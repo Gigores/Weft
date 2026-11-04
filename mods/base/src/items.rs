@@ -141,6 +141,8 @@ pub fn register(r: &mut Registry) {
         .tab(&crate::tabs::TOOLS)
         .durability(32)
         .texture("base:watering_can_filled")
+        .bar_always()
+        .bar_color(0x4444FFFF)
         .on_use(water);
     r.set("lava_bucket", &FUEL, 20000);
     r.tag("buckets/lava", &["lava_bucket"]);

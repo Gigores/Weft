@@ -256,6 +256,10 @@ pub struct ItemDef {
     /// Boxes from its model file (`models/item/<name>.json`) in block units, drawn instead of
     /// the icon in hands, on the ground and in slots; empty: none.
     pub model: Vec<ModelBox>,
+    /// When true always displays durability bar
+    pub bar_always: bool,
+    /// Custom bar color
+    pub bar_color: u32,
 }
 
 /// A creative inventory tab: translated as `tab.<ns>.<name>`, or the mod's name for the tab a mod
@@ -1177,6 +1181,8 @@ pub struct RawItem {
     pub block: String,
     pub components: Vec<RawValue>,
     pub on_use: Option<Callback>,
+    pub bar_always: bool,
+    pub bar_color: u32,
 }
 
 impl RawRegistrar {
@@ -1370,6 +1376,8 @@ fn expand_templates(
                         block: name.clone(),
                         components: i.components.clone(),
                         on_use: i.on_use,
+                        bar_always: i.bar_always,
+                        bar_color: i.bar_color,
                     },
                 ));
             }
@@ -1548,6 +1556,8 @@ pub(crate) unsafe fn copy_item(d: &abi::ItemDesc) -> RawItem {
             block: d.block.as_str().to_string(),
             components: RawValue::list(d.components),
             on_use: cb(d.on_use),
+            bar_always: d.bar_always,
+            bar_color: d.bar_color,
         }
     }
 }
@@ -2509,6 +2519,8 @@ fn number_items(
         equip: None,
         handheld: false,
         model: Vec::new(),
+        bar_always: false,
+        bar_color: 0,
     }];
     let mut item_values: Vec<(ModId, Vec<RawValue>)> = vec![(ModId(u32::MAX), Vec::new())];
     for (owner, mut it) in items {
@@ -2564,6 +2576,8 @@ fn number_items(
             equip: None,
             handheld: false,
             model,
+            bar_always: it.bar_always,
+            bar_color: it.bar_color,
         });
     }
     let item_names: FxHashMap<String, u32> = item_defs

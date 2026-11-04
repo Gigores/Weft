@@ -886,12 +886,18 @@ impl UiRenderer {
             self.plain_icon(c, textures, x, y, s, &stack);
         }
         let (most, damage) = (c.durability(&stack), crate::stack::damage(&stack));
-        if most > 0 && damage > 0 {
+        let item = c.items.get(stack.item as usize);
+        let always = item.is_some_and(|i| i.bar_always);
+        if most > 0 && (damage > 0 || always) {
             let f = 1.0 - damage as f32 / most as f32;
             let bar = Rect { x: x + scale, y: y + s - 2.0 * scale, w: 14.0 * scale, h: 2.0 * scale };
             self.rect(bar, 0x000000FF);
             let g = (f * 255.0) as u32;
-            self.rect(Rect { w: 13.0 * scale * f, h: scale, ..bar }, ((255 - g) << 24) | (g << 16) | 0xFF);
+            let default = ((255 - g) << 24) | (g << 16) | 0xFF;
+            let color = item
+                .filter(|i| i.bar_color != 0)
+                .map_or(default, |i| i.bar_color);
+            self.rect(Rect { w: 13.0 * scale * f, h: scale, ..bar }, color);
         }
         let liquid = c.item_fluid.contains_key(&stack.item);
         if stack.count > 1 || liquid {

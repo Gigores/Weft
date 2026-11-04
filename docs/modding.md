@@ -271,6 +271,8 @@ Anywhere a block is named as text, `base:furnace[lit=true]` picks a state: in st
 - `wearable(&HEAD, inflate, texture)` for armor and anything else worn in an equipment slot
 - `two_handed()`, `one_handed_action(action)`, `use_priority(n)`: [what it does in the hands](models.md#items-in-the-hand)
 - `on_use`: what using it does. Before it runs anyone can say no to `actions::USE_ITEM`, and after it the same action's event tells every mod (testmod heals with base's food through it). `base_api::eat` is the base game's eating: `.set(&FOOD, ..).use_ticks(32).on_use(base_api::eat)`
+- `bar_always`: Forces the durability bar to be always shown
+- `bar_color`: Sets the custom durability bar color
 
 #### Stacks with their own data
 A stack is an item, a count, and whatever values of components it carries of its own, like the damage a tool took. You never touch `data` yourself, it's only a handle to those values:

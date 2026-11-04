@@ -1305,6 +1305,8 @@ unsafe extern "C" fn item_info(item: u32, out: *mut abi::ItemInfo) -> u32 {
             block: d.block.unwrap_or(u32::MAX),
             worn,
             handheld: d.handheld as u32,
+            bar_always: d.bar_always,
+            bar_color: d.bar_color,
         };
     }
     1

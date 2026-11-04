@@ -948,6 +948,8 @@ impl Registry {
             block: String::new(),
             components: Vec::new(),
             on_use: abi::Callback::NONE,
+            bar_always: false,
+            bar_color: 0,
         }
     }
 
@@ -963,6 +965,8 @@ impl Registry {
             block: block.to_string(),
             components: Vec::new(),
             on_use: abi::Callback::NONE,
+            bar_always: false,
+            bar_color: 0,
         }
     }
 
@@ -2512,6 +2516,8 @@ pub struct ItemBuilder<'a> {
     block: String,
     components: Vec<Pending>,
     on_use: abi::Callback,
+    bar_always: bool,
+    bar_color: u32,
 }
 
 impl ItemBuilder<'_> {
@@ -2649,6 +2655,14 @@ impl ItemBuilder<'_> {
         });
         self
     }
+    pub fn bar_always(mut self) -> Self {
+        self.bar_always = true;
+        self
+    }
+    pub fn bar_color(mut self, color: u32) -> Self {
+        self.bar_color = color;
+        self
+    }
 }
 
 impl Drop for ItemBuilder<'_> {
@@ -2665,6 +2679,8 @@ impl Drop for ItemBuilder<'_> {
             block: Str::new(&self.block),
             components: Slice::new(&values),
             on_use: self.on_use,
+            bar_always: self.bar_always,
+            bar_color: self.bar_color,
             ..abi::ItemDesc::DEFAULT
         };
         unsafe { (host().reg_item)(self.raw, &desc) }

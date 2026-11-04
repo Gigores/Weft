@@ -446,6 +446,8 @@ pub struct ItemInfo {
     /// The equipment slot it is worn in, empty for none.
     pub worn: Str,
     pub handheld: u32,
+    pub bar_always: bool,
+    pub bar_color: u32,
 }
 
 /// Component names the engine itself reads. Items: `max_stack: u32` (default 64), `durability: u32`,
@@ -972,6 +974,8 @@ pub struct ItemDesc {
     pub components: Slice<CompValue>,
     /// `ItemUseArgs`.
     pub on_use: Callback,
+    pub bar_always: bool,
+    pub bar_color: u32,
 }
 defaults!(ItemDesc {
     name: Str::EMPTY,
@@ -979,7 +983,9 @@ defaults!(ItemDesc {
     texture: Str::EMPTY,
     block: Str::EMPTY,
     components: Slice::EMPTY,
-    on_use: Callback::NONE
+    on_use: Callback::NONE,
+    bar_always: false,
+    bar_color: 0,
 });
 
 #[repr(C)]
