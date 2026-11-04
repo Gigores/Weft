@@ -31,27 +31,27 @@ const MATERIALS: [Material; 5] = [
 const TILLABLE: Tag = Tag::named("dirt");
 
 fn till(u: &mut ItemUse) -> bool {
-    let Some((pos, face)) = u.target() else { return false };
+    let Some((pos, face)) = u.target_block() else { return false };
     if face == 2 {
         return false;
     }
     let w = u.world();
-    let state = w.get(pos);
+    let state = w.block(pos);
 
     if state == crate::blocks::FARMLAND.id() || !TILLABLE.on_block(state) {
         return false;
     }
-    if !w.set(pos, crate::blocks::FARMLAND.id()) {
+    if !w.set_block(pos, crate::blocks::FARMLAND.id()) {
         return false;
     }
     if !w.creative(u.player()) {
         let stack = u.stack();
         if let Some(max) = DURABILITY.on_item(stack.item) {
-            let damage = stack.damage() + 1;
+            let damage = stack.wear() + 1;
             u.set_stack(if damage >= max {
                 ItemStack::EMPTY
             } else {
-                stack.with_damage(damage)
+                stack.with_wear(damage)
             });
         }
     }
