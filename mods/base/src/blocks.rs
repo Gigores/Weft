@@ -54,6 +54,9 @@ pub static DIAMOND_BLOCK: Block = Block::named("diamond_block");
 pub static COAL_BLOCK: Block = Block::named("coal_block");
 pub static WOOL: Block = Block::named("wool");
 
+// 20 ticks * 60 secs * 20 mins = 1 day
+pub const FARMLAND_DRY_TICKS: u32 = 20 * 60 * 20;
+
 /// Log axis along the clicked face, like vanilla.
 fn axis_placement(p: &Place, props: &mut Props) {
     props.set(
@@ -404,6 +407,11 @@ pub fn register(r: &mut Registry) {
                 _ => "farmland",
             };
             s.textures(top, "dirt", "dirt")
+        })
+        .on_scheduled(|e| {
+            if FARMLAND.is(e.state()) {
+                e.world().prop_set(e.pos(), "isWet", "0");
+            }
         })
         .model_box([0.0, 0.0, 0.0], [16.0, 15.0, 16.0])
         .hardness(0.6)

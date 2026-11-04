@@ -86,9 +86,15 @@ fn water(u: &mut ItemUse) -> bool {
             return false;
         }
 
+        // Already wet: nothing to do, and no reason to use a charge.
+        if w.prop(hit.pos, "isWet") == Some("1") {
+            return true;
+        }
+
         if !w.prop_set(hit.pos, "isWet", "1") {
             return false;
         }
+        w.schedule_tick(hit.pos, crate::blocks::FARMLAND_DRY_TICKS);
 
         if !w.creative(u.player()) {
             u.set_stack(stack.with_wear(stack.wear() + 1));
