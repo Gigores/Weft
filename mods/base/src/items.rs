@@ -28,6 +28,35 @@ const MATERIALS: [Material; 5] = [
     Material { name: "diamond", level: tool_tier::DIAMOND, speed: 8.0, durability: 1561, damage: 3.0 },
     Material { name: "gold", level: tool_tier::WOOD, speed: 12.0, durability: 32, damage: 0.0 },
 ];
+const TILLABLE: Tag = Tag::named("dirt");
+
+fn till(u: &mut ItemUse) -> bool {
+    let Some((pos, face)) = u.target() else { return false };
+    if face == 2 {
+        return false;
+    }
+    let w = u.world();
+    let state = w.get(pos);
+
+    if state == crate::blocks::FARMLAND.id() || !TILLABLE.on_block(state) {
+        return false;
+    }
+    if !w.set(pos, crate::blocks::FARMLAND.id()) {
+        return false;
+    }
+    if !w.creative(u.player()) {
+        let stack = u.stack();
+        if let Some(max) = DURABILITY.on_item(stack.item) {
+            let damage = stack.damage() + 1;
+            u.set_stack(if damage >= max {
+                ItemStack::EMPTY
+            } else {
+                stack.with_damage(damage)
+            });
+        }
+    }
+    true
+}
 
 pub fn register(r: &mut Registry) {
     r.item(&STICK).tag("stick").handheld().set(&FUEL, 100).tab(&crate::tabs::INGREDIENTS);
@@ -51,7 +80,7 @@ pub fn register(r: &mut Registry) {
         ("bread", 5, 6.0, ""),
         ("porkchop", 3, 1.8, "raw_meat/pork"),
         ("cooked_porkchop", 8, 12.8, "cooked_meat/pork"),
-        ("beef", 3, 1.8, "raw_meat/beef"),
+      ("beef", 3, 1.8, "raw_meat/beef"),
         ("cooked_beef", 8, 12.8, "cooked_meat/beef"),
         ("rotten_flesh", 4, 0.8, ""),
         ("chicken", 2, 1.2, "raw_meat/chicken"),
@@ -85,6 +114,8 @@ pub fn register(r: &mut Registry) {
                 .tab(if kind == "sword" { &crate::tabs::COMBAT } else { &crate::tabs::TOOLS });
             if kind == "sword" {
                 b.sweeps().no_creative_break();
+            } else if kind == "hoe" {
+                b.on_use(till);
             }
         };
         tool(r, "pickaxe", 2.0 + m.damage, 1.2);
