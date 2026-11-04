@@ -56,6 +56,7 @@ pub static WOOL: Block = Block::named("wool");
 
 // 20 ticks * 60 secs * 20 mins = 1 day
 pub const FARMLAND_DRY_TICKS: u32 = 20 * 60 * 20;
+pub const FARMLAND_RAIN_CHECK_SECONDS: f32 = 5.0;
 
 /// Log axis along the clicked face, like vanilla.
 fn axis_placement(p: &Place, props: &mut Props) {
@@ -411,6 +412,20 @@ pub fn register(r: &mut Registry) {
         .on_scheduled(|e| {
             if FARMLAND.is(e.state()) {
                 e.world().prop_set(e.pos(), "isWet", "0");
+            }
+        })
+        .grows(FARMLAND_RAIN_CHECK_SECONDS, 0)
+        .on_grow(|e| {
+            let w = e.world();
+            let p = e.pos();
+
+            if !FARMLAND.is(e.state()) || !w.raining() || w.sky_light(p.above()) != 15 {
+                return;
+            }
+
+            // Already wet: keep the timer it has, rather than scheduling a new one every check.
+            if w.prop(p, "isWet") != Some("1") && w.prop_set(p, "isWet", "1") {
+                w.schedule_tick(p, FARMLAND_DRY_TICKS);
             }
         })
         .model_box([0.0, 0.0, 0.0], [16.0, 15.0, 16.0])
