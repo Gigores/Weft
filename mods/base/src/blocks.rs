@@ -387,7 +387,36 @@ pub fn register(r: &mut Registry) {
         .plant()
         .needs_below("#crop_soil")
         .no_item()
-        .grows(205.0, 9);
+        .grows(205.0, 9)
+        .on_grow(|e| {
+            let w = e.world();
+            let p = e.pos();
+            let below = BlockPos {
+                y: p.y - 1,
+                ..p
+            };
+            let soil = w.block(below);
+
+            let chance = if crate::blocks::FARMLAND.is(soil) {
+                let wet = w.prop(below, "isWet") == Some("1");
+                let fertilized = w.prop(below, "isFertilized") == Some("1");
+                match (wet, fertilized) {
+                    (true, true) => 100,
+                    (true, false) => 65,
+                    (false, true) => 35,
+                    (false, false) => 15,
+                }
+            } else {
+                50 // modded soil fallback
+            };
+            if w.random_below(100) >= chance {
+                return;
+            }
+            let age = w.prop_int(p, "age").unwrap_or(0);
+            if age < 7 {
+                w.prop_set (p, "age", &(age + 1).to_string());
+            }
+        });
     // Modern's: unripe gives its seed back, ripe gives the wheat and up to 3 more seeds.
     r.loot(&WHEAT)
         .pool(Pool::new().when(Cond::BlockState("age=7")).item("wheat"))
