@@ -358,6 +358,8 @@ pub struct Game {
     pub bone_motions: Vec<(String, String, crate::model::BoneMotion)>,
     /// Who says which model a stack of an item shows as.
     pub item_model_for_stack: FxHashMap<u32, (ModId, Callback)>,
+    /// Who says which texture a stack of an item shows as.
+    pub item_texture_for_stack: FxHashMap<u32, (ModId, Callback)>,
     /// Mod message channels by id (sorted by name, so both sides agree).
     pub packets: Vec<PacketDef>,
     pub packet_names: FxHashMap<String, u32>,
@@ -780,6 +782,7 @@ pub struct RawGame {
     pub attached_models: Vec<(String, String, String)>,
     pub bone_motions: Vec<(String, String, crate::model::BoneMotion)>,
     pub item_model_for_stack: Vec<(ModId, String, Callback)>,
+    pub item_texture_for_stack: Vec<(ModId, String, Callback)>,
     /// (owner, name, side, callback).
     /// (owner, channel, schema, side, callback).
     pub packets: Vec<(ModId, String, String, u32, Callback)>,
@@ -1701,12 +1704,14 @@ pub fn freeze(
     let mut entity_watchers: Vec<(ModId, String, Callback)> = Vec::new();
     let mut attached_models: Vec<(String, String, String)> = Vec::new();
     let mut item_models: Vec<(ModId, String, Callback)> = Vec::new();
+    let mut item_textures: Vec<(ModId, String, Callback)> = Vec::new();
     for r in raws {
         entity_ticks.extend(r.client_entity_ticks);
         entity_watchers.extend(r.client_entity_watchers);
         attached_models.extend(r.attached_models);
         g.bone_motions.extend(r.bone_motions);
         item_models.extend(r.item_model_for_stack);
+        item_textures.extend(r.item_texture_for_stack);
         sounds.extend(r.sounds);
         music.extend(r.music);
         particles.extend(r.particles);
@@ -1805,6 +1810,15 @@ pub fn freeze(
                 g.item_model_for_stack.insert(i, (owner, cb));
             }
             None => errors.push(format!("item_model_for_stack for unknown item {item}")),
+        }
+    }
+    item_textures.sort_by_key(|t| order(t.0));
+    for (owner, item, cb) in item_textures {
+        match item_names.get(&item) {
+            Some(&i) => {
+                g.item_texture_for_stack.insert(i, (owner, cb));
+            }
+            None => errors.push(format!("item_texture_for_stack for unknown item {item}")),
         }
     }
     freeze_particles(&mut g, particles, errors);

@@ -980,6 +980,15 @@ impl Content {
         ))
     }
 
+    /// The texture a stack shows as, if a mod chose one from the stack itself.
+    pub fn texture_for_stack(&self, stack: &abi::ItemStack) -> Option<String> {
+        let (owner, cb) = self.game.item_texture_for_stack.get(&stack.item).copied()?;
+        let mut a = abi::ItemTextureArgs { stack: *stack, texture: abi::Str::EMPTY };
+        crate::host::invoke(owner, cb, &mut a);
+        let name = unsafe { a.texture.as_str() }.to_string();
+        (!name.is_empty()).then_some(name)
+    }
+
     /// The roles (`1 << role`) of the wearer's bones an item covers, from its equipment slot.
     pub fn worn_roles(&self, item: u32) -> u32 {
         self.items

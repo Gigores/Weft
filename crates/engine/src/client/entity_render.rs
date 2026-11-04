@@ -717,27 +717,32 @@ impl EntityRenderer {
         let white = Vec4::new(1.0, 1.0, 1.0, 0.0);
         let looks = super::looks::current();
         let mut sprite_color = white;
-        let sprite = match looks.item_draw(c, item) {
-            ItemDraw::Model(model) => {
-                boxes_shape(&mut self.item_boxes, textures, Mat4::IDENTITY, model, &c.states[0], white);
-                None
-            }
-            ItemDraw::Icon(t) => Some(layers.map_or(t, |l| textures.layered(l))),
-            ItemDraw::Block(state) => {
-                let s = &c.states[state as usize];
-                let sprite = looks.block_sprite(state, s);
-                if sprite.is_none() {
-                    boxes_shape(&mut self.item_boxes, textures, Mat4::IDENTITY, &looks.block_shape(state, s), s, white);
+        let dynamic = c.texture_for_stack(stack).map(|name| textures.layered(&name));
+        let sprite = if let Some(t) = dynamic {
+            Some(t)
+        } else {
+            match looks.item_draw(c, item) {
+                ItemDraw::Model(model) => {
+                    boxes_shape(&mut self.item_boxes, textures, Mat4::IDENTITY, model, &c.states[0], white);
+                    None
                 }
-                if crate::content::face_paint(s, 0, false).base_tinted {
-                    let [r, g, b, _] = (crate::content::item_tint(s.tint) << 8)
-                        .to_be_bytes()
-                        .map(|v| v as f32 / 255.0);
-                    sprite_color = Vec4::new(r, g, b, 0.0);
+                ItemDraw::Icon(t) => Some(layers.map_or(t, |l| textures.layered(l))),
+                ItemDraw::Block(state) => {
+                    let s = &c.states[state as usize];
+                    let sprite = looks.block_sprite(state, s);
+                    if sprite.is_none() {
+                        boxes_shape(&mut self.item_boxes, textures, Mat4::IDENTITY, &looks.block_shape(state, s), s, white);
+                    }
+                    if crate::content::face_paint(s, 0, false).base_tinted {
+                        let [r, g, b, _] = (crate::content::item_tint(s.tint) << 8)
+                            .to_be_bytes()
+                            .map(|v| v as f32 / 255.0);
+                        sprite_color = Vec4::new(r, g, b, 0.0);
+                    }
+                    sprite
                 }
-                sprite
+                ItemDraw::Nothing => return None,
             }
-            ItemDraw::Nothing => return None,
         };
         if let Some(t) = sprite {
             let l = textures.texture(t);
@@ -1935,6 +1940,9 @@ fn run_key(m: (u32, u32)) -> u64 {
 /// Texture a held item is drawn from as a solid sprite: its own `layers`, its icon, or the
 /// texture of a plant block.
 fn sprite_name(stack: &ItemStack) -> Option<String> {
+    if let Some(name) = content().texture_for_stack(stack) {
+        return Some(name);
+    }
     if let Some(spec) = crate::stack::layers(stack) {
         return Some(format!("layers:{spec}"));
     }

@@ -948,6 +948,8 @@ impl Registry {
             block: String::new(),
             components: Vec::new(),
             on_use: abi::Callback::NONE,
+            model_for_stack: None,
+            texture_for_stack: None,
             bar_always: false,
             bar_color: 0,
         }
@@ -965,6 +967,8 @@ impl Registry {
             block: block.to_string(),
             components: Vec::new(),
             on_use: abi::Callback::NONE,
+            model_for_stack: None,
+            texture_for_stack: None,
             bar_always: false,
             bar_color: 0,
         }
@@ -1105,17 +1109,7 @@ impl Registry {
         item: impl ModelTarget,
         f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
     ) {
-        thread_local! {
-            static NAME: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
-        }
-        let cb = callback(move |a: &mut abi::ItemModelArgs| {
-            if let Some(name) = f(&a.stack) {
-                NAME.with(|n| {
-                    *n.borrow_mut() = crate::asset("", name.as_ref());
-                    a.model = Str::new(&n.borrow());
-                });
-            }
-        });
+        let cb = model_for_stack_cb(f);
         let item = qualify(self.ns, item.target().name());
         unsafe { (host().reg_item_model_for_stack)(self.raw, Str::new(&item), cb) }
     }
@@ -2507,6 +2501,38 @@ impl Drop for BlockBuilder<'_> {
     }
 }
 
+fn model_for_stack_cb<R: AsRef<str>>(
+    f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
+) -> abi::Callback {
+    thread_local! {
+        static NAME: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    }
+    callback(move |a: &mut abi::ItemModelArgs| {
+        if let Some(name) = f(&a.stack) {
+            NAME.with(|n| {
+                *n.borrow_mut() = crate::asset("", name.as_ref());
+                a.model = Str::new(&n.borrow());
+            });
+        }
+    })
+}
+
+fn texture_for_stack_cb<R: AsRef<str>>(
+    f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
+) -> abi::Callback {
+    thread_local! {
+        static NAME: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    }
+    callback(move |a: &mut abi::ItemTextureArgs| {
+        if let Some(name) = f(&a.stack) {
+            NAME.with(|n| {
+                *n.borrow_mut() = crate::asset("item", name.as_ref());
+                a.texture = Str::new(&n.borrow());
+            });
+        }
+    })
+}
+
 pub struct ItemBuilder<'a> {
     _p: PhantomData<&'a mut Registry>,
     raw: *mut abi::Registrar,
@@ -2516,6 +2542,8 @@ pub struct ItemBuilder<'a> {
     block: String,
     components: Vec<Pending>,
     on_use: abi::Callback,
+    model_for_stack: Option<abi::Callback>,
+    texture_for_stack: Option<abi::Callback>,
     bar_always: bool,
     bar_color: u32,
 }
@@ -2663,6 +2691,29 @@ impl ItemBuilder<'_> {
         self.bar_color = color;
         self
     }
+    /// Which flat item texture a stack of this item shows as, chosen from the stack itself:
+    /// `None` keeps the usual one. The name is relative to `textures/item/`.
+    ///
+    /// ```ignore
+    /// .dynamic_texture(|s| (s.wear() > 0).then_some("mymod:item_worn"))
+    /// ```
+    pub fn dynamic_texture<R: AsRef<str>>(
+        mut self,
+        f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
+    ) -> Self {
+        self.texture_for_stack = Some(texture_for_stack_cb(f));
+        self
+    }
+
+    /// Which model a stack of this item shows as, chosen from the stack itself: `None` keeps the
+    /// usual model. The name is a model (`models/<name>.geo.json`), not a bare texture.
+    pub fn dynamic_model<R: AsRef<str>>(
+        mut self,
+        f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
+    ) -> Self {
+        self.model_for_stack = Some(model_for_stack_cb(f));
+        self
+    }
 }
 
 impl Drop for ItemBuilder<'_> {
@@ -2684,6 +2735,12 @@ impl Drop for ItemBuilder<'_> {
             ..abi::ItemDesc::DEFAULT
         };
         unsafe { (host().reg_item)(self.raw, &desc) }
+        if let Some(cb) = self.model_for_stack {
+            unsafe { (host().reg_item_model_for_stack)(self.raw, Str::new(&self.name), cb) }
+        }
+        if let Some(cb) = self.texture_for_stack {
+            unsafe { (host().reg_item_texture_for_stack)(self.raw, Str::new(&self.name), cb) }
+        }
     }
 }
 

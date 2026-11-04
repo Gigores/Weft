@@ -2766,6 +2766,8 @@ pub struct Host {
     /// A bone of `model` hangs and swings by itself.
     pub reg_bone_motion: unsafe extern "C" fn(reg: *mut Registrar, model: Str, bone: Str, gravity: f32, spring: f32, drag: f32),
     pub reg_item_model_for_stack: unsafe extern "C" fn(reg: *mut Registrar, item: Str, cb: Callback),
+    /// The texture a stack of `item` shows as, chosen from the stack itself.
+    pub reg_item_texture_for_stack: unsafe extern "C" fn(reg: *mut Registrar, item: Str, cb: Callback),
     /// Moves a bone of what `entity` is or has on, for the next frame: radians about x, y, z, pixels, scale.
     pub client_pose_bone:
         unsafe extern "C" fn(c: *mut ClientCtx, entity: u64, bone: Str, turn: *const [f32; 3], by: *const [f32; 3], scale: *const [f32; 3]),
@@ -4186,6 +4188,13 @@ pub struct ClientFrameArgs {
 pub struct ItemModelArgs {
     pub stack: ItemStack,
     pub model: Str,
+}
+
+/// `Host::reg_item_texture_for_stack`: the texture `stack` shows as, or left empty for its usual.
+#[repr(C)]
+pub struct ItemTextureArgs {
+    pub stack: ItemStack,
+    pub texture: Str,
 }
 
 /// One entity on the client, for `Host::reg_client_entity_cosmetics`.

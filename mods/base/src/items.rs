@@ -140,9 +140,20 @@ pub fn register(r: &mut Registry) {
         .max_stack(0)
         .tab(&crate::tabs::TOOLS)
         .durability(32)
-        .texture("base:watering_can_filled")
+        .texture("base:watering_can_empty")
         .bar_always()
         .bar_color(0x4444FFFF)
+        .dynamic_texture(|s|
+            if let Some(max) = DURABILITY.on_item(s.item) {
+                if s.wear() < max {
+                    Some("base:watering_can_filled")
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        )
         .on_use(water);
     r.set("lava_bucket", &FUEL, 20000);
     r.tag("buckets/lava", &["lava_bucket"]);

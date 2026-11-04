@@ -129,6 +129,7 @@ pub static HOST: Host = Host {
     reg_bone_model,
     reg_bone_motion,
     reg_item_model_for_stack,
+    reg_item_texture_for_stack,
     client_pose_bone: crate::app::api::client_pose_bone,
     client_bone_position: crate::app::api::client_bone_position,
     client_action_current: crate::app::api::client_entity_action,
@@ -2753,6 +2754,16 @@ unsafe extern "C" fn reg_item_model_for_stack(r: *mut abi::Registrar, item: Str,
         let owner = r.owner;
         r.game
             .item_model_for_stack
+            .push((owner, item.as_str().to_string(), cb));
+    }
+}
+
+unsafe extern "C" fn reg_item_texture_for_stack(r: *mut abi::Registrar, item: Str, cb: Callback) {
+    unsafe {
+        let r = reg(r);
+        let owner = r.owner;
+        r.game
+            .item_texture_for_stack
             .push((owner, item.as_str().to_string(), cb));
     }
 }

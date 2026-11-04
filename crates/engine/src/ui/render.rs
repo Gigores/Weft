@@ -686,6 +686,19 @@ impl UiRenderer {
     /// An item's own picture, what it shows until its model has one or without a model.
     fn plain_icon(&mut self, c: &Content, tex: &GameTextures, x: f32, y: f32, size: f32, stack: &weft_abi::ItemStack) {
         let item = stack.item;
+        if let Some(name) = c.texture_for_stack(stack) {
+            self.quads.push(Quad {
+                p0: [x, y],
+                u: [size, 0.0],
+                v: [0.0, size],
+                uv: [0.0, 0.0, 1.0, 1.0],
+                color: 0xFFFFFFFF,
+                tex: tex.texture(tex.layered(&name)),
+                mode: ui_mode::ICON,
+                ..Default::default()
+            });
+            return;
+        }
         let looks = crate::client::looks::current();
         match looks.item_draw(c, item) {
             // Its own pictures, one over the other.
@@ -882,7 +895,8 @@ impl UiRenderer {
         }
         let s = 16.0 * scale;
         let (x, y) = (r.x + (r.w - s) / 2.0, r.y + (r.h - s) / 2.0);
-        if !self.model_icon(x, y, s, stack) {
+        let dynamic = c.texture_for_stack(&stack).is_some();
+        if dynamic || !self.model_icon(x, y, s, stack) {
             self.plain_icon(c, textures, x, y, s, &stack);
         }
         let (most, damage) = (c.durability(&stack), crate::stack::damage(&stack));
