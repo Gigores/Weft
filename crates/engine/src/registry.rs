@@ -1079,8 +1079,8 @@ fn engine_weathers() -> Vec<(usize, WeatherDef)> {
     let rain = abi::WeatherDesc::DEFAULT.look;
     let thunder = abi::WeatherLook { cloud_dark: 0.95, ..rain };
     vec![
-        w("clear", 0, abi::WeatherLook::default(), [12000, 180000], 0),
-        w("rain", f::FALLS | f::SHELTERS, rain, [12000, 24000], 3),
+        w("clear", 0, abi::WeatherLook::default(), [96000, 180000], 0),
+        w("rain", f::FALLS | f::SHELTERS, rain, [6000, 12000], 3),
         w("thunder", f::FALLS | f::SHELTERS | f::LIGHTNING, thunder, [12000, 24000], 1),
     ]
 }
