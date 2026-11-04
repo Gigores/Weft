@@ -58,6 +58,8 @@ fn till(u: &mut ItemUse) -> bool {
     }
     true
 }
+const CROPS: Tag = Tag::named("crop");
+
 fn water(u: &mut ItemUse) -> bool {
     let w = u.world();
 
@@ -81,21 +83,38 @@ fn water(u: &mut ItemUse) -> bool {
         return true;
     }
 
+    let water_pos = |pos: BlockPos| {
+        if w.prop(pos, "isWet") == Some("1") {
+            return true;
+        }
+        if !w.prop_set(pos, "isWet", "1") {
+            return false;
+        }
+        w.schedule_tick(pos, crate::blocks::FARMLAND_DRY_TICKS);
+        true
+    };
+
     if crate::blocks::FARMLAND.is(hit.state) {
         if stack.wear() >= max {
             return false;
         }
-
-        // Already wet: nothing to do, and no reason to use a charge.
-        if w.prop(hit.pos, "isWet") == Some("1") {
-            return true;
-        }
-
-        if !w.prop_set(hit.pos, "isWet", "1") {
+        if !water_pos(hit.pos) {
             return false;
         }
-        w.schedule_tick(hit.pos, crate::blocks::FARMLAND_DRY_TICKS);
+        if !w.creative(u.player()) {
+            u.set_stack(stack.with_wear(stack.wear() + 1));
+        }
+        return true;
+    }
 
+    if CROPS.on_block(hit.state) {
+        let pos = BlockPos {
+            y: hit.pos.y - 1,
+            ..hit.pos
+        };
+        if !water_pos(pos) {
+            return false;
+        }
         if !w.creative(u.player()) {
             u.set_stack(stack.with_wear(stack.wear() + 1));
         }

@@ -381,6 +381,7 @@ pub fn register(r: &mut Registry) {
         .tab(&crate::tabs::NATURAL);
     r.block(&WHEAT)
         .sound_group("grass")
+        .tag("crop")
         .prop("age", 0..=7)
         .states(|p, s| s.texture(&format!("wheat_stage_{}", p.get("age"))))
         .plant()
