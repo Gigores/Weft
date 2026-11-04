@@ -1,5 +1,5 @@
-# Builds the game for Windows, Linux and macOS and publishes all three on GitHub. Nothing is
-# published unless all of them build.
+# Builds the game for Windows, Linux and macOS (Apple silicon and Intel) and publishes them on
+# GitHub. Nothing is published unless all of them build.
 #   - push a tag like v0.2.0 (the version in Cargo.toml must match), or
 #   - run it by hand from the Actions tab and give an existing tag (for a release that was tagged
 #     before this workflow existed).
@@ -21,6 +21,10 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
   MOLTENVK: v1.4.2
   MOLTENVK_SHA256: f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e
+  APPIMAGETOOL: 1.9.1
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+  APPIMAGE_RUNTIME: 20251108
+  APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
 
 jobs:
   build:
@@ -32,6 +36,8 @@ jobs:
           # The oldest available, since a Linux build only runs on this glibc or newer.
           - { os: ubuntu-22.04, platform: linux-x64, exe: weft }
           - { os: macos-latest, platform: macos-arm64, exe: weft }
+          # Intel Macs; MoltenVK's library below is universal.
+          - { os: macos-15-intel, platform: macos-x64, exe: weft }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -76,6 +82,34 @@ jobs:
           tar xf moltenvk.tar
           cp MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib dist/Weft/
           cp MoltenVK/LICENSE dist/Weft/MoltenVK-LICENSE
+
+      # The same distribution as one file to run, next to the tar. No Vulkan, drivers or sound
+      # library in it: those have to be the player's own. It is read-only when running, which
+      # the game doesn't mind, writing to the player's folders.
+      - name: AppImage
+        if: runner.os == 'Linux'
+        env:
+          ARCH: x86_64
+          # The tool is an AppImage itself, and this machine has no FUSE to run one.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL/appimagetool-x86_64.AppImage"
+          curl -fsSL -o appimage-runtime "https://github.com/AppImage/type2-runtime/releases/download/$APPIMAGE_RUNTIME/runtime-x86_64"
+          echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
+          echo "$APPIMAGE_RUNTIME_SHA256  appimage-runtime" | sha256sum -c -
+          chmod +x appimagetool
+          cp -r dist/Weft AppDir
+          cp .github/appimage/AppRun .github/appimage/weft.desktop AppDir/
+          cp crates/engine/assets/icon.png AppDir/weft.png
+          chmod +x AppDir/AppRun
+          ./appimagetool --no-appstream --runtime-file appimage-runtime AppDir "$ARCHIVE.AppImage"
+          # What it holds, as far as a machine with no GPU can tell.
+          chmod +x "$ARCHIVE.AppImage"
+          "./$ARCHIVE.AppImage" --appimage-extract > /dev/null
+          test -x squashfs-root/AppRun
+          test -x squashfs-root/weft
+          test -f squashfs-root/assets/core/icon.png
+          test -n "$(ls squashfs-root/run/mods)"
 
       - name: Pack (Windows)
         if: runner.os == 'Windows'

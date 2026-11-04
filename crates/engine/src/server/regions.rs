@@ -24,8 +24,8 @@ pub struct DimSet {
     pub day_offset: i64,
     /// `/time` moved the sky: players hear at once, not at the next second.
     pub day_moved: bool,
-    pub raining: bool,
-    pub thunder: bool,
+    /// The weather now (`registry::WeatherDef`).
+    pub weather: u16,
     /// When the weather changes by itself.
     pub weather_until: u64,
     /// Changed: players hear at once.
@@ -40,8 +40,27 @@ pub struct DimSet {
 }
 
 impl DimSet {
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
     pub fn new(id: u32, seed: u64, next_id: Arc<AtomicU64>) -> DimSet {
-        DimSet { id, regions: Vec::new(), generating: FxHashSet::default(), time: 1000, day_offset: 0, day_moved: false, raining: false, thunder: false, weather_until: 0, weather_moved: false, seed, next_id, owner: FxHashMap::default(), dirty: false, edits: Arc::default() }
+        DimSet {
+            id,
+            regions: Vec::new(),
+            generating: FxHashSet::default(),
+            time: 1000,
+            day_offset: 0,
+            day_moved: false,
+            weather: 0,
+            weather_until: 0,
+            weather_moved: false,
+            seed,
+            next_id,
+            owner: FxHashMap::default(),
+            dirty: false,
+            edits: Arc::default(),
+        }
     }
 
     fn new_region(&mut self, section: IVec3) -> usize {
@@ -49,8 +68,7 @@ impl DimSet {
         d.set_rng(weft_noise::hash(self.seed ^ self.time, section.x as i64, section.y as i64, section.z as i64));
         d.time = self.time;
         d.day_offset = self.day_offset;
-        d.raining = self.raining;
-        d.thunder = self.thunder;
+        d.weather = self.weather;
         self.regions.push(d);
         self.regions.len() - 1
     }
@@ -85,7 +103,10 @@ impl DimSet {
 
     /// Folds regions into the largest of them; returns its index afterwards.
     fn merge(&mut self, c: &Content, list: &[usize]) -> usize {
-        let target = *list.iter().max_by_key(|&&i| self.regions[i].space.cubes.len()).unwrap();
+        let target = *list
+            .iter()
+            .max_by_key(|&&i| self.regions[i].space.cubes.len())
+            .unwrap();
         for &i in list.iter().rev() {
             if i != target {
                 let parcel = self.regions[i].take_sections(|_| true);
@@ -114,7 +135,9 @@ impl DimSet {
     }
 
     pub fn entity_region(&mut self, id: u64) -> Option<&mut Dim> {
-        self.regions.iter_mut().find(|r| r.entities.get(id).is_some())
+        self.regions
+            .iter_mut()
+            .find(|r| r.entities.get(id).is_some())
     }
 
     pub fn entity_region_ref(&self, id: u64) -> Option<&Dim> {
@@ -126,17 +149,26 @@ impl DimSet {
     }
 
     pub fn has(&self, pos: IVec3) -> bool {
-        self.owner.get(&section_of_cube(pos)).is_some_and(|&r| self.regions[r].has(pos))
+        self.owner
+            .get(&section_of_cube(pos))
+            .is_some_and(|&r| self.regions[r].has(pos))
     }
 
     /// Cubes settled since the last call.
     pub fn take_settled(&mut self) -> Vec<IVec3> {
-        self.regions.iter_mut().flat_map(|r| r.newly_settled.drain(..)).collect()
+        self.regions
+            .iter_mut()
+            .flat_map(|r| r.newly_settled.drain(..))
+            .collect()
     }
 
     /// Cubes with block changes since the last call.
     pub fn take_edited(&mut self) -> Vec<IVec3> {
-        let mut out: Vec<IVec3> = self.regions.iter_mut().flat_map(|r| r.space.edited.drain()).collect();
+        let mut out: Vec<IVec3> = self
+            .regions
+            .iter_mut()
+            .flat_map(|r| r.space.edited.drain())
+            .collect();
         out.sort_unstable_by_key(|p| (p.x, p.y, p.z));
         out
     }
@@ -144,12 +176,18 @@ impl DimSet {
     /// Changes whenever a cube was loaded or became settled, or regions were reshaped.
     pub fn settled_version(&self) -> u64 {
         let settled: u64 = self.regions.iter().map(|r| r.settled_gen).sum();
-        let cubes: u64 = self.regions.iter().map(|r| r.space.cubes.len() as u64).sum();
+        let cubes: u64 = self
+            .regions
+            .iter()
+            .map(|r| r.space.cubes.len() as u64)
+            .sum();
         settled ^ cubes << 24 ^ (self.regions.len() as u64) << 52
     }
 
     pub fn settled(&self, pos: IVec3) -> bool {
-        self.owner.get(&section_of_cube(pos)).is_some_and(|&r| self.regions[r].settled.contains(&pos))
+        self.owner
+            .get(&section_of_cube(pos))
+            .is_some_and(|&r| self.regions[r].settled.contains(&pos))
     }
 
     pub fn snapshot(&self, pos: IVec3) -> Option<Arc<Cube>> {
@@ -159,7 +197,12 @@ impl DimSet {
 
     /// Loaded cubes of nothing but air right under `pos`, at most `max`.
     pub fn air_below(&self, pos: IVec3, max: i32) -> i32 {
-        (1..=max).take_while(|&d| self.snapshot(pos - IVec3::Y * d).is_some_and(|c| c.palette() == [crate::content::AIR])).count() as i32
+        (1..=max)
+            .take_while(|&d| {
+                self.snapshot(pos - IVec3::Y * d)
+                    .is_some_and(|c| c.palette() == [crate::content::AIR])
+            })
+            .count() as i32
     }
 
     pub fn get(&self, p: IVec3) -> Option<u32> {
@@ -198,7 +241,11 @@ impl DimSet {
             if d.entities.get(id).is_some() {
                 continue;
             }
-            if c.game.is_block_entity(e.kind) && !d.in_frame(e.block_frame(), |d| d.block_entity_fits(c, &e)).unwrap_or(false) {
+            if c.game.is_block_entity(e.kind)
+                && !d
+                    .in_frame(e.block_frame(), |d| d.block_entity_fits(c, &e))
+                    .unwrap_or(false)
+            {
                 // Its block is gone (or it never had one): what it held stays in the world.
                 for s in inv.into_iter().flatten() {
                     d.spawn_item(c, e.pos, s);
@@ -206,7 +253,8 @@ impl DimSet {
                 continue;
             }
             if let Some(blocks) = blocks {
-                d.bodies.insert(id, Box::new(super::space::Space::with_blocks(c, &blocks)));
+                d.bodies
+                    .insert(id, Box::new(super::space::Space::with_blocks(c, &blocks)));
                 bodies.push(id);
             }
             d.entities.insert_with(c, e, inv, comps);
@@ -225,7 +273,9 @@ impl DimSet {
 
     /// Loaded cubes changed since they were generated or loaded (saved when they unload).
     pub fn modified(&self) -> impl Iterator<Item = IVec3> + '_ {
-        self.regions.iter().flat_map(|r| r.space.modified.iter().copied())
+        self.regions
+            .iter()
+            .flat_map(|r| r.space.modified.iter().copied())
     }
 
     pub fn connectivity(&mut self, c: &Content, pos: IVec3) -> Option<u16> {
@@ -243,9 +293,9 @@ impl DimSet {
         let def = &c.dims[self.id as usize];
         let mut pos = def.spawn_at;
         if let Some(cb) = def.spawn {
-            let mut args = abi::SpawnArgs { seed: self.seed, pos };
+            let mut args = abi::SpawnArgs { seed: self.seed, pos: pos.into() };
             host::invoke(def.owner, cb, &mut args);
-            pos = args.pos;
+            pos = args.pos.to_array();
         } else if let Some(p) = search_spawn(c, def, self.seed) {
             pos = p;
         }
@@ -257,7 +307,7 @@ impl DimSet {
     pub fn area_fill(&mut self, c: &'static Content, mut fill: super::area::AreaFill, fresh: &[IVec3]) {
         let start = std::time::Instant::now();
         fill.id = self.edits.last().map_or(1, |e| e.id + 1);
-        Arc::make_mut(&mut self.edits).push(fill);
+        Arc::make_mut(&mut self.edits).push(fill.clone());
         // Regions first (making one may merge others), then who gets what.
         for &cp in fresh {
             self.region_for(c, section_of_cube(cp));
@@ -277,8 +327,8 @@ impl DimSet {
             total.light_ms += s.light_ms;
         }
         log::info!(
-            "area fill r {:.0}: {} cubes changed ({} whole), {:.0} ms applying, {} relit in {:.0} ms, {} edge updates queued, {:.0} ms in all",
-            fill.radius,
+            "area fill {}: {} cubes changed ({} whole), {:.0} ms applying, {} relit in {:.0} ms, {} edge updates queued, {:.0} ms in all",
+            fill.id,
             total.cubes,
             total.whole,
             total.apply_ms,
@@ -307,27 +357,46 @@ impl DimSet {
     }
 
     /// The time of day's own clock.
-    pub fn set_weather(&mut self, raining: bool, thunder: bool, ticks: u64) {
-        (self.raining, self.thunder) = (raining, raining && thunder);
+    pub fn set_weather(&mut self, weather: u16, ticks: u64) {
+        self.weather = weather;
         self.weather_until = self.time + ticks;
         self.weather_moved = true;
         for r in &mut self.regions {
-            r.raining = raining;
-            r.thunder = self.thunder;
+            r.weather = self.weather;
         }
     }
 
-    /// Vanilla's timing: clear for 10 minutes to 2.5 hours, rain for 10 to 20 minutes, a third of
-    /// it with thunder.
-    pub fn tick_weather(&mut self) {
+    /// After clear weather one of the others by their weights, after any other clear again, each
+    /// for as long as its `duration` says.
+    pub fn tick_weather(&mut self, c: &Content) {
+        let tick = abi::WeatherTick { dim: self.id, weather: self.weather as u32 };
+        if let Some(r) = self.regions.first_mut() {
+            r.emit_engine(c, abi::event::WEATHER_TICK, &tick);
+        }
         if self.time < self.weather_until {
             return;
         }
+        let all = &c.game.weathers;
         let r = weft_noise::hash(self.seed ^ 0x5745_4154, self.time as i64, 0, 0);
         let first = self.weather_until == 0;
-        let raining = !first && !self.raining;
-        let ticks = if raining { 12000 + r % 12000 } else { 12000 + r % 168000 };
-        self.set_weather(raining, raining && r >> 32 & 3 == 0, ticks);
+        let here = &c.dims[self.id as usize].weathers;
+        let total: u64 = here.iter().map(|&w| all[w as usize].weight as u64).sum();
+        let next = if first || self.weather != 0 || total == 0 {
+            0
+        } else {
+            let mut pick = (r >> 32) % total;
+            here.iter()
+                .copied()
+                .find(|&w| {
+                    let weight = all[w as usize].weight as u64;
+                    let hit = pick < weight;
+                    pick = pick.saturating_sub(weight);
+                    hit
+                })
+                .unwrap_or(0) as usize
+        };
+        let [lo, hi] = all[next].duration;
+        self.set_weather(next as u16, lo + r % (hi - lo + 1));
     }
 
     pub fn day_time(&self) -> u64 {
@@ -338,9 +407,16 @@ impl DimSet {
     /// parts. Data moves in parcels; each region keeps the part it holds most of.
     pub fn regionize(&mut self, c: &Content) {
         self.dirty = false;
-        self.regions.retain(|r| !r.space.cubes.is_empty() || !r.entities.list.is_empty());
+        self.regions
+            .retain(|r| !r.space.cubes.is_empty() || !r.entities.list.is_empty());
         let per_region: Vec<FxHashSet<IVec3>> = self.regions.iter().map(|r| r.sections()).collect();
-        let all: Vec<IVec3> = per_region.iter().flatten().copied().collect::<FxHashSet<_>>().into_iter().collect();
+        let all: Vec<IVec3> = per_region
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<FxHashSet<_>>()
+            .into_iter()
+            .collect();
         let index: FxHashMap<IVec3, usize> = all.iter().enumerate().map(|(i, &s)| (s, i)).collect();
         let mut parent: Vec<usize> = (0..all.len()).collect();
         fn find(p: &mut [usize], mut x: usize) -> usize {
@@ -383,16 +459,31 @@ impl DimSet {
             for &s in secs {
                 *counts.entry(comp_of(s, &mut parent)).or_default() += 1;
             }
-            primary.push(counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then((b.0.x, b.0.y, b.0.z).cmp(&(a.0.x, a.0.y, a.0.z)))).map(|x| x.0));
+            primary.push(
+                counts
+                    .into_iter()
+                    .max_by(|a, b| {
+                        a.1.cmp(&b.1)
+                            .then((b.0.x, b.0.y, b.0.z).cmp(&(a.0.x, a.0.y, a.0.z)))
+                    })
+                    .map(|x| x.0),
+            );
         }
         let sec_comp: FxHashMap<IVec3, IVec3> = all.iter().map(|&s| (s, comp_of(s, &mut parent))).collect();
-        let changed = per_region.iter().enumerate().any(|(i, secs)| secs.iter().any(|s| Some(sec_comp[s]) != primary[i]))
+        let changed = per_region
+            .iter()
+            .enumerate()
+            .any(|(i, secs)| secs.iter().any(|s| Some(sec_comp[s]) != primary[i]))
             || {
                 let mut seen = FxHashSet::default();
                 primary.iter().flatten().any(|p| !seen.insert(*p))
             };
         if !changed {
-            self.owner = per_region.iter().enumerate().flat_map(|(i, secs)| secs.iter().map(move |&s| (s, i))).collect();
+            self.owner = per_region
+                .iter()
+                .enumerate()
+                .flat_map(|(i, secs)| secs.iter().map(move |&s| (s, i)))
+                .collect();
             return;
         }
 
@@ -400,7 +491,11 @@ impl DimSet {
         let mut parcels: Vec<(IVec3, super::dim::Parcel)> = Vec::new();
         for (i, r) in self.regions.iter_mut().enumerate() {
             let mine = primary[i];
-            let foreign: FxHashSet<IVec3> = per_region[i].iter().filter(|s| Some(sec_comp[*s]) != mine).map(|s| sec_comp[s]).collect();
+            let foreign: FxHashSet<IVec3> = per_region[i]
+                .iter()
+                .filter(|s| Some(sec_comp[*s]) != mine)
+                .map(|s| sec_comp[s])
+                .collect();
             for comp in foreign {
                 let sc = &sec_comp;
                 parcels.push((comp, r.take_sections(|s| sc.get(&s) == Some(&comp))));
@@ -469,7 +564,12 @@ fn search_spawn(c: &Content, def: &crate::content::DimensionDef, seed: u64) -> O
     let good = |x: i32, z: i32, prefer: bool| {
         let col = def.column(seed, x, z)?;
         let biome_ok = !prefer || preferred.is_some_and(|t| c.components.has(crate::components::BIOME, col.biome, t));
-        (col.height != i32::MIN && col.height > sea + 1 && biome_ok && !def.carved(seed, x, z) && !super::dim::scattered_near(def, c, seed, x, z)).then_some([x, col.height, z])
+        (col.height != i32::MIN
+            && col.height > sea + 1
+            && biome_ok
+            && !def.carved(seed, x, z)
+            && !super::dim::scattered_near(def, c, seed, x, z))
+        .then_some([x, col.height, z])
     };
     for prefer in [true, false] {
         for r in 0..200 {

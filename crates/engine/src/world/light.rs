@@ -26,7 +26,7 @@ pub trait CubeMap {
     }
 }
 
-const DIRS: [IVec3; 6] = [IVec3::NEG_X, IVec3::X, IVec3::NEG_Y, IVec3::Y, IVec3::NEG_Z, IVec3::Z];
+use super::DIRS;
 pub const SKY_FULL: u8 = 15;
 
 /// The one rule light moves by: from a block at `v` into one taking `op` (its opacity, or the
@@ -35,6 +35,18 @@ pub const SKY_FULL: u8 = 15;
 #[inline]
 pub fn step(v: u8, op: u8, down_sky: bool) -> u8 {
     if down_sky && v == SKY_FULL && op == 0 { SKY_FULL } else { v.saturating_sub(op.max(1)) }
+}
+
+/// What of light `v` on channel `c` goes from a block of `from` into its neighbor `to` in
+/// direction `dir` (`DIRS` order), 0 for none. Every path light takes, lighting cubes
+/// together or alone, goes by this and nothing else.
+#[inline]
+pub fn passed(from: &Tight, to: &Tight, dir: usize, v: u8, c: usize) -> u8 {
+    let op = if c == SKY { to.opacity } else { to.absorb[c - 1] };
+    if (op >= 15 && to.opacity >= 15) || !from.lets_into(to, dir) {
+        return 0;
+    }
+    step(v, op, c == SKY && dir == 2)
 }
 
 /// The most light at `v` gives a neighbor (`step` into a clear block).
@@ -63,9 +75,9 @@ pub enum SkyBelow {
 /// What comes down from `above` (`None`: not loaded; `open`: open sky is there, `open_above`).
 pub fn sky_below(above: Option<&Cube>, open: bool) -> SkyBelow {
     let Some(a) = above else { return if open { SkyBelow::Full } else { SkyBelow::Dark } };
-    let sky = |i: usize| a.light(crate::world::cube::index(i % 16, 0, i / 16)) & 0xFF;
+    let sky = |i: usize| weft_abi::light::sky(a.light(crate::world::cube::index(i % 16, 0, i / 16)));
     let v = match a.uniform_light() {
-        Some(l) => l & 0xFF,
+        Some(l) => weft_abi::light::sky(l),
         None if (1..256).all(|i| sky(i) == sky(0)) => sky(0),
         None => return SkyBelow::Partial,
     };
@@ -81,7 +93,22 @@ const SKY: usize = 0;
 #[inline]
 /// The sky's level in a light value as cubes store it.
 pub fn sky_of(v: u32) -> u8 {
-    ch(v, SKY)
+    weft_abi::light::sky(v) as u8
+}
+
+/// What a block changing at `p` from `old` does to the light around it, what bodies' lights give
+/// included, on the server and in a client's guess alike. Returns the cubes that changed.
+pub fn block_changed(
+    map: &mut impl CubeMap,
+    c: &crate::content::Content,
+    sky: bool,
+    glow: &rustc_hash::FxHashMap<IVec3, [u8; 3]>,
+    p: IVec3,
+    old: u32,
+) -> Vec<IVec3> {
+    let mut lighter = Lighter::new(map, c, sky).with_extra(glow);
+    lighter.block_changed(p, old);
+    std::mem::take(&mut lighter.changed).into_iter().collect()
 }
 
 fn ch(v: u32, c: usize) -> u8 {
@@ -142,7 +169,8 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
             return unsafe { ptr.as_ref() };
         }
         let r = self.map.cube(cp);
-        self.cache.set((cp, r.map_or(std::ptr::null(), |c| c as *const Cube)));
+        self.cache
+            .set((cp, r.map_or(std::ptr::null(), |c| c as *const Cube)));
         r
     }
 
@@ -179,9 +207,16 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
     }
 
     #[inline]
-    fn absorb(&self, state: u32, c: usize) -> u8 {
-        let s = &self.c.tight[state as usize];
-        if c == SKY { s.opacity } else { s.absorb[c - 1] }
+    fn tight(&self, state: u32) -> &Tight {
+        &self.c.tight[state as usize]
+    }
+
+    /// `passed` from the block at `p` (air where nothing is loaded: open sky) into a neighbor
+    /// of state `to`.
+    #[inline]
+    fn passed_from(&self, p: IVec3, to: u32, dir: usize, v: u8, c: usize) -> u8 {
+        let from = self.read(p).map_or(0, |(s, _)| s);
+        passed(self.tight(from), self.tight(to), dir, v, c)
     }
 
     #[inline]
@@ -203,14 +238,11 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
             if self.get(p, c) != Some(v) {
                 continue;
             }
+            let from = self.read(p).map_or(0, |(s, _)| s);
             for (d, dir) in DIRS.iter().enumerate() {
                 let n = p + *dir;
                 let Some((state, light)) = self.read(n) else { continue };
-                let op = self.absorb(state, c);
-                if op >= 15 && self.c.tight[state as usize].opacity >= 15 {
-                    continue;
-                }
-                let nv = step(v, op, c == SKY && d == 2);
+                let nv = passed(self.tight(from), self.tight(state), d, v, c);
                 if nv > ch(light, c) && self.put(n, c, nv) {
                     self.add.push_back((n, nv));
                     steps += 1;
@@ -255,9 +287,12 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
         let base = cp * 16;
         let Some(cube) = self.map.cube(cp) else { return };
         let states = &self.c.tight;
-        let all_clear = cube.palette().iter().all(|&s| states[s as usize].opacity == 0);
-        let all_opaque = cube.palette().iter().all(|&s| states[s as usize].opacity >= 15);
-        let emits = cube.palette().iter().any(|&s| states[s as usize].light != [0; 3]);
+        let all_clear = cube.palette().iter().all(|&s| states[s as usize].clear());
+        let all_opaque = cube.palette().iter().all(|&s| states[s as usize].dark());
+        let emits = cube
+            .palette()
+            .iter()
+            .any(|&s| states[s as usize].light != [0; 3]);
         self.map.cube_mut(cp).unwrap().fill_light(0);
         self.cache.set((IVec3::MAX, std::ptr::null()));
         self.changed.insert(cp);
@@ -282,7 +317,6 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
                         if !self.accepts(cp + DIRS[d], SKY, SKY_FULL) {
                             continue;
                         }
-                        let reach = reach(SKY_FULL, d == 2);
                         for a in 0..16 {
                             for b in 0..16 {
                                 let p = base
@@ -296,7 +330,7 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
                                 // Seed only where the cell across can still get brighter: a
                                 // neighbor lit earlier is usually full already.
                                 let Some((state, light)) = self.read(p + DIRS[d]) else { continue };
-                                if ch(light, SKY) < reach && self.c.tight[state as usize].opacity < 15 {
+                                if self.passed_from(p, state, d, SKY_FULL, SKY) > ch(light, SKY) {
                                     self.add.push_back((p, SKY_FULL));
                                 }
                             }
@@ -311,9 +345,8 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
                             }
                             let p = base + IVec3::new(x, 15, z);
                             let (state, _) = self.read(p).unwrap();
-                            let op = self.absorb(state, SKY);
-                            let nv = step(v, op, true);
-                            if nv > 0 && op < 15 {
+                            let nv = self.passed_from(p + IVec3::Y, state, 2, v, SKY);
+                            if nv > 0 {
                                 self.put(p, SKY, nv);
                                 self.add.push_back((p, nv));
                             }
@@ -356,7 +389,10 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
         self.changed.insert(cp);
         let base = cp * 16;
         let Some(cube) = self.map.cube(cp) else { return };
-        let all_opaque = cube.palette().iter().all(|&s| self.c.tight[s as usize].opacity >= 15);
+        let all_opaque = cube
+            .palette()
+            .iter()
+            .all(|&s| self.c.tight[s as usize].dark());
         if all_opaque {
             return;
         }
@@ -395,9 +431,8 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
                         if v <= 1 {
                             continue;
                         }
-                        let reach = reach(v, c == SKY && d == 2);
                         let Some((state, light)) = self.read(p + DIRS[d]) else { continue };
-                        if ch(light, c) < reach && self.c.tight[state as usize].opacity < 15 {
+                        if self.passed_from(p, state, d, v, c) > ch(light, c) {
                             self.add.push_back((p, v));
                         }
                     }
@@ -414,7 +449,10 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
         if cube.uniform_light().is_some_and(|l| ch(l, c) >= level) {
             return false;
         }
-        !cube.palette().iter().all(|&s| self.c.tight[s as usize].opacity >= 15)
+        !cube
+            .palette()
+            .iter()
+            .all(|&s| self.c.tight[s as usize].dark())
     }
 
     fn seed_from_neighbors(&mut self, cp: IVec3, c: usize, dirs: &[usize]) {
@@ -458,8 +496,7 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
     /// Relights after the block at `p` changed from `old` to the state now stored there.
     pub fn block_changed(&mut self, p: IVec3, old: u32) {
         let Some((new, _)) = self.read(p) else { return };
-        let (so, sn) = (&self.c.states[old as usize], &self.c.states[new as usize]);
-        if so.opacity == sn.opacity && so.light == sn.light && so.absorb == sn.absorb {
+        if self.tight(old).same_light(self.tight(new)) {
             return;
         }
         for &c in self.channels() {
@@ -502,7 +539,7 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
 /// value), for `Lighter::spread`. Only reads, so cubes lit apart can be looked at side by side.
 pub fn outward<M: CubeMap>(map: &M, c: &Content, sky: bool, cp: IVec3, out: &mut Vec<(IVec3, u8, u8)>) {
     let Some(cube) = map.cube(cp) else { return };
-    let opaque = |cube: &Cube| cube.palette().iter().all(|&s| c.tight[s as usize].opacity >= 15);
+    let opaque = |cube: &Cube| cube.palette().iter().all(|&s| c.tight[s as usize].dark());
     if opaque(cube) {
         return;
     }
@@ -534,10 +571,10 @@ pub fn outward<M: CubeMap>(map: &M, c: &Content, sky: bool, cp: IVec3, out: &mut
                     if v <= 1 {
                         continue;
                     }
-                    let reach = reach(v, ch_ == SKY && d == 2);
+                    let from = &c.tight[cube.get(index(local.x as usize, local.y as usize, local.z as usize)) as usize];
                     let q = (local + DIRS[d]) & 15;
                     let i = index(q.x as usize, q.y as usize, q.z as usize);
-                    if ch(n.light(i), ch_) < reach && c.tight[n.get(i) as usize].opacity < 15 {
+                    if passed(from, &c.tight[n.get(i) as usize], d, v, ch_) > ch(n.light(i), ch_) {
                         out.push((base + local, ch_ as u8, v));
                     }
                 }
@@ -551,8 +588,8 @@ pub fn outward<M: CubeMap>(map: &M, c: &Content, sky: bool, cp: IVec3, out: &mut
 pub fn prelight(c: &Content, cube: &mut Cube, sky: bool) {
     let t = &c.tight;
     let palette = cube.palette();
-    let all_opaque = palette.iter().all(|&s| t[s as usize].opacity >= 15);
-    let all_clear = palette.iter().all(|&s| t[s as usize].opacity == 0);
+    let all_opaque = palette.iter().all(|&s| t[s as usize].dark());
+    let all_clear = palette.iter().all(|&s| t[s as usize].clear());
     let emits = palette.iter().any(|&s| t[s as usize].light != [0; 3]);
     let sky = sky && !all_opaque;
     if !emits && (!sky || all_clear) {
@@ -566,7 +603,7 @@ pub fn prelight(c: &Content, cube: &mut Cube, sky: bool) {
     cube.palette_indices(&mut idx);
     let mut light = [[0u8; 4096]; 4];
     let mut queue: Vec<(u16, u8)> = Vec::new();
-    let flood = |light: &mut [u8; 4096], queue: &mut Vec<(u16, u8)>, absorb: &dyn Fn(usize) -> u8, sky: bool| {
+    let flood = |light: &mut [u8; 4096], queue: &mut Vec<(u16, u8)>, c: usize| {
         let mut head = 0;
         while head < queue.len() {
             let (i, v) = queue[head];
@@ -576,16 +613,18 @@ pub fn prelight(c: &Content, cube: &mut Cube, sky: bool) {
                 continue;
             }
             let (x, y, z) = (i & 15, i >> 8, (i >> 4) & 15);
-            for (d, ok, n) in [(0, x > 0, i.wrapping_sub(1)), (1, x < 15, i + 1), (2, y > 0, i.wrapping_sub(256)), (3, y < 15, i + 256), (4, z > 0, i.wrapping_sub(16)), (5, z < 15, i + 16)] {
+            for (d, ok, n) in [
+                (0, x > 0, i.wrapping_sub(1)),
+                (1, x < 15, i + 1),
+                (2, y > 0, i.wrapping_sub(256)),
+                (3, y < 15, i + 256),
+                (4, z > 0, i.wrapping_sub(16)),
+                (5, z < 15, i + 16),
+            ] {
                 if !ok {
                     continue;
                 }
-                let p = &props[idx[n] as usize];
-                let op = absorb(idx[n] as usize);
-                if op >= 15 && p.opacity >= 15 {
-                    continue;
-                }
-                let nv = step(v, op, sky && d == 2);
+                let nv = passed(&props[idx[i] as usize], &props[idx[n] as usize], d, v, c);
                 if nv > light[n] {
                     light[n] = nv;
                     queue.push((n as u16, nv));
@@ -600,17 +639,20 @@ pub fn prelight(c: &Content, cube: &mut Cube, sky: bool) {
             let mut v = SKY_FULL;
             for y in (0..16).rev() {
                 let i = y * 256 + col;
-                let op = props[idx[i] as usize].opacity;
-                // Only full sky goes on down here; dimmer light is the flood's.
-                v = if v == SKY_FULL && (op == 0 || y == 15) && op < 15 { step(v, op, true) } else { 0 };
-                if v == 0 {
+                // Open sky above the top: air.
+                let above = if y == 15 { &t[0] } else { &props[idx[i + 256] as usize] };
+                let nv = passed(above, &props[idx[i] as usize], 2, v, SKY);
+                // Only full sky goes on down here, dimmer light is the flood's; but for the
+                // top row, which nothing else in the cube lights.
+                if nv == 0 || (nv < SKY_FULL && y < 15) {
                     break;
                 }
+                v = nv;
                 light[0][i] = v;
                 queue.push((i as u16, v));
             }
         }
-        flood(&mut light[0], &mut queue, &|k| props[k].opacity, true);
+        flood(&mut light[0], &mut queue, SKY);
     }
     if emits {
         for ch in 0..3 {
@@ -621,10 +663,12 @@ pub fn prelight(c: &Content, cube: &mut Cube, sky: bool) {
                     queue.push((i as u16, e));
                 }
             }
-            flood(&mut light[ch + 1], &mut queue, &|k| props[k].absorb[ch], false);
+            flood(&mut light[ch + 1], &mut queue, ch + 1);
         }
     }
-    let packed: Box<[u32; 4096]> = Box::new(std::array::from_fn(|i| light[0][i] as u32 | (light[1][i] as u32) << 8 | (light[2][i] as u32) << 16 | (light[3][i] as u32) << 24));
+    let packed: Box<[u32; 4096]> = Box::new(std::array::from_fn(|i| {
+        light[0][i] as u32 | (light[1][i] as u32) << 8 | (light[2][i] as u32) << 16 | (light[3][i] as u32) << 24
+    }));
     cube.set_light_all(packed);
 }
 

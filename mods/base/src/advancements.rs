@@ -99,30 +99,36 @@ const ICON_Y: f32 = 9.0;
 
 pub fn register(r: &mut Registry) {
     // Kept through death: what a player made stays made.
-    r.entity_component(&ADVANCEMENTS, Advancements { done: 0 }, component_flags::SAVE | component_flags::SYNC_OWNER | component_flags::KEEP);
+    r.entity_component(
+        &ADVANCEMENTS,
+        Advancements { done: 0 },
+        component_flags::SAVE | component_flags::SYNC_OWNER | component_flags::KEEP_ON_RESPAWN,
+    );
     r.attach(&PLAYER, &ADVANCEMENTS);
-    r.sound(&CHIME).files(&["random/advancement"]).category(&sound_categories::UI);
+    r.sound(&CHIME)
+        .files(&["random/advancement"])
+        .category(&sound_categories::UI);
 
     r.world_tick(check_players);
-    r.on(&BLOCK_BROKEN, |b| {
+    r.on(&actions::BREAK_BLOCK, |b| {
         let w = b.world();
         for c in b.iter() {
             grant_where(&w, c.player, |rule| matches!(rule, Rule::Break(t) if t.on_block(c.state)));
         }
     });
-    r.on(&BLOCK_PLACED, |b| {
+    r.on(&actions::PLACE_BLOCK, |b| {
         let w = b.world();
         for c in b.iter() {
             grant_where(&w, c.player, |rule| matches!(rule, Rule::Place(t) if t.on_block(c.state)));
         }
     });
-    r.on(&ENTITY_DIED, |b| {
+    r.on(&actions::DIE, |b| {
         let w = b.world();
         for d in b.iter() {
-            grant_where(&w, d.killer, |rule| matches!(rule, Rule::Kill(t) if t.on_entity(d.kind)));
+            grant_where(&w, d.source, |rule| matches!(rule, Rule::Kill(t) if t.on_entity(d.kind)));
         }
     });
-    r.on(&ITEM_USED, |b| {
+    r.on(&actions::USE_ITEM, |b| {
         let w = b.world();
         for u in b.iter() {
             grant_where(&w, u.player, |rule| matches!(rule, Rule::Eat(t) if t.on_item(u.stack.item)));
@@ -148,13 +154,21 @@ pub fn register(r: &mut Registry) {
 fn check_players(w: &World) {
     for id in w.players() {
         let Some(st) = w.entity(id) else { continue };
-        if st.age % 20 != 0 || w.creative(id) {
+        if st.age % 20 != 0 || w.outside_survival(id) {
             continue;
         }
         let inv = w.inventory(id);
-        let items: Vec<u32> = (0..inv.size()).map(|i| inv.get(i)).filter(|s| !s.is_empty()).map(|s| s.item).collect();
-        let worn = inv.find_group(EQUIPMENT_GROUP).map_or(0, |g| (0..g.len()).filter(|&i| ARMOR.on_item(g.get(i).item).is_some()).count() as u32);
-        let y = st.pos[1];
+        let items: Vec<u32> = (0..inv.len())
+            .map(|i| inv.get(i))
+            .filter(|s| !s.is_empty())
+            .map(|s| s.item)
+            .collect();
+        let worn = inv.find_group(EQUIPMENT_GROUP).map_or(0, |g| {
+            (0..g.len())
+                .filter(|&i| ARMOR.on_item(g.get(i).item).is_some())
+                .count() as u32
+        });
+        let y = st.pos.y;
         grant_where(w, id, |rule| match *rule {
             Rule::Have(tag) => items.iter().any(|&i| tag.on_item(i)),
             Rule::Wear(n) => worn >= n,
@@ -168,7 +182,7 @@ fn check_players(w: &World) {
 /// Grants every advancement whose rule `met` says so to `player`, if it is a player in survival
 /// that doesn't have it yet, and tells their client.
 fn grant_where(w: &World, player: u64, met: impl Fn(&Rule) -> bool) {
-    if player == 0 || w.creative(player) {
+    if player == 0 || w.outside_survival(player) {
         return;
     }
     let Some(a) = w.component_mut(player, &ADVANCEMENTS) else { return };
@@ -209,13 +223,17 @@ fn client(r: &mut Registry) {
         }
         // Slides in from the right edge, eased, and back out at the end. Screen text is placed by
         // fractions of the window, centered on x with its top at y, so GUI pixels are converted.
-        let shown = (t / SLIDE_SECS).min((TOAST_SECS - t) / SLIDE_SECS).clamp(0.0, 1.0);
+        let shown = (t / SLIDE_SECS)
+            .min((TOAST_SECS - t) / SLIDE_SECS)
+            .clamp(0.0, 1.0);
         let ease = 1.0 - (1.0 - shown).powi(3);
         let st = c.state();
         let scale = st.gui_scale.max(1.0);
         let (gw, gh) = (st.window[0] as f32 / scale, st.window[1] as f32 / scale);
         let left = gw - (TOAST_W + TOAST_MARGIN) * ease;
-        let text = |x: f32, y: f32, key: &str, args: &[Arg], color: u32, size: f32| c.screen_text((left + x) / gw, (TOAST_MARGIN + y) / gh, key, args, color, size);
+        let text = |x: f32, y: f32, key: &str, args: &[Arg], color: u32, size: f32| {
+            c.draw_screen_text((left + x) / gw, (TOAST_MARGIN + y) / gh, key, args, color, size)
+        };
         text(TOAST_W / 2.0, 0.0, "advancements.base.toast_box", &[], 0xffffffff, 1.0);
         // An icon in text is as tall as a line: twice the size fills the slot.
         text(16.0, ICON_Y, "", &[Arg::Item(adv.icon.id())], 0xffffffff, 2.0);
@@ -228,28 +246,38 @@ fn client(r: &mut Registry) {
     // Every group a chain of tiles, gold framed once made, with the details in their tooltips.
     // Built when the screen opens, from what the player has made by then.
     r.screen(&SCREEN, |ui| {
-        let done = ui.client().component(&ADVANCEMENTS).map_or(0, |a| a.done);
-        ui.panel("panel", S::col().pad(8.0).gap(6.0), |ui| {
+        let done = ui.view().component(&ADVANCEMENTS).map_or(0, |a| a.done);
+        ui.panel("panel", S::column().pad(8.0).gap(6.0), |ui| {
             ui.row(S::row().gap(8.0), |ui| {
-                ui.text_styled(S::col().class("title").scale(1.5).no_wrap(), "advancements.base.title", &[]);
+                ui.text_styled(S::column().class("title").scale(1.5).no_wrap(), "advancements.base.title", &[]);
                 ui.spacer();
-                ui.text_bind_styled(S::col().class("dim").no_wrap(), |v, out| {
-                    let done = v.component(&ADVANCEMENTS).map_or(0, |a| a.done.count_ones());
+                ui.text_bind_styled(S::column().class("dim").no_wrap(), |v, out| {
+                    let done = v
+                        .component(&ADVANCEMENTS)
+                        .map_or(0, |a| a.done.count_ones());
                     out.set("advancements.base.progress", &[Arg::Int(done as i64), Arg::Int(ALL.len() as i64)]);
                 });
             });
-            ui.panel("well", S::col().pad(6.0).gap(6.0), |ui| {
+            ui.panel("well", S::column().pad(6.0).gap(6.0), |ui| {
                 for (g, group) in GROUPS.iter().enumerate() {
                     ui.row(S::row(), |ui| {
-                        ui.text_styled(S::col().w(90.0).no_wrap(), &format!("advancements.base.group.{group}"), &[]);
-                        for (n, (i, adv)) in ALL.iter().enumerate().filter(|(_, a)| a.group == g).enumerate() {
+                        ui.text_styled(S::column().w(90.0).no_wrap(), &format!("advancements.base.group.{group}"), &[]);
+                        for (n, (i, adv)) in ALL
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, a)| a.group == g)
+                            .enumerate()
+                        {
                             let made = done & (1 << i) != 0;
                             if n > 0 {
                                 ui.image(if made { "base:gui/advancement_line_done" } else { "base:gui/advancement_line" }, 6.0, 2.0);
                             }
                             let (title, desc) = (format!("advancement.base.{}", adv.id), format!("advancement.base.{}.desc", adv.id));
                             let status = if made { "advancements.base.done" } else { "advancements.base.locked" };
-                            let tile = S::row().size(26.0, 26.0).center().tooltip_args("advancements.base.tip", &[Arg::Key(&title), Arg::Key(&desc), Arg::Key(status)]);
+                            let tile = S::row()
+                                .size(26.0, 26.0)
+                                .center()
+                                .tooltip_args("advancements.base.tip", &[Arg::Key(&title), Arg::Key(&desc), Arg::Key(status)]);
                             ui.panel(if made { "advancement_tile_done" } else { "advancement_tile" }, tile, |ui| {
                                 ui.item(adv.icon.id(), 1, S::default());
                             });
@@ -259,14 +287,14 @@ fn client(r: &mut Registry) {
             });
         });
     });
-    r.key(&OPEN, "L").on_press(|c| {
-        c.open_screen(&SCREEN);
+    r.key(&OPEN, "L").on_press_client(|c| {
+        c.screen_open(&SCREEN);
     });
     // The pause menu stretches its mods' parts across the screen; sized and centered like its own
     // buttons (200 wide) instead.
     r.screen_part(&screens::PAUSE, "buttons", 0, |ui| {
-        ui.button("advancements.base.button", S::col().min_w(200.0).self_align(abi::ui_align::CENTER), |c| {
-            c.client().open_screen(&SCREEN);
+        ui.button("advancements.base.button", S::column().min_w(200.0).self_align(abi::ui_align::CENTER), |c| {
+            c.client().screen_open(&SCREEN);
         });
     });
 }

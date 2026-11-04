@@ -12,20 +12,72 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dim::Dim;
 use crate::content::Content;
+use crate::shape::Shape;
 use crate::world::cube::{Cube, VOLUME};
 use crate::world::light::Lighter;
 
-/// A ball of one block: every block whose middle is within `radius` of `center` becomes
-/// `state` (unbreakable ones stay with `keep_unbreakable`, liquids with `keep_liquids`).
-#[derive(Clone, Copy, Debug)]
+/// A shape of one block: every block whose middle is inside becomes `state`, unless a `keep`
+/// filter matches it or `only` is given and none of it does.
+#[derive(Clone, Debug)]
 pub struct AreaFill {
     /// Order of the dimension's edits, from 1; cubes remember the last one they got.
     pub id: u32,
-    pub center: DVec3,
-    pub radius: f64,
+    pub shape: Shape,
     pub state: u32,
-    pub keep_unbreakable: bool,
-    pub keep_liquids: bool,
+    pub keep: Vec<Filter>,
+    pub only: Vec<Filter>,
+}
+
+/// Which blocks a fill keeps or changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Filter {
+    Liquids,
+    Unbreakable,
+    Tag(u32),
+    Block(u32),
+}
+
+impl Filter {
+    pub fn from_abi(c: &Content, f: &weft_abi::BlockFilter) -> Option<Filter> {
+        use weft_abi::block_filter as k;
+        Some(match f.kind {
+            k::LIQUIDS => Filter::Liquids,
+            k::UNBREAKABLE => Filter::Unbreakable,
+            k::TAG if (f.id as usize) < c.components.names.len() => Filter::Tag(f.id),
+            k::BLOCK if (f.id as usize) < c.states.len() => Filter::Block(c.states[f.id as usize].block),
+            _ => return None,
+        })
+    }
+
+    pub fn matches(&self, c: &Content, s: u32) -> bool {
+        let st = &c.states[s as usize];
+        match *self {
+            Filter::Liquids => st.liquid.is_some(),
+            // Liquids count as unbreakable for mining, not here: a crater takes the lake too,
+            // unless it is told otherwise.
+            Filter::Unbreakable => st.liquid.is_none() && st.hardness < 0.0,
+            Filter::Tag(t) => c.components.has(crate::components::BLOCK, s, t),
+            Filter::Block(b) => st.block == b,
+        }
+    }
+
+    fn spec(&self, c: &Content) -> String {
+        match *self {
+            Filter::Liquids => "liquids".into(),
+            Filter::Unbreakable => "unbreakable".into(),
+            Filter::Tag(t) => format!("#{}", c.components.names[t as usize]),
+            Filter::Block(b) => c.blocks[b as usize].name.clone(),
+        }
+    }
+
+    fn parse(c: &Content, w: &str) -> Option<Filter> {
+        Some(match w {
+            "liquids" => Filter::Liquids,
+            "unbreakable" => Filter::Unbreakable,
+            t if t.starts_with('#') => Filter::Tag(c.components.id(&t[1..])?),
+            b => Filter::Block(*c.block_names.get(b)?),
+        })
+    }
 }
 
 /// Light work for one cube of an area edit.
@@ -67,7 +119,10 @@ impl crate::world::light::CubeMap for Overlay<'_> {
         if !self.reaches(p) {
             return None;
         }
-        self.own.get(&p).map(|b| &**b).or_else(|| self.base.get(&p).map(|a| &**a))
+        self.own
+            .get(&p)
+            .map(|b| &**b)
+            .or_else(|| self.base.get(&p).map(|a| &**a))
     }
 
     fn cube_mut(&mut self, p: IVec3) -> Option<&mut Cube> {
@@ -94,59 +149,98 @@ pub struct FillStats {
 }
 
 impl AreaFill {
-    /// As saved in `world.txt`: `id x y z radius block keep`, keep 1 unbreakable + 2 liquids.
+    /// As saved in `world.txt`: `id block keep:<filters> only:<filters> <shape>`.
     pub fn spec(&self, c: &Content) -> String {
-        let p = self.center;
-        format!("{} {} {} {} {} {} {}", self.id, p.x, p.y, p.z, self.radius, c.state_name(self.state), self.keep_unbreakable as u8 + self.keep_liquids as u8 * 2)
+        let list = |l: &[Filter]| l.iter().map(|f| f.spec(c)).collect::<Vec<_>>().join(",");
+        format!("{} {} keep:{} only:{} {}", self.id, c.state_name(self.state), list(&self.keep), list(&self.only), self.shape.spec())
     }
 
     pub fn parse(c: &Content, spec: &str) -> Option<AreaFill> {
         let w: Vec<&str> = spec.split_whitespace().collect();
-        let [id, x, y, z, r, block, keep] = w[..] else { return None };
-        let keep: u8 = keep.parse().ok()?;
+        // Saved before shapes: `id x y z radius block keep`, keep 1 unbreakable + 2 liquids.
+        if let [id, x, y, z, r, block, keep] = w[..] {
+            if let (Ok(x), Ok(y), Ok(z), Ok(r), Ok(keep)) = (x.parse(), y.parse(), z.parse(), r.parse(), keep.parse::<u8>()) {
+                let kept = [(1, Filter::Unbreakable), (2, Filter::Liquids)]
+                    .into_iter()
+                    .filter(|(bit, _)| keep & bit != 0)
+                    .map(|f| f.1)
+                    .collect();
+                return Some(AreaFill {
+                    id: id.parse().ok()?,
+                    shape: Shape::ball(DVec3::new(x, y, z), r),
+                    state: c.state_by_name(block)?,
+                    keep: kept,
+                    only: Vec::new(),
+                });
+            }
+        }
+        let [id, block, keep, only, shape @ ..] = &w[..] else { return None };
+        let list = |w: &str, tag: &str| -> Option<Vec<Filter>> {
+            w.strip_prefix(tag)?
+                .split(',')
+                .filter(|f| !f.is_empty())
+                .map(|f| Filter::parse(c, f))
+                .collect()
+        };
         Some(AreaFill {
             id: id.parse().ok()?,
-            center: DVec3::new(x.parse().ok()?, y.parse().ok()?, z.parse().ok()?),
-            radius: r.parse().ok()?,
             state: c.state_by_name(block)?,
-            keep_unbreakable: keep & 1 != 0,
-            keep_liquids: keep & 2 != 0,
+            keep: list(keep, "keep:")?,
+            only: list(only, "only:")?,
+            shape: Shape::parse(shape.iter().copied())?,
         })
     }
 
-    /// Squared distance from the center to the nearest and farthest point of cube `cp`.
-    pub fn reach(&self, cp: IVec3) -> (f64, f64) {
-        let lo = (cp * 16).as_dvec3();
-        let hi = lo + DVec3::splat(16.0);
-        let near = self.center.clamp(lo, hi) - self.center;
-        let far = DVec3::new(
-            (self.center.x - lo.x).abs().max((hi.x - self.center.x).abs()),
-            (self.center.y - lo.y).abs().max((hi.y - self.center.y).abs()),
-            (self.center.z - lo.z).abs().max((hi.z - self.center.z).abs()),
-        );
-        (near.length_squared(), far.length_squared())
+    /// Stays as it is.
+    fn keeps(&self, c: &Content, s: u32) -> bool {
+        self.keep.iter().any(|f| f.matches(c, s)) || (!self.only.is_empty() && !self.only.iter().any(|f| f.matches(c, s)))
     }
 
-    /// The cube may hold a block it changes, or one next to the edge.
+    /// Blocks it keeps may be anywhere in terrain: cubes it covers are then made from what
+    /// was there, not as one block.
+    pub fn keeps_any(&self, c: &Content) -> bool {
+        !self.only.is_empty()
+            || self.keep.iter().any(|f| match f {
+                Filter::Unbreakable => c
+                    .states
+                    .iter()
+                    .any(|s| s.hardness < 0.0 && s.liquid.is_none()),
+                _ => true,
+            })
+    }
+
+    /// Block corners of cube `cp`, grown by `by` blocks.
+    fn cube_box(cp: IVec3, by: f64) -> (DVec3, DVec3) {
+        let lo = (cp * 16).as_dvec3();
+        (lo - by, lo + 16.0 + by)
+    }
+
+    /// The cube may hold a block it changes, or one next to the edge (`by` 1); with a larger
+    /// `by`, a cube that far from it.
+    pub fn near(&self, cp: IVec3, by: f64) -> bool {
+        let (lo, hi) = Self::cube_box(cp, by);
+        self.shape.test_box(lo, hi).1
+    }
+
     pub fn touches(&self, cp: IVec3) -> bool {
-        self.reach(cp).0 <= (self.radius + 1.0).powi(2)
+        self.near(cp, 1.0)
+    }
+
+    /// The middle of every block of the cube is inside.
+    pub fn covers(&self, cp: IVec3) -> bool {
+        let (lo, hi) = Self::cube_box(cp, -0.5);
+        self.shape.test_box(lo, hi).0
     }
 
     fn inside(&self, p: IVec3) -> bool {
-        (p.as_dvec3() + DVec3::splat(0.5) - self.center).length_squared() <= self.radius * self.radius
+        self.shape.contains(p.as_dvec3() + DVec3::splat(0.5))
     }
 
     /// The cube with the fill applied, if that changes it, and the blocks outside next to a
     /// changed one (they get a neighbor update: sand on the rim falls).
     pub fn apply(&self, c: &Content, cp: IVec3, cube: &Cube) -> Option<(Cube, Vec<IVec3>)> {
-        // Liquids count as unbreakable for mining, not here: a crater takes the lake too, unless
-        // it is told otherwise.
-        let keep = |s: u32| {
-            let st = &c.states[s as usize];
-            if st.liquid.is_some() { self.keep_liquids } else { self.keep_unbreakable && st.hardness < 0.0 }
-        };
-        let (_, far) = self.reach(cp);
-        let mut out = if far <= self.radius * self.radius && !cube.palette().iter().any(|&s| keep(s)) {
+        let keep = |s: u32| self.keeps(c, s);
+        let mut out = if self.covers(cp) && !cube.palette().iter().any(|&s| keep(s)) {
             if cube.palette() == [self.state] {
                 return None;
             }
@@ -187,10 +281,26 @@ impl Dim {
     pub fn area_fill(&mut self, c: &'static Content, fill: &AreaFill, fresh: &[IVec3]) -> FillStats {
         let mut stats = FillStats::default();
         let start = std::time::Instant::now();
-        let targets: Vec<(IVec3, Arc<Cube>)> = self.space.cubes.iter().filter(|(cp, _)| fill.touches(**cp)).map(|(cp, cube)| (*cp, cube.clone())).collect();
+        let targets: Vec<(IVec3, Arc<Cube>)> = self
+            .space
+            .cubes
+            .iter()
+            .filter(|(cp, _)| fill.touches(**cp))
+            .map(|(cp, cube)| (*cp, cube.clone()))
+            .collect();
         // With whether the cube had a light source.
-        let done: Vec<(IVec3, Option<(Cube, Vec<IVec3>)>, bool)> =
-            targets.par_iter().map(|(cp, cube)| (*cp, fill.apply(c, *cp, cube), cube.palette().iter().any(|&s| c.states[s as usize].light != [0; 3]))).collect();
+        let done: Vec<(IVec3, Option<(Cube, Vec<IVec3>)>, bool)> = targets
+            .par_iter()
+            .map(|(cp, cube)| {
+                (
+                    *cp,
+                    fill.apply(c, *cp, cube),
+                    cube.palette()
+                        .iter()
+                        .any(|&s| c.states[s as usize].light != [0; 3]),
+                )
+            })
+            .collect();
         let mut relight: Vec<IVec3> = Vec::new();
         // Cubes that lost a light source: those around them may get darker.
         let mut lost_light: Vec<IVec3> = Vec::new();
@@ -212,7 +322,11 @@ impl Dim {
                 .entities
                 .anchors
                 .iter()
-                .filter(|((frame, p), _)| *frame == 0 && crate::world::cube_of(*p) == cp && cube.get(crate::world::local_index(*p)) != self.get(*p).unwrap_or(u32::MAX))
+                .filter(|((frame, p), _)| {
+                    *frame == 0
+                        && crate::world::cube_of(*p) == cp
+                        && cube.get(crate::world::local_index(*p)) != self.get(*p).unwrap_or(u32::MAX)
+                })
                 .map(|((_, p), id)| (*p, *id))
                 .collect();
             for (_, id) in gone {
@@ -275,9 +389,23 @@ pub fn catch_up(c: &Content, edits: &[AreaFill], pos: IVec3, cube: &mut Cube) ->
 /// `fill` made on cubes held outside a region (a client's own world): applied on every core to
 /// the ones it reaches and lit; every cube changed, in blocks or light, goes into `dirty`.
 pub fn fill_cubes(c: &'static Content, dim: u32, fill: &AreaFill, cubes: &mut FxHashMap<IVec3, Arc<Cube>>, dirty: &mut FxHashSet<IVec3>) {
-    let targets: Vec<(IVec3, Arc<Cube>)> = cubes.iter().filter(|(cp, _)| fill.touches(**cp)).map(|(cp, cube)| (*cp, cube.clone())).collect();
-    let done: Vec<(IVec3, Option<Cube>, bool)> =
-        targets.par_iter().map(|(cp, cube)| (*cp, fill.apply(c, *cp, cube).map(|r| r.0), cube.palette().iter().any(|&s| c.states[s as usize].light != [0; 3]))).collect();
+    let targets: Vec<(IVec3, Arc<Cube>)> = cubes
+        .iter()
+        .filter(|(cp, _)| fill.touches(**cp))
+        .map(|(cp, cube)| (*cp, cube.clone()))
+        .collect();
+    let done: Vec<(IVec3, Option<Cube>, bool)> = targets
+        .par_iter()
+        .map(|(cp, cube)| {
+            (
+                *cp,
+                fill.apply(c, *cp, cube).map(|r| r.0),
+                cube.palette()
+                    .iter()
+                    .any(|&s| c.states[s as usize].light != [0; 3]),
+            )
+        })
+        .collect();
     let (mut changed, mut lost) = (Vec::new(), Vec::new());
     for (cp, result, emitted) in done {
         match result {
@@ -303,7 +431,15 @@ pub fn fill_cubes(c: &'static Content, dim: u32, fill: &AreaFill, cubes: &mut Fx
 /// Light after `state` was filled into the `changed` cubes (`lost_light`: those of them that
 /// had a light source), every cube whose light changed going into `dirty`. Returns how many
 /// cubes were relit.
-pub fn relight_after(c: &'static Content, dim: u32, state: u32, cubes: &mut FxHashMap<IVec3, Arc<Cube>>, dirty: &mut FxHashSet<IVec3>, changed: &[IVec3], lost_light: &[IVec3]) -> usize {
+pub fn relight_after(
+    c: &'static Content,
+    dim: u32,
+    state: u32,
+    cubes: &mut FxHashMap<IVec3, Arc<Cube>>,
+    dirty: &mut FxHashSet<IVec3>,
+    changed: &[IVec3],
+    lost_light: &[IVec3],
+) -> usize {
     let st = &c.states[state as usize];
     if st.opacity == 0 && st.light == [0; 3] && st.liquid.is_none() {
         relight_opened(c, dim, cubes, dirty, changed, lost_light)
@@ -316,13 +452,22 @@ pub fn relight_after(c: &'static Content, dim: u32, state: u32, cubes: &mut FxHa
 /// only they are lit again and push it out, except around lost light sources. Cubes open to
 /// full sky above need no flood fill: whole air ones are set to full sky, partial ones are
 /// lit alone in parallel (as generation does) and joined to their neighbors.
-fn relight_opened(c: &'static Content, dim: u32, cubes: &mut FxHashMap<IVec3, Arc<Cube>>, dirty: &mut FxHashSet<IVec3>, changed: &[IVec3], lost_light: &[IVec3]) -> usize {
+fn relight_opened(
+    c: &'static Content,
+    dim: u32,
+    cubes: &mut FxHashMap<IVec3, Arc<Cube>>,
+    dirty: &mut FxHashSet<IVec3>,
+    changed: &[IVec3],
+    lost_light: &[IVec3],
+) -> usize {
     let def = &c.dims[dim as usize];
     let full = crate::world::light::SKY_FULL as u32;
     let mut order = changed.to_vec();
     order.sort_unstable_by_key(|p| (-p.y, p.x, p.z));
     let open_above = |cp: IVec3| crate::world::light::open_above(def, cp.y);
-    let sky_above = |cubes: &rustc_hash::FxHashMap<IVec3, Arc<Cube>>, cp: IVec3| crate::world::light::sky_below(cubes.get(&(cp + IVec3::Y)).map(|a| &**a), open_above(cp)) == crate::world::light::SkyBelow::Full;
+    let sky_above = |cubes: &rustc_hash::FxHashMap<IVec3, Arc<Cube>>, cp: IVec3| {
+        crate::world::light::sky_below(cubes.get(&(cp + IVec3::Y)).map(|a| &**a), open_above(cp)) == crate::world::light::SkyBelow::Full
+    };
     let mut whole = Vec::new();
     let mut alone = Vec::new();
     let mut flood = Vec::new();
@@ -360,8 +505,22 @@ fn relight_opened(c: &'static Content, dim: u32, cubes: &mut FxHashMap<IVec3, Ar
     // Whole air cubes among others like them have nothing to push or pull.
     let full: FxHashSet<IVec3> = whole.iter().copied().collect();
     let mut jobs: Vec<LightJob> = alone.iter().map(|&cp| LightJob::Join(cp)).collect();
-    jobs.extend(flood.iter().chain(&dimmed).map(|&cp| LightJob::New(cp, open_above(cp))));
-    jobs.extend(whole.iter().filter(|&&cp| crate::world::DIRS.iter().any(|d| !full.contains(&(cp + *d)))).map(|&cp| LightJob::Join(cp)));
+    jobs.extend(
+        flood
+            .iter()
+            .chain(&dimmed)
+            .map(|&cp| LightJob::New(cp, open_above(cp))),
+    );
+    jobs.extend(
+        whole
+            .iter()
+            .filter(|&&cp| {
+                crate::world::DIRS
+                    .iter()
+                    .any(|d| !full.contains(&(cp + *d)))
+            })
+            .map(|&cp| LightJob::Join(cp)),
+    );
     run_light_jobs(c, dim, cubes, dirty, jobs);
     relit
 }
@@ -370,23 +529,40 @@ fn relight_opened(c: &'static Content, dim: u32, cubes: &mut FxHashMap<IVec3, Ar
 /// cube) except full sky going straight down, so jobs are grouped by column and columns
 /// three apart are done at once, each seeing only the 3x3 columns around it (`Overlay`);
 /// nine rounds cover every column. Within a column the jobs keep their order (top down).
-fn run_light_jobs(c: &'static Content, dim: u32, cubes: &mut FxHashMap<IVec3, Arc<Cube>>, dirty: &mut FxHashSet<IVec3>, jobs: Vec<LightJob>) {
+fn run_light_jobs(
+    c: &'static Content,
+    dim: u32,
+    cubes: &mut FxHashMap<IVec3, Arc<Cube>>,
+    dirty: &mut FxHashSet<IVec3>,
+    jobs: Vec<LightJob>,
+) {
     let def = &c.dims[dim as usize];
     let mut columns: FxHashMap<IVec2, Vec<LightJob>> = FxHashMap::default();
     for job in jobs {
         let p = job.pos();
         columns.entry(IVec2::new(p.x, p.z)).or_default().push(job);
     }
-    let opaque = |cube: &Cube| cube.palette().iter().all(|&s| c.states[s as usize].opacity >= 15);
+    let opaque = |cube: &Cube| {
+        cube.palette()
+            .iter()
+            .all(|&s| c.states[s as usize].opacity >= 15)
+    };
     for round in 0..9 {
-        let keys: Vec<IVec2> = columns.keys().copied().filter(|k| k.x.rem_euclid(3) + 3 * k.y.rem_euclid(3) == round).collect();
+        let keys: Vec<IVec2> = columns
+            .keys()
+            .copied()
+            .filter(|k| k.x.rem_euclid(3) + 3 * k.y.rem_euclid(3) == round)
+            .collect();
         let mut work: Vec<(IVec2, Vec<LightJob>, i32, i32)> = Vec::with_capacity(keys.len());
         for key in keys {
             let jobs = columns.remove(&key).unwrap();
             let top = jobs.iter().map(|j| j.pos().y).max().unwrap() + 1;
             // Full sky goes on down whatever shaft is below, and sideways from there.
             let mut low = jobs.iter().map(|j| j.pos().y).min().unwrap();
-            while cubes.get(&IVec3::new(key.x, low - 1, key.y)).is_some_and(|cube| !opaque(cube)) {
+            while cubes
+                .get(&IVec3::new(key.x, low - 1, key.y))
+                .is_some_and(|cube| !opaque(cube))
+            {
                 low -= 1;
             }
             work.push((key, jobs, low - 1, top));
@@ -418,13 +594,26 @@ fn run_light_jobs(c: &'static Content, dim: u32, cubes: &mut FxHashMap<IVec3, Ar
 
 /// Light once per cube, the changed ones and those around them (light reaches 15 blocks:
 /// less than a cube), from the top down so sky light comes from cubes already done.
-fn relight_around(c: &'static Content, dim: u32, cubes: &mut FxHashMap<IVec3, Arc<Cube>>, dirty: &mut FxHashSet<IVec3>, relight: &[IVec3]) -> usize {
-    let mut around: Vec<IVec3> = relight.iter().flat_map(|&cp| (-1..=1).flat_map(move |y| (-1..=1).flat_map(move |z| (-1..=1).map(move |x| cp + IVec3::new(x, y, z))))).filter(|p| cubes.contains_key(p)).collect();
+fn relight_around(
+    c: &'static Content,
+    dim: u32,
+    cubes: &mut FxHashMap<IVec3, Arc<Cube>>,
+    dirty: &mut FxHashSet<IVec3>,
+    relight: &[IVec3],
+) -> usize {
+    let mut around: Vec<IVec3> = relight
+        .iter()
+        .flat_map(|&cp| (-1..=1).flat_map(move |y| (-1..=1).flat_map(move |z| (-1..=1).map(move |x| cp + IVec3::new(x, y, z)))))
+        .filter(|p| cubes.contains_key(p))
+        .collect();
     around.sort_unstable_by_key(|p| (-p.y, p.x, p.z));
     around.dedup();
     let relit = around.len();
     let def = &c.dims[dim as usize];
-    let jobs = around.iter().map(|&cp| LightJob::New(cp, crate::world::light::open_above(def, cp.y))).collect();
+    let jobs = around
+        .iter()
+        .map(|&cp| LightJob::New(cp, crate::world::light::open_above(def, cp.y)))
+        .collect();
     run_light_jobs(c, dim, cubes, dirty, jobs);
     relit
 }

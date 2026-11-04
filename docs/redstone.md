@@ -22,7 +22,7 @@ Only wire of the same block connects, so another wire block is an insulated wire
 - *Strongly*, from a gate facing it, a lever on it, or the top of a torch under it. Wire touching that block takes the power, and so do devices.
 - *Weakly*, from wire lying on it. Only devices next to it take that. Otherwise all the wires on one wall would be one wire.
 
-Solid blocks carry power by default. `.redstone_blocker()` turns that off, the way glass, ice and leaves have it. Wire can still lie on them. Slabs and other partial solid blocks carry power too.
+Solid blocks carry power by default. `.signal_blocker()` turns that off, the way glass, ice and leaves have it. Wire can still lie on them. Slabs and other partial solid blocks carry power too.
 
 **Wire reaches** the block it lies on and any device touching one of its edges or its back. It doesn't reach across the cell, so wire on a floor doesn't touch what is on the ceiling above it. Wire running past a lamp lights it. To get past without lighting it, take another face.
 
@@ -48,8 +48,8 @@ Solid blocks carry power by default. `.redstone_blocker()` turns that off, the w
 | `redstone_lamp` | Lit with any power around it |
 | `piston`, `sticky_piston` | Pushes up to 12 blocks, powered from any side but its front. Breaks what isn't solid, stops at block entities and `.immovable()` blocks. The blocks move as a body, so whoever stands on them rides along smoothly |
 | `slime_block` | What a piston moves takes what touches it along, for flying machines. `.sticky()` on any block does the same |
-| `motor` | Goes the way you look when placing it, any of the six, its green front first. With power from any other side it carries itself, the block in front of it and what is stuck to that through slime, half a block a second per level of power, circuits going on. Nothing else it touches goes along: the floor and what feeds it stay. Without power, or at something solid in the way, it all lands on a whole block. It shows red when it can't go; a comparator reads 1 going, 15 stuck |
-| `copper_lamp` | Each new pulse flips it. A comparator reads 15 while it is lit |
+| `floater` | What is fixed to its blocks comes along; what runs into a solid block on the way comes off and drops while it all goes on, so a torch or lever feeding it from the leading face stops it on arrival. Goes the way you look when placing it, any of the six, its green front first. With power from any other side it carries itself, the block in front of it and what is stuck to that through slime, half a block a second per level of power, circuits going on. Nothing else it touches goes along: the floor and what feeds it stay. Without power, or at something solid in the way, it all lands on a whole block. It shows red when it can't go; a comparator reads 1 going, 15 stuck |
+| `golden_lamp` | Each new pulse flips it. A comparator reads 15 while it is lit |
 | `anchor` | With power it can't be moved: in a row being pushed it stops the push, touching slime it stays behind. On a platform on its way, getting power with more of the platform pushing it stops the platform at the next whole block; with nothing pushing it, it rides on. Without power it moves like any block |
 | `observer` | A pulse out of its back when the block it looks at changes, and when a piston moves it |
 | `dispenser` | One item out of the front for each new pulse |
@@ -60,7 +60,7 @@ Say what a block is and the engine runs it. No ticking and no neighbor callbacks
 
 ```rust
 // Always on.
-r.block(&CRYSTAL).signal_block();
+r.block(&CRYSTAL).signal_constant();
 
 // Follows the power around it: a `power` property (`off`, `on`) changes by itself.
 r.block(&LIGHT)
@@ -76,9 +76,11 @@ r.block(&ALARM).signal_sink().on_signal(|e| {
 });
 
 // A gate with your own logic, on the clicked face. Runs only when something around it changes,
-// and what it returns comes out of the front after the delay (in game ticks).
+// and what it returns comes out of the front after the delay (in redstone ticks, like a repeater's).
+// `Gate::new()` reads behind it and both sides; `.inputs(&[Side::Left, Side::Right, Side::Top])`
+// names other faces, `.delay(4)` waits longer.
 r.block(&AND_GATE)
-    .signal_logic(2, |s| if s.rear() > 0 && s.sides().iter().any(|v| *v > 0) { 15 } else { 0 })
+    .signal_gate(Gate::new(), |s| if s.side(Side::Rear) > 0 && (s.side(Side::Left) > 0 || s.side(Side::Right) > 0) { 15 } else { 0 })
     .model_box([0.0, 0.0, 0.0], [16.0, 2.0, 16.0])
     .not_solid();
 
@@ -87,7 +89,7 @@ r.block(&AND_GATE)
 r.block(&BLUE_WIRE).wire().textures("blue_dot", "blue_line", "blue_dot");
 
 // Glass-like, and something a piston can't move.
-r.block(&CASING).redstone_blocker();
+r.block(&CASING).signal_blocker();
 r.block(&BEDROCK_ISH).immovable();
 ```
 
@@ -96,22 +98,22 @@ The rest of the set, each with the properties it needs added for you:
 - `.signal_switch()`: a lever or button. Goes on the clicked face; flip its `power` property from `on_use`.
 - `.signal_torch()`, `.signal_repeater()`, `.signal_comparator()`: as in the game.
 - `.signal_read(|w, p| level)`: what a comparator behind the block reads, instead of how full it is. It looks again when the block changes; `w.signal_read_changed(p)` for anything else it depends on.
-- `.signal_motor(breaks)` after `.facing(..)`: a motor; `breaks` makes it break what is in its way. `power` is 0 idle, 1 going, 2 stuck.
-- `w.lift(center, &cells)` takes blocks out of the world into a moving structure, with chests and what is in them, circuits going on. Move it with `set_entity` (a speed) or `w.body_go(id, pos, ticks)`, and `w.put_down(id)` makes it blocks again, on the nearest whole block.
+- `.signal_floater(breaks)` after `.facing(..)`: a floater; `breaks` makes it break what is in its way. `power` is 0 idle, 1 going, 2 stuck.
+- `w.body_from_blocks(center, &cells)` takes blocks out of the world into a moving body, with chests and what is in them, circuits going on. Move it with `set_entity` (a speed) or `w.body_move_to(id, pos, ticks)`, and `w.body_to_blocks(id)` makes it blocks again, on the nearest whole block. Its blocks are reached the way the world's are, through `w.on_body(id)`: `w.on_body(ship)?.prop_set(pos, "lit", "true")` in the body's own coordinates, with parts, scheduled ticks and signals as in the world. `w.push_blocks(pos, dir)` moves blocks the way a piston does, without one: what would be pushed goes one block that way, slime and all, so a machine can open a drawbridge. `w.body_fall(id)` lets it drop instead, like sand: each block lands where it comes down, or drops if it can't stand there, so a felled tree or a collapsing roof is a lift and a fall.
 - `.signal_observer()` and `.signal_piston(head, sticky)`, `.signal_piston_head()`: after `.facing(..)`.
 
-**A model on any face:** those blocks have `attach` and `front` properties. Write the model once for a floor with the front to the north, and `framed_box` turns it, pictures included:
+**A model on any face:** those blocks have `attach` and `front` properties. Write the model once for a floor with the front to the north, and `oriented` turns it, pictures included:
 
 ```rust
 r.block(&GATE).signal_repeater().states(|p, s| {
     let top = if p.is("power", "on") { "gate_on" } else { "gate" };
-    let mut faces = [("smooth_stone", [-1.0, 0.0, 0.0, 0.0]); 6];   // negative: from the box
+    let mut faces = [("smooth_stone", UV_FROM_BOX); 6];
     faces[3].0 = top;
-    s.framed_box(p.frame(), [0.0, 0.0, 0.0], [16.0, 2.0, 16.0], faces)
+    s.oriented(p.orientation()).model_box_faces([0.0, 0.0, 0.0], [16.0, 2.0, 16.0], faces)
 });
 ```
 
-`p.frame_up()` is the same for a block with `facing` and its top that way, like a piston.
+`p.orientation_up()` is the same for a block with `facing` and its top that way, like a piston.
 
 `base` is written with exactly this: see `mods/base/src/redstone.rs`.
 
@@ -121,5 +123,5 @@ r.block(&GATE).signal_repeater().states(|p, s| {
 
 ## Limits
 
-- Wire on moving structures runs but isn't drawn.
+- Wire on moving bodies runs but isn't drawn.
 - A gate changing is still a block change, so on the client it remeshes its cube. Only wire avoids that.

@@ -1,37 +1,36 @@
-mod controls;
-mod receive;
 pub mod ctm;
 pub mod entity_render;
 pub mod gizmo;
+pub mod lod;
 pub mod looks;
 pub mod mesher;
 pub mod models;
 pub mod modui;
 pub mod particles;
+mod receive;
 pub mod sky;
 pub mod terrain;
+pub mod terrain_gpu;
+pub mod textures;
 pub mod weather;
 pub mod wires;
-pub mod terrain_gpu;
-pub mod lod;
-pub mod textures;
 pub mod world;
 pub mod world_render;
 
 use std::time::Instant;
 
+use crate::gpu_layout::Scene;
 use glam::{DVec3, IVec3, Vec3};
 use rustc_hash::{FxHashMap, FxHashSet};
 use weft_abi::{ItemStack, block_flags as bf};
 use weft_render::{Backend, BufferId, CommandList, FrameInfo};
-use crate::gpu_layout::Scene;
 
 use crate::content::content;
 use crate::input::Input;
 use crate::net::{ClientConn, ToClient, ToServer};
 use crate::physics::{self, Hit};
-use crate::world::{GameMode, Pose};
 use crate::ui::text::{Arg, Msg};
+use crate::world::{GameMode, Pose};
 use entity_render::EntityRenderer;
 use textures::GameTextures;
 use world::ClientWorld;
@@ -48,12 +47,16 @@ pub struct LocalPlayer {
     /// Touched the ground at any physics step since the last move sent: a quick re-jump can
     /// leave the ground before the next send, and the server would add up the falls.
     pub landed: bool,
+    /// Jumped at any physics step since the last move sent.
+    pub jumped: bool,
     pub flying: bool,
     /// Spectator: moves through blocks.
     pub noclip: bool,
     /// Flying speed multiplier, changed with the scroll wheel in spectator mode.
     pub fly_speed: f32,
     pub in_liquid: bool,
+    /// On a ladder.
+    pub climbing: bool,
     /// Physics steps until the next jump while the key stays held (vanilla's 10 ticks), so a
     /// two-block gap cannot be used to bounce at full speed.
     pub jump_cooldown: u32,
@@ -63,28 +66,25 @@ pub struct LocalPlayer {
     pub fov_mul: f32,
     /// Lower box and eyes. Stays on under a low ceiling until there is room for more.
     pub pose: Pose,
-    /// Lying in a bed, its head toward the back of this yaw: stays put, whatever the keys say.
-    pub lying: Option<f32>,
+    /// A pose a mod holds it in, where it fits, and with a facing it stays put that way (a bed).
+    pub forced: Option<(Pose, Option<f32>)>,
     /// Actually sprinting, after the conditions: moving forward, not sneaking, not wading.
     pub sprinting: bool,
     /// Holding the use button on an item that takes time.
     pub using: bool,
-    /// Can swim in liquids that are not swimmable (`core:swim_anywhere`).
-    pub swim_anywhere: bool,
+    /// By liquid: whether sprinting swims in it (`comp::SWIMS_IN` of its kind and what it wears).
+    pub swims_in: Vec<bool>,
     pub can_sprint: bool,
     /// The solid body it rides.
     pub support: Option<u64>,
     /// Its box standing (width, height, eye): the player kind's, or what a mod gave it.
-    pub size: [f64; 3],
+    pub size: weft_abi::EntitySize,
     /// Riding a body: its id and the position relative to it at the previous and the last
     /// step. Drawn on the body as shown, so a rider and its deck never drift apart.
     pub riding: Option<(u64, DVec3, DVec3)>,
     /// Walking speed and jump multipliers from the server (attributes).
     pub speed_mul: f64,
     pub jump_mul: f64,
-    /// Sneaking now and wanting to sprint now.
-    pub sneak: bool,
-    pub sprint: bool,
 }
 
 pub struct ClientEntity {
@@ -100,6 +100,18 @@ pub struct ClientEntity {
     pub worn: Vec<u32>,
     /// A player's item in hand, 0 for none.
     pub held: u32,
+    /// And in the other hand.
+    pub off_held: u32,
+    /// Into using what it holds, 0..1, and whether with the other hand.
+    pub using: Option<(f32, bool)>,
+    /// Ticks using it takes.
+    pub use_ticks: f32,
+    /// How far into sneaking, 0..1: the pose fades in and out.
+    pub crouched: f32,
+    /// Actions a mod has play as another for now: which, as what.
+    pub swaps: Vec<(String, String)>,
+    /// Its swing is the other hand's.
+    pub swing_off: bool,
     /// Accumulated walk distance and current swing amplitude, for limb animation.
     pub walk: f32,
     /// Blocks actually walked, which limbs at full swing fall behind of.
@@ -111,23 +123,24 @@ pub struct ClientEntity {
     pub dying: Option<f32>,
     /// Walk distance at which its next step sounds.
     pub next_step: f32,
-    /// Keyframe animation the server started: name, age it started at, looping.
-    pub anim: Option<(String, f32, bool)>,
+    /// Action the server started: name, age it started at, looping.
+    pub action: Option<(String, f32, bool)>,
     /// How a player holds itself: its box and how the model stands.
     pub pose: Pose,
+    pub sprinting: bool,
     /// Where the body faces: follows the head with a lag, and where it walks.
     pub body_yaw: f32,
     /// Arm swing progress 0..1 while swinging.
     pub arm_swing: Option<f32>,
-    /// Seconds left of a white flash.
-    pub flash: f32,
+    /// The shader effect on it (`abi::entity_effect`), its strength and seconds left.
+    pub effect: Option<(u32, f32, f32)>,
     /// Solid bodies: where the server had them at its last ticks (tick, position), oldest
     /// first; they are shown `INTERP_TICKS` behind the server (`pose`).
     pub track: std::collections::VecDeque<(f64, DVec3)>,
     /// A picked up item flying to who took it: where it started, the taker, seconds so far.
     pub pulled: Option<(DVec3, u64, f32)>,
     /// Its own box (width, height, eye) and the kind it looks like, when a mod set them.
-    pub size: Option<[f32; 3]>,
+    pub size: Option<weft_abi::EntitySize>,
     pub look: Option<u32>,
     /// The solid body it stands on (0: the world), and its position relative to that body:
     /// shown and as the server last had it. Riders are drawn where the body is drawn.
@@ -143,12 +156,13 @@ pub struct ClientEntity {
 /// A picked up item reaches the taker's feet in three ticks (vanilla's pickup animation).
 const PULL_SECS: f32 = 0.15;
 
+/// Seconds an entity flashes red after a hit (vanilla's 10 ticks).
+const HURT_FLASH: f32 = 0.5;
+
 impl LocalPlayer {
-    /// Half width, height and eye height now (crouching lowers them).
-    pub fn dims(&self) -> (f64, f64, f64) {
-        let [w, h, eye] = self.size;
-        let (h, eye) = physics::posed(self.pose, h, eye);
-        (w / 2.0, h, eye)
+    /// Its box now (crouching lowers it).
+    pub fn dims(&self) -> physics::Dims {
+        physics::posed(self.size, self.pose)
     }
 }
 
@@ -157,19 +171,93 @@ fn words(bytes: &[u8]) -> impl Iterator<Item = [u8; 4]> + '_ {
     bytes.chunks_exact(4).map(|w| [w[0], w[1], w[2], w[3]])
 }
 
+fn parse_swaps(bytes: &[u8]) -> Vec<(String, String)> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+}
+
+/// A pose comes and goes in about a tenth of a second.
+fn fade_pose(now: f32, on: bool, dt: f32) -> f32 {
+    (now + if on { dt } else { -dt } / 0.1).clamp(0.0, 1.0)
+}
 
 impl ClientEntity {
-    /// What its kind's client tick gets (`client` filled in by the caller).
-    pub fn args(&self, id: u64, dt: f32) -> weft_abi::ClientEntityArgs {
-        weft_abi::ClientEntityArgs { client: std::ptr::null_mut(), entity: id, kind: self.kind, pos: self.pos.to_array(), yaw: self.yaw, walked: self.walked, dying: self.dying.unwrap_or(-1.0), age: self.age, dt }
+    pub fn new(kind: u32, pos: DVec3, yaw: f32, pitch: f32, item: ItemStack) -> ClientEntity {
+        ClientEntity {
+            kind,
+            pos,
+            target: pos,
+            yaw,
+            target_yaw: yaw,
+            body_yaw: yaw,
+            arm_swing: None,
+            effect: None,
+            pitch,
+            item,
+            // Arrives as a component right after: no hurt flash for the first.
+            health: f32::NAN,
+            hurt: 0.0,
+            worn: Vec::new(),
+            held: 0,
+            off_held: 0,
+            using: None,
+            use_ticks: 0.0,
+            crouched: 0.0,
+            swaps: Vec::new(),
+            swing_off: false,
+            walk: 0.0,
+            walked: 0.0,
+            swing: 0.0,
+            age: 0.0,
+            burning: false,
+            dying: None,
+            next_step: 0.0,
+            action: None,
+            pose: Pose::STAND,
+            sprinting: false,
+            track: Default::default(),
+            pulled: None,
+            size: None,
+            look: None,
+            frame: 0,
+            rel: DVec3::ZERO,
+            rel_target: None,
+            structure: None,
+            world_light: Default::default(),
+        }
     }
 
-    /// Half width, height and eye height of its box, like the server's `Entity::dims`.
-    pub fn dims(&self) -> (f64, f64, f64) {
-        let k = &content().game.entities[self.kind as usize];
-        let [w, h, eye] = self.size.unwrap_or([k.width, k.height, k.eye]).map(|v| v as f64);
-        let (h, eye) = physics::posed(self.pose, h, eye);
-        (w / 2.0, h, eye)
+    /// Something that can be bumped into or hit, like the server's `Entity::is_body`: what isn't
+    /// a thing to hit never gets here, and the dead lie there only to be seen.
+    pub fn is_body(&self) -> bool {
+        self.item.is_empty() && self.dying.is_none()
+    }
+
+    /// What its kind's client tick gets (`client` filled in by the caller).
+    pub fn args(&self, id: u64, dt: f32) -> weft_abi::ClientEntityArgs {
+        weft_abi::ClientEntityArgs {
+            client: std::ptr::null_mut(),
+            entity: id,
+            kind: self.kind,
+            pos: self.pos.to_array().into(),
+            yaw: self.yaw,
+            walked: self.walked,
+            dying: self.dying.unwrap_or(-1.0),
+            age: self.age,
+            dt,
+        }
+    }
+
+    /// Its box, like the server's `Entity::dims`.
+    pub fn dims(&self) -> physics::Dims {
+        physics::posed(
+            self.size
+                .unwrap_or(content().game.entities[self.kind as usize].size()),
+            self.pose,
+        )
     }
 
     /// The kind whose model, texture and animations draw it.
@@ -195,7 +283,13 @@ impl ClientEntity {
         let mut before = self.track[0];
         for &(t, p) in &self.track {
             if tick < t {
-                return if t > before.0 { before.1.lerp(p, ((tick - before.0) / (t - before.0)).max(0.0)) } else { p };
+                return if t > before.0 {
+                    before
+                        .1
+                        .lerp(p, ((tick - before.0) / (t - before.0)).max(0.0))
+                } else {
+                    p
+                };
             }
             before = (t, p);
         }
@@ -209,7 +303,6 @@ impl ClientEntity {
         self.pose(self.track.back().map_or(tick, |t| tick.min(t.0)))
     }
 }
-
 
 pub struct ClientMenu {
     pub kind: u32,
@@ -250,8 +343,9 @@ pub struct Client {
     pub player: LocalPlayer,
     pub joined: bool,
     pub player_id: u64,
-    /// Keyframe animation the server started on us: (name, start, looping).
-    self_anim: Option<(String, f32, bool)>,
+    /// The local player as an entity: what the server says of it (health, actions, look) and
+    /// what its own animation works out, brought up to date each frame (`sync_me`).
+    pub me: ClientEntity,
     accum: f64,
     tick_accum: f64,
     /// Seconds of physics steps taken, the clock solid bodies are shown by.
@@ -266,9 +360,11 @@ pub struct Client {
     drawn_frames: FxHashSet<u64>,
     start: Instant,
     /// Ticks counted since the server last said the time (`Scene` ticks).
-    since_time: u32,
+    since_time: f64,
+    /// Ticks a second the server runs at.
+    tick_rate: f64,
     /// Particle kind per block state shown around the player (`ambient`), `u32::MAX` none.
-    ambient_kinds: Option<Vec<Vec<u32>>>,
+    ambient_kinds: Option<Vec<(Vec<u32>, Option<u32>)>>,
     /// The frame's `Scene`, one buffer per frame in flight.
     scene_bufs: Vec<BufferId>,
     pub target: Option<Hit>,
@@ -303,41 +399,37 @@ pub struct Client {
     pub brightness: f32,
     pub entities: FxHashMap<u64, ClientEntity>,
     pub inventory: Vec<ItemStack>,
-    pub health: f32,
     pub max_health: f32,
     pub mode: GameMode,
     /// When jump was last pressed, for double-tap flight toggling.
     /// How sneak, sprint and flight are being asked for.
-    controls: controls::Controls,
+    /// The server ended the sprint; `update` switches the key off.
+    sprint_stopped: bool,
     /// 0 first person, 1 third person from behind, 2 from the front.
     pub view: u8,
     /// F1: no hand and no block outline.
     pub hide_gui: bool,
+    /// Show your own body in first person instead of just the hand.
+    pub first_person_model: bool,
     /// Arm swing progress 0..1 while swinging.
     hand_swing: Option<f32>,
+    /// That swing is the other hand's.
+    hand_swing_off: bool,
+    using_off: bool,
     /// The stack the hand shows: a new one only comes up after the old one went down.
     hand_stack: ItemStack,
     /// How far the hand is up, 0..1.
     hand_height: f32,
-    /// Seconds since the last swing or change of items, and the attribute multiplying its speed.
+    /// Seconds since the last swing or change of items, and what was in hand then, as the server
+    /// judges a hit by.
     swing_since: f32,
+    swing_held: ItemStack,
     /// This player's attributes, by id, as the server says.
     pub(crate) attributes: Vec<f32>,
     /// What the server refused to have mined; the button let go or another block lifts it.
     refused_break: Option<(u64, IVec3)>,
     /// Where the hand's view is, easing after the camera: pitch, yaw.
     hand_view: (f32, f32),
-    /// Where the own body faces in third person.
-    self_body: f32,
-    was_on_ground: bool,
-    was_wet: bool,
-    /// Blocks per tick it was falling at.
-    was_falling: f32,
-    /// The highest it has been since it last stood.
-    fall_top: f64,
-    /// Own walk distance and swing amplitude, for the third person model and view bobbing.
-    self_walk: f32,
-    self_swing: f32,
     /// Vanilla's bobbing state: distance walked (x0.6) and the smoothed amplitude.
     walk_dist: f32,
     bob: f32,
@@ -358,8 +450,6 @@ pub struct Client {
     pub sweep: Vec<u32>,
     /// The last slot pressed and when, for double clicks.
     pub last_click: Option<(u32, u8, Instant)>,
-    /// Seconds left of the red screen flash after taking damage.
-    pub hurt_flash: f32,
     pub particles: particles::Particles,
     pub wires: wires::Wires,
     pub weather_render: weather::Weather,
@@ -368,8 +458,6 @@ pub struct Client {
     pulls: Vec<(u64, DVec3)>,
     /// Scratch: solid bodies and where they are drawn this frame.
     frames: Vec<(u64, DVec3)>,
-    /// Another kind the local player looks like (a mod's `set_look`).
-    self_look: Option<u32>,
     /// Commands recorded early but drawn after the opaque ones: translucent blocks and blended
     /// particles, then cracks, gizmo fills and the hand.
     late: CommandList,
@@ -383,21 +471,20 @@ pub struct Client {
     next_step: f32,
     rng: weft_noise::Rng,
     pub dead: bool,
-    /// Raining, and thundering, as the server says.
-    weather: (bool, bool),
+    /// The weather the server says it is (`registry::WeatherDef`).
+    pub weather_id: u16,
     /// How much of it there is by now, 0..1 over about five seconds.
-    rain: f32,
+    /// The weather's look as it is by now, going over to the weather's own (`weather_effects`).
+    look: weft_abi::WeatherLook,
     frame_dt: f32,
     /// Seconds left of a lightning's flash.
     lightning: f32,
     /// Holding the use button on an item that takes time: ticks left, ticks in all.
     using: Option<(f32, f32)>,
-    /// On fire, as the server says.
-    burning: bool,
     /// Who else is mining what, and how far along.
-    others_mining: Vec<(u64, IVec3, f32)>,
+    others_mining: Vec<crate::net::Crack>,
     /// What the server was last told this player mines.
-    told_mining: Option<(u64, IVec3)>,
+    told_mining: Option<(u64, IVec3, u32)>,
     /// What the server says this player may do (`abi::permission`).
     pub permission: u32,
     /// Seconds since it died, while it is.
@@ -410,7 +497,11 @@ pub struct Client {
     /// Components of other entities the server shares.
     pub entity_components: FxHashMap<(u64, u32), Vec<u8>>,
     /// Formatted when drawn, in the language shown then.
-    pub chat: Vec<(Msg, Instant)>,
+    pub chat: Vec<(crate::net::Shown, Instant)>,
+    /// Text on the screen other than the chat, some of it possibly over by now.
+    pub shown: Vec<(crate::net::Shown, Instant)>,
+    /// Goes up with every change to `chat` and `shown`, for the HUD to notice.
+    pub shown_changes: u32,
     /// Answers to commands run from code, by their id, until read.
     pub command_replies: rustc_hash::FxHashMap<u32, Vec<Msg>>,
     pub next_command: u32,
@@ -421,6 +512,8 @@ pub struct Client {
     pub gizmo_labels: Vec<gizmo::Label>,
     /// The block being broken (frame, block as in `Hit`) and how far.
     pub breaking: Option<(u64, IVec3, f32)>,
+    /// Which of what is in that cell.
+    breaking_part: u32,
     /// Hotbar contents last frame, so the HUD knows when to redraw.
     pub hotbar: Vec<u32>,
 }
@@ -449,7 +542,11 @@ impl Client {
         let text = |s: &str| Arg::Text(s.to_string());
         if group.is_empty() {
             let mut out = vec![Msg::new("command.gizmo.groups", Vec::new())];
-            out.extend(gizmo::BUILTIN.iter().map(|g| Msg::new("command.gizmo.group", vec![text(g), Arg::Key(format!("gizmo.{g}"))])));
+            out.extend(
+                gizmo::BUILTIN
+                    .iter()
+                    .map(|g| Msg::new("command.gizmo.group", vec![text(g), Arg::Key(format!("gizmo.{g}"))])),
+            );
             out.push(match self.gizmos.enabled.is_empty() {
                 true => Msg::new("command.gizmo.none_on", Vec::new()),
                 false => Msg::new("command.gizmo.on_list", vec![text(&self.gizmos.enabled.join(", "))]),
@@ -467,7 +564,11 @@ impl Client {
         self.gizmos = g;
         let c = content();
         let eye = self.render_camera().pos;
-        let opaque = |p: IVec3| self.world.block_or_air(p).map(|s| if c.states[s as usize].flags & bf::OPAQUE != 0 { s } else { crate::content::AIR });
+        let opaque = |p: IVec3| {
+            self.world
+                .block_or_air(p)
+                .map(|s| if c.states[s as usize].flags & bf::OPAQUE != 0 { s } else { crate::content::AIR })
+        };
         labels.retain(|(pos, ..)| {
             let d = *pos - eye;
             let len = d.length();
@@ -478,13 +579,49 @@ impl Client {
 
     /// Shows a line in the chat as if the server had sent it.
     pub fn chat_line(&mut self, line: Msg) {
-        self.chat.push((line, Instant::now()));
-        let extra = self.chat.len().saturating_sub(50);
-        self.chat.drain(..extra);
+        self.show(crate::net::Shown::chat(line));
+    }
+
+    /// Puts text on the screen. The chat keeps what is over as its history.
+    pub fn show(&mut self, s: crate::net::Shown) {
+        let now = Instant::now();
+        let s = s.settled();
+        self.shown_changes += 1;
+        let in_chat = s.place == weft_abi::show_place::CHAT && s.at.is_none();
+        let list = if in_chat { &mut self.chat } else { &mut self.shown };
+        let replaced = (!s.look().stacks || !s.id.is_empty())
+            .then(|| {
+                list.iter()
+                    .position(|(o, _)| o.place == s.place && o.id == s.id)
+            })
+            .flatten();
+        match replaced {
+            Some(i) if s.clears() => drop(list.remove(i)),
+            Some(i) => list[i] = (s, now),
+            None if s.clears() => {}
+            None => list.push((s, now)),
+        }
+        if in_chat {
+            let extra = list.len().saturating_sub(100);
+            list.drain(..extra);
+        } else {
+            // Not by alpha: that is 0 too at the start of a fade in.
+            list.retain(|(o, at)| now.duration_since(*at).as_secs_f32() < o.times.iter().sum::<f32>());
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn new(gpu: &mut dyn Backend, assets: &crate::assets::Assets, textures: &GameTextures, mut conn: ClientConn, name: &str, key: &str, view_radius: i32, skin: Option<Vec<u8>>) -> Result<Client, String> {
+    pub fn new(
+        gpu: &mut dyn Backend,
+        assets: &crate::assets::Assets,
+        textures: &GameTextures,
+        mut conn: ClientConn,
+        name: &str,
+        key: &str,
+        view_radius: i32,
+        skin: Option<Vec<u8>>,
+        avatar: Option<crate::net::AvatarData>,
+    ) -> Result<Client, String> {
         let c = content();
         let render = WorldRenderer::new(gpu, c, textures, assets)?;
         let entity_render = EntityRenderer::new(gpu, assets)?;
@@ -496,6 +633,9 @@ impl Client {
         conn.send(ToServer::View(view_radius as u32));
         if let Some(png) = skin {
             conn.send(ToServer::Skin(png));
+        }
+        if let Some(a) = avatar {
+            conn.send(ToServer::Avatar(a));
         }
         let (gpu_tx, gpu_rx) = crossbeam_channel::unbounded();
         let gpu_on = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -515,30 +655,31 @@ impl Client {
                 pitch: 0.0,
                 on_ground: false,
                 landed: false,
+                jumped: false,
                 jump_cooldown: 0,
                 eye: 1.62,
                 fov_mul: 1.0,
-                pose: Pose::Stand,
-                lying: None,
+                pose: Pose::STAND,
+                forced: None,
                 sprinting: false,
                 using: false,
-                swim_anywhere: false,
+                swims_in: Vec::new(),
                 can_sprint: true,
                 support: None,
-                size: { let k = &c.game.entities[c.game.player_kind as usize]; [k.width, k.height, k.eye].map(|v| v as f64) },
+                size: c.game.entities[c.game.player_kind as usize].size(),
                 riding: None,
                 flying: false,
                 noclip: false,
                 fly_speed: 1.0,
                 in_liquid: false,
+                climbing: false,
                 speed_mul: 1.0,
                 jump_mul: 1.0,
-                sneak: false,
-                sprint: false,
             },
             joined: false,
             player_id: 0,
-            self_anim: None,
+            sprint_stopped: false,
+            me: ClientEntity::new(content().game.player_kind, DVec3::ZERO, 0.0, 0.0, ItemStack::EMPTY),
             accum: 0.0,
             tick_accum: 0.0,
             body_clock: 0.0,
@@ -546,7 +687,8 @@ impl Client {
             offset_target: 0.0,
             drawn_frames: FxHashSet::default(),
             start: Instant::now(),
-            since_time: 0,
+            since_time: 0.0,
+            tick_rate: crate::world::TPS as f64,
             ambient_kinds: None,
             scene_bufs: Vec::new(),
             target: None,
@@ -571,15 +713,12 @@ impl Client {
             brightness: 0.5,
             entities: FxHashMap::default(),
             inventory: vec![ItemStack::EMPTY; content().game.player_layout.slots as usize],
-            health: 20.0,
             max_health: 20.0,
-            hurt_flash: 0.0,
             particles,
             wires,
             sky,
             pulls: Vec::new(),
             frames: Vec::new(),
-            self_look: None,
             late: CommandList::default(),
             hand_late: CommandList::default(),
             hit_dust: 0.0,
@@ -593,24 +732,25 @@ impl Client {
             players: Vec::new(),
             sent: Vec::new(),
             held_name: (ItemStack::EMPTY, Instant::now()),
-            mode: GameMode::Survival,
-            controls: controls::Controls::default(),
+            mode: GameMode::SURVIVAL,
             view: 0,
             hide_gui: false,
+            first_person_model: false,
             hand_swing: None,
+            hand_swing_off: false,
+            using_off: false,
             hand_stack: ItemStack::default(),
             hand_height: 1.0,
             swing_since: 1000.0,
-            attributes: content().game.attributes.iter().map(|a| a.default as f32).collect(),
+            swing_held: ItemStack::default(),
+            attributes: content()
+                .game
+                .attributes
+                .iter()
+                .map(|a| a.default as f32)
+                .collect(),
             refused_break: None,
             hand_view: (0.0, 0.0),
-            self_body: 0.0,
-            was_on_ground: true,
-            was_wet: false,
-            was_falling: 0.0,
-            fall_top: f64::NEG_INFINITY,
-            self_walk: 0.0,
-            self_swing: 0.0,
             walk_dist: 0.0,
             bob: 0.0,
             last_smooth: DVec3::ZERO,
@@ -618,11 +758,10 @@ impl Client {
             moved_over: 0.0,
             dead: false,
             permission: 0,
-            weather: (false, false),
-            rain: 0.0,
+            weather_id: 0,
+            look: Default::default(),
             lightning: 0.0,
             using: None,
-            burning: false,
             others_mining: Vec::new(),
             told_mining: None,
             dead_for: None,
@@ -632,6 +771,8 @@ impl Client {
             packets: Vec::new(),
             entity_components: FxHashMap::default(),
             chat: Vec::new(),
+            shown: Vec::new(),
+            shown_changes: 0,
             command_replies: Default::default(),
             next_command: 0,
             gizmos: Default::default(),
@@ -639,6 +780,7 @@ impl Client {
             gizmo_fills: Vec::new(),
             gizmo_labels: Vec::new(),
             breaking: None,
+            breaking_part: 0,
             hotbar: vec![0; 9],
         })
     }
@@ -649,6 +791,11 @@ impl Client {
 
     pub fn leave(&mut self) {
         self.conn.send(ToServer::Leave);
+    }
+
+    /// The player's health, full until the server has said.
+    pub fn health(&self) -> f32 {
+        if self.me.health.is_nan() { self.max_health } else { self.me.health }
     }
 
     fn attribute(&self, id: u32) -> f32 {
@@ -662,11 +809,25 @@ impl Client {
 
     /// How charged the next swing is, 0..1, as the server will judge it.
     pub fn swing_strength(&self) -> f32 {
-        crate::content::swing_charge(content(), self.hand_stack.item, self.swing_since * crate::world::TPS as f32, self.attribute(crate::server::extend::ATTACK_SPEED))
+        crate::content::swing_charge(
+            content(),
+            &self.swing_held,
+            self.swing_since * self.tick_rate as f32,
+            self.attribute(crate::server::extend::ATTACK_SPEED),
+        )
     }
 
     pub fn held(&self) -> ItemStack {
-        self.inventory.get(self.selected).copied().unwrap_or_default()
+        crate::content::in_main_hand(content(), &self.inventory, self.selected as u32)
+    }
+
+    /// What the main hand shows: from the eyes the old stack, until the hand has gone down with it.
+    pub fn shown_held(&self) -> ItemStack {
+        if self.view == 0 { self.hand_stack } else { self.held() }
+    }
+
+    pub fn off_held(&self) -> ItemStack {
+        crate::content::in_off_hand(content(), &self.inventory)
     }
 
     /// Starts the terrain over for dimension `dim` (joined, or moved to another dimension).
@@ -691,6 +852,13 @@ impl Client {
         self.world.pending_meshes() + self.meshes.len()
     }
 
+    /// The key that swaps what is in the two hands.
+    fn swap_hands(&mut self, input: &Input) {
+        if input.captured && !self.mode.has(weft_abi::game_mode_flags::NO_INTERACT) && input.pressed("core:swap_hands") {
+            self.conn.send(ToServer::SwapHands);
+        }
+    }
+
     pub fn close_menu(&mut self) {
         self.drag = None;
         if self.menu.take().is_some() {
@@ -698,15 +866,26 @@ impl Client {
         }
     }
 
-    pub fn update(&mut self, gpu: &mut dyn Backend, textures: &GameTextures, input: &Input, dt: f64) {
+    pub fn update(&mut self, gpu: &mut dyn Backend, textures: &GameTextures, input: &mut Input, dt: f64) {
+        // The server ended the sprint (no food, say): a toggle or a double tap has to be pressed again.
+        if std::mem::take(&mut self.sprint_stopped) {
+            input.stop("core:sprint");
+        }
+        let input = &*input;
         self.take_messages(dt);
         self.read_look(input);
         self.read_controls(input);
+        self.fly_speed(input);
         self.select_slot(input);
         self.ease_camera(input, dt);
         let moved = self.animate_player(input, dt);
-        if input.pressed("core:drop") && self.mode != GameMode::Spectator {
-            self.conn.send(ToServer::Drop { all: input.held("core:sprint") });
+        self.body_particles(dt as f32);
+        self.frame_dt = dt as f32;
+        self.weather_effects(dt as f32);
+        self.sync_me();
+        if input.pressed("core:drop") && !self.mode.has(weft_abi::game_mode_flags::NO_INTERACT) {
+            self.conn
+                .send(ToServer::Drop { all: input.held("core:sprint") });
         }
         if input.pressed("core:inventory") && input.captured {
             self.conn.send(ToServer::OpenInventory);
@@ -719,9 +898,12 @@ impl Client {
         self.chip_block(dt);
         self.particles.update(dt as f32);
         self.creature_sounds(dt as f32, moved);
-        self.hurt_flash = (self.hurt_flash - dt as f32).max(0.0);
+        self.me.hurt = (self.me.hurt - dt as f32).max(0.0);
         self.dead_for = self.dead.then(|| self.dead_for.unwrap_or(0.0) + dt as f32);
-        self.hotbar = self.inventory[..content().game.player_layout.hotbar as usize].iter().map(|s| if s.is_empty() { 0 } else { s.item | (s.count.min(255) << 24) }).collect();
+        self.hotbar = self.inventory[..content().game.player_layout.hotbar as usize]
+            .iter()
+            .map(|s| if s.is_empty() { 0 } else { s.item | (s.count.min(255) << 24) })
+            .collect();
 
         self.upload_meshes(gpu, textures);
     }
@@ -748,35 +930,50 @@ impl Client {
         }
     }
 
+    /// Flying goes on and off where the game mode lets it.
     fn read_controls(&mut self, input: &Input) {
-        let creative = self.mode == GameMode::Creative;
-        let i = self.controls.read(&controls::Keys::of(input), self.player.flying, creative, Instant::now());
-        (self.player.sneak, self.player.sprint, self.player.flying) = (i.sneak, i.sprint, i.flying);
+        if self.mode.has(weft_abi::game_mode_flags::CAN_FLY) && input.captured && input.pressed("core:fly") {
+            self.player.flying = !self.player.flying;
+        }
+    }
+
+    /// A spectator's scroll wheel sets how fast it flies.
+    fn fly_speed(&mut self, input: &Input) {
+        if input.scroll != 0.0 && self.mode.has(weft_abi::game_mode_flags::NO_INTERACT) {
+            self.player.fly_speed = (self.player.fly_speed * if input.scroll > 0.0 { 1.25 } else { 0.8 }).clamp(0.1, 10.0);
+        }
     }
 
     fn select_slot(&mut self, input: &Input) {
+        if self.mode.has(weft_abi::game_mode_flags::NO_INTERACT) {
+            return;
+        }
         let old = self.selected;
-        let spectator = self.mode == GameMode::Spectator;
         // In a screen the number keys belong to it (swapping slots with the hotbar), and with F3
         // down to the debug groups.
-        if !spectator && input.captured && !input.held("core:debug") {
-            for (i, action) in crate::input::HOTBAR.into_iter().enumerate().take(content().game.player_layout.hotbar as usize) {
+        if input.captured && !input.held("core:debug") {
+            for (i, action) in crate::input::HOTBAR
+                .into_iter()
+                .enumerate()
+                .take(content().game.player_layout.hotbar as usize)
+            {
                 if input.pressed(action) {
                     self.selected = i;
                 }
             }
         }
         if input.scroll != 0.0 {
-            if spectator {
-                self.player.fly_speed = (self.player.fly_speed * if input.scroll > 0.0 { 1.25 } else { 0.8 }).clamp(0.1, 10.0);
-            } else {
-                self.selected = (self.selected as i32 - input.scroll.signum() as i32).rem_euclid(content().game.player_layout.hotbar.max(1) as i32) as usize;
-            }
+            self.selected = (self.selected as i32 - input.scroll.signum() as i32)
+                .rem_euclid(content().game.player_layout.hotbar.max(1) as i32) as usize;
         }
         if old != self.selected {
             self.conn.send(ToServer::Select(self.selected as u32));
         }
-        let held = self.inventory.get(self.selected).copied().unwrap_or_default();
+        let held = self
+            .inventory
+            .get(self.selected)
+            .copied()
+            .unwrap_or_default();
         if (held.item, held.data) != (self.held_name.0.item, self.held_name.0.data) || old != self.selected {
             self.held_name = (held, Instant::now());
         }
@@ -785,21 +982,30 @@ impl Client {
     /// Eye and view widen or drop over a few frames like vanilla, not in one jump.
     fn ease_camera(&mut self, input: &Input, dt: f64) {
         let k = (dt * 12.0).min(1.0);
-        let sneaking = self.player.sneak && !self.player.flying;
-        let eye_target = self.player.dims().2;
+        let sneaking = input.held("core:sneak") && !self.player.flying;
+        let eye_target = self.player.dims().eye;
         self.player.eye += (eye_target - self.player.eye) * k;
         let moving = input.held("core:forward");
-        let fov_target = if self.player.flying { 1.1 } else { 1.0 } + if self.player.sprint && moving && !sneaking { 0.15 } else { 0.0 };
+        let fov_target =
+            if self.player.flying { 1.1 } else { 1.0 } + if input.held("core:sprint") && moving && !sneaking { 0.15 } else { 0.0 };
         self.player.fov_mul += (fov_target - self.player.fov_mul) * k as f32;
         if input.pressed("core:perspective") && input.captured {
             self.view = (self.view + 1) % 3;
         }
     }
 
-    /// Walking (limbs, bobbing, steps) is motion in the frame of what the player stands on.
-    /// Returns how far it walked.
+    /// The player's body, the camera's bob and the hand in first person. Returns how far it
+    /// walked.
     fn animate_player(&mut self, input: &Input, dt: f64) -> f32 {
-        let spectator = self.mode == GameMode::Spectator;
+        let (moved, speed) = self.animate_walk(dt);
+        self.animate_bob(moved, speed, dt);
+        self.animate_hand(input, dt);
+        moved
+    }
+
+    /// Walking (limbs, turning, steps) is motion in the frame of what the player stands on.
+    /// Returns how far it walked and how fast.
+    fn animate_walk(&mut self, dt: f64) -> (f32, f32) {
         let t = (self.accum / STEP).clamp(0.0, 1.0);
         // Walking is how its place changes on what it stands on, not how that goes.
         let (now, frame) = match self.player.riding {
@@ -810,24 +1016,35 @@ impl Client {
         let walked_by = if frame == self.last_frame { now - self.last_smooth } else { DVec3::ZERO };
         let moved = walked_by.with_y(0.0).length().min(2.0) as f32;
         (self.last_smooth, self.last_frame) = (now, frame);
-        self.self_body = turn_body(self.self_body, self.player.yaw, walked_by, dt as f32);
+        self.me.body_yaw = turn_body(self.me.body_yaw, self.player.yaw, walked_by, dt as f32);
         // That move is the last frame's: physics runs after this. By this frame's time, uneven frames
         // made the speed jump up and down and the bob settle far too low.
         let speed = moved / std::mem::replace(&mut self.moved_over, dt as f32).max(1e-4);
         // Limbs swing with horizontal speed in the air too, like vanilla.
-        crate::model::walk_limbs(&mut self.self_walk, &mut self.self_swing, speed, dt as f32);
+        crate::model::walk_limbs(&mut self.me.walk, &mut self.me.swing, speed, dt as f32);
+        self.me.crouched = fade_pose(self.me.crouched, self.player.pose == Pose::CROUCH, dt as f32);
+        (moved, speed)
+    }
+
+    fn animate_bob(&mut self, moved: f32, speed: f32, dt: f64) {
         // Vanilla's: swimming doesn't bob, even touching the bottom.
-        let walking = self.player.on_ground && !self.player.flying && self.player.pose != Pose::Swim && !self.dead;
+        let walking = self.player.on_ground && !self.player.flying && self.player.pose.def().bob && !self.dead;
         // Vanilla: amplitude follows the per-tick speed capped at 0.1, eased by 0.4 per tick.
         self.walk_dist += moved * 0.6;
-        let target = if walking { (speed / 20.0).min(0.1) } else { 0.0 };
+        let target = if walking { (speed * crate::world::TICK as f32).min(0.1) } else { 0.0 };
         self.bob += (target - self.bob) * (1.0 - 0.6f32.powf(dt as f32 * crate::world::TPS as f32));
-        if let Some(p) = &mut self.hand_swing {
-            *p += dt as f32 / 0.3;
-            if *p >= 1.0 {
-                self.hand_swing = None;
-            }
+        // It eases forever otherwise, and a still picture should be still.
+        if target == 0.0 && self.bob < 1e-5 {
+            self.bob = 0.0;
         }
+    }
+
+    /// Swings, the held item going down and coming up when it changes, and the hand lagging
+    /// behind the view.
+    fn animate_hand(&mut self, input: &Input, dt: f64) {
+        let spectator = self.mode.has(weft_abi::game_mode_flags::NO_INTERACT);
+        advance_swing(&mut self.hand_swing, dt as f32);
+        self.swap_hands(input);
         // A use swings only when the server says it did something (`ToClient::Swing`).
         if input.captured && !spectator && (input.pressed("core:attack") || (input.held("core:attack") && self.breaking.is_some())) {
             self.swing_arm();
@@ -835,20 +1052,18 @@ impl Client {
         // Vanilla's 0.4 per tick: the old item goes down, the new one comes up. More of the same
         // item (a count or damage change) is not a change.
         let held = self.held();
-        let same = held.is_empty() == self.hand_stack.is_empty() && (held.is_empty() || held.item == self.hand_stack.item);
+        let same = crate::content::same_in_hand(held, self.hand_stack);
         self.swing_since += dt as f32;
+        if !crate::content::same_in_hand(held, self.swing_held) {
+            self.swing_since = 0.0;
+        }
+        self.swing_held = held;
         self.player.using = self.using.is_some();
-        self.body_particles(dt as f32);
-        self.frame_dt = dt as f32;
-        self.weather_effects(dt as f32);
         let step = dt as f32 * 0.4 * crate::world::TPS as f32;
         // The hand dips after a swing and comes back up as it charges (vanilla's strength cubed).
         let up = if same { self.swing_strength().powi(3) } else { 0.0 };
         self.hand_height += (up - self.hand_height).clamp(-step, step);
         if same || self.hand_height < 0.1 {
-            if !same {
-                self.swing_since = 0.0;
-            }
             self.hand_stack = held;
         }
         let k_lag = 1.0 - 0.5f32.powf(dt as f32 * crate::world::TPS as f32);
@@ -861,32 +1076,37 @@ impl Client {
         if angle_diff(self.player.yaw, self.hand_view.1).abs() < 1e-5 {
             self.hand_view.1 = self.player.yaw;
         }
-        if target == 0.0 && self.bob < 1e-5 {
-            self.bob = 0.0;
-        }
-        moved
     }
 
     fn step_physics(&mut self, input: &Input, dt: f64) {
         let c = content();
         let world = &self.world;
-        let block = |p: IVec3| world.block_or_air(p);
+        let block = world::SeenCells { world, air_if_missing: false };
         // Walking waits for the ground under the player to arrive; flying goes on, taking cubes
         // that are not here yet for air (the next ones are usually on their way).
         let flying = self.player.flying || self.player.noclip;
-        let ready = self.joined && !self.dead && (flying || block(self.player.pos.floor().as_ivec3()).is_some());
+        let ready = self.joined
+            && !self.dead
+            && (flying
+                || world
+                    .block_or_air(self.player.pos.floor().as_ivec3())
+                    .is_some());
         // The clock bodies are predicted by runs on while the player waits, or they would stop.
         let mut ambient_steps = 0;
         if self.joined {
-            let air_if_missing = |p: IVec3| block(p).or(Some(crate::content::AIR));
+            let air_if_missing = world::SeenCells { world, air_if_missing: true };
             self.accum += dt.min(0.25);
             while self.accum >= STEP {
                 self.accum -= STEP;
-                self.since_time = (self.since_time + 1).min(20);
+                self.since_time = (self.since_time + STEP * self.tick_rate).min(crate::world::TPS as f64);
                 ambient_steps += 1;
                 // A rider is where it is on its body: if moves arrived late and the body's past
                 // changed, the rider moves with it, not over the deck.
-                if let Some(e) = self.player.riding.and_then(|(b, _, now)| self.entities.get(&b).map(|e| e.known(self.body_tick(self.body_clock)) + now)) {
+                if let Some(e) = self.player.riding.and_then(|(b, _, now)| {
+                    self.entities
+                        .get(&b)
+                        .map(|e| e.known(self.body_tick(self.body_clock)) + now)
+                }) {
                     self.player.pos = e;
                 }
                 self.player.prev = self.player.pos;
@@ -896,28 +1116,25 @@ impl Client {
                 // ones nudging the player aside.
                 self.body_clock += STEP;
                 let at = self.body_tick(self.body_clock);
+                // Bodies move by the server's ticks, this step by its own clock.
+                let step_ticks = STEP * self.tick_rate;
                 let mut bodies = Vec::new();
                 let mut push = DVec3::ZERO;
                 for (&id, e) in &self.entities {
                     let k = &c.game.entities[e.kind as usize];
+                    if !e.is_body() {
+                        continue;
+                    }
                     if k.is(weft_abi::entity_flags::SOLID) {
-                        let (now, delta) = (e.known(at), e.known(at) - e.known(at - 1.0));
-                        let aabb = physics::Aabb::around(now, k.width as f64 / 2.0, k.height as f64);
-                        let built = e.structure.as_deref();
-                        let aabb = match built {
-                            Some(s) => {
-                                let Some((lo, hi)) = s.bounds else { continue };
-                                physics::Transform::of(now).box_to_world(physics::Aabb { min: lo.as_dvec3(), max: (hi + IVec3::ONE).as_dvec3() })
-                            }
-                            None => aabb,
-                        };
-                        let blocks = built.map(|s| (s as &dyn physics::Blocks, physics::Transform::of(now)));
-                        bodies.push(physics::Body { id, aabb, delta, carry: k.carry_height as f64, crushes: false, blocks });
-                    } else if k.is(weft_abi::entity_flags::PUSHABLE) && e.item.is_empty() && e.dying.is_none() {
+                        let (now, delta) = (e.known(at), e.known(at) - e.known(at - step_ticks));
+                        let physics::Dims { half_width: hw, height: h, .. } = e.dims();
+                        let built = e.structure.as_deref().map(|s| s as &dyn physics::Blocks);
+                        bodies.extend(physics::Body::of(id, k, now, (hw, h), delta, built));
+                    } else if k.is(weft_abi::entity_flags::PUSHABLE) {
                         let d = self.player.pos - e.pos;
-                        let ((ehw, eh, _), (hw, h, _)) = (e.dims(), self.player.dims());
-                        let reach = ehw + hw;
-                        if d.x.abs() < reach && d.z.abs() < reach && d.y < eh && -d.y < h {
+                        let (theirs, mine) = (e.dims(), self.player.dims());
+                        let reach = theirs.half_width + mine.half_width;
+                        if d.x.abs() < reach && d.z.abs() < reach && d.y < theirs.height && -d.y < mine.height {
                             push += physics::nudge(d);
                         }
                     }
@@ -935,15 +1152,19 @@ impl Client {
                 }
                 let entities = &self.entities;
                 let p = &self.player;
-                self.player.riding = p.support.and_then(|b| entities.get(&b).map(|e| (b, p.prev - e.known(at - 1.0), p.pos - e.known(at))));
+                self.player.riding = p.support.and_then(|b| {
+                    entities
+                        .get(&b)
+                        .map(|e| (b, p.prev - e.known(at - step_ticks), p.pos - e.known(at)))
+                });
                 if crate::log::on(crate::log::Channel::Physics, log::Level::Trace) {
                     let p = &self.player;
                     let feet = p.pos.floor().as_ivec3() - glam::IVec3::Y;
                     log::trace!(
                         target: "physics",
                         "pos {:.4} {:.4} {:.4} vel {:.4} {:.4} {:.4} ground {} liquid {} crouch {} fly {} below {}",
-                        p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, p.on_ground, p.in_liquid, p.pose == Pose::Crouch, p.flying,
-                        block(feet).map_or("unloaded".to_string(), |s| c.state_name(s))
+                        p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, p.on_ground, p.in_liquid, p.pose == Pose::CROUCH, p.flying,
+                        world.block_or_air(feet).map_or("unloaded".to_string(), |s| c.state_name(s))
                     );
                 }
             }
@@ -956,7 +1177,7 @@ impl Client {
     /// What the crosshair is on. Returns where the eye looks.
     fn aim(&mut self, input: &Input) -> DVec3 {
         let c = content();
-        let spectator = self.mode == GameMode::Spectator;
+        let spectator = self.mode.has(weft_abi::game_mode_flags::NO_INTERACT);
         // From the eye as drawn, the moment structures are drawn at too, so a block on a
         // structure the player rides stays the one aimed at.
         let eye = self.camera().pos;
@@ -966,17 +1187,29 @@ impl Client {
         self.target = if spectator { None } else { self.raycast(eye, look, reach) };
         // Vanilla's: whichever comes first along the look is all that is aimed at.
         let block_dist = self.target.map_or(f64::INFINITY, |h| h.dist);
-        self.target_entity = if spectator { None } else { self.pick_entity(eye, look, block_dist.min(self.attribute(ENTITY_REACH) as f64)) };
+        self.target_entity =
+            if spectator { None } else { self.pick_entity(eye, look, block_dist.min(self.attribute(ENTITY_REACH) as f64)) };
         if self.target_entity.is_some() {
             self.target = None;
         }
         if input.captured && !spectator && input.pressed("core:pick") {
-            if let Some(item) = self.target.and_then(|h| c.pick_item(h.state)) {
+            // In creative a mob gives its egg, there being no other way to get what stands there.
+            let egg = || {
+                self.target_entity
+                    .filter(|_| self.mode.has(weft_abi::game_mode_flags::NO_COSTS))
+                    .and_then(|e| c.spawn_egg_of(self.entities.get(&e)?.kind))
+            };
+            if let Some(item) = self.target.and_then(|h| c.pick_item(h.state)).or_else(egg) {
                 let hotbar = &self.inventory[..content().game.player_layout.hotbar as usize];
                 // Already in the hotbar: select it. Otherwise creative fills an empty slot first.
-                let slot = hotbar.iter().position(|s| s.item == item && !s.is_empty()).or_else(|| {
-                    (self.mode == GameMode::Creative && !hotbar[self.selected].is_empty()).then(|| hotbar.iter().position(|s| s.is_empty())).flatten()
-                });
+                let slot = hotbar
+                    .iter()
+                    .position(|s| s.item == item && !s.is_empty())
+                    .or_else(|| {
+                        (self.mode.has(weft_abi::game_mode_flags::NO_COSTS) && !hotbar[self.selected].is_empty())
+                            .then(|| hotbar.iter().position(|s| s.is_empty()))
+                            .flatten()
+                    });
                 if let Some(i) = slot.filter(|&i| i != self.selected) {
                     self.selected = i;
                     self.conn.send(ToServer::Select(i as u32));
@@ -989,8 +1222,9 @@ impl Client {
         look
     }
 
-    fn move_message(&self, landed: bool) -> ToServer {
+    fn move_message(&self, landed: bool, jumped: bool) -> ToServer {
         ToServer::Move {
+            jumped,
             frame: self.player.riding.map(|(b, _, now)| (b, now)),
             pos: self.player.pos,
             yaw: self.player.yaw,
@@ -1007,7 +1241,10 @@ impl Client {
         self.use_delay -= dt as f32;
         // The server judges actions by where the player looks, which it only hears 20 times a
         // second: a turn made just before a click must arrive first.
-        let mut send_look = LookOnce(self.joined.then(|| self.move_message(self.player.landed)));
+        let mut send_look = LookOnce(
+            self.joined
+                .then(|| self.move_message(self.player.landed, false)),
+        );
         if !input.captured || self.dead {
             self.breaking = None;
             return;
@@ -1019,8 +1256,11 @@ impl Client {
     fn attack(&mut self, input: &Input, dt: f64, send_look: &mut LookOnce) {
         let c = content();
         let target = self.target;
-        self.refused_break = self.refused_break.filter(|&r| input.held("core:attack") && target.is_some_and(|h| (h.frame, h.block) == r));
-        let keeps = self.mode == GameMode::Creative && c.no_creative_break(self.held().item);
+        self.refused_break = self
+            .refused_break
+            .filter(|&r| input.held("core:attack") && target.is_some_and(|h| (h.frame, h.block) == r));
+        let keeps = (self.mode.has(weft_abi::game_mode_flags::INSTANT_BREAK) && c.no_creative_break(self.held().item))
+            || self.mode.has(weft_abi::game_mode_flags::NO_BREAK);
         let refused = keeps || self.refused_break.is_some();
         if input.held("core:attack") {
             if let Some(id) = self.target_entity {
@@ -1029,35 +1269,44 @@ impl Client {
                 if input.pressed("core:attack") {
                     send_look.send(&mut self.conn);
                     self.conn.send(ToServer::Attack(id));
+                    self.conn.send(ToServer::Swing);
                     self.swing_since = 0.0;
                 }
                 self.breaking = None;
             } else if refused {
                 self.breaking = None;
             } else if let Some(hit) = self.target {
-                let held = self.held().item;
-                let time = crate::server::mining_time(c, hit.state, held, self.eye_liquid().is_some(), self.player.on_ground, self.attribute(crate::server::extend::MINING_SPEED));
-                let time = if self.mode == GameMode::Creative { 0.0 } else { time };
+                let rate = crate::server::mining_rate(
+                    c,
+                    hit.state,
+                    &self.held(),
+                    self.eye_liquid().is_some(),
+                    self.player.on_ground,
+                    self.attribute(crate::server::extend::MINING_SPEED),
+                    self.mode.has(weft_abi::game_mode_flags::INSTANT_BREAK),
+                );
                 let done = match self.breaking {
-                    Some((f, p, v)) if (f, p) == (hit.frame, hit.block) => v,
+                    Some((f, p, v)) if (f, p) == (hit.frame, hit.block) && self.breaking_part == hit.state => v,
                     _ => 0.0,
                 };
-                let progress = if time <= 0.0 { 1.0 } else { done + dt as f32 / time };
+                self.breaking_part = hit.state;
+                let progress = if rate >= 1.0 { 1.0 } else { done + dt as f32 * self.tick_rate as f32 * rate };
                 if progress >= 1.0 && (input.pressed("core:attack") || self.break_delay <= 0.0) {
                     send_look.send(&mut self.conn);
-                    self.conn.send(ToServer::Break { pos: hit.block, face: hit.face, frame: hit.frame });
+                    self.conn
+                        .send(ToServer::Break { pos: hit.block, part: hit.state, face: hit.face, frame: hit.frame });
                     let after = crate::wire::after_break(content(), hit.state, hit.face);
                     match hit.frame {
-                        0 => self.world.set_block(hit.block, after),
+                        0 => self.world.replace_part(hit.block, hit.state, after),
                         f => {
                             if let Some(s) = self.entities.get_mut(&f).and_then(|e| e.structure.as_mut()) {
-                                s.set_block(hit.block, after);
+                                s.replace_part(hit.block, hit.state, after);
                             }
                         }
                     }
                     self.breaking = None;
                     self.break_delay = 0.25;
-                } else if time > 0.0 {
+                } else if rate < 1.0 {
                     self.breaking = Some((hit.frame, hit.block, progress.min(1.0)));
                 } else {
                     // Instant breaks (creative, grass) show no cracks while the next waits.
@@ -1071,14 +1320,15 @@ impl Client {
         }
         // Hitting nothing still spends the swing.
         if input.pressed("core:attack") && self.target_entity.is_none() && self.target.is_none() {
+            self.conn.send(ToServer::Swing);
             self.swing_since = 0.0;
         }
         // The server times mining too, and shows the cracks to the others.
-        let mining = self.breaking.map(|(f, p, _)| (f, p));
+        let mining = self.breaking.map(|(f, p, _)| (f, p, self.breaking_part));
         if mining != self.told_mining {
             self.told_mining = mining;
             self.conn.send(match mining {
-                Some((frame, pos)) => ToServer::StartBreak { pos, frame },
+                Some((frame, pos, part)) => ToServer::StartBreak { pos, part, frame },
                 None => ToServer::StopBreak,
             });
         }
@@ -1086,7 +1336,7 @@ impl Client {
 
     fn use_held(&mut self, input: &Input, dt: f64, look: DVec3, send_look: &mut LookOnce) {
         if let Some((left, _)) = &mut self.using {
-            *left = (*left - dt as f32 * crate::world::TPS as f32).max(0.0);
+            *left = (*left - dt as f32 * self.tick_rate as f32).max(0.0);
             if !input.held("core:use") {
                 self.using = None;
                 self.conn.send(ToServer::StopUsing);
@@ -1096,8 +1346,20 @@ impl Client {
             if let Some(id) = self.target_entity {
                 self.conn.send(ToServer::Interact(id));
             } else if let Some(hit) = self.target {
-                let sneak = self.player.sneak;
-                self.conn.send(ToServer::Use { pos: hit.block, face: hit.face, look: look.as_vec3().to_array(), sneak, frame: hit.frame });
+                let sneak = input.held("core:sneak");
+                let at = self
+                    .frame_place(hit.frame)
+                    .to_local(self.camera().pos + self.camera().forward().as_dvec3() * hit.dist);
+                let at = (at - hit.block.as_dvec3()).as_vec3().to_array();
+                self.conn.send(ToServer::Use {
+                    pos: hit.block,
+                    part: hit.state,
+                    face: hit.face,
+                    look: look.as_vec3().to_array(),
+                    hit: at,
+                    sneak,
+                    frame: hit.frame,
+                });
             } else {
                 self.conn.send(ToServer::UseItem { target: None });
             }
@@ -1107,12 +1369,13 @@ impl Client {
 
     fn send_move(&mut self, dt: f64) {
         self.tick_accum += dt;
-        if self.tick_accum >= 0.05 {
+        if self.tick_accum >= STEP {
             // Keeps the fraction, so moves go out 20 times a second at any frame rate.
-            self.tick_accum = (self.tick_accum - 0.05).min(0.05);
+            self.tick_accum = (self.tick_accum - STEP).min(STEP);
             if self.joined && !self.dead {
                 let landed = std::mem::replace(&mut self.player.landed, false);
-                self.conn.send(self.move_message(landed));
+                let jumped = std::mem::replace(&mut self.player.jumped, false);
+                self.conn.send(self.move_message(landed, jumped));
             }
         }
     }
@@ -1144,10 +1407,25 @@ impl Client {
         let mut frames = std::mem::take(&mut self.frames);
         frames.clear();
         let at = self.body_tick(shown);
-        frames.extend(self.entities.iter().filter(|(_, e)| c.game.entities[e.kind as usize].is(weft_abi::entity_flags::SOLID)).map(|(&id, e)| (id, e.pose(at))));
-        for e in self.entities.values_mut().filter(|e| e.pulled.is_none()) {
+        frames.extend(
+            self.entities
+                .iter()
+                .filter(|(_, e)| c.game.entities[e.kind as usize].is(weft_abi::entity_flags::SOLID))
+                .map(|(&id, e)| (id, e.pose(at))),
+        );
+        // A crowd's worth on all cores: nothing here depends on another entity.
+        let mut moving: Vec<&mut ClientEntity> = self
+            .entities
+            .values_mut()
+            .filter(|e| e.pulled.is_none())
+            .collect();
+        let frames_ref = &frames;
+        let step = |e: &mut &mut ClientEntity| {
+            let frames = frames_ref;
             let before = e.pos;
-            let body = e.rel_target.and_then(|t| frames.iter().find(|f| f.0 == e.frame).map(|f| (f.1, t)));
+            let body = e
+                .rel_target
+                .and_then(|t| frames.iter().find(|f| f.0 == e.frame).map(|f| (f.1, t)));
             let mut walked = None;
             e.pos = if c.game.entities[e.kind as usize].is(weft_abi::entity_flags::SOLID) {
                 e.pose(at)
@@ -1160,21 +1438,36 @@ impl Client {
                 e.pos.lerp(e.target, k)
             };
             let mut dyaw = e.target_yaw - e.yaw;
-            dyaw = (dyaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            if dyaw.abs() > std::f32::consts::PI {
+                dyaw = (dyaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            }
             e.yaw += dyaw * k as f32;
             e.body_yaw = turn_body(e.body_yaw, e.yaw, walked.unwrap_or(e.pos - before), dt as f32);
-            e.arm_swing = e.arm_swing.map(|p| p + dt as f32 / 0.3).filter(|&p| p < 1.0);
-            e.flash = (e.flash - dt as f32).max(0.0);
+            advance_swing(&mut e.arm_swing, dt as f32);
+            if let Some(fx) = &mut e.effect {
+                fx.2 -= dt as f32;
+            }
+            e.effect = e.effect.filter(|fx| fx.2 > 0.0);
             let speed = (walked.unwrap_or(e.pos - before).with_y(0.0).length() / dt.max(1e-4)) as f32;
             e.walked += speed * dt as f32;
             crate::model::walk_limbs(&mut e.walk, &mut e.swing, speed, dt as f32);
+            e.crouched = fade_pose(e.crouched, e.pose == Pose::CROUCH, dt as f32);
+            if let Some((p, _)) = &mut e.using {
+                *p = (*p + dt as f32 * crate::world::TPS as f32 / e.use_ticks.max(1.0)).min(1.0);
+            }
             e.hurt = (e.hurt - dt as f32).max(0.0);
             e.age += dt as f32;
             if let Some(d) = &mut e.dying {
                 *d += dt as f32;
-                e.hurt = 0.4;
+                e.hurt = HURT_FLASH;
                 e.burning = false;
             }
+        };
+        if moving.len() >= 512 {
+            use rayon::prelude::*;
+            moving.par_iter_mut().with_min_len(128).for_each(step);
+        } else {
+            moving.iter_mut().for_each(step);
         }
         self.frames = frames;
     }
@@ -1188,10 +1481,24 @@ impl Client {
                 self.hit_dust = 0.05;
                 if let Some(&kind) = c.game.particle_names.get(weft_abi::particle::BLOCK) {
                     let normal = crate::world::DIRS[hit.face as usize].as_vec3();
-                    let at = self.frame_place(frame).to_world(pos.as_dvec3() + DVec3::splat(0.5) + (normal * 0.55).as_dvec3());
+                    let at = self
+                        .frame_place(frame)
+                        .to_world(pos.as_dvec3() + DVec3::splat(0.5) + (normal * 0.55).as_dvec3());
                     let spread = (glam::Vec3::splat(0.45) * (glam::Vec3::ONE - normal.abs())).to_array();
                     let velocity = [0.0, 2.0, 0.0];
-                    self.particles.spawn(&weft_abi::ParticleBurst { kind, pos: at.to_array(), spread, velocity, speed: 0.72, count: 1, block: hit.state, ..weft_abi::ParticleBurst::DEFAULT }, &self.world);
+                    self.particles.spawn(
+                        &weft_abi::ParticleBurst {
+                            kind,
+                            pos: at.to_array().into(),
+                            spread: spread.into(),
+                            velocity: velocity.into(),
+                            speed: 0.72,
+                            count: 1,
+                            block: hit.state,
+                            ..weft_abi::ParticleBurst::DEFAULT
+                        },
+                        &self.world,
+                    );
                 }
             }
         }
@@ -1204,16 +1511,23 @@ impl Client {
         if self.render.set_tint_tiles(gpu, (reach * 2 + 1) as u32) {
             self.world.retint_all();
         }
-        for (col, tints) in self.world.take_tints(glam::IVec2::new(center.x, center.z), reach) {
+        for (col, tints) in self
+            .world
+            .take_tints(glam::IVec2::new(center.x, center.z), reach)
+        {
             self.render.upload_tints(gpu, col, &tints);
         }
         if self.joined && self.terrain_view != (center, self.view_radius) {
             self.terrain_view = (center, self.view_radius);
-            let _ = self.terrain.tx.send(terrain::In::View { center, radius: self.view_radius });
+            let _ = self
+                .terrain
+                .tx
+                .send(terrain::In::View { center, radius: self.view_radius });
         }
         // Enough jobs that meshing keeps up at 50 frames per second too (results are taken once
         // a frame), not only at hundreds.
-        self.world.schedule_meshing(center, crate::meshing().current_num_threads() * 512);
+        self.world
+            .schedule_meshing(center, crate::meshing().current_num_threads() * 512);
         self.render.update_solid(gpu, &self.world, center);
         self.world.set_eye(center.y);
         // Uploads too, oldest first; the rest wait for the next frame (dropped if their cube
@@ -1247,14 +1561,20 @@ impl Client {
             self.drawn_frames.insert(id);
         }
         let entities = &self.entities;
-        let gone: Vec<u64> = self.drawn_frames.iter().copied().filter(|id| !entities.get(id).is_some_and(|e| e.structure.is_some())).collect();
+        let gone: Vec<u64> = self
+            .drawn_frames
+            .iter()
+            .copied()
+            .filter(|id| !entities.get(id).is_some_and(|e| e.structure.is_some()))
+            .collect();
         for id in gone {
             self.render.remove_frame(id);
             self.drawn_frames.remove(&id);
         }
         if self.joined {
             let cam = self.render_camera().pos;
-            self.lod.update(gpu, &mut self.render, &mut self.world, textures, self.seed, cam, self.view_radius);
+            self.lod
+                .update(gpu, &mut self.render, &mut self.world, textures, self.seed, cam, self.view_radius);
         }
         self.render.set_textures(gpu, textures);
     }
@@ -1265,120 +1585,187 @@ impl Client {
 
     /// What the player's own moving kicks up: a landing's dust, a sprint's, a splash going into
     /// water and bubbles while under it.
+    /// Bubbles from the eyes under a liquid that has them; a fall's dust and splash come from
+    /// the server, a sprint's from `sprint_dust`, for everyone near.
     fn body_particles(&mut self, dt: f32) {
         let c = content();
         let pos = self.player.pos;
-        let name = |n: &str| c.game.particle_names.get(n).copied();
-        let under = self.world.block_or_air((pos - DVec3::Y * 0.2).floor().as_ivec3()).unwrap_or(0);
-        let (w, on_ground) = (self.player.size[0] as f32 / 2.0, self.player.on_ground);
-        let fell = self.was_falling;
-        let drop = (self.fall_top - pos.y) as f32;
-        if on_ground && !self.was_on_ground && drop > 3.0 && under != 0 {
-            if let Some(kind) = name(weft_abi::particle::BLOCK) {
-                // Vanilla's `checkFallDamage`, and what its particles make of no speed of their own.
-                let count = (150.0 * (0.2 + (drop - 3.0).ceil() / 15.0).min(2.5)) as u32;
-                self.particles.spawn(&weft_abi::ParticleBurst { kind, block: under, pos: pos.to_array(), count, velocity: [0.0, 2.0, 0.0], speed: 3.6, outward: 1, ..weft_abi::ParticleBurst::DEFAULT }, &self.world);
-            }
+        if self.me.sprinting {
+            self.sprint_dust(pos, self.player.vel, self.player.size.width / 2.0, dt);
         }
-        if on_ground && self.player.sprinting && under != 0 && self.chance() < dt * 20.0 {
-            if let Some(kind) = name(weft_abi::particle::BLOCK) {
-                // Vanilla's `spawnSprintParticle`: back and up, in a particle's own speeds.
-                let mut noise = || self.rng.float() * 0.8 - 0.4;
-                let aim = glam::Vec3::new(-4.0 * self.player.vel.x as f32 + noise(), 1.5 + noise(), -4.0 * self.player.vel.z as f32 + noise());
-                let speed = (self.chance() + self.chance() + 1.0) / 3.0 * 3.6;
-                let velocity = (aim.normalize_or_zero() * speed + glam::Vec3::Y * 2.0).to_array();
-                let at = pos + DVec3::Y * 0.1;
-                self.particles.spawn(&weft_abi::ParticleBurst { kind, block: under, pos: at.to_array(), count: 1, spread: [w, 0.0, w], velocity, ..weft_abi::ParticleBurst::DEFAULT }, &self.world);
-            }
+        let bubble = self.eye_liquid().and_then(|l| {
+            let state = c.liquids[l as usize].first_state;
+            let id = c.components.id(weft_abi::comp::BUBBLE)?;
+            c.game
+                .particle_names
+                .get(c.components.text(crate::components::BLOCK, state, id)?)
+                .copied()
+        });
+        if let Some(kind) = bubble.filter(|_| self.chance() < dt * 1.5) {
+            let at = pos + DVec3::Y * self.player.eye;
+            self.particles.spawn(
+                &weft_abi::ParticleBurst {
+                    kind,
+                    pos: at.to_array().into(),
+                    count: 2,
+                    spread: [0.2, 0.1, 0.2].into(),
+                    speed: 0.5,
+                    ..weft_abi::ParticleBurst::DEFAULT
+                },
+                &self.world,
+            );
         }
-        if self.player.in_liquid && !self.was_wet && fell > 0.1 {
-            for (n, count) in [(weft_abi::particle::SPLASH, 24), (weft_abi::particle::BUBBLE, 12)] {
-                if let Some(kind) = name(n) {
-                    self.particles.spawn(&weft_abi::ParticleBurst { kind, pos: pos.to_array(), count, spread: [w * 2.0, 0.2, w * 2.0], speed: 3.0, velocity: [0.0, 3.0, 0.0], ..weft_abi::ParticleBurst::DEFAULT }, &self.world);
-                }
-            }
+    }
+
+    /// Vanilla's `spawnSprintParticle`: now and then a bit of the ground under a sprinter, thrown
+    /// back and up. `vel` in blocks per tick.
+    fn sprint_dust(&mut self, pos: DVec3, vel: DVec3, half_width: f32, dt: f32) {
+        let c = content();
+        let under = self
+            .world
+            .block_or_air((pos - DVec3::Y * 0.2).floor().as_ivec3())
+            .unwrap_or(0);
+        let Some(&kind) = c.game.particle_names.get(weft_abi::particle::BLOCK) else { return };
+        if under == 0 || c.states[under as usize].liquid.is_some() || self.chance() >= dt * crate::world::TPS as f32 {
+            return;
         }
-        if self.eye_liquid().is_some() && self.chance() < dt * 1.5 {
-            if let Some(kind) = name(weft_abi::particle::BUBBLE) {
-                let at = pos + DVec3::Y * self.player.eye;
-                self.particles.spawn(&weft_abi::ParticleBurst { kind, pos: at.to_array(), count: 2, spread: [0.2, 0.1, 0.2], speed: 0.5, ..weft_abi::ParticleBurst::DEFAULT }, &self.world);
-            }
-        }
-        self.was_on_ground = on_ground;
-        self.was_wet = self.player.in_liquid;
-        self.was_falling = (-self.player.vel.y as f32).max(0.0);
-        self.fall_top = if on_ground || self.player.in_liquid || self.player.flying { pos.y } else { self.fall_top.max(pos.y) };
+        let mut noise = || self.rng.float() * 0.8 - 0.4;
+        let aim = glam::Vec3::new(-4.0 * vel.x as f32 + noise(), 1.5 + noise(), -4.0 * vel.z as f32 + noise());
+        let speed = (self.chance() + self.chance() + 1.0) / 3.0 * 3.6;
+        let velocity = (aim.normalize_or_zero() * speed + glam::Vec3::Y * 2.0).to_array();
+        self.particles.spawn(
+            &weft_abi::ParticleBurst {
+                kind,
+                block: under,
+                pos: (pos + DVec3::Y * 0.1).to_array().into(),
+                count: 1,
+                spread: [half_width, 0.0, half_width].into(),
+                velocity: velocity.into(),
+                ..weft_abi::ParticleBurst::DEFAULT
+            },
+            &self.world,
+        );
     }
 
     /// What goes over the screen: the inside of a liquid, of a block, a fire.
-    fn overlays(&self, cam: &Camera) -> Vec<sky::Overlay> {
+    fn overlays(&self, textures: &GameTextures) -> Vec<sky::Overlay> {
         let c = content();
         let mut out = Vec::new();
         if self.view != 0 || self.hide_gui {
             return out;
         }
         let light = self.daylight().max(0.25);
-        if let Some(l) = self.eye_liquid().map(|l| &c.liquids[l as usize]).filter(|l| l.overlay_opacity > 0.0) {
+        let looks = looks::current();
+        if let Some(l) = self
+            .eye_liquid()
+            .map(|l| &c.liquids[l as usize])
+            .filter(|l| l.overlay_opacity > 0.0)
+        {
             let st = &c.states[l.first_state as usize];
-            let own = c.textures.get(st.textures[0] as usize).map_or("", String::as_str);
+            let own = looks
+                .texture_name(c, looks.drawn(l.first_state, st).textures[0])
+                .unwrap_or("");
             let tint = if st.tint != 0 { sky::rgb(crate::content::item_tint(st.tint)) } else { Vec3::ONE };
             out.push(sky::Overlay {
                 picture: if l.overlay.is_empty() { own.to_string() } else { l.overlay.clone() },
-                color: (tint * light).powf(2.2).extend(l.overlay_opacity).to_array(),
-                tiles: 4.0,
-                slide: [-cam.yaw.to_degrees() / 64.0, cam.pitch.to_degrees() / 64.0],
+                color: (tint * light)
+                    .powf(2.2)
+                    .extend(l.overlay_opacity)
+                    .to_array(),
+                tiles: 1.0,
                 lower: false,
                 frame: 0,
             });
         }
-        let head = (self.smooth_pos() + DVec3::Y * self.player.eye).floor().as_ivec3();
+        let head = (self.smooth_pos() + DVec3::Y * self.player.eye)
+            .floor()
+            .as_ivec3();
         if !self.player.noclip {
-            if let Some(st) = self.world.block_or_air(head).map(|s| s as usize).filter(|&s| c.states[s].flags & weft_abi::block_flags::SOLID != 0 && c.tight[s].opacity >= 15) {
-                if let Some(picture) = c.textures.get(c.states[st].textures[1] as usize) {
-                    out.push(sky::Overlay { picture: picture.clone(), color: [0.01, 0.01, 0.01, 1.0], tiles: 1.0, slide: [0.0, 0.0], lower: false, frame: 0 });
+            if let Some(st) = self
+                .world
+                .block_or_air(head)
+                .filter(|&s| c.states[s as usize].flags & weft_abi::block_flags::SOLID != 0 && c.tight[s as usize].opacity >= 15)
+            {
+                if let Some(picture) = looks.texture_name(c, looks.drawn(st, &c.states[st as usize]).textures[1]) {
+                    out.push(sky::Overlay {
+                        picture: picture.to_string(),
+                        color: [0.01, 0.01, 0.01, 1.0],
+                        tiles: 1.0,
+                        lower: false,
+                        frame: 0,
+                    });
                 }
             }
         }
-        if self.burning {
+        if self.me.burning {
             if let Some(picture) = c.textures.get(c.fire_texture as usize) {
-                let frame = (self.start.elapsed().as_secs_f32() * crate::world::TPS as f32) as u32;
-                out.push(sky::Overlay { picture: picture.clone(), color: [1.0, 1.0, 1.0, 0.9], tiles: 2.0, slide: [0.0, 0.0], lower: true, frame });
+                let ticks = self.start.elapsed().as_secs_f32() * crate::world::TPS as f32;
+                // Loaded by being asked for its picture, for mobs too.
+                textures.texture(c.fire_texture);
+                let frame = textures.strip_frame(c.fire_texture, ticks);
+                out.push(sky::Overlay { picture: picture.clone(), color: [1.0, 1.0, 1.0, 0.9], tiles: 2.0, lower: true, frame });
             }
         }
         out
     }
 
     /// Like vanilla's block display ticks: random blocks around the player that name a particle
-    /// (`abi::comp::AMBIENT_PARTICLE`) show one, each about every three seconds. The server has
-    /// no part in it.
+    /// (`abi::comp::AMBIENT_PARTICLE`) show one, each about every three seconds, and liquids
+    /// with `abi::comp::DRIP` drip through the ceiling under them. The server has no part in it.
     fn ambient(&mut self) {
         const TRIES: usize = 667;
         let c = content();
         let kinds = self.ambient_kinds.get_or_insert_with(|| {
-            let comp = c.components.id(weft_abi::comp::AMBIENT_PARTICLE);
+            let (ambient, drip) = (c.components.id(weft_abi::comp::AMBIENT_PARTICLE), c.components.id(weft_abi::comp::DRIP));
+            let named = |s: u32, comp: Option<u32>| {
+                comp.and_then(|id| c.components.text(crate::components::BLOCK, s, id))
+                    .map_or(Vec::new(), |names| {
+                        names
+                            .split(',')
+                            .filter_map(|n| c.game.particle_names.get(n).copied())
+                            .collect()
+                    })
+            };
             (0..c.states.len() as u32)
-                .map(|s| comp.and_then(|id| c.components.text(crate::components::BLOCK, s, id)).map_or(Vec::new(), |names| names.split(',').filter_map(|n| c.game.particle_names.get(n).copied()).collect()))
+                .map(|s| (named(s, ambient), named(s, drip).first().copied()))
                 .collect()
         });
-        let drip = c.game.particle_names.get(weft_abi::particle::DRIP).copied();
         let center = self.player.pos.floor().as_ivec3();
         let mut bursts: Vec<weft_abi::ParticleBurst> = Vec::new();
         for _ in 0..TRIES {
             let r = self.rng.next();
             let p = center + IVec3::new((r % 33) as i32 - 16, ((r >> 8) % 33) as i32 - 16, ((r >> 16) % 33) as i32 - 16);
             let state = self.world.block(p);
-            for &kind in kinds.get(state as usize).map_or(&[][..], |k| &k[..]) {
+            let Some((own, drip)) = kinds.get(state as usize) else { continue };
+            for &kind in own {
                 // Vanilla's: over a torch, and out from the wall where it leans.
-                let wall = c.states[state as usize].support.map(|(f, _)| f as usize).filter(|f| f / 2 != 1).map(|f| crate::world::DIRS[f].as_dvec3());
+                let wall = c.states[state as usize]
+                    .support
+                    .map(|(f, _)| f as usize)
+                    .filter(|f| f / 2 != 1)
+                    .map(|f| crate::world::DIRS[f].as_dvec3());
                 let pos = (p.as_dvec3() + wall.map_or(DVec3::new(0.5, 0.7, 0.5), |d| DVec3::new(0.5, 0.92, 0.5) - d * 0.27)).to_array();
-                bursts.push(weft_abi::ParticleBurst { kind, pos, spread: [0.1, 0.1, 0.1], speed: 0.1, count: 1, ..weft_abi::ParticleBurst::DEFAULT });
+                bursts.push(weft_abi::ParticleBurst {
+                    kind,
+                    pos: pos.into(),
+                    spread: [0.1, 0.1, 0.1].into(),
+                    speed: 0.1,
+                    count: 1,
+                    ..weft_abi::ParticleBurst::DEFAULT
+                });
             }
-            // Water through a ceiling: a solid block under water, air under that.
-            if let Some(kind) = drip.filter(|_| c.states.get(state as usize).is_some_and(|s| s.liquid.is_some() && (r >> 24) % 8 == 0)) {
+            // Through a ceiling: a solid block under the liquid, air under that.
+            if let Some(kind) = drip.filter(|_| (r >> 24) % 8 == 0) {
                 let (below, air) = (self.world.block(p - IVec3::Y), self.world.block(p - IVec3::Y * 2));
                 if c.states[below as usize].flags & weft_abi::block_flags::SOLID != 0 && air == 0 {
                     let pos = [p.x as f64 + 0.5, p.y as f64 - 1.05, p.z as f64 + 0.5];
-                    bursts.push(weft_abi::ParticleBurst { kind, pos, spread: [0.4, 0.0, 0.4], count: 1, ..weft_abi::ParticleBurst::DEFAULT });
+                    bursts.push(weft_abi::ParticleBurst {
+                        kind,
+                        pos: pos.into(),
+                        spread: [0.4, 0.0, 0.4].into(),
+                        count: 1,
+                        ..weft_abi::ParticleBurst::DEFAULT
+                    });
                 }
             }
         }
@@ -1392,14 +1779,28 @@ impl Client {
     /// timer), and a puff of smoke when its death animation ends (vanilla's 20 poof particles).
     pub fn entity_effects(&mut self, a: &weft_abi::ClientEntityArgs) {
         use crate::audio::Play;
+        use crate::content::block_sound;
+        use crate::registry::entity_sound;
         let c = content();
         let k = &c.game.entities[a.kind as usize];
-        let pos = DVec3::from_array(a.pos);
+        let pos = crate::world::dvec(a.pos);
         if a.dying >= 1.0 {
             if let Some(&kind) = c.game.particle_names.get(weft_abi::particle::POOF) {
-                let (w, h) = (k.width * 0.5, k.height * 0.5);
+                let crate::physics::Dims { half_width: hw, height: h, .. } = physics::posed(k.size(), Pose::STAND);
+                let (w, h) = (hw as f32, h as f32 * 0.5);
                 let at = (pos + DVec3::Y * h as f64).to_array();
-                self.particles.spawn(&weft_abi::ParticleBurst { kind, pos: at, spread: [w, h, w], velocity: [0.0, 0.4, 0.0], speed: 0.8, count: 20, ..weft_abi::ParticleBurst::DEFAULT }, &self.world);
+                self.particles.spawn(
+                    &weft_abi::ParticleBurst {
+                        kind,
+                        pos: at.into(),
+                        spread: [w, h, w].into(),
+                        velocity: [0.0, 0.4, 0.0].into(),
+                        speed: 0.8,
+                        count: 20,
+                        ..weft_abi::ParticleBurst::DEFAULT
+                    },
+                    &self.world,
+                );
             }
             return;
         }
@@ -1409,13 +1810,29 @@ impl Client {
         let Some(e) = self.entities.get_mut(&a.entity) else { return };
         if a.walked >= e.next_step {
             e.next_step = a.walked + 1.6;
-            let sound = if k.sounds[3] != u32::MAX { k.sounds[3] } else { self.world.block_or_air((pos - DVec3::Y * 0.2).floor().as_ivec3()).map_or(u32::MAX, |s| c.states[s as usize].sounds[2]) };
+            let sound = if k.sounds[entity_sound::STEP] != u32::MAX {
+                k.sounds[entity_sound::STEP]
+            } else {
+                self.world
+                    .block_or_air((pos - DVec3::Y * 0.2).floor().as_ivec3())
+                    .map_or(u32::MAX, |s| c.states[s as usize].sounds[block_sound::STEP])
+            };
             if sound != u32::MAX {
-                self.sounds.push(Play { sound, pos: Some(pos), volume: 0.2, pitch: 0.0 });
+                self.sounds
+                    .push(Play { sound, pos: Some(pos), volume: 0.2, pitch: 0.0 });
             }
         }
-        if k.sounds[2] != u32::MAX && self.chance() < a.dt / 12.0 {
-            self.sounds.push(Play { sound: k.sounds[2], pos: Some(pos + DVec3::Y * k.eye as f64), volume: 1.0, pitch: 0.0 });
+        if e.sprinting {
+            // Vanilla's sprint, about 0.28 blocks a tick, the way the body faces.
+            let (sin, cos) = (e.body_yaw as f64).sin_cos();
+            let (vel, hw) = (DVec3::new(-sin, 0.0, -cos) * 0.28, e.dims().half_width as f32);
+            self.sprint_dust(pos, vel, hw, a.dt);
+        }
+        let Some(e) = self.entities.get(&a.entity) else { return };
+        let eye = e.dims().eye;
+        if k.sounds[entity_sound::AMBIENT] != u32::MAX && self.chance() < a.dt / 12.0 {
+            self.sounds
+                .push(Play { sound: k.sounds[entity_sound::AMBIENT], pos: Some(pos + DVec3::Y * eye), volume: 1.0, pitch: 0.0 });
         }
     }
 
@@ -1423,24 +1840,40 @@ impl Client {
     /// travels for them.
     fn creature_sounds(&mut self, dt: f32, moved: f32) {
         use crate::audio::Play;
+        use crate::content::block_sound;
         let c = content();
-        let below = |w: &world::ClientWorld, p: DVec3| w.block_or_air((p - DVec3::Y * 0.2).floor().as_ivec3()).map_or(u32::MAX, |s| c.states[s as usize].sounds[2]);
-        if self.player.on_ground && !self.player.flying && self.mode != GameMode::Spectator {
+        let below = |w: &world::ClientWorld, p: DVec3| {
+            w.block_or_air((p - DVec3::Y * 0.2).floor().as_ivec3())
+                .map_or(u32::MAX, |s| c.states[s as usize].sounds[block_sound::STEP])
+        };
+        if self.player.on_ground && !self.player.flying && !self.mode.has(weft_abi::game_mode_flags::HIDDEN) {
             self.next_step -= moved;
             if self.next_step <= 0.0 {
                 // Vanilla: a step every 1/0.6 blocks walked.
                 self.next_step = 1.6;
                 let sound = below(&self.world, self.player.pos);
-                self.sounds.push(Play { sound, pos: Some(self.player.pos), volume: 0.25, pitch: 0.0 });
+                self.sounds
+                    .push(Play { sound, pos: Some(self.player.pos), volume: 0.25, pitch: 0.0 });
             }
         }
         self.hit_sound -= dt;
-        if let Some(hit) = self.target.filter(|h| self.breaking.is_some_and(|(f, p, _)| (f, p) == (h.frame, h.block))) {
+        if let Some(hit) = self.target.filter(|h| {
+            self.breaking
+                .is_some_and(|(f, p, _)| (f, p) == (h.frame, h.block))
+        }) {
             if self.hit_sound <= 0.0 {
                 // Vanilla knocks every four ticks while mining.
                 self.hit_sound = 0.2;
-                let sound = c.states[hit.state as usize].sounds[3];
-                self.sounds.push(Play { sound, pos: Some(self.frame_place(hit.frame).to_world(hit.block.as_dvec3() + DVec3::splat(0.5))), volume: 0.4, pitch: 0.0 });
+                let sound = c.states[hit.state as usize].sounds[block_sound::HIT];
+                self.sounds.push(Play {
+                    sound,
+                    pos: Some(
+                        self.frame_place(hit.frame)
+                            .to_world(hit.block.as_dvec3() + DVec3::splat(0.5)),
+                    ),
+                    volume: 0.4,
+                    pitch: 0.0,
+                });
             }
         }
         self.sounds.retain(|p| p.sound != u32::MAX);
@@ -1451,27 +1884,41 @@ impl Client {
         let c = content();
         let cam = self.camera();
         let eye = cam.pos.floor().as_ivec3();
-        let liquid = self.world.block_or_air(eye).and_then(|s| c.states[s as usize].liquid).map(|l| c.liquids[l as usize].temperature);
         crate::audio::Listener {
             pos: cam.pos,
             yaw: cam.yaw,
             pitch: cam.pitch,
-            underwater: liquid.is_some_and(|t| t < 1000),
-            enclosed: self.world.light(eye) & 255 < 6 && c.dims[self.world.dim as usize].sky_light,
+            underwater: self
+                .eye_liquid()
+                .is_some_and(|l| !c.liquids[l as usize].burns()),
+            enclosed: weft_abi::light::sky(self.world.light(eye)) < 6 && c.dims[self.world.dim as usize].sky_light,
             dim: self.world.dim,
-            day: self.daylight() > 0.5,
-            creative: self.mode == GameMode::Creative,
+            holds: c
+                .game
+                .music
+                .iter()
+                .flat_map(|m| &m.when)
+                .copied()
+                .filter(|&id| crate::conditions::on_client(Some(self), id))
+                .collect(),
         }
+    }
+
+    /// No sky light at the camera: a cave, or under a roof.
+    pub fn enclosed(&self) -> bool {
+        let c = content();
+        let eye = self.camera().pos.floor().as_ivec3();
+        weft_abi::light::sky(self.world.light(eye)) < 6 && c.dims[self.world.dim as usize].sky_light
     }
 
     fn pick_entity(&self, eye: DVec3, dir: DVec3, max: f64) -> Option<u64> {
         let mut best: Option<(f64, u64)> = None;
         for (&id, e) in &self.entities {
-            // Structures are aimed at by their blocks; the dead lie there only to be seen.
-            if !e.item.is_empty() || id == self.player_id || e.structure.is_some() || e.dying.is_some() {
+            // Structures are aimed at by their blocks.
+            if !e.is_body() || id == self.player_id || e.structure.is_some() {
                 continue;
             }
-            let (hw, h, _) = e.dims();
+            let physics::Dims { half_width: hw, height: h, .. } = e.dims();
             let b = physics::Aabb::around(e.pos, hw, h);
             if let Some(t) = physics::ray_aabb(eye, dir, &b, max) {
                 if best.is_none_or(|(bt, _)| t < bt) {
@@ -1485,38 +1932,23 @@ impl Client {
     /// Copies an engine field component into the entity (or the own player) that shows it.
     fn engine_field(&mut self, id: u64, comp: u32, bytes: &[u8]) {
         let c = content();
-        let [health, burning, worn, shape, held] = c.game.field_comps;
+        let [health, burning, worn, shape, held, off_held, using, swaps, looping, effect, forced] = c.game.field_comps;
+        let now = self.world.time;
         let f: Vec<f32> = words(bytes).map(f32::from_le_bytes).collect();
         let shaped = || {
-            let size = (f.len() == 4 && f[0] > 0.0).then(|| [f[0], f[1], f[2]]);
-            let look = words(bytes).nth(3).map(u32::from_le_bytes).filter(|&l| l != u32::MAX);
+            let size = (f.len() == 4 && f[0] > 0.0).then(|| weft_abi::EntitySize { width: f[0], height: f[1], eye: f[2] });
+            let look = words(bytes)
+                .nth(3)
+                .map(u32::from_le_bytes)
+                .filter(|&l| l != u32::MAX);
             (size, look)
         };
-        if id == self.player_id {
-            if comp == burning {
-                self.burning = bytes.first().is_some_and(|&b| b != 0);
-            }
-            if comp == health && f.len() == 2 {
-                // Lower health out of a lower maximum, or on joining, isn't a hit.
-                if f[0] < self.health && f[1] >= self.max_health && self.health > 0.0 {
-                    self.hurt_flash = 0.5;
-                }
-                (self.health, self.max_health) = (f[0], f[1]);
-                if f[0] > 0.0 {
-                    self.dead = false;
-                }
-            } else if comp == shape {
-                let (size, look) = shaped();
-                let k = &c.game.entities[c.game.player_kind as usize];
-                self.player.size = size.unwrap_or([k.width, k.height, k.eye]).map(|v| v as f64);
-                self.self_look = look;
-            }
-            return;
-        }
-        let Some(e) = self.entities.get_mut(&id) else { return };
+        let mine = id == self.player_id;
+        let Some(e) = (if mine { Some(&mut self.me) } else { self.entities.get_mut(&id) }) else { return };
         if comp == health && f.len() == 2 {
-            if f[0] < e.health {
-                e.hurt = 0.4;
+            // Lower health out of a lower maximum, or on joining, isn't a hit.
+            if f[0] < e.health && (!mine || (f[1] >= self.max_health && e.health > 0.0)) {
+                e.hurt = HURT_FLASH;
             }
             e.health = f[0];
         } else if comp == burning {
@@ -1525,8 +1957,48 @@ impl Client {
             e.worn = words(bytes).map(u32::from_le_bytes).collect();
         } else if comp == held {
             e.held = words(bytes).next().map_or(0, u32::from_le_bytes);
+        } else if comp == swaps {
+            e.swaps = parse_swaps(bytes);
+        } else if comp == looping {
+            // For who wasn't around when it started; those who were have it from `PlayAction`.
+            let name = String::from_utf8_lossy(bytes);
+            if !name.is_empty() && e.action.as_ref().is_none_or(|a| a.0 != name) {
+                e.action = Some((name.into_owned(), e.age, true));
+            }
+        } else if comp == off_held {
+            e.off_held = words(bytes).next().map_or(0, u32::from_le_bytes);
+        } else if comp == using {
+            let v = words(bytes).next().map_or(0, u32::from_le_bytes);
+            e.use_ticks = (v & !(1 << 31)) as f32;
+            e.using = (v != 0).then(|| (e.using.map_or(0.0, |u| u.0), v >> 31 != 0));
         } else if comp == shape {
             (e.size, e.look) = shaped();
+        } else if comp == effect {
+            e.effect = (bytes.len() >= 16).then(|| {
+                let id = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+                let strength = f32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                let until = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+                (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32)
+            });
+        }
+        if !mine {
+            return;
+        }
+        // What the local player's own movement and screens go by.
+        if comp == forced {
+            self.player.forced = (bytes.len() >= 8).then(|| {
+                let yaw = f32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                (Pose::from_id(u32::from_le_bytes(bytes[..4].try_into().unwrap())), (!yaw.is_nan()).then_some(yaw))
+            });
+        } else if comp == health && f.len() == 2 {
+            self.max_health = f[1];
+            if f[0] > 0.0 {
+                self.dead = false;
+            }
+        } else if comp == shape {
+            self.player.size = shaped()
+                .0
+                .unwrap_or(c.game.entities[c.game.player_kind as usize].size());
         }
     }
 
@@ -1534,8 +2006,15 @@ impl Client {
     pub fn worn(&self) -> Vec<u32> {
         let c = content();
         let w = &c.game.player_layout.worn;
-        let slots = self.inventory.get(w.start as usize..w.end as usize).unwrap_or_default();
-        slots.iter().filter(|s| !s.is_empty() && c.worn(s.item).is_some()).map(|s| s.item).collect()
+        let slots = self
+            .inventory
+            .get(w.start as usize..w.end as usize)
+            .unwrap_or_default();
+        slots
+            .iter()
+            .filter(|s| !s.is_empty() && c.worn(s.item).is_some())
+            .map(|s| s.item)
+            .collect()
     }
 
     /// Wire of the world and of bodies, before the frame's passes.
@@ -1547,12 +2026,16 @@ impl Client {
             }
         }
         let entities = &self.entities;
-        self.wires.keep_frames(gpu, |id| entities.get(&id).is_some_and(|e| e.structure.is_some()));
+        self.wires
+            .keep_frames(gpu, |id| entities.get(&id).is_some_and(|e| e.structure.is_some()));
     }
 
     /// Where `frame`'s space is drawn: a structure's pose, the world as it is at 0.
     pub fn frame_place(&self, frame: u64) -> physics::Transform {
-        self.entities.get(&frame).filter(|_| frame != 0).map_or(physics::Transform::default(), |e| physics::Transform::of(e.pos))
+        self.entities
+            .get(&frame)
+            .filter(|_| frame != 0)
+            .map_or(physics::Transform::default(), |e| physics::Transform::of(e.pos))
     }
 
     /// The block looked at: the world's or a structure's, whichever the ray enters first.
@@ -1562,14 +2045,18 @@ impl Client {
         let structures: Vec<(u64, physics::Transform, &dyn physics::Blocks)> = self
             .entities
             .iter()
-            .filter_map(|(&id, e)| e.structure.as_deref().map(|s| (id, physics::Transform::of(e.pose(now)), s as &dyn physics::Blocks)))
+            .filter_map(|(&id, e)| {
+                e.structure
+                    .as_deref()
+                    .map(|s| (id, physics::Transform::of(e.pose(now)), s as &dyn physics::Blocks))
+            })
             .collect();
-        physics::pick(content(), &|p| world.block_or_air(p), &structures, eye, look, reach, false)
+        physics::pick(content(), &world::SeenCells { world, air_if_missing: false }, &structures, eye, look, reach, false)
     }
 
     /// Server tick (fractional) bodies are shown at when the client clock reads `clock`.
     fn body_tick(&self, clock: f64) -> f64 {
-        (clock - self.tick_offset.unwrap_or(clock)) / STEP - INTERP_TICKS
+        (clock - self.tick_offset.unwrap_or(clock)) * self.tick_rate - INTERP_TICKS
     }
 
     /// Position drawn this frame, between the last two physics ticks; on a body, on the body as
@@ -1587,15 +2074,26 @@ impl Client {
     pub fn camera(&self) -> Camera {
         // From inside a liquid everything looks closer, vanilla's 60 degrees for 70.
         let inside = if self.eye_liquid().is_some() { 6.0 / 7.0 } else { 1.0 };
-        // From the bed, the head is on the pillow, behind the middle of the body.
-        let pillow = self.player.lying.map_or(DVec3::ZERO, |yaw| DVec3::new(yaw.sin() as f64, 0.0, yaw.cos() as f64) * 0.75);
-        Camera { pos: self.smooth_pos() + DVec3::Y * self.player.eye + pillow, yaw: self.player.yaw, pitch: self.player.pitch, fov: self.fov * self.player.fov_mul * inside, bob: (Vec3::ZERO, 0.0, 0.0) }
+        // Lying on its back the head is behind the middle of the body (on a bed's pillow).
+        let pillow = match self.player.forced {
+            Some((pose, Some(yaw))) if pose.def().tilt == weft_abi::pose_tilt::ON_BACK => {
+                DVec3::new(yaw.sin() as f64, 0.0, yaw.cos() as f64) * 0.75
+            }
+            _ => DVec3::ZERO,
+        };
+        Camera {
+            pos: self.smooth_pos() + DVec3::Y * self.player.eye + pillow,
+            yaw: self.player.yaw,
+            pitch: self.player.pitch,
+            fov: self.fov * self.player.fov_mul * self.attribute(crate::server::extend::FOV) * inside,
+            bob: (Vec3::ZERO, 0.0, 0.0),
+        }
     }
 
     /// The liquid the eyes are in.
     fn eye_liquid(&self) -> Option<u16> {
         let world = &self.world;
-        physics::liquid_at(content(), &|p| world.block_or_air(p), self.smooth_pos() + DVec3::Y * self.player.eye)
+        physics::liquid_at(content(), &world::SeenCells { world, air_if_missing: false }, self.smooth_pos() + DVec3::Y * self.player.eye)
     }
 
     /// The camera with view bobbing, for drawing (aiming uses the steady one).
@@ -1603,13 +2101,16 @@ impl Client {
         use std::f32::consts::PI;
         let (f, g) = (-self.walk_dist * PI, self.bob);
         // Vanilla's bobHurt: a jolt to the side when hit, and falling over when dead.
-        let hit = (self.hurt_flash / 0.5).clamp(0.0, 1.0);
+        let hit = (self.me.hurt / HURT_FLASH).clamp(0.0, 1.0);
         let jolt = (hit.powi(4) * PI).sin() * 14.0;
-        let fallen = self.dead_for.map_or(0.0, |t| 40.0 - 8000.0 / ((t * crate::world::TPS as f32).min(20.0) + 200.0));
+        let fallen = self
+            .dead_for
+            .map_or(0.0, |t| 40.0 - 8000.0 / ((t * crate::world::TPS as f32).min(20.0) + 200.0));
+        let (kick, roll, pitch) = self.entity_render.camera_kick;
         cam.bob = (
-            Vec3::new(f.sin() * g * 0.5, -(f.cos() * g).abs(), 0.0),
-            (f.sin() * g * 3.0 - jolt + fallen).to_radians(),
-            ((f - 0.2).cos() * g).abs().to_radians() * 5.0,
+            Vec3::new(f.sin() * g * 0.5, -(f.cos() * g).abs(), 0.0) + kick,
+            (f.sin() * g * 3.0 - jolt + fallen).to_radians() + roll,
+            ((f - 0.2).cos() * g).abs().to_radians() * 5.0 + pitch,
         );
         cam
     }
@@ -1617,9 +2118,8 @@ impl Client {
     /// Vanilla's swing: starts over once past halfway, which is the quick arm of holding a block
     /// being mined.
     fn swing_arm(&mut self) {
-        if self.hand_swing.is_none_or(|p| p >= 0.5) {
-            self.hand_swing = Some(0.0);
-        }
+        restart_swing(&mut self.hand_swing);
+        self.hand_swing_off = false;
     }
 
     /// The camera drawn from: the eye, or up to 4 blocks behind or in front of it in third person,
@@ -1639,49 +2139,31 @@ impl Client {
         let c = content();
         let world = &self.world;
         let block = |p: IVec3| world.block_or_air(p);
-        let dist = physics::raycast(c, &block, eye.pos, back, 4.0, false).map_or(4.0, |h| ((h.block.as_dvec3() + DVec3::splat(0.5) - eye.pos).length() - 0.8).clamp(0.3, 4.0));
+        let dist = physics::raycast(c, &block, eye.pos, back, 4.0, false)
+            .map_or(4.0, |h| ((h.block.as_dvec3() + DVec3::splat(0.5) - eye.pos).length() - 0.8).clamp(0.3, 4.0));
         cam.pos = eye.pos + back * dist;
         self.bobbed(cam)
     }
 
-    /// The local player as an entity, for third person.
-    fn self_entity(&self) -> ClientEntity {
+    /// The local player as an entity.
+    /// Brings `me` up to what prediction, the inventory and the hand say this frame.
+    fn sync_me(&mut self) {
         let w = &content().game.player_layout.worn;
-        let worn: Vec<u32> = self.inventory.get(w.start as usize..w.end as usize).map_or(Vec::new(), |s| s.iter().filter(|s| !s.is_empty()).map(|s| s.item).collect());
-        ClientEntity {
-            kind: content().game.player_kind,
-            pos: self.smooth_pos(),
-            target: self.smooth_pos(),
-            yaw: self.player.yaw,
-            target_yaw: self.player.yaw,
-            body_yaw: self.self_body,
-            arm_swing: self.hand_swing,
-            flash: 0.0,
-            pitch: self.player.pitch,
-            item: ItemStack::EMPTY,
-            health: self.health,
-            hurt: self.hurt_flash,
-            worn,
-            held: self.held().item,
-            walk: self.self_walk,
-            walked: self.self_walk,
-            swing: self.self_swing,
-            age: self.start.elapsed().as_secs_f32(),
-            burning: self.burning,
-            dying: None,
-            next_step: 0.0,
-            anim: self.self_anim.clone(),
-            pose: self.player.pose,
-            track: Default::default(),
-            pulled: None,
-            size: None,
-            look: self.self_look,
-            frame: 0,
-            rel: DVec3::ZERO,
-            rel_target: None,
-            structure: None,
-            world_light: Default::default(),
-        }
+        let worn: Vec<u32> = self
+            .inventory
+            .get(w.start as usize..w.end as usize)
+            .map_or(Vec::new(), |s| s.iter().filter(|s| !s.is_empty()).map(|s| s.item).collect());
+        let (pos, held, off_held) = (self.smooth_pos(), self.shown_held().item, self.off_held().item);
+        let using = self
+            .using
+            .map(|(left, all)| (1.0 - left / all.max(1.0), self.using_off));
+        let me = &mut self.me;
+        (me.pos, me.target, me.yaw, me.target_yaw, me.pitch) = (pos, pos, self.player.yaw, self.player.yaw, self.player.pitch);
+        (me.worn, me.held, me.off_held, me.using) = (worn, held, off_held, using);
+        (me.arm_swing, me.swing_off, me.pose, me.walked) = (self.hand_swing, self.hand_swing_off, self.player.pose, me.walk);
+        me.sprinting = self.player.sprinting && self.player.on_ground;
+        me.age = self.start.elapsed().as_secs_f32();
+        self.player.swims_in = swims_in(content(), self.me.kind, &self.worn());
     }
 
     pub fn set_view_distance(&mut self, r: i32) {
@@ -1705,24 +2187,44 @@ impl Client {
     /// Fraction of full daylight for the current dimension and time.
     pub fn daylight(&self) -> f32 {
         // Rain takes away a third of the day, a lightning brings it back for a moment.
-        let day = content().dims[self.world.dim as usize].daylight(self.world.time) * (1.0 - self.rain * 0.3125);
+        let day = content().dims[self.world.dim as usize].daylight(self.world.time) * (1.0 - self.look.darkness);
         if self.lightning > 0.0 { (day + 0.5).min(1.0) } else { day }
     }
 
-    /// How much rain there is, and now and then a lightning's flash (`weather` draws it).
+    /// The weather's look going over to the current one's, its sound now and then, and a
+    /// lightning's flash (`weather` draws the precipitation).
     fn weather_effects(&mut self, dt: f32) {
-        let target = if self.weather.0 { 1.0 } else { 0.0 };
-        self.rain += (target - self.rain).clamp(-dt / 5.0, dt / 5.0);
+        let weather = &content().game.weathers[self.weather_id as usize];
+        let (to, step) = (weather.look, dt / 5.0);
+        let go = |v: &mut f32, t: f32| *v += (t - *v).clamp(-step, step);
+        let l = &mut self.look;
+        go(&mut l.falls, if weather.falls() { to.falls } else { 0.0 });
+        go(&mut l.sky_gray, to.sky_gray);
+        go(&mut l.sky_cover, to.sky_cover);
+        go(&mut l.fog_gray, to.fog_gray);
+        go(&mut l.cloud_gray, to.cloud_gray);
+        go(&mut l.cloud_dark, to.cloud_dark);
+        go(&mut l.darkness, to.darkness);
         self.lightning = (self.lightning - dt).max(0.0);
-        if self.weather.1 && self.chance() < dt / 12.0 {
+        if weather.lightning() && self.chance() < dt / 12.0 {
             self.lightning = 0.15;
+        }
+        if let Some(sound) = weather
+            .sound
+            .filter(|_| self.look.falls > 0.5 && !self.enclosed())
+        {
+            if self.chance() < dt {
+                let volume = self.look.falls;
+                self.sounds
+                    .push(crate::audio::Play { sound, pos: None, volume, pitch: 0.0 });
+            }
         }
     }
 
     /// Game ticks now, with the fraction of the current one.
     fn smooth_time(&self) -> f64 {
-        let fraction = if self.since_time < 20 { (self.accum / STEP).clamp(0.0, 1.0) } else { 0.0 };
-        self.world.time as f64 + self.since_time as f64 + fraction
+        let fraction = if self.since_time < crate::world::TPS as f64 { self.accum.clamp(0.0, STEP) * self.tick_rate } else { 0.0 };
+        self.world.time as f64 + self.since_time + fraction
     }
 
     /// Fog color (linear): the liquid's from inside one; else vanilla's dimming towards night,
@@ -1733,7 +2235,7 @@ impl Client {
         }
         let d = &content().dims[self.world.dim as usize];
         let l = self.daylight();
-        let c = sky::rained(sky::rgb(d.fog_color) * Vec3::new(l * 0.94 + 0.06, l * 0.94 + 0.06, l * 0.91 + 0.09), self.rain, 0.5);
+        let c = sky::rained(sky::rgb(d.fog_color) * Vec3::new(l * 0.94 + 0.06, l * 0.94 + 0.06, l * 0.91 + 0.09), 1.0, self.look.fog_gray);
         let forward = self.camera().forward();
         sky::warmed_by_glows(self.world.dim as usize, d, self.smooth_time(), c, forward).powf(2.2)
     }
@@ -1743,7 +2245,10 @@ impl Client {
         // Fog ends where the terrain does: the view, or the distant terrain beyond it.
         let view_distance = (self.view_radius * 16).max(lod::Lod::distance()) as f32;
         // Vanilla's water fog starts behind the eye, lava's right at it.
-        let (fog_start, fog_end) = match self.eye_liquid().map(|l| content().liquids[l as usize].fog_distance) {
+        let (fog_start, fog_end) = match self
+            .eye_liquid()
+            .map(|l| content().liquids[l as usize].fog_distance)
+        {
             Some(end) => (if end >= 16.0 { -8.0 } else { end * 0.25 }, end),
             None => (view_distance * 0.6, view_distance),
         };
@@ -1776,7 +2281,15 @@ impl Client {
         [v.x, v.y, v.z, v.y.max(0.0)]
     }
 
-    pub fn render(&mut self, gpu: &mut dyn Backend, list: &mut CommandList, frame: &FrameInfo, textures: &GameTextures) {
+    /// `list` goes in the world's pass, `early` before it.
+    pub fn render(
+        &mut self,
+        gpu: &mut dyn Backend,
+        list: &mut CommandList,
+        early: &mut CommandList,
+        frame: &FrameInfo,
+        textures: &GameTextures,
+    ) {
         self.entity_render.local = self.player_id;
         for (entity, png) in std::mem::take(&mut self.entity_render.skin_pending) {
             self.entity_render.set_skin(gpu, entity, &png);
@@ -1784,45 +2297,114 @@ impl Client {
         let cam = self.render_camera();
         let scene = self.scene(&cam, frame);
         while self.scene_bufs.len() < gpu.frames_in_flight() {
-            self.scene_bufs.push(gpu.create_buffer(size_of::<Scene>() as u64, weft_render::usage::STORAGE | weft_render::usage::HOST, "scene"));
+            self.scene_bufs.push(gpu.create_buffer(
+                size_of::<Scene>() as u64,
+                weft_render::usage::STORAGE | weft_render::usage::HOST,
+                "scene",
+            ));
         }
         let scene_buf = self.scene_bufs[frame.slot];
         gpu.mapped(scene_buf)[..size_of::<Scene>()].copy_from_slice(bytemuck::bytes_of(&scene));
         // Opaque blocks, then entities and cutout particles, then what is seen through:
         // translucent blocks, cracks and gizmo fills, blended particles, and the hand.
-        let frames: Vec<(u64, DVec3)> = self.entities.iter().filter(|(_, e)| e.structure.is_some()).map(|(&id, e)| (id, physics::Transform::of(e.pos).origin())).collect();
+        let frames: Vec<(u64, DVec3)> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| e.structure.is_some())
+            .map(|(&id, e)| (id, physics::Transform::of(e.pos).origin()))
+            .collect();
         // The world's light on each, as the server worked it out when it got there.
-        let lights: rustc_hash::FxHashMap<(u64, IVec3), u32> = self.entities.iter().flat_map(|(&id, e)| e.world_light.iter().map(move |(cp, l)| ((id, *cp), *l))).collect();
-        self.render.draw(gpu, list, frame, &cam, scene_buf, &frames, &lights);
-        let lit: Vec<u32> = frames.iter().map(|(id, _)| self.entities.get(id).map_or(crate::world::light::SKY_FULL as u32, |e| e.world_light.values().copied().max().unwrap_or(crate::world::light::SKY_FULL as u32))).collect();
+        let lights: rustc_hash::FxHashMap<(u64, IVec3), u32> = frames
+            .iter()
+            .filter_map(|(id, _)| self.entities.get(id).map(|e| (*id, e)))
+            .flat_map(|(id, e)| e.world_light.iter().map(move |(cp, l)| ((id, *cp), *l)))
+            .collect();
+        self.render
+            .draw(gpu, list, early, frame, &cam, scene_buf, &frames, &lights);
+        let lit: Vec<u32> = frames
+            .iter()
+            .map(|(id, _)| {
+                self.entities
+                    .get(id)
+                    .map_or(crate::world::light::SKY_FULL as u32, |e| {
+                        e.world_light
+                            .values()
+                            .copied()
+                            .max()
+                            .unwrap_or(crate::world::light::SKY_FULL as u32)
+                    })
+            })
+            .collect();
         self.wires.draw(list, &cam, scene_buf, &frames, &lit);
         list.push(weft_render::Cmd::Mark);
         let mut late = std::mem::take(&mut self.late);
         late.clear();
         // The sky fills what the opaque world left, and translucent things are seen against it.
-        let overlays = self.overlays(&cam);
-        self.sky.draw(gpu, &mut late, frame, &cam, scene_buf, self.world.dim as usize, self.smooth_time(), self.camera().pos.y, self.eye_liquid().is_some(), self.rain, &overlays);
+        let overlays = self.overlays(textures);
+        self.sky.draw(
+            gpu,
+            &mut late,
+            frame,
+            &cam,
+            scene_buf,
+            self.world.dim as usize,
+            self.smooth_time(),
+            self.camera().pos.y,
+            self.eye_liquid().is_some(),
+            &self.look,
+            &overlays,
+        );
         self.render.draw_translucent(&mut late);
-        let me = (self.view != 0 && !self.dead && self.mode != GameMode::Spectator).then(|| self.self_entity());
-        let hand = (self.view == 0 && !self.dead && self.player.lying.is_none() && self.mode != GameMode::Spectator && !self.hide_gui).then(|| entity_render::Hand {
-            stack: self.hand_stack,
-            swing: self.hand_swing,
+        let alive = !self.dead && !self.mode.has(weft_abi::game_mode_flags::NO_INTERACT);
+        let first_person = self.view == 0;
+        let hand = (alive && first_person && !self.hide_gui).then(|| entity_render::Hand {
             lowered: 1.0 - self.hand_height,
             lag: (self.player.pitch - self.hand_view.0, angle_diff(self.player.yaw, self.hand_view.1)),
-            using: self.using,
-            anim: self.self_anim.clone(),
-            age: self.start.elapsed().as_secs_f32(),
+            body: self.first_person_model,
         });
+        let me = (alive && (!first_person || hand.is_some())).then_some(&self.me);
         let world = &self.world;
         let light = |p: IVec3| world.light(p);
         let mut hand_late = std::mem::take(&mut self.hand_late);
         hand_late.clear();
-        let mut cracks: Vec<(IVec3, f32, DVec3)> = self.others_mining.iter().map(|&(_, p, v)| (p, v, DVec3::ZERO)).collect();
-        cracks.extend(self.breaking.map(|(f, p, v)| (p, v, self.frame_place(f).origin())));
-        self.entity_render.draw(gpu, list, frame, &cam, &self.entities, me.as_ref(), hand, textures, &light, &scene, scene_buf, self.target.filter(|_| !self.hide_gui).map(|h| (h, self.frame_place(h.frame).origin())), &cracks, &self.gizmo_lines, &self.gizmo_fills, &mut hand_late);
+        let mut cracks: Vec<entity_render::Crack> = self
+            .others_mining
+            .iter()
+            .map(|&(_, pos, state, progress)| entity_render::Crack { pos, progress, at: DVec3::ZERO, state })
+            .collect();
+        cracks.extend(
+            self.breaking
+                .map(|(f, pos, progress)| entity_render::Crack {
+                    pos,
+                    progress,
+                    at: self.frame_place(f).origin(),
+                    state: self.breaking_part,
+                }),
+        );
+        self.entity_render.draw(
+            gpu,
+            list,
+            frame,
+            &cam,
+            &self.entities,
+            me,
+            hand,
+            textures,
+            &light,
+            &scene,
+            scene_buf,
+            self.target
+                .filter(|_| !self.hide_gui)
+                .map(|h| (h, self.frame_place(h.frame).origin())),
+            &cracks,
+            &self.gizmo_lines,
+            &self.gizmo_fills,
+            &mut hand_late,
+        );
         self.particles.draw(list, &mut late, scene_buf);
         let ticks = self.smooth_time();
-        self.weather_render.draw(gpu, &mut late, frame, &cam, scene_buf, &self.world, self.rain, ticks, self.frame_dt);
+        self.weather_render
+            .draw(gpu, &mut late, frame, &cam, scene_buf, &self.world, self.look.falls, ticks, self.frame_dt);
         self.sky.draw_overlay(&mut hand_late, scene_buf);
         list.append(&mut late);
         list.append(&mut hand_late);
@@ -1857,6 +2439,18 @@ pub(crate) fn turn_body(body: f32, head: f32, moved: DVec3, dt: f32) -> f32 {
     head - angle_diff(head, body)
 }
 
+/// Vanilla's swing starts over once past halfway.
+fn restart_swing(swing: &mut Option<f32>) {
+    if swing.is_none_or(|p| p >= 0.5) {
+        *swing = Some(0.0);
+    }
+}
+
+/// An arm's swing goes on, 0.3 seconds from start to end.
+fn advance_swing(swing: &mut Option<f32>, dt: f32) {
+    *swing = swing.map(|p| p + dt / 0.3).filter(|&p| p < 1.0);
+}
+
 /// `a - b` the short way around, radians.
 fn angle_diff(a: f32, b: f32) -> f32 {
     (a - b + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
@@ -1865,28 +2459,49 @@ fn angle_diff(a: f32, b: f32) -> f32 {
 /// One 20 Hz tick of player movement with vanilla's numbers (blocks per tick): acceleration
 /// scaled by ground slipperiness, 0.91 air drag, 0.98 vertical drag, 0.08 gravity, 0.42 jump,
 /// so jumps, sprint-jumps and parkur distances match.
-fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl Fn(IVec3) -> Option<u32>, gravity: f64, bodies: &[physics::Body]) {
+/// By liquid, whether `kind` wearing `worn` swims in it: what its `comp::SWIMS_IN` and theirs name.
+fn swims_in(c: &crate::content::Content, kind: u32, worn: &[u32]) -> Vec<bool> {
+    use crate::components as comps;
+    let Some(id) = c.components.id(weft_abi::comp::SWIMS_IN) else { return vec![false; c.liquids.len()] };
+    let words: Vec<&str> = c
+        .components
+        .text(comps::ENTITY, kind, id)
+        .into_iter()
+        .chain(
+            worn.iter()
+                .filter_map(|&i| c.components.text(comps::ITEM, i, id)),
+        )
+        .flat_map(str::split_whitespace)
+        .collect();
+    c.liquids
+        .iter()
+        .map(|l| {
+            words.iter().any(|w| match w.strip_prefix('#') {
+                Some(tag) => c
+                    .components
+                    .id(tag)
+                    .is_some_and(|t| c.components.has(comps::BLOCK, l.first_state, t)),
+                None => *w == l.name,
+            })
+        })
+        .collect()
+}
+
+fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, gravity: f64, bodies: &[physics::Body]) {
     let c = content();
-    if let Some(yaw) = p.lying {
-        (p.yaw, p.pitch, p.vel, p.pose) = (yaw, 0.0, DVec3::ZERO, Pose::Sleep);
-        p.eye = physics::posed(Pose::Sleep, 1.8, 1.62).1;
+    // Held facing one way it stays put: in a bed.
+    if let Some((pose, Some(yaw))) = p.forced {
+        (p.yaw, p.pitch, p.vel, p.pose) = (yaw, 0.0, DVec3::ZERO, pose);
+        p.eye = p.dims().eye;
         return;
     }
     // The body the player rides moves it first, like on the server.
-    let (hw, _, _) = p.dims();
+    let hw = p.dims().half_width;
     if !p.noclip {
-        let h = p.dims().1;
-        let ride = physics::ride(c, p.pos, hw, p.on_ground, &mut p.support, bodies, 0);
-        if ride.carry != DVec3::ZERO {
-            let moved = physics::move_box(c, block, p.pos, hw, h, ride.carry, 0.0).pos;
-            p.pos = moved;
-        }
-        if let Some(d) = ride.released {
+        let h = p.dims().height;
+        let moved_by = physics::carried(c, block, &mut p.pos, hw, h, p.on_ground, &mut p.support, bodies, 0);
+        if let Some(d) = moved_by.released {
             p.vel += d;
-        }
-        let (shift, _) = physics::push(c, p.pos, hw, h, bodies, 0, p.support);
-        if shift != DVec3::ZERO {
-            p.pos = physics::move_box(c, block, p.pos, hw, h, shift, 0.0).pos;
         }
     } else {
         p.support = None;
@@ -1905,39 +2520,54 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl Fn(IVec3) -> Opt
     if input.held("core:right") {
         side_in += 1.0;
     }
-    let sneak = p.sneak;
+    let sneak = input.held("core:sneak");
+    let crawl = input.held("core:crawl");
     let jump = input.held("core:jump");
-    // Sprinting needs forward movement and stops when walking backwards or sneaking.
-    let sprint = p.sprint && fwd_in > 0.0 && !sneak && !p.using && (p.can_sprint || p.flying);
-    // Sprinting swims once the eyes are in a liquid that can be swum in, and keeps at it while the
-    // body is. In a liquid it is no use otherwise.
-    let can_swim = |at: DVec3| physics::liquid_at(c, block, at).is_some_and(|l| p.swim_anywhere || c.liquids[l as usize].swimmable);
+    // Sprinting needs forward movement and stops when walking backwards, sneaking or crawling.
+    let sprint = input.held("core:sprint") && fwd_in > 0.0 && !sneak && !crawl && !p.using && (p.can_sprint || p.flying);
+    // A liquid it swims in, at the eyes, or at the feet once it lies down.
+    let low = p.pose.def().tilt != weft_abi::pose_tilt::UPRIGHT;
+    let swim_at = p.pos + DVec3::Y * if low { 0.1 } else { p.dims().eye };
+    let in_swim_liquid = physics::liquid_at(c, block, swim_at).is_some_and(|l| p.swims_in.get(l as usize) == Some(&true));
     let feet_wet = physics::in_liquid(c, block, p.pos, 0.0);
-    let start_at = p.pos + DVec3::Y * if matches!(p.pose, Pose::Swim | Pose::Crawl) { 0.1 } else { p.dims().2 };
-    let swimming = sprint && !p.flying && !p.noclip && can_swim(start_at);
-    let sprint = sprint && (swimming || !feet_wet);
-    p.sprinting = sprint;
-    // A pose where it fits, and if nothing else fits it crawls (a swimming box under a trapdoor).
-    let want = if swimming {
-        Pose::Swim
-    } else if sneak && !p.flying && !p.noclip {
-        Pose::Crouch
-    } else {
-        Pose::Stand
+    // `input`: the action held and sprinting count, which a pose fallen back to goes without.
+    let holds = |d: &crate::registry::PoseDef, input_too: bool| {
+        use weft_abi::pose_when as w;
+        let on = |f: u32| d.when & f != 0;
+        (!input_too || ((d.key.is_empty() || input.held(&d.key)) && (!on(w::SPRINTING) || sprint)))
+            && (!on(w::NOT_FLYING) || !(p.flying || p.noclip))
+            && (!on(w::SWIM_LIQUID) || in_swim_liquid)
     };
-    let fits = |pose: Pose| p.noclip || !physics::collides(c, block, physics::Aabb::around(p.pos, hw - 1e-3, physics::posed(pose, p.size[1], p.size[2]).0));
+    let want = match p.forced {
+        Some((held, _)) => held,
+        None => c
+            .game
+            .pose_order
+            .iter()
+            .copied()
+            .find(|q| holds(q.def(), true))
+            .unwrap_or(Pose::STAND),
+    };
+    let fits =
+        |pose: Pose| p.noclip || !physics::collides(c, block, physics::Aabb::around(p.pos, hw - 1e-3, physics::posed(p.size, pose).height));
     p.pose = if fits(want) {
         want
-    } else if fits(Pose::Crouch) {
-        Pose::Crouch
-    } else if feet_wet {
-        Pose::Swim
     } else {
-        Pose::Crawl
+        let back = &want.def().fallback;
+        back.iter()
+            .copied()
+            .find(|&q| holds(q.def(), false) && fits(q))
+            .or(back.last().copied())
+            .unwrap_or(want)
     };
-    if !p.flying && matches!(p.pose, Pose::Crouch | Pose::Crawl) {
-        fwd_in *= 0.3;
-        side_in *= 0.3;
+    // Sprinting swims in a pose for it; in a liquid it is no use otherwise.
+    let swimming = sprint && p.pose.def().when & weft_abi::pose_when::SWIM_LIQUID != 0;
+    let sprint = sprint && (swimming || !feet_wet);
+    p.sprinting = sprint;
+    if !p.flying {
+        let speed = p.pose.def().speed as f64;
+        fwd_in *= speed;
+        side_in *= speed;
     }
     // Eating and the like: modern's fifth of the speed.
     if p.using {
@@ -1950,9 +2580,9 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl Fn(IVec3) -> Opt
     let right = DVec3::new(cy, 0.0, -sy);
     // Vanilla's moveRelative input: normalized only when longer than 1.
     let wish = forward * fwd_in + right * side_in;
-    let g = 0.08 * gravity / 32.0;
+    let g = physics::gravity_per_tick(gravity);
 
-    let height = p.dims().1;
+    let height = p.dims().height;
     let before = p.pos;
 
     if p.flying || p.noclip {
@@ -1985,7 +2615,8 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl Fn(IVec3) -> Opt
                 p.flying = false;
             }
         }
-        p.in_liquid = physics::in_liquid(c, block, p.pos, 0.0);
+        let here = physics::around(c, block, p.pos, height);
+        (p.in_liquid, p.climbing) = (here.in_liquid, here.climbing);
         p.vel.y *= 0.6;
         p.vel.x *= 0.91;
         p.vel.z *= 0.91;
@@ -2001,19 +2632,21 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl Fn(IVec3) -> Opt
         wish,
         ground: if sprint { 0.13 } else { 0.1 } * p.speed_mul,
         air: if sprint { 0.026 } else { 0.02 },
-        jump: if jump && p.jump_cooldown == 0 { 0.42 * p.jump_mul } else { 0.0 },
+        jump: if jump && p.jump_cooldown == 0 { physics::JUMP * p.jump_mul } else { 0.0 },
         jump_boost: if sprint { forward * 0.2 } else { DVec3::ZERO },
         swim: jump,
         careful: sneak,
         sprint: swimming,
         swim_look: swimming.then(|| (p.pitch as f64).sin()),
     };
-    let frame = physics::Frame { half_width: hw, height, step: 0.6, gravity: g };
+    let frame = physics::Frame { half_width: hw, height, step: physics::STEP_UP, gravity: g };
     let w = physics::walk(c, block, bodies, 0, &mut p.pos, &mut p.vel, p.on_ground, &ctl, &frame);
     if w.jumped {
         p.jump_cooldown = 10;
+        p.jumped = true;
     }
-    p.in_liquid = w.in_liquid;
+    let here = physics::around(c, block, p.pos, height);
+    (p.in_liquid, p.climbing) = (here.in_liquid, here.climbing);
     if w.on_ground {
         if let Some(b) = physics::standing_on(c, p.pos, hw, bodies, 0) {
             p.support = Some(b);

@@ -7,6 +7,7 @@ use crate::{callback, host};
 
 /// Read-only client state for bindings.
 #[derive(Clone, Copy)]
+#[repr(transparent)]
 pub struct ClientView {
     raw: *mut abi::ClientCtx,
 }
@@ -15,7 +16,7 @@ impl ClientView {
     pub(crate) fn from_raw(raw: *mut abi::ClientCtx) -> ClientView {
         ClientView { raw }
     }
-    /// The client's actions (`open_screen`, `open_world`, `quit`..), for a button's callback:
+    /// The client's actions (`screen_open`, `world_open`, `quit`..), for a button's callback:
     /// a button may drive the client, a binding that only shows a value may not.
     pub fn client(&self) -> crate::Client {
         crate::Client::from_raw(self.raw)
@@ -23,7 +24,8 @@ impl ClientView {
     pub fn player(&self) -> u64 {
         unsafe { (host().client_player)(self.raw) }
     }
-    /// Own player's attribute, as the server says. Mods' attributes come too.
+    /// Own player's attribute, as the server says. Mods' attributes come too. Unlike
+    /// `World::attribute` it takes no entity: the client only has its own player's.
     pub fn attribute(&self, a: &crate::Attribute) -> f64 {
         unsafe { (host().client_attribute)(self.raw, abi::Str::new(a.name())) }
     }
@@ -32,44 +34,57 @@ impl ClientView {
         unsafe { (host().client_swing_strength)(self.raw) }
     }
     /// Ticks left of the item being used.
-    pub fn using(&self) -> Option<f32> {
-        let left = unsafe { (host().client_using)(self.raw) };
+    pub fn use_ticks_left(&self) -> Option<f32> {
+        let left = unsafe { (host().client_use_ticks_left)(self.raw) };
         (left >= 0.0).then_some(left)
     }
     pub fn day_time(&self) -> u64 {
         unsafe { (host().client_day_time)(self.raw) }
     }
-    pub fn raining(&self) -> bool {
-        unsafe { (host().client_raining)(self.raw) != 0 }
+    /// The weather's id now (`weathers::RAIN.id()`), as the server says.
+    pub fn weather(&self) -> u32 {
+        unsafe { (host().client_weather)(self.raw) }
     }
     /// The player's permission level (`abi::permission`).
     pub fn permission(&self) -> u32 {
         unsafe { (host().client_permission)(self.raw) }
     }
-    /// Own player's synced component.
+    /// Own player's synced component. Unlike `World::component` it takes no entity: another
+    /// one's is `component_of`.
     pub fn component<T: Value>(&self, c: &Component<T>) -> Option<T> {
         let p = unsafe { (host().client_component)(self.raw, 0, c.id()) };
         (!p.is_null()).then(|| unsafe { std::ptr::read_unaligned(p as *const T) })
     }
-    pub fn me(&self) -> Option<abi::EntityState> {
+    pub fn player_state(&self) -> Option<abi::EntityState> {
         let mut s = abi::EntityState::default();
         (unsafe { (host().client_entity)(self.raw, 0, &mut s) } != 0).then_some(s)
     }
-    /// Own inventory slot by index.
+    /// Own inventory slot by index (the engine lays the inventory out from its groups; with the
+    /// base game the hotbar comes first).
     pub fn inventory_slot(&self, slot: u32) -> ItemStack {
-        unsafe { (host().client_slot)(self.raw, 0, slot) }
+        unsafe { (host().client_slot)(self.raw, abi::slot_container::INVENTORY, slot) }
     }
     /// The stacks of a group of the own inventory (`hotbar`, `core:equipment`...).
     pub fn inventory_group(&self, name: &str) -> Vec<ItemStack> {
-        let mut out = [0u32; 2];
-        if unsafe { (host().player_group)(Str::new(name), &mut out) } == 0 {
+        let mut out = abi::SlotGroup::default();
+        if unsafe { (host().player_inventory_group)(Str::new(name), &mut out) } == 0 {
             return Vec::new();
         }
-        (out[0]..out[0] + out[1]).map(|i| self.inventory_slot(i)).collect()
+        (out.start..out.start + out.len)
+            .map(|i| self.inventory_slot(i))
+            .collect()
     }
     /// The local player is in creative mode.
     pub fn creative(&self) -> bool {
-        unsafe { (host().client_creative)(self.raw) != 0 }
+        self.game_mode() == abi::game_mode::CREATIVE
+    }
+    /// The local player's mode spares it damage and hunger: no bars to show.
+    pub fn outside_survival(&self) -> bool {
+        crate::GameMode::flags_of(self.game_mode()) & abi::game_mode_flags::INVULNERABLE != 0
+    }
+    /// `abi::game_mode`.
+    pub fn game_mode(&self) -> u32 {
+        unsafe { (host().client_game_mode)(self.raw) }
     }
     /// Another entity's component the server shares with this client (`SYNC_WATCHERS`, or
     /// `SYNC_MENU` while its menu is open).
@@ -184,7 +199,7 @@ impl S {
     pub fn row() -> S {
         S { row: true, align: abi::ui_align::CENTER, ..S::default() }
     }
-    pub fn col() -> S {
+    pub fn column() -> S {
         S::default()
     }
     /// A tooltip over the part (a translation key, with all of rich text).
@@ -319,7 +334,7 @@ impl Ui {
     }
 }
 
-pub(crate) fn ui_callback(f: impl Fn(&mut Ui) + Send + Sync + 'static) -> abi::Callback {
+pub(crate) fn ui_cb(f: impl Fn(&mut Ui) + Send + Sync + 'static) -> abi::Callback {
     callback(move |a: &mut abi::UiArgs| {
         let mut ui = Ui { raw: a.ui, client: ClientView { raw: a.client } };
         f(&mut ui)
@@ -382,7 +397,7 @@ fn node(kind: u32, s: S) -> Node {
 }
 
 impl Ui {
-    pub fn client(&self) -> ClientView {
+    pub fn view(&self) -> ClientView {
         self.client
     }
 
@@ -429,7 +444,7 @@ impl Ui {
         self.text_styled(S::default(), key, args)
     }
 
-    /// Text with a class, size, one line, `mono`...: `ui.text_styled(S::col().class("title").scale(2.0), "mymod.title", &[])`.
+    /// Text with a class, size, one line, `mono`...: `ui.text_styled(S::column().class("title").scale(2.0), "mymod.title", &[])`.
     pub fn text_styled(&mut self, s: S, key: &str, args: &[Arg]) {
         let a = raw_args(args);
         let mut n = node(k::TEXT, s);
@@ -456,7 +471,7 @@ impl Ui {
     /// What mods add to place `area` of `screen` (`Registry::screen_part`). A screen of your own
     /// that replaces an engine one (`core:title`) keeps other mods' buttons by building its places.
     pub fn screen_parts(&mut self, screen: &str, area: &str) {
-        let mut n = node(k::PARTS, S::default());
+        let mut n = node(k::SCREEN_PARTS, S::default());
         n.class = Str::new(screen);
         n.text = Str::new(area);
         self.leaf(n)
@@ -504,11 +519,11 @@ impl Ui {
     /// The player's inventory and hotbar (`MenuBuilder::player_inventory`), spaced like vanilla,
     /// under the title "Inventory" when `title`.
     pub fn player_inventory(&mut self, title: bool) {
-        self.column(S::col().gap(2.0), |ui| {
+        self.column(S::column().gap(2.0), |ui| {
             if title {
                 ui.text("menu.inventory");
             }
-            ui.column(S::col().gap(4.0), |ui| {
+            ui.column(S::column().gap(4.0), |ui| {
                 ui.group(crate::game::INVENTORY_GROUP);
                 ui.group(crate::game::HOTBAR_GROUP);
             });
@@ -535,7 +550,7 @@ impl Ui {
     /// `recipe_arrow` showing progress (a furnace's cooking).
     pub fn recipe_arrow_bind(&mut self, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) {
         let mut n = node(k::RECIPE_ARROW, S::default());
-        n.bind = bind(f);
+        n.bind = bind_cb(f);
         self.leaf(n)
     }
 
@@ -548,48 +563,19 @@ impl Ui {
     pub fn progress_bind_dir(&mut self, class: &str, s: S, dir: u32, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) {
         let mut n = node(k::PROGRESS, s);
         n.class = Str::new(class);
-        n.bind = bind(f);
+        n.bind = bind_cb(f);
         n.dir = dir;
         self.leaf(n)
     }
 
-    /// `count` icons showing a value in half-icon steps (hearts, hunger).
-    pub fn icons(&mut self, class: &str, count: u32, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) {
+    /// `count` icons showing a value in half-icon steps (hearts, hunger); a negative value hides
+    /// them.
+    pub fn icons(&mut self, class: &str, count: u32, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> Icons<'_> {
         let mut n = node(k::ICONS, S::default());
         n.class = Str::new(class);
         n.count = count;
-        n.bind = bind(f);
-        self.leaf(n)
-    }
-
-    /// Like `icons`, jumping about at 4 or less (hearts near the end).
-    pub fn icons_shaking(&mut self, class: &str, count: u32, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) {
-        let mut n = node(k::ICONS, S::default());
-        n.class = Str::new(class);
-        n.count = count;
-        n.data = 2;
-        n.bind = bind(f);
-        self.leaf(n)
-    }
-
-    /// Like `icons`, filling from the right (hunger).
-    pub fn icons_dir(&mut self, class: &str, count: u32, dir: u32, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) {
-        let mut n = node(k::ICONS, S::default());
-        n.class = Str::new(class);
-        n.count = count;
-        n.dir = dir;
-        n.bind = bind(f);
-        self.leaf(n)
-    }
-
-    /// `icons` filling from the right (`icons_dir` with `ui_dir::LEFT`).
-    pub fn icons_rtl(&mut self, class: &str, count: u32, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) {
-        let mut n = node(k::ICONS, S::default());
-        n.class = Str::new(class);
-        n.count = count;
-        n.data = 1;
-        n.bind = bind(f);
-        self.leaf(n)
+        n.bind = bind_cb(f);
+        Icons { ui: self, node: Some(n) }
     }
 
     pub fn image(&mut self, texture: &str, w: f32, h: f32) {
@@ -600,7 +586,7 @@ impl Ui {
 
     /// The local player's model with what it wears.
     pub fn player_model(&mut self, w: f32, h: f32) {
-        self.leaf(node(k::ENTITY, S::default().size(w, h)))
+        self.leaf(node(k::PLAYER_MODEL, S::default().size(w, h)))
     }
 
     pub fn spacer(&mut self) {
@@ -618,7 +604,7 @@ impl Ui {
         if n.class.len == 0 {
             n.class = Str::new("button");
         }
-        self.with(n, |ui| ui.text_styled(S::col().class("button").no_wrap(), key, args));
+        self.with(n, |ui| ui.text_styled(S::column().class("button").no_wrap(), key, args));
     }
 
     /// A one-line text field starting with `value` (at most `max` characters, 0 for any);
@@ -632,9 +618,14 @@ impl Ui {
     }
 
     /// A slider at `value` (0..1, read every frame); `on_change` gets where the player drags it.
-    pub fn slider(&mut self, s: S, value: impl Fn(&ClientView) -> f32 + Send + Sync + 'static, on_change: impl Fn(&ClientView, f32) + Send + Sync + 'static) {
+    pub fn slider(
+        &mut self,
+        s: S,
+        value: impl Fn(&ClientView) -> f32 + Send + Sync + 'static,
+        on_change: impl Fn(&ClientView, f32) + Send + Sync + 'static,
+    ) {
         let mut n = node(k::SLIDER, s);
-        n.bind = bind(value);
+        n.bind = bind_cb(value);
         n.on_change = callback(move |a: &mut abi::UiChangeArgs| on_change(&ClientView { raw: a.client }, a.value));
         self.leaf(n)
     }
@@ -648,7 +639,7 @@ impl Ui {
     }
 }
 
-fn bind(f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> abi::Callback {
+fn bind_cb(f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> abi::Callback {
     callback(move |a: &mut abi::UiBindArgs| {
         a.value = f(&ClientView { raw: a.client });
     })
@@ -670,6 +661,41 @@ impl TextOut {
     }
 }
 
-pub fn stack(item: u32, count: u32) -> ItemStack {
-    ItemStack::new(item, count)
+/// A row of icons in the making (`Ui::icons`); it goes in as this goes.
+pub struct Icons<'a> {
+    ui: &'a mut Ui,
+    node: Option<Node>,
+}
+
+impl Icons<'_> {
+    /// Filling from the right (hunger).
+    pub fn from_right(self) -> Self {
+        self.dir(abi::ui_dir::LEFT)
+    }
+    /// Filling in direction `dir` (`abi::ui_dir`).
+    pub fn dir(mut self, dir: u32) -> Self {
+        if let Some(n) = &mut self.node {
+            n.dir = dir;
+        }
+        self
+    }
+    /// Jumping about at 4 or less (hearts near the end).
+    pub fn shaking(self) -> Self {
+        self.shaking_below(4.0)
+    }
+    /// Jumping about at `value` or less.
+    pub fn shaking_below(mut self, value: f32) -> Self {
+        if let Some(n) = &mut self.node {
+            n.data = value.max(f32::MIN_POSITIVE).to_bits();
+        }
+        self
+    }
+}
+
+impl Drop for Icons<'_> {
+    fn drop(&mut self) {
+        if let Some(n) = self.node.take().filter(|_| !std::thread::panicking()) {
+            self.ui.leaf(n);
+        }
+    }
 }

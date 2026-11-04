@@ -57,11 +57,37 @@ impl Assets {
     pub fn pack_path(&self, name: &str, kind: &str, ext: &str) -> Option<PathBuf> {
         let (ns, rel) = name.split_once(':').unwrap_or(("core", name));
         let file = format!("{kind}/{rel}.{ext}");
-        self.packs.iter().map(|p| p.join(ns).join(&file)).find(|c| self.files.contains(c))
+        self.packs
+            .iter()
+            .map(|p| p.join(ns).join(&file))
+            .find(|c| self.files.contains(c))
     }
 
     pub fn read(&self, name: &str, kind: &str, ext: &str) -> Option<Vec<u8>> {
         std::fs::read(self.path(name, kind, ext)?).ok()
+    }
+
+    /// `<name>.<ext>` if what it says is about the picture `<name>.<of>` in effect: from the pack or
+    /// mod that has that picture, or from one above it. A mod's rules were made for the mod's
+    /// picture, and a pack that replaces it without bringing rules of its own has none.
+    pub fn sidecar(&self, name: &str, kind: &str, of: &str, ext: &str) -> Option<PathBuf> {
+        let (ns, rel) = name.split_once(':').unwrap_or(("core", name));
+        let (file, picture) = (format!("{kind}/{rel}.{ext}"), format!("{kind}/{rel}.{of}"));
+        for root in self
+            .packs
+            .iter()
+            .map(|p| p.join(ns))
+            .chain(self.mods.get(ns).cloned())
+        {
+            let candidate = root.join(&file);
+            if self.files.contains(&candidate) {
+                return Some(candidate);
+            }
+            if self.files.contains(&root.join(&picture)) {
+                return None;
+            }
+        }
+        None
     }
 
     /// `<name><suffix>.<ext>` from the same pack or mod as `<name>.<ext>` itself: a mask drawn
@@ -125,7 +151,6 @@ impl Assets {
         }
         out
     }
-
 }
 
 fn walk(dir: &Path, f: &mut impl FnMut(&Path)) {
@@ -159,8 +184,14 @@ pub fn decode_png(bytes: &[u8]) -> Option<Image> {
             .chunks_exact(2)
             .flat_map(|p| [p[0], p[0], p[0], p[1]])
             .collect(),
-        png::ColorType::Rgb => buf[..(w * h * 3) as usize].chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-        png::ColorType::Grayscale => buf[..(w * h) as usize].iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Rgb => buf[..(w * h * 3) as usize]
+            .chunks_exact(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        png::ColorType::Grayscale => buf[..(w * h) as usize]
+            .iter()
+            .flat_map(|&g| [g, g, g, 255])
+            .collect(),
         png::ColorType::Indexed => return None,
     };
     Some(Image { width: w, height: h, rgba })
@@ -205,18 +236,34 @@ pub struct LoadedTexture {
     pub anim: Option<Anim>,
 }
 
+/// A picture of the `_e.png` kind as a mask: it glows by its red channel times alpha.
+pub fn glow_mask(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks_exact(4)
+        .map(|p| (p[0] as u32 * p[3] as u32 / 255) as u8)
+        .collect()
+}
+
 /// Emission like LabPBR, only that part of it: `<name>_s.png` (a LabPBR specular map) glows by
 /// its alpha, 0..254 from none to full and 255 for none; or our own `<name>_e.png`, glowing by
 /// its red channel times alpha. Same size and frames as the texture, and from the same pack or
 /// mod. One byte per texel.
 pub fn emission_mask(assets: &Assets, name: &str) -> Option<Image> {
-    let read = |suffix: &str| assets.beside(name, "textures", "png", suffix).and_then(|p| std::fs::read(p).ok()).and_then(|b| decode_png(&b));
+    let read = |suffix: &str| {
+        assets
+            .beside(name, "textures", "png", suffix)
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| decode_png(&b))
+    };
     if let Some(mut img) = read("_e") {
-        img.rgba = img.rgba.chunks_exact(4).map(|p| (p[0] as u32 * p[3] as u32 / 255) as u8).collect();
+        img.rgba = glow_mask(&img.rgba);
         return Some(img);
     }
     let mut img = read("_s")?;
-    img.rgba = img.rgba.chunks_exact(4).map(|p| if p[3] == 255 { 0 } else { (p[3] as u32 * 255 / 254) as u8 }).collect();
+    img.rgba = img
+        .rgba
+        .chunks_exact(4)
+        .map(|p| if p[3] == 255 { 0 } else { (p[3] as u32 * 255 / 254) as u8 })
+        .collect();
     Some(img)
 }
 
@@ -239,6 +286,28 @@ fn mask_frame(mask: &Image, frame: u32, to: u32) -> Vec<u8> {
 pub struct Anim {
     pub frames: Vec<(u32, u32)>,
     pub interpolate: bool,
+    /// Frames in the strip and how many pixels high each is.
+    pub frame_count: u32,
+    pub frame_height: u32,
+}
+
+impl Anim {
+    /// What shows at `ticks`: the frame, the next one and how far it has blended into that, as the
+    /// world's shader picks them (`texture_frame`).
+    pub fn frame_at(&self, ticks: f32) -> (u32, u32, f32) {
+        let total: u32 = self.frames.iter().map(|f| f.1).sum();
+        let t = ticks.rem_euclid(total.max(1) as f32);
+        let mut acc = 0.0;
+        for (i, &(frame, length)) in self.frames.iter().enumerate() {
+            let end = acc + length as f32;
+            if t < end || i + 1 == self.frames.len() {
+                let blend = if self.interpolate { (t - acc) / length as f32 } else { 0.0 };
+                return (frame, self.frames[(i + 1) % self.frames.len()].0, blend);
+            }
+            acc = end;
+        }
+        (0, 0, 0.0)
+    }
 }
 
 /// `<texture>.anim` next to the png, same `key = value` style as other data files:
@@ -247,8 +316,16 @@ pub struct Anim {
 /// frametime = 2          # ticks per frame (default 1)
 /// interpolate = true     # blend towards the next frame
 /// frames = 0 1 2 3*5 2 1 # order; `3*5` shows frame 3 for 5 ticks
+/// frame_height = 8       # pixels a frame is high (GUI pictures; square by default)
 /// ```
-pub fn parse_anim(src: &str, frame_count: u32, first: u32) -> Anim {
+///
+/// `size`: of the whole strip in pixels.
+pub fn parse_anim(src: &str, size: [u32; 2], first: u32) -> Anim {
+    let frame_height = crate::kv::get(src, "frame_height")
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(size[0])
+        .max(1);
+    let frame_count = (size[1] / frame_height).max(1);
     let mut frametime = 1u32;
     let mut interpolate = false;
     let mut order: Option<Vec<(u32, Option<u32>)>> = None;
@@ -270,14 +347,30 @@ pub fn parse_anim(src: &str, frame_count: u32, first: u32) -> Anim {
             _ => {}
         }
     }
-    let order = order.filter(|o| !o.is_empty()).unwrap_or_else(|| (0..frame_count).map(|i| (i, None)).collect());
-    Anim { frames: order.into_iter().map(|(i, d)| (first + i, d.unwrap_or(frametime).max(1))).collect(), interpolate }
+    let order = order
+        .filter(|o| !o.is_empty())
+        .unwrap_or_else(|| (0..frame_count).map(|i| (i, None)).collect());
+    Anim {
+        frames: order
+            .into_iter()
+            .map(|(i, d)| (first + i, d.unwrap_or(frametime).max(1)))
+            .collect(),
+        interpolate,
+        frame_count,
+        frame_height,
+    }
 }
 
 /// A texture by name: animated ones are vertical strips of square frames (`.anim` next to it
 /// says how they play). A missing or malformed file gives the magenta checker and a warning.
 pub fn load_texture(assets: &Assets, name: &str) -> LoadedTexture {
-    let img = (name != "core:missing").then(|| assets.read(name, "textures", "png").and_then(|b| decode_png(&b))).flatten();
+    let img = (name != "core:missing")
+        .then(|| {
+            assets
+                .read(name, "textures", "png")
+                .and_then(|b| decode_png(&b))
+        })
+        .flatten();
     let img = match img {
         Some(img) if img.height >= img.width && img.width > 0 && img.height % img.width == 0 => img,
         Some(img) => {
@@ -293,12 +386,26 @@ pub fn load_texture(assets: &Assets, name: &str) -> LoadedTexture {
     };
     let size = img.width.next_power_of_two();
     let count = img.height / img.width;
+    let (img_width, img_height) = (img.width, img.height);
     let frame_bytes = (img.width * img.width * 4) as usize;
-    let frames: Vec<Vec<Vec<u8>>> = (0..count as usize).map(|f| mip_chain(scale_nearest(&img.rgba[f * frame_bytes..(f + 1) * frame_bytes], img.width, size), size)).collect();
+    let frames: Vec<Vec<Vec<u8>>> = (0..count as usize)
+        .map(|f| mip_chain(scale_nearest(&img.rgba[f * frame_bytes..(f + 1) * frame_bytes], img.width, size), size))
+        .collect();
     let mask = emission_mask(assets, name).filter(|m| m.width > 0);
-    let glow = (0..count).map(|f| mask.as_ref().map(|m| mask_frame(m, f, size))).collect();
-    let meta = assets.read(name, "textures", "anim").map(|b| String::from_utf8_lossy(&b).into_owned());
-    let anim = (count > 1 || meta.is_some()).then(|| parse_anim(meta.as_deref().unwrap_or(""), count, 0));
+    let glow = (0..count)
+        .map(|f| mask.as_ref().map(|m| mask_frame(m, f, size)))
+        .collect();
+    let meta = assets
+        .read(name, "textures", "anim")
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    let anim = (count > 1 || meta.is_some()).then(|| {
+        let a = parse_anim(meta.as_deref().unwrap_or(""), [img_width, img_height], 0);
+        if a.frame_height == img_width {
+            return a;
+        }
+        log::warn!("texture {name}: frames of block and item textures are square, frame_height is for GUI pictures");
+        parse_anim("", [img_width, img_height], 0)
+    });
     LoadedTexture { size, frames, glow, anim }
 }
 
@@ -323,13 +430,44 @@ pub fn composite_texture(parts: [&LoadedTexture; 4]) -> LoadedTexture {
     LoadedTexture { size, frames: vec![mip_chain(out, size)], glow: vec![None], anim: None }
 }
 
+/// Pictures one over the other, the first at the bottom, each multiplied by its tint
+/// (0xRRGGBB): what a stack with `layers` shows. All are scaled to the biggest.
+pub fn layered_texture(parts: &[(&LoadedTexture, u32)]) -> LoadedTexture {
+    let size = parts.iter().map(|p| p.0.size).max().unwrap_or(16);
+    let mut out = vec![0u8; (size * size * 4) as usize];
+    for (p, tint) in parts {
+        let Some(rgba) = p.frames.first().and_then(|f| f.first()) else { continue };
+        let from = scale_nearest(rgba, p.size, size);
+        let t = [(tint >> 16) & 255, (tint >> 8) & 255, tint & 255];
+        for (o, s) in out.chunks_exact_mut(4).zip(from.chunks_exact(4)) {
+            let a = s[3] as u32;
+            for k in 0..3 {
+                let c = s[k] as u32 * t[k] / 255;
+                o[k] = ((c * a + o[k] as u32 * (255 - a)) / 255) as u8;
+            }
+            o[3] = (a + o[3] as u32 * (255 - a) / 255) as u8;
+        }
+    }
+    LoadedTexture { size, frames: vec![mip_chain(out, size)], glow: vec![None], anim: None }
+}
+
 /// Fingerprint of the files a texture is made of (image, `.anim`, glow masks): changes when any of
 /// them is edited, added or removed, so a reload reads only what changed.
 pub fn texture_stamp(assets: &Assets, name: &str) -> u64 {
     let mut h = weft_noise::FNV;
     for (n, ext) in [(name.to_string(), "png"), (name.to_string(), "anim"), (format!("{name}_e"), "png"), (format!("{name}_s"), "png")] {
-        let meta = assets.path(&n, "textures", ext).and_then(|p| std::fs::metadata(p).ok());
-        let (len, time) = meta.map_or((u64::MAX, 0), |m| (m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as u64)));
+        let meta = assets
+            .path(&n, "textures", ext)
+            .and_then(|p| std::fs::metadata(p).ok());
+        let (len, time) = meta.map_or((u64::MAX, 0), |m| {
+            (
+                m.len(),
+                m.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos() as u64),
+            )
+        });
         for v in [len, time] {
             h = weft_noise::fnv_step(h, v);
         }
@@ -442,18 +580,103 @@ fn downsample(src: &[u8], size: u32) -> Vec<u8> {
 }
 
 #[cfg(test)]
+mod layer_tests {
+    use super::*;
+
+    fn one(size: u32, px: [u8; 4]) -> LoadedTexture {
+        let rgba = px.repeat((size * size) as usize);
+        LoadedTexture { size, frames: vec![vec![rgba]], glow: vec![None], anim: None }
+    }
+
+    #[test]
+    fn layers_stack_tinted_and_scaled() {
+        let base = one(16, [200, 200, 200, 255]);
+        let top = one(32, [255, 255, 255, 255]);
+        let clear = one(16, [9, 9, 9, 0]);
+        let t = layered_texture(&[(&base, 0xFF_FFFF), (&clear, 0xFF_FFFF), (&top, 0xFF_0000)]);
+        assert_eq!(t.size, 32);
+        assert_eq!(&t.frames[0][0][..4], &[255, 0, 0, 255]);
+        let t = layered_texture(&[(&base, 0xFF_FFFF), (&clear, 0xFF_FFFF)]);
+        assert_eq!(&t.frames[0][0][..4], &[200, 200, 200, 255]);
+    }
+}
+
+#[cfg(test)]
 mod tests {
+
+    #[test]
+    fn rules_go_with_their_picture() {
+        let root = std::env::temp_dir().join(format!("weft_sidecar_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let put = |p: &str| {
+            let p = root.join(p);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        };
+        put("mod/textures/both.png");
+        put("mod/textures/both.ctm");
+        put("mod/textures/replaced.png");
+        put("mod/textures/replaced.ctm");
+        put("mod/textures/own_rules.png");
+        put("mod/textures/own_rules.ctm");
+        put("mod/textures/rules_only.png");
+        put("mod/textures/low.png");
+        put("top/m/textures/replaced.png");
+        put("top/m/textures/own_rules.png");
+        put("top/m/textures/own_rules.ctm");
+        put("top/m/textures/rules_only.ctm");
+        put("top/m/textures/low.png");
+        put("low/m/textures/low.ctm");
+        let a = Assets::new([("m".to_string(), root.join("mod"))], vec![root.join("top"), root.join("low")]);
+        let found = |n: &str| {
+            a.sidecar(&format!("m:{n}"), "textures", "png", "ctm")
+                .map(|p| {
+                    p.strip_prefix(&root)
+                        .unwrap()
+                        .components()
+                        .next()
+                        .unwrap()
+                        .as_os_str()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+        };
+        assert_eq!(found("both").as_deref(), Some("mod"), "nothing replaced");
+        assert_eq!(found("replaced"), None, "a pack's picture without rules has none");
+        assert_eq!(found("own_rules").as_deref(), Some("top"), "its own rules");
+        assert_eq!(found("rules_only").as_deref(), Some("top"), "rules over the mod's picture");
+        assert_eq!(found("low"), None, "rules under a pack's picture aren't for it");
+        assert_eq!(found("none"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
     use super::*;
 
     #[test]
     fn anim_order_and_durations() {
-        let a = parse_anim("frametime = 2\ninterpolate = true\nframes = 0 2*5 1 9", 3, 10);
+        let a = parse_anim("frametime = 2\ninterpolate = true\nframes = 0 2*5 1 9", [16, 48], 10);
         assert!(a.interpolate);
         // Frame 9 does not exist and is dropped.
         assert_eq!(a.frames, vec![(10, 2), (12, 5), (11, 2)]);
-        let d = parse_anim("", 4, 0);
+        let d = parse_anim("", [16, 64], 0);
         assert_eq!(d.frames.len(), 4);
         assert!(d.frames.iter().all(|f| f.1 == 1));
+    }
+
+    #[test]
+    fn anim_plays_its_order() {
+        let a = parse_anim("frames = 0 1 2 1", [16, 48], 0);
+        let shown: Vec<u32> = (0..6).map(|t| a.frame_at(t as f32 + 0.5).0).collect();
+        assert_eq!(shown, [0, 1, 2, 1, 0, 1]);
+        let b = parse_anim("frametime = 2\nframes = 0 3*5", [16, 64], 0);
+        assert_eq!(b.frame_at(1.5).0, 0);
+        assert_eq!(b.frame_at(2.5).0, 3);
+        assert_eq!(b.frame_at(6.9).0, 3);
+        assert_eq!(b.frame_at(7.1).0, 0);
+        let i = parse_anim("interpolate = true\nframetime = 4", [16, 32], 0);
+        assert_eq!(i.frame_at(1.0), (0, 1, 0.25));
+        assert_eq!(i.frame_at(6.0), (1, 0, 0.5));
+        let tall = parse_anim("frame_height = 8", [16, 32], 0);
+        assert_eq!((tall.frame_count, tall.frame_height), (4, 8));
     }
 }
 
@@ -479,7 +702,7 @@ pub fn picture_states(name: &str) -> Vec<(f32, String)> {
     map.get(name).cloned().unwrap_or_default()
 }
 
-/// Pixel size of a texture (`base:gui/arrow`), read once from its PNG header.
+/// Pixel size of a picture (`base:gui/arrow`), one frame of it if animated, read once.
 pub fn texture_size(name: &str) -> Option<(u32, u32)> {
     let mut map = SIZES.lock().unwrap();
     let map = map.get_or_insert_with(Default::default);
@@ -487,12 +710,20 @@ pub fn texture_size(name: &str) -> Option<(u32, u32)> {
         return *s;
     }
     let assets = CURRENT.read().unwrap().clone();
-    let size = assets.and_then(|a| a.read(name, "textures", "png")).and_then(|b| png_size(&b));
+    let size = assets.and_then(|a| {
+        let (w, h) = png_size(&a.read(name, "textures", "png")?)?;
+        let frame = a
+            .read(name, "textures", "anim")
+            .map(|b| parse_anim(&String::from_utf8_lossy(&b), [w, h], 0).frame_height)
+            .filter(|&f| h > f && h % f == 0);
+        Some((w, frame.unwrap_or(h)))
+    });
     map.insert(name.to_string(), size);
     size
 }
 
-fn png_size(b: &[u8]) -> Option<(u32, u32)> {
+/// How big a PNG says it is, before anything is unpacked.
+pub fn png_size(b: &[u8]) -> Option<(u32, u32)> {
     let w = u32::from_be_bytes(b.get(16..20)?.try_into().ok()?);
     let h = u32::from_be_bytes(b.get(20..24)?.try_into().ok()?);
     (b.starts_with(b"\x89PNG") && w > 0 && h > 0).then_some((w, h))

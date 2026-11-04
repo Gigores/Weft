@@ -2,11 +2,12 @@
 //! side by side, so a listed command always has one.
 
 use glam::{DVec3, IVec3};
-use weft_abi::{ItemStack, damage};
+use weft_abi::{ItemStack, Who, damage_cause as damage};
 
 use super::Server;
 use crate::commands::Args;
 use crate::content::Content;
+use crate::net::Shown;
 use crate::ui::text::{Arg, Msg, Name};
 use crate::world::GameMode;
 
@@ -65,22 +66,132 @@ pub const COMMANDS: &[(&str, &str, Handler, u32)] = &[
     ("setblock", "<pos:pos> <block:block>", set_block, p::GAME_MASTER),
     ("insert", "<pos:pos> <item:item> [count:int]", insert, p::GAME_MASTER),
     ("block", "<pos:pos>", block, p::GAME_MASTER),
-    ("gamemode", "survival [who:targets] | creative [who:targets] | spectator [who:targets]", game_mode, p::GAME_MASTER),
+    ("gamemode", "<mode:word(#core:game_modes)> [who:targets]", game_mode, p::GAME_MASTER),
     ("heal", "[who:targets]", heal, p::GAME_MASTER),
     ("tick", "query | rate <tps:int> | freeze | unfreeze | step [ticks:int] | sprint <ticks:int>", tick, p::ADMIN),
     ("regions", "", regions, p::GAME_MASTER),
-    ("weather", "clear [ticks:int] | rain [ticks:int] | thunder [ticks:int]", weather, p::GAME_MASTER),
+    ("seed", "", seed, p::GAME_MASTER),
+    ("weather", "<weather:word(#core:weathers)> [ticks:int]", weather, p::GAME_MASTER),
     ("op", "<who:targets> [level:int]", op, p::ADMIN),
     ("deop", "<who:targets>", deop, p::ADMIN),
     ("rule", "[name:word(#core:rules)] [value:int]", rule, p::ADMIN),
+    (
+        "title",
+        "<who:targets> title <text:text> | <who:targets> subtitle <text:text> | <who:targets> hint <text:text> | <who:targets> show <x:float> <y:float> <size:float> <text:text> | <who:targets> times <fade_in:float> <stay:float> <fade_out:float> | <who:targets> clear | <who:targets> reset",
+        title,
+        p::GAME_MASTER,
+    ),
+    ("say", "<text:text>", say_all, p::GAME_MASTER),
+    ("msg", "<who:player> <text:text>", whisper, p::EVERYONE),
+    ("tellraw", "<who:targets> <text:text>", tellraw, p::GAME_MASTER),
 ];
+
+fn title(s: &mut Server, x: &Ctx) -> Vec<Msg> {
+    use weft_abi::show_place as place;
+    let a = x.a;
+    let players: Vec<usize> = x
+        .targets(s, "who")
+        .iter()
+        .filter_map(|t| s.player_index(t.1))
+        .collect();
+    let text = a.text("text").unwrap_or("");
+    let shown = |p: u32| Shown::new(p, Msg::template(text));
+    let to_all = |s: &mut Server, shown: Shown| {
+        for &pi in &players {
+            let times = s.players[pi].title_times;
+            let timed = if shown.place == place::FREE || shown.place == place::HINT { None } else { times };
+            let one = Shown { times: timed.unwrap_or(shown.times), ..shown.clone() };
+            s.show(Who::Player(s.players[pi].entity), one);
+        }
+    };
+    if a.get("times").is_some() {
+        let t = [a.float("fade_in").unwrap_or(0.0), a.float("stay").unwrap_or(0.0), a.float("fade_out").unwrap_or(0.0)];
+        for &pi in &players {
+            s.players[pi].title_times = Some(t.map(|v| v.max(0.0) as f32));
+        }
+    } else if a.get("reset").is_some() {
+        for &pi in &players {
+            s.players[pi].title_times = None;
+        }
+    } else if a.get("clear").is_some() {
+        let empty = Msg::new("", vec![]);
+        for p in [place::TITLE, place::SUBTITLE] {
+            to_all(s, Shown::new(p, empty.clone()));
+        }
+    } else if a.get("show").is_some() {
+        let at = [a.float("x").unwrap_or(0.5) as f32, a.float("y").unwrap_or(0.5) as f32];
+        let scale = a.float("size").unwrap_or(1.0) as f32;
+        to_all(s, Shown { at: Some(at), scale, ..shown(place::FREE) });
+    } else {
+        let named = [("subtitle", place::SUBTITLE), ("hint", place::HINT), ("title", place::TITLE)];
+        for (_, p) in named.into_iter().filter(|(name, _)| a.get(name).is_some()) {
+            to_all(s, shown(p));
+        }
+    }
+    say("title.done", vec![int(players.len())])
+}
+
+fn say_all(s: &mut Server, x: &Ctx) -> Vec<Msg> {
+    let name = s.players[x.pi].name.clone();
+    let line = Msg::new("chat.say", vec![Arg::Text(name), text(x.a.text("text").unwrap_or(""))]);
+    s.show(Who::All, Shown::chat(line));
+    Vec::new()
+}
+
+fn whisper(s: &mut Server, x: &Ctx) -> Vec<Msg> {
+    let said = text(x.a.text("text").unwrap_or(""));
+    let to = x.a.text("who").unwrap_or("");
+    let Some(target) = s.players.iter().find(|p| p.name == to).map(|p| p.entity) else { return Vec::new() };
+    let name = s.players[x.pi].name.clone();
+    let heard = Msg::new("chat.whisper", vec![Arg::Text(name), said.clone()]);
+    s.show(Who::Player(target), Shown { from: Shown::PLAYER, ..Shown::chat(heard) });
+    vec![Msg::new("chat.whisper_to", vec![text(to), said])]
+}
+
+fn tellraw(s: &mut Server, x: &Ctx) -> Vec<Msg> {
+    let line = Msg::template(x.a.text("text").unwrap_or(""));
+    for (_, id) in x.targets(s, "who") {
+        s.show(Who::Player(id), Shown::chat(line.clone()));
+    }
+    Vec::new()
+}
 
 fn help(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let (c, a) = (x.c, x.a);
     match a.text("command") {
-        Some(n) => c.commands.iter().find(|d| d.name == n).map_or_else(|| say("unknown", vec![text(n)]), |d| say("usage_line", vec![text(&d.name), text(&d.usage)])),
-        None => c.commands.iter().filter(|d| d.level <= s.permission_of(x.pi)).flat_map(|d| say("usage_line", vec![text(&d.name), text(&d.usage)])).collect(),
+        Some(n) => c
+            .commands
+            .iter()
+            .find(|d| d.name == n)
+            .map_or_else(|| say("unknown", vec![text(n)]), |d| say("usage_line", vec![text(&d.name), text(&d.usage)])),
+        None => c
+            .commands
+            .iter()
+            .filter(|d| d.level <= s.permission_of(x.pi))
+            .flat_map(|d| say("usage_line", vec![text(&d.name), text(&short_usage(&d.usage))]))
+            .collect(),
     }
+}
+
+/// A command's usage for the list of them: a line. `/help <command>` has it all.
+fn short_usage(usage: &str) -> String {
+    const ROOM: usize = 80;
+    let mut out = String::new();
+    for alt in usage.split(" | ") {
+        if !out.is_empty() && out.len() + alt.len() + 3 > ROOM {
+            out.push_str(" | ...");
+            break;
+        }
+        if !out.is_empty() {
+            out.push_str(" | ");
+        }
+        out.push_str(alt);
+    }
+    out
+}
+
+fn seed(s: &mut Server, x: &Ctx) -> Vec<Msg> {
+    say("seed.done", vec![text(&crate::saves::shown_seed(s.dims[x.me.0 as usize].seed()))])
 }
 
 fn tp(s: &mut Server, x: &Ctx) -> Vec<Msg> {
@@ -88,9 +199,10 @@ fn tp(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let who = x.targets(s, "who");
     let dest = match (a.pos("pos"), a.get("to")) {
         (Some(p), _) => Some((me.0, p)),
-        (None, Some(crate::commands::Value::Targets(sel))) => {
-            s.select(pi, sel, here).first().and_then(|&(d, id)| s.position_of(d, id).map(|p| (d, p)))
-        }
+        (None, Some(crate::commands::Value::Targets(sel))) => s
+            .select(pi, sel, here)
+            .first()
+            .and_then(|&(d, id)| s.position_of(d, id).map(|p| (d, p))),
         _ => None,
     };
     let Some((to_dim, pos)) = dest else { return say("tp.nowhere", Vec::new()) };
@@ -118,7 +230,10 @@ fn give(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let mut given = 0;
     for (d, id) in x.targets(s, "who") {
         if let Some(r) = s.dims[d as usize].entity_region(id) {
-            given += count - r.entities.insert_item(c, id, ItemStack::new(item, count)).count;
+            given += count
+                - r.entities
+                    .insert_item(c, id, ItemStack::new(item, count))
+                    .count;
         }
     }
     say("give.done", vec![int(given), Arg::Name(Name::Item(item))])
@@ -193,7 +308,9 @@ fn insert(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     match s.dims[dim as usize].region_at(p) {
         Some(r) => match r.anchored(p) {
             Some(owner) => {
-                let left = r.entities.insert_item(c, owner, ItemStack::new(item, count));
+                let left = r
+                    .entities
+                    .insert_item(c, owner, ItemStack::new(item, count));
                 say("insert.done", vec![int(count - left.count), Arg::Name(Name::Item(item))])
             }
             None => say("insert.no_entity", Vec::new()),
@@ -215,8 +332,15 @@ fn block(s: &mut Server, x: &Ctx) -> Vec<Msg> {
 
 fn game_mode(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let a = x.a;
-    let mode = GameMode::ALL.into_iter().find(|m| a.get(m.name()).is_some()).unwrap_or_default();
-    let who: Vec<usize> = x.targets(s, "who").iter().filter_map(|t| s.player_index(t.1)).collect();
+    let named = a.text("mode").unwrap_or("");
+    let Some(mode) = GameMode::parse(named) else {
+        return say("gamemode.unknown", vec![text(named)]);
+    };
+    let who: Vec<usize> = x
+        .targets(s, "who")
+        .iter()
+        .filter_map(|t| s.player_index(t.1))
+        .collect();
     for &p in &who {
         s.set_mode(p, mode);
     }
@@ -225,12 +349,19 @@ fn game_mode(s: &mut Server, x: &Ctx) -> Vec<Msg> {
 
 fn weather(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let d = &mut s.dims[x.me.0 as usize];
-    if !x.c.dims[d.id as usize].weather {
+    if !x.c.dims[d.id as usize].has_weather() {
         return say("weather.none", Vec::new());
     }
-    let (raining, thunder) = (x.a.get("rain").is_some() || x.a.get("thunder").is_some(), x.a.get("thunder").is_some());
+    let named = x.a.text("weather").unwrap_or("");
+    let names = &x.c.game.weather_names;
+    let Some(&w) = names
+        .get(named)
+        .or_else(|| names.get(&format!("core:{named}")))
+    else {
+        return say("weather.unknown", vec![text(named)]);
+    };
     let ticks = x.a.int("ticks").map_or(12000, |t| t.max(1) as u64);
-    d.set_weather(raining, thunder, ticks);
+    d.set_weather(w as u16, ticks);
     say("weather.done", Vec::new())
 }
 
@@ -251,7 +382,9 @@ fn set_level(s: &mut Server, x: &Ctx, level: u32) -> Vec<Msg> {
 }
 
 fn op(s: &mut Server, x: &Ctx) -> Vec<Msg> {
-    let level = x.a.int("level").map_or(weft_abi::permission::OWNER, |l| l.clamp(0, weft_abi::permission::OWNER as i64) as u32);
+    let level =
+        x.a.int("level")
+            .map_or(weft_abi::permission::OWNER, |l| l.clamp(0, weft_abi::permission::OWNER as i64) as u32);
     set_level(s, x, level)
 }
 
@@ -313,7 +446,11 @@ fn regions(s: &mut Server, x: &Ctx) -> Vec<Msg> {
         .iter()
         .filter(|d| !d.regions.is_empty())
         .map(|d| {
-            let sizes: Vec<String> = d.regions.iter().map(|r| format!("{}/{}", r.space.cubes.len(), r.entities.list.len())).collect();
+            let sizes: Vec<String> = d
+                .regions
+                .iter()
+                .map(|r| format!("{}/{}", r.space.cubes.len(), r.entities.list.len()))
+                .collect();
             format!("{}: {} ({})", c.dims[d.id as usize].name, d.regions.len(), sizes.join(" "))
         })
         .collect();
@@ -323,12 +460,24 @@ fn regions(s: &mut Server, x: &Ctx) -> Vec<Msg> {
 /// The world's settings (`config_scope::WORLD`), like vanilla's game rules.
 fn rule(_s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let (c, a) = (x.c, x.a);
-    let rules: Vec<(u32, &crate::config::ConfigDef)> = c.game.configs.iter().enumerate().filter(|(_, d)| d.scope == weft_abi::config_scope::WORLD).map(|(i, d)| (i as u32, d)).collect();
+    let rules: Vec<(u32, &crate::config::ConfigDef)> = c
+        .game
+        .configs
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.scope == weft_abi::config_scope::WORLD)
+        .map(|(i, d)| (i as u32, d))
+        .collect();
     let value = |id: u32, d: &crate::config::ConfigDef| say("rule.value", vec![text(&d.name), text(&d.show(crate::config::get(id)))]);
     let Some(name) = a.text("name") else {
         return rules.iter().flat_map(|&(id, d)| value(id, d)).collect();
     };
-    let Some(&(id, d)) = rules.iter().find(|r| r.1.name == name || r.1.name.rsplit(':').next() == Some(name)) else { return say("rule.unknown", vec![text(name)]) };
+    let Some(&(id, d)) = rules
+        .iter()
+        .find(|r| r.1.name == name || r.1.name.rsplit(':').next() == Some(name))
+    else {
+        return say("rule.unknown", vec![text(name)]);
+    };
     if let Some(v) = a.int("value") {
         crate::config::set(id, v as f64);
     }

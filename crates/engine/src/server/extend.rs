@@ -87,7 +87,11 @@ impl Dim {
             log::error!("event {}: value of {} bytes, others had {size}", def.name, bytes.len());
             return;
         }
-        self.space.event_queue.entry(event).or_default().extend_from_slice(bytes);
+        self.space
+            .event_queue
+            .entry(event)
+            .or_default()
+            .extend_from_slice(bytes);
     }
 
     /// Engine events by name, with their `abi` struct as the value.
@@ -123,7 +127,7 @@ impl Dim {
 
     /// Whether the interceptors of `question` let it happen: any deny wins.
     pub fn ask(&mut self, c: &'static Content, question: &str, q: &mut abi::Query) -> bool {
-        if !c.dims[self.id as usize].editable && (question == abi::question::BREAK_BLOCK || question == abi::question::PLACE_BLOCK) {
+        if !c.dims[self.id as usize].editable && (question == abi::action::BREAK_BLOCK || question == abi::action::PLACE_BLOCK) {
             q.verdict = verdict::DENY;
             return false;
         }
@@ -175,25 +179,31 @@ impl Dim {
 /// The engine's attributes come first in the registry (`registry::freeze`).
 pub const MAX_HEALTH: u32 = 0;
 pub const MOVEMENT_SPEED: u32 = 1;
-pub const VISIBILITY: u32 = 2;
+
 pub const JUMP_STRENGTH: u32 = 3;
-pub const SWIM_ANYWHERE: u32 = 4;
-pub const ATTACK_SPEED: u32 = 5;
-pub const CAN_SPRINT: u32 = 6;
-pub const BLOCK_REACH: u32 = 7;
-pub const ENTITY_REACH: u32 = 8;
-pub const MINING_SPEED: u32 = 9;
+pub const ATTACK_SPEED: u32 = 4;
+pub const CAN_SPRINT: u32 = 5;
+pub const BLOCK_REACH: u32 = 6;
+pub const ENTITY_REACH: u32 = 7;
+pub const MINING_SPEED: u32 = 8;
+pub const FOV: u32 = 9;
 
 impl Dim {
     fn base_attribute(&self, c: &Content, entity: u64, attr: u32) -> Option<f64> {
         let e = self.entities.get(entity)?;
         let def = &c.game.attributes[attr as usize];
-        let own = def.comp.and_then(|id| c.components.get::<f64>(crate::components::ENTITY, e.kind, id));
+        let own = def.comp.and_then(|id| {
+            c.components
+                .get::<f64>(crate::components::ENTITY, e.kind, id)
+        });
         Some(own.unwrap_or(def.default))
     }
 
     fn modifiers_of(&self, c: &Content, entity: u64) -> Vec<AttrMod> {
-        self.entities.comps.get(&(entity, c.game.modifiers_comp)).map_or_else(Vec::new, |b| decode_mods(b))
+        self.entities
+            .comps
+            .get(&(entity, c.game.modifiers_comp))
+            .map_or_else(Vec::new, |b| decode_mods(b))
     }
 
     /// Value of attribute `attr` for an entity; with `explain` the steps go to `explanation`.
@@ -207,8 +217,8 @@ impl Dim {
                     if a == def.hash && (until == 0 || until > self.time) {
                         match op as u32 {
                             abi::attr_op::ADD => add += amount,
-                            abi::attr_op::MUL_BASE => mul_base += amount,
-                            abi::attr_op::MUL_TOTAL => mul_total *= 1.0 + amount,
+                            abi::attr_op::MULTIPLY_BASE => mul_base += amount,
+                            abi::attr_op::MULTIPLY_TOTAL => mul_total *= 1.0 + amount,
                             _ => {}
                         }
                     }
@@ -216,11 +226,26 @@ impl Dim {
             }
             return ((base + add) * (1.0 + mul_base) * mul_total).clamp(def.min, def.max);
         }
-        let mods: Vec<AttrMod> = self.modifiers_of(c, entity).into_iter().filter(|m| m.attr == def.hash && (m.until == 0 || m.until > self.time)).collect();
-        let add: f64 = mods.iter().filter(|m| m.op as u32 == abi::attr_op::ADD).map(|m| m.amount).sum();
-        let mul_base: f64 = mods.iter().filter(|m| m.op as u32 == abi::attr_op::MUL_BASE).map(|m| m.amount).sum();
+        let mods: Vec<AttrMod> = self
+            .modifiers_of(c, entity)
+            .into_iter()
+            .filter(|m| m.attr == def.hash && (m.until == 0 || m.until > self.time))
+            .collect();
+        let add: f64 = mods
+            .iter()
+            .filter(|m| m.op as u32 == abi::attr_op::ADD)
+            .map(|m| m.amount)
+            .sum();
+        let mul_base: f64 = mods
+            .iter()
+            .filter(|m| m.op as u32 == abi::attr_op::MULTIPLY_BASE)
+            .map(|m| m.amount)
+            .sum();
         let mut v = (base + add) * (1.0 + mul_base);
-        for m in mods.iter().filter(|m| m.op as u32 == abi::attr_op::MUL_TOTAL) {
+        for m in mods
+            .iter()
+            .filter(|m| m.op as u32 == abi::attr_op::MULTIPLY_TOTAL)
+        {
             v *= 1.0 + m.amount;
         }
         let v = v.clamp(def.min, def.max);
@@ -247,7 +272,9 @@ impl Dim {
         let now = self.time;
         mods.retain(|m| !(m.attr == hash && m.id == id) && (m.until == 0 || m.until > now));
         mods.push(AttrMod { attr: hash, op: op.min(2) as u8, amount, until: if ticks == 0 { 0 } else { now + ticks }, id: id.to_string() });
-        self.entities.comps.insert((entity, c.game.modifiers_comp), encode_mods(&mods));
+        self.entities
+            .comps
+            .insert((entity, c.game.modifiers_comp), encode_mods(&mods));
     }
 
     pub fn remove_attr_modifier(&mut self, c: &Content, entity: u64, attr: u32, id: &str) {
@@ -257,7 +284,9 @@ impl Dim {
         if mods.is_empty() {
             self.entities.comps.remove(&(entity, c.game.modifiers_comp));
         } else {
-            self.entities.comps.insert((entity, c.game.modifiers_comp), encode_mods(&mods));
+            self.entities
+                .comps
+                .insert((entity, c.game.modifiers_comp), encode_mods(&mods));
         }
     }
 
@@ -275,10 +304,27 @@ impl Dim {
     }
 
     /// Rolls a loot table with this region's random stream.
-    pub fn roll_loot(&mut self, c: &Content, table: &str, ctx: &crate::loot::Ctx) -> Vec<weft_abi::ItemStack> {
+    /// Rolls `table`; conditions it asks are answered about `pos` and `entity` first.
+    pub fn roll_loot(
+        &mut self,
+        c: &'static Content,
+        table: &str,
+        ctx: &crate::loot::Ctx,
+        pos: glam::DVec3,
+        entity: u64,
+    ) -> Vec<weft_abi::ItemStack> {
         let Some(t) = c.loot.get(table) else { return Vec::new() };
+        let mut ctx = ctx.clone();
+        for name in crate::loot::conditions_in(t) {
+            if c.game
+                .condition_names
+                .get(name)
+                .is_some_and(|&id| crate::conditions::on_server(self, c, id, pos, entity))
+            {
+                ctx.holds.push(name.to_string());
+            }
+        }
         let mut rng = || self.random_unit();
-        crate::loot::roll(c, t, ctx, &mut rng)
+        crate::loot::roll(c, t, &ctx, &mut rng)
     }
 }
-

@@ -10,6 +10,13 @@ struct VOut {
     @location(3) dist: f32,
     @location(4) @interpolate(flat) shader: u32,
     @location(5) @interpolate(flat) glow: u32,
+    @location(6) @interpolate(flat) effect: u32,
+    @location(7) @interpolate(flat) strength: f32,
+}
+
+// A layer draws the parts of its roles, and the bones it names.
+fn drawn(inst: Instance, role: u32, bone: u32) -> bool {
+    return ((inst.roles >> role) & 1u) != 0u || (bone < 32u && ((inst.bone_mask >> bone) & 1u) != 0u);
 }
 
 fn place(bone: u32, p: vec3<f32>) -> vec3<f32> {
@@ -18,8 +25,7 @@ fn place(bone: u32, p: vec3<f32>) -> vec3<f32> {
     return vec3(dot(b.rows[0], q), dot(b.rows[1], q), dot(b.rows[2], q));
 }
 
-@vertex
-fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+fn vertex(vi: u32, ii: u32) -> VOut {
     let inst = instances[ii];
     var out: VOut;
     var world: vec3<f32>;
@@ -27,7 +33,7 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     let boxes = inst.cuboid_count * 36u;
     if vi < boxes {
         let cub = cuboids[inst.cuboids + vi / 36u];
-        if ((inst.roles >> cub.role) & 1u) == 0u {
+        if !drawn(inst, cub.role, cub.bone) {
             out.clip = vec4(0.0, 0.0, 0.0, 1.0);
             return out;
         }
@@ -51,7 +57,7 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     } else {
         let k = vi - boxes;
         let v = corners[inst.vertices + k];
-        if ((inst.roles >> v.role) & 1u) == 0u {
+        if !drawn(inst, v.role, v.bone) {
             out.clip = vec4(0.0, 0.0, 0.0, 1.0);
             return out;
         }
@@ -72,10 +78,11 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     if inst.light != 0xffffffffu {
         lit = lightmap(unpack_light(inst.light), scene.params.z, scene.light.x, scene.light.y);
     }
-    let flash = select(mix(vec3(1.0), vec3(1.0, 0.4, 0.4), inst.hurt), vec3(2.0), inst.hurt < 0.0);
-    out.color = pow(inst.color * lit * shade * flash, vec3(2.2));
+    out.color = pow(inst.color * lit * shade, vec3(2.2));
     out.shader = inst.shader;
     out.glow = inst.glow;
+    out.effect = inst.effect;
+    out.strength = inst.strength;
     return out;
 }
 
@@ -87,10 +94,25 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let e = textureSampleLevel(textures[in.glow], nearest_clamp, in.uv, 0.0).r;
         light = max(light, vec3(pow(e, 2.2)));
     }
-    let c = entity_shade(in.shader, EntityPixel(in.uv, albedo, light, scene.params.w));
+    let p = EntityPixel(in.uv, albedo, light, scene.params.w);
+    let c = entity_effect(in.effect, p, entity_shade(in.shader, p), in.strength);
     if c.a < 0.5 {
         discard;
     }
     let f = fog_amount(in.dist, scene.params.x, scene.params.y);
     return vec4(mix(c.rgb, scene.fog_color.rgb, f), 1.0);
+}
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+    return vertex(vi, ii);
+}
+
+// The first person's arms: depth squeezed into the near half (reverse Z), in front of the world
+// (nothing the player collides with comes closer than ~0.2 blocks) but sorted within themselves.
+@vertex
+fn vs_hand(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+    var out = vertex(vi, ii);
+    out.clip.z = (0.5 + 0.5 * out.clip.z / out.clip.w) * out.clip.w;
+    return out;
 }

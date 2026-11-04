@@ -13,6 +13,15 @@ use std::time::{Duration, Instant};
 use weft_sdk::client::{self, ClientState, client_flags as cf};
 use weft_sdk::*;
 
+/// The key of an action tests and scripts name as text, one handle per name.
+fn key_named(action: &str) -> &'static Key {
+    static KEYS: std::sync::Mutex<Option<HashMap<String, &'static Key>>> = std::sync::Mutex::new(None);
+    let mut keys = KEYS.lock().unwrap();
+    keys.get_or_insert_with(HashMap::new)
+        .entry(action.to_string())
+        .or_insert_with(|| Key::generated(action.to_string()))
+}
+
 pub type R = Result<(), String>;
 pub type BoxTest = Pin<Box<dyn Future<Output = R>>>;
 
@@ -48,12 +57,12 @@ impl T {
     fn new(name: &str) -> T {
         T(
             Rc::new(RefCell::new(Inner {
-            client: None,
-            state: ClientState::DEFAULT,
-            screen: String::new(),
-            name: name.to_string(),
-            failures: Vec::new(),
-            notes: Vec::new(),
+                client: None,
+                state: ClientState::DEFAULT,
+                screen: String::new(),
+                name: name.to_string(),
+                failures: Vec::new(),
+                notes: Vec::new(),
             })),
             None,
         )
@@ -82,7 +91,10 @@ impl T {
 
     /// The client of the frame being polled.
     pub fn c(&self) -> Client {
-        self.0.borrow().client.expect("testkit: client used outside a frame")
+        self.0
+            .borrow()
+            .client
+            .expect("testkit: client used outside a frame")
     }
 
     pub fn state(&self) -> ClientState {
@@ -133,16 +145,15 @@ impl T {
     /// of the local player in first person; `None` behind the camera.
     pub fn on_screen(&self, p: [f64; 3]) -> Option<(f32, f32)> {
         let s = self.state();
-        let eye_y = self.c().entity(0).map_or(1.62, |e| e.size[2] as f64);
-        let eye = [s.shown[0], s.shown[1] + eye_y, s.shown[2]];
+        let eye_y = self.c().entity(0).map_or(1.62, |e| e.size.eye as f64);
+        let eye = [s.shown.x, s.shown.y + eye_y, s.shown.z];
+        let fwd = look_dir(s.yaw, s.pitch);
         let (sy, cy) = (s.yaw as f64).sin_cos();
-        let (sp, cp) = (s.pitch as f64).sin_cos();
-        let fwd = [-sy * cp, sp, -cy * cp];
         let right = [cy, 0.0, -sy];
-        let up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
+        let up = [right[1] * fwd.z - right[2] * fwd.y, right[2] * fwd.x - right[0] * fwd.z, right[0] * fwd.y - right[1] * fwd.x];
         let d = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
         let dot = |a: [f64; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
-        let z = dot(fwd);
+        let z = dot(fwd.to_array());
         if z <= 0.05 {
             return None;
         }
@@ -205,8 +216,8 @@ impl T {
         let mut last = [f64::NAN; 3];
         self.until("standing still", DEFAULT_TIMEOUT, move |t| {
             let s = t.state();
-            let moved = (0..3).any(|i| (s.pos[i] - last[i]).abs() > 1e-6 || s.pos[i].is_nan());
-            last = s.pos;
+            let moved = (s.pos - last.into()).length_squared() > 1e-12 || s.pos.to_array().iter().any(|v| v.is_nan());
+            last = s.pos.to_array();
             still = if moved || !t.flag(cf::ON_GROUND) { 0 } else { still + 1 };
             still >= 20
         })
@@ -222,8 +233,9 @@ impl T {
     /// A fresh world `test-<name>` with `seed`, waiting until it is loaded.
     pub async fn world(&self, seed: u64) -> R {
         let name = format!("test-{}", self.name());
-        self.c().new_world(&name, seed);
-        self.until("joined", Duration::from_secs(60), |t| t.flag(cf::JOINED)).await?;
+        self.c().world_create(&name, seed);
+        self.until("joined", Duration::from_secs(60), |t| t.flag(cf::JOINED))
+            .await?;
         // Mobs only where a test puts them, so pictures repeat.
         self.cmd("/rule core:mob_spawning 0").await?;
         self.loaded().await
@@ -233,7 +245,7 @@ impl T {
     pub async fn cmd(&self, line: &str) -> Result<String, String> {
         let before = self.c().chat_line(0);
         let marker = self.0.borrow().state.frame;
-        self.c().chat(line);
+        self.c().say(line);
         let mut seen = String::new();
         self.until(&format!("reply to {line}"), Duration::from_secs(10), |t| {
             let now = t.c().chat_line(0);
@@ -267,15 +279,20 @@ impl T {
 
     /// The block's name as the server has it (`base:furnace[facing=north,lit=true]`).
     pub async fn block(&self, pos: [i32; 3]) -> Result<String, String> {
-        self.op(&format!("get {} {} {}", pos[0], pos[1], pos[2])).await
+        self.op(&format!("get {} {} {}", pos[0], pos[1], pos[2]))
+            .await
     }
 
     pub async fn set(&self, pos: [i32; 3], block: &str) -> R {
-        self.op(&format!("set {} {} {} {block}", pos[0], pos[1], pos[2])).await.map(|_| ())
+        self.op(&format!("set {} {} {} {block}", pos[0], pos[1], pos[2]))
+            .await
+            .map(|_| ())
     }
 
     pub async fn fill(&self, a: [i32; 3], b: [i32; 3], block: &str) -> R {
-        self.op(&format!("fill {} {} {} {} {} {} {block}", a[0], a[1], a[2], b[0], b[1], b[2])).await.map(|_| ())
+        self.op(&format!("fill {} {} {} {} {} {} {block}", a[0], a[1], a[2], b[0], b[1], b[2]))
+            .await
+            .map(|_| ())
     }
 
     /// (item name, count, damage) in an inventory slot of `owner` (`me`, `x y z` or `#id`).
@@ -302,14 +319,13 @@ impl T {
 
     /// Player's block position as the client has it.
     pub fn feet(&self) -> [i32; 3] {
-        let p = self.state().pos;
-        [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32]
+        block_pos_of(self.state().pos).to_array()
     }
 
     // ------------------------------------------------ input
 
     pub fn press(&self, action: &str) {
-        if !self.c().press(action, 0.0) {
+        if !self.c().input_action(key_named(action), 0.0) {
             self.fail(format!("no action {action}"));
         }
     }
@@ -319,11 +335,12 @@ impl T {
         if self.flag(cf::DEBUG) != on {
             self.press("core:debug");
         }
-        self.until("F3 toggled", Duration::from_secs(2), |t| t.flag(cf::DEBUG) == on).await
+        self.until("F3 toggled", Duration::from_secs(2), |t| t.flag(cf::DEBUG) == on)
+            .await
     }
 
     pub fn hold(&self, action: &str, secs: f32) {
-        if !self.c().press(action, secs) {
+        if !self.c().input_action(key_named(action), secs) {
             self.fail(format!("no action {action}"));
         }
     }
@@ -333,8 +350,11 @@ impl T {
         for q in queries {
             match self.c().ui_rect(q) {
                 None => self.fail(format!("no UI element {q} on {}", self.0.borrow().screen)),
-                Some([x, y, w, h]) => {
-                    self.check(x >= 0.0 && y >= 0.0 && x + w <= 1.001 && y + h <= 1.001, format!("{q} sticks out of the window ({x:.3} {y:.3} {w:.3} {h:.3})"));
+                Some(Rect { x, y, w, h }) => {
+                    self.check(
+                        x >= 0.0 && y >= 0.0 && x + w <= 1.001 && y + h <= 1.001,
+                        format!("{q} sticks out of the window ({x:.3} {y:.3} {w:.3} {h:.3})"),
+                    );
                 }
             }
         }
@@ -342,7 +362,7 @@ impl T {
 
     /// Clicks a UI element (`slot:N`, `id:x`, `text:words`) of the top screen.
     pub fn click_ui(&self, query: &str, button: u32) -> bool {
-        let ok = self.c().click_ui(query, button);
+        let ok = self.c().ui_click(query, button);
         if !ok {
             self.fail(format!("no UI element {query} on {}", self.0.borrow().screen));
         }
@@ -362,11 +382,11 @@ impl T {
         let id = self.c().screenshot(&path);
         let mut shot = None;
         self.until(&format!("screenshot {name}"), Duration::from_secs(10), |_| {
-            shot = client::image(id).map(|(w, h, p)| Shot { w, h, px: p.to_vec() });
+            shot = client::image_pixels(id).map(|(w, h, p)| Shot { w, h, px: p.to_vec() });
             shot.is_some()
         })
         .await?;
-        client::image_free(id);
+        client::image_unload(id);
         Ok(shot.unwrap())
     }
 
@@ -389,17 +409,26 @@ impl T {
     pub async fn bench(&self, secs: f32, label: &str) -> Result<[f32; 5], String> {
         let before = self.state().benches;
         self.c().bench(secs, label);
-        self.until(&format!("bench {label}"), Duration::from_secs_f32(secs + 30.0), |t| t.state().benches > before).await?;
+        self.until(&format!("bench {label}"), Duration::from_secs_f32(secs + 30.0), |t| t.state().benches > before)
+            .await?;
         let s = self.state();
         let v = [s.bench_fps, s.bench_avg_ms, s.bench_p99_ms, s.bench_gpu_ms, s.bench_server_ms];
-        self.note(format!("bench {label}: {:.0} fps, avg {:.2} ms, p99 {:.2} ms, gpu {:.2} ms, server {:.2} ms", v[0], v[1], v[2], v[3], v[4]));
+        self.note(format!(
+            "bench {label}: {:.0} fps, avg {:.2} ms, p99 {:.2} ms, gpu {:.2} ms, server {:.2} ms",
+            v[0], v[1], v[2], v[3], v[4]
+        ));
         Ok(v)
     }
 
     /// Compares what the server and the client have: blocks in the box between `a` and `b`.
     pub async fn sync_blocks(&self, a: [i32; 3], b: [i32; 3]) -> R {
-        let server = self.op(&format!("snapshot {} {} {} {} {} {}", a[0], a[1], a[2], b[0], b[1], b[2])).await?;
-        let server: Vec<u32> = server.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+        let server = self
+            .op(&format!("snapshot {} {} {} {} {} {}", a[0], a[1], a[2], b[0], b[1], b[2]))
+            .await?;
+        let server: Vec<u32> = server
+            .split_whitespace()
+            .filter_map(|s| s.parse().ok())
+            .collect();
         let c = self.c();
         let mut i = 0;
         let mut diffs = Vec::new();
@@ -510,7 +539,11 @@ pub fn lum(c: [f32; 3]) -> f32 {
 
 /// Pixels whose color differs noticeably.
 fn compare(a: &[u8], b: &[u8]) -> u32 {
-    let n = a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(p, q)| (0..3).any(|i| (p[i] as i32 - q[i] as i32).abs() > 40)).count();
+    let n = a
+        .chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .filter(|(p, q)| (0..3).any(|i| (p[i] as i32 - q[i] as i32).abs() > 40))
+        .count();
     n as u32
 }
 
@@ -600,8 +633,18 @@ thread_local! {
 }
 
 pub fn start(queue: Vec<TestDef>) {
-    weft_sdk::info!("testkit: running {} test(s): {}", queue.len(), queue.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
-    RUNNER.with(|r| *r.borrow_mut() = Some(Runner { queue, current: None, done: Vec::new(), started: Instant::now(), finished: false, warmup: 3 }));
+    weft_sdk::info!(
+        "testkit: running {} test(s): {}",
+        queue.len(),
+        queue
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    RUNNER.with(|r| {
+        *r.borrow_mut() = Some(Runner { queue, current: None, done: Vec::new(), started: Instant::now(), finished: false, warmup: 3 })
+    });
 }
 
 pub fn frame(c: &Client) {
@@ -635,7 +678,7 @@ pub fn frame(c: &Client) {
         }
         let (t, fut, began) = run.current.as_mut().unwrap();
         // Held, not pressed: a key the test taps itself is pressed only within its own frame.
-        if c.held(&PROBE) {
+        if c.key_held(&PROBE) {
             PROBES.with(|p| p.set(p.get() + 1));
         }
         {
@@ -662,12 +705,12 @@ pub fn frame(c: &Client) {
             drop(i);
             run.done.push(out);
             run.current = None;
-            c.release_all();
+            c.input_release_all();
             if c.state().flags & cf::DEBUG != 0 {
-                c.key("F3", 0.0);
+                c.input_key("F3", 0.0);
             }
             if c.state().flags & cf::IN_WORLD != 0 {
-                c.leave_world();
+                c.world_leave();
             }
         }
     });
@@ -676,11 +719,8 @@ pub fn frame(c: &Client) {
 fn finish(c: &Client, run: &mut Runner) {
     run.done.retain(|o| o.name != "warm_up" || !o.ok);
     let failed = run.done.iter().filter(|o| !o.ok).count();
-    let mut report = format!(
-        "testkit report: {} passed, {failed} failed, {:.1} s\n",
-        run.done.len() - failed,
-        run.started.elapsed().as_secs_f32()
-    );
+    let mut report =
+        format!("testkit report: {} passed, {failed} failed, {:.1} s\n", run.done.len() - failed, run.started.elapsed().as_secs_f32());
     for o in &run.done {
         report.push_str(&format!("\n{} {} ({:.1} s)\n", if o.ok { "PASS" } else { "FAIL" }, o.name, o.secs));
         for l in &o.lines {

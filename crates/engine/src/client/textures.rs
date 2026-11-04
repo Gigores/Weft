@@ -13,11 +13,13 @@ use weft_render::*;
 use crate::assets::{self, Anim, Assets, LoadedTexture};
 use crate::content::Content;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Source {
     File,
     /// Quarters of four other entries (connected textures' compact form).
     Composite([u32; 4]),
+    /// Pictures one over the other, each tinted (a stack's `layers`).
+    Layers(Vec<(String, u32)>),
 }
 
 struct Entry {
@@ -45,6 +47,8 @@ struct Inner {
     glow_dirty: bool,
     generation: u64,
     assets: Assets,
+    /// Texture id of each stack's `layers` made so far, by its text.
+    layered: FxHashMap<String, u32>,
 }
 
 pub struct GameTextures {
@@ -85,18 +89,36 @@ impl GameTextures {
         let mut by_name: FxHashMap<String, u32> = FxHashMap::default();
         let mut add = |name: String, source: Source, entries: &mut Vec<Entry>| -> u32 {
             *by_name.entry(name.clone()).or_insert_with(|| {
-                entries.push(Entry { name, source, frames: Vec::new(), glow: Vec::new(), anim: None, images: Vec::new(), stamp: 0, requested: false, size: 16 });
+                entries.push(Entry {
+                    name,
+                    source,
+                    frames: Vec::new(),
+                    glow: Vec::new(),
+                    anim: None,
+                    images: Vec::new(),
+                    stamp: 0,
+                    requested: false,
+                    size: 16,
+                });
                 entries.len() as u32 - 1
             })
         };
-        let mut ids: Vec<u32> = c.textures.iter().chain(&extra.names).map(|n| add(n.clone(), Source::File, &mut entries)).collect();
+        let mut ids: Vec<u32> = c
+            .textures
+            .iter()
+            .chain(&extra.names)
+            .map(|n| add(n.clone(), Source::File, &mut entries))
+            .collect();
         for parts in &extra.composites {
             let parts = parts.map(|p| ids.get(p as usize).copied().unwrap_or(0));
             let name = composite_name(&parts.map(|i| entries[i as usize].name.clone()));
             ids.push(add(name, Source::Composite(parts), &mut entries));
         }
         super::looks::set(looks);
-        let blank = gpu.create_texture(&TextureDesc { width: 1, height: 1, mips: 1, format: Format::Rgba8Srgb, render_target: false }, "blank texture");
+        let blank = gpu.create_texture(
+            &TextureDesc { width: 1, height: 1, mips: 1, format: Format::Rgba8Srgb, render_target: false },
+            "blank texture",
+        );
         gpu.write_texture(blank, 0, &[0, 0, 0, 0]);
         let blank = (blank, gpu.texture_index(blank));
         let glow_buffer = gpu.create_buffer(4096 * 4, usage::STORAGE, "glow map");
@@ -112,6 +134,7 @@ impl GameTextures {
                 glow_dirty: true,
                 generation: next_generation(),
                 assets: assets.clone(),
+                layered: FxHashMap::default(),
             }),
             overlays,
             blank,
@@ -135,14 +158,57 @@ impl GameTextures {
         en.frames[n as usize % en.frames.len()]
     }
 
-    /// First frame of texture `id` (a block's face, an item's icon, a particle's frame).
-    pub fn texture(&self, id: u32) -> u32 {
-        self.frame_of(id, 0)
+    /// The texture id of a stack's `layers` text, made the first time it is asked for; loaded like
+    /// any texture once drawn.
+    pub fn layered(&self, spec: &str) -> u32 {
+        let mut i = self.inner.borrow_mut();
+        if let Some(&id) = i.layered.get(spec) {
+            return id;
+        }
+        let parts = crate::stack::parse_layers(spec)
+            .into_iter()
+            .map(|(n, t)| (n.to_string(), t))
+            .collect();
+        i.entries.push(Entry {
+            name: format!("layers:{spec}"),
+            source: Source::Layers(parts),
+            frames: Vec::new(),
+            glow: Vec::new(),
+            anim: None,
+            images: Vec::new(),
+            stamp: 0,
+            requested: false,
+            size: 16,
+        });
+        let entry = i.entries.len() as u32 - 1;
+        i.ids.push(entry);
+        let id = i.ids.len() as u32 - 1;
+        i.layered.insert(spec.to_string(), id);
+        id
     }
 
-    pub fn frame_of(&self, id: u32, n: u32) -> u32 {
+    /// First frame of texture `id` (a block's face, an item's icon, a particle's frame).
+    pub fn texture(&self, id: u32) -> u32 {
         let e = self.inner.borrow().ids.get(id as usize).copied();
-        self.frame(e, n)
+        self.frame(e, 0)
+    }
+
+    /// The frame of texture `id` at `ticks`, as its `.anim` plays it.
+    pub fn frame_now(&self, id: u32, ticks: f32) -> u32 {
+        let e = self.inner.borrow().ids.get(id as usize).copied();
+        self.frame(e, self.strip_frame(id, ticks))
+    }
+
+    /// Which frame of its strip that is, for what draws the file's own picture. Nothing while it
+    /// isn't loaded.
+    pub fn strip_frame(&self, id: u32, ticks: f32) -> u32 {
+        let i = self.inner.borrow();
+        let en = i
+            .ids
+            .get(id as usize)
+            .and_then(|&e| i.entries.get(e as usize));
+        en.and_then(|en| en.anim.as_ref())
+            .map_or(0, |a| a.frame_at(ticks).0)
     }
 
     /// Texture ids there are: the content's and the connected texture tiles.
@@ -220,13 +286,16 @@ impl GameTextures {
     /// animated -> (offset into `frames`, count | total ticks << 16 | interpolate << 31), then
     /// every texture's size. Shader packs are copies of that shader, also of older ones: new
     /// things go after what they read.
-    /// `frames`: animation frames (index | ticks << 16), then from `overlays` per block texture
-    /// its overlay id + 1 or 0.
+    /// `frames`: the number of texture ids (where `info`'s sizes start, over two), animation
+    /// frames (index | ticks << 16), then from `overlays` per block texture its overlay id + 1 or
+    /// 0. The count is there because `arrayLength` is not to be trusted: on macOS (MoltenVK, push
+    /// descriptors) it came back longer than the table, and sizes read past it drew every block
+    /// in one flat color.
     pub fn world_tables(&self) -> (Vec<u32>, Vec<u32>, u32) {
         let i = self.inner.borrow();
         let mut info: Vec<u32> = Vec::with_capacity(i.ids.len() * 3);
         let mut sizes: Vec<u32> = Vec::with_capacity(i.ids.len());
-        let mut frames: Vec<u32> = vec![0];
+        let mut frames: Vec<u32> = vec![i.ids.len() as u32];
         for &e in &i.ids {
             let en = &i.entries[e as usize];
             sizes.push(if en.frames.is_empty() { 16 } else { en.size.max(1) });
@@ -235,7 +304,11 @@ impl GameTextures {
                     let total: u32 = a.frames.iter().map(|f| f.1).sum::<u32>().min(0x7FFF);
                     info.push(frames.len() as u32);
                     info.push(a.frames.len() as u32 | total << 16 | (a.interpolate as u32) << 31);
-                    frames.extend(a.frames.iter().map(|&(f, ticks)| en.frames[f as usize % en.frames.len()] | ticks.min(0xFFFF) << 16));
+                    frames.extend(
+                        a.frames
+                            .iter()
+                            .map(|&(f, ticks)| en.frames[f as usize % en.frames.len()] | ticks.min(0xFFFF) << 16),
+                    );
                 }
                 (_, false) => info.extend([en.frames[0], 0]),
                 (_, true) => info.extend([self.blank.1, 0]),
@@ -255,26 +328,52 @@ impl GameTextures {
         let old = std::mem::replace(self, next);
         let blank = old.blank.0;
         let mut old = old.inner.into_inner();
-        let loaded: FxHashMap<String, u32> = old.entries.iter().enumerate().filter(|(_, e)| !e.frames.is_empty()).map(|(k, e)| (e.name.clone(), k as u32)).collect();
+        let loaded: FxHashMap<String, u32> = old
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !e.frames.is_empty())
+            .map(|(k, e)| (e.name.clone(), k as u32))
+            .collect();
         let (mut kept, mut redo) = (0, 0);
         {
             let mut n = self.inner.borrow_mut();
             // Only what was loaded is compared; the rest loads fresh when first used anyway.
-            let unchanged = |name: &str| loaded.get(name).is_some_and(|&o| assets::texture_stamp(assets, name) == old.entries[o as usize].stamp);
+            let unchanged = |name: &str| {
+                loaded
+                    .get(name)
+                    .is_some_and(|&o| assets::texture_stamp(assets, name) == old.entries[o as usize].stamp)
+            };
             let entries = &n.entries;
             let same: Vec<bool> = entries
                 .par_iter()
-                .map(|e| match e.source {
+                .map(|e| match &e.source {
                     Source::File => unchanged(&e.name),
-                    Source::Composite(parts) => loaded.get(&e.name).is_some_and(|&o| composite_stamp(assets, entries, parts) == old.entries[o as usize].stamp),
+                    Source::Composite(parts) => loaded
+                        .get(&e.name)
+                        .is_some_and(|&o| composite_stamp(assets, entries, *parts) == old.entries[o as usize].stamp),
+                    // Made again when next asked for.
+                    Source::Layers(_) => false,
                 })
                 .collect();
             for k in 0..n.entries.len() {
                 let Some(&o) = loaded.get(&n.entries[k].name) else { continue };
                 if same[k] {
                     let (oe, ne) = (&mut old.entries[o as usize], &mut n.entries[k]);
-                    (ne.frames, ne.glow, ne.images, ne.anim, ne.stamp, ne.size) = (std::mem::take(&mut oe.frames), std::mem::take(&mut oe.glow), std::mem::take(&mut oe.images), oe.anim.take(), oe.stamp, oe.size);
-                    let pairs: Vec<(u32, u32)> = ne.frames.iter().copied().zip(ne.glow.iter().copied()).collect();
+                    (ne.frames, ne.glow, ne.images, ne.anim, ne.stamp, ne.size) = (
+                        std::mem::take(&mut oe.frames),
+                        std::mem::take(&mut oe.glow),
+                        std::mem::take(&mut oe.images),
+                        oe.anim.take(),
+                        oe.stamp,
+                        oe.size,
+                    );
+                    let pairs: Vec<(u32, u32)> = ne
+                        .frames
+                        .iter()
+                        .copied()
+                        .zip(ne.glow.iter().copied())
+                        .collect();
                     for (f, g) in pairs {
                         set_glow(&mut n.glow_map, f, g);
                     }
@@ -302,7 +401,20 @@ impl GameTextures {
 
 /// A composite changes when any of its parts does.
 fn composite_stamp(assets: &Assets, entries: &[Entry], parts: [u32; 4]) -> u64 {
-    parts.iter().fold(weft_noise::FNV, |h, &p| weft_noise::fnv_step(h, assets::texture_stamp(assets, &entries[p as usize].name)))
+    parts
+        .iter()
+        .fold(weft_noise::FNV, |h, &p| weft_noise::fnv_step(h, assets::texture_stamp(assets, &entries[p as usize].name)))
+}
+
+/// A stack's `layers` from their files: the same picture for its icon, its sprite in the hand
+/// and on the ground.
+pub fn layered(assets: &Assets, parts: &[(String, u32)]) -> assets::LoadedTexture {
+    let loaded: Vec<assets::LoadedTexture> = parts
+        .iter()
+        .map(|(n, _)| assets::load_texture(assets, n))
+        .collect();
+    let refs: Vec<(&assets::LoadedTexture, u32)> = loaded.iter().zip(parts).map(|(l, p)| (l, p.1)).collect();
+    assets::layered_texture(&refs)
 }
 
 fn set_glow(map: &mut Vec<u32>, color: u32, glow: u32) {
@@ -317,11 +429,18 @@ fn load(entries: &[Entry], assets: &Assets, ids: &[u32]) -> Vec<Loaded> {
     ids.par_iter()
         .map(|&e| {
             let en = &entries[e as usize];
-            match en.source {
-                Source::File => Loaded { entry: e, tex: assets::load_texture(assets, &en.name), stamp: assets::texture_stamp(assets, &en.name) },
-                Source::Composite(ids) => {
+            match &en.source {
+                Source::File => {
+                    Loaded { entry: e, tex: assets::load_texture(assets, &en.name), stamp: assets::texture_stamp(assets, &en.name) }
+                }
+                Source::Layers(parts) => Loaded { entry: e, tex: layered(assets, parts), stamp: 0 },
+                &Source::Composite(ids) => {
                     let parts = ids.map(|p| assets::load_texture(assets, &entries[p as usize].name));
-                    Loaded { entry: e, tex: assets::composite_texture([&parts[0], &parts[1], &parts[2], &parts[3]]), stamp: composite_stamp(assets, entries, ids) }
+                    Loaded {
+                        entry: e,
+                        tex: assets::composite_texture([&parts[0], &parts[1], &parts[2], &parts[3]]),
+                        stamp: composite_stamp(assets, entries, ids),
+                    }
                 }
             }
         })
@@ -335,14 +454,18 @@ fn upload(gpu: &mut dyn Backend, i: &mut Inner, l: Loaded) {
     let mut frames = Vec::new();
     let mut glows = Vec::new();
     for (mips, glow) in l.tex.frames.iter().zip(&l.tex.glow) {
-        let t = gpu.create_texture(&TextureDesc { width: size, height: size, mips: mips.len() as u32, format: Format::Rgba8Srgb, render_target: false }, label);
+        let t = gpu.create_texture(
+            &TextureDesc { width: size, height: size, mips: mips.len() as u32, format: Format::Rgba8Srgb, render_target: false },
+            label,
+        );
         for (m, data) in mips.iter().enumerate() {
             gpu.write_texture(t, m as u32, data);
         }
         let index = gpu.texture_index(t);
         images.push(t);
         let g = glow.as_ref().map_or(u32::MAX, |mask| {
-            let g = gpu.create_texture(&TextureDesc { width: size, height: size, mips: 1, format: Format::R8Unorm, render_target: false }, label);
+            let g = gpu
+                .create_texture(&TextureDesc { width: size, height: size, mips: 1, format: Format::R8Unorm, render_target: false }, label);
             gpu.write_texture(g, 0, mask);
             images.push(g);
             gpu.texture_index(g)

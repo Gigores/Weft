@@ -1,11 +1,12 @@
-//! Container menus: a list of slots pointing into inventories (the player's, a block entity's or
-//! the menu's own temporary grid), the cursor stack, and synced integers. The slots come from the
+//! Container menus: a list of slots pointing into inventories (the player's, the one it opened
+//! on or the menu's own temporary grid), the cursor stack, and synced integers. The slots come from the
 //! menu's groups; click handling is generic, mods only describe groups and react to changes
 //! (crafting).
 
 use weft_abi::{self as abi, ItemStack, slot_flags as sf};
 
 use super::dim::Dim;
+use super::holder::{self, At, Inv};
 use crate::content::Content;
 use crate::host;
 
@@ -13,7 +14,8 @@ use crate::host;
 pub enum Owner {
     Temp,
     Player,
-    Entity(u64),
+    /// The inventory the menu opened on.
+    On(Inv),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -33,7 +35,9 @@ pub struct OpenMenu {
     /// code (a remote terminal) means it to work from anywhere.
     pub on_block: bool,
     pub kind: u32,
-    pub owner: u64,
+    pub on: Option<Inv>,
+    /// Opened on a stack: the item it was, the menu closes once that stack is gone.
+    pub held_item: u32,
     pub slots: Vec<SlotRef>,
     pub temp: Vec<ItemStack>,
     pub cursor: ItemStack,
@@ -63,7 +67,9 @@ impl MenuCall {
     /// (first menu slot, slot count, columns) of group `name`.
     pub fn group(&self, c: &Content, name: &str) -> Option<(u32, u32, u32)> {
         let layout = &c.game.player_layout;
-        c.game.menus[self.m().kind as usize].group(layout, name).map(|g| (g.1, g.2, g.0.span(layout).2))
+        c.game.menus[self.m().kind as usize]
+            .group(layout, name)
+            .map(|g| (g.1, g.2, g.0.span(layout).2))
     }
 
     pub fn get(&self, slot: u32) -> ItemStack {
@@ -73,15 +79,25 @@ impl MenuCall {
     pub fn set(&mut self, slot: u32, stack: ItemStack) {
         set(self.m(), self.d(), self.player, slot, stack)
     }
+}
 
+impl OpenMenu {
+    /// The entity it opened on (holding the stack it opened on), 0 for none.
+    pub fn owner(&self) -> u64 {
+        match self.on.map(|inv| inv.at) {
+            Some(At::Entity(id) | At::Stack { entity: id, .. }) => id,
+            None => 0,
+        }
+    }
 }
 
 fn get(m: &OpenMenu, dim: &Dim, player: u64, slot: u32) -> ItemStack {
     let Some(r) = m.slots.get(slot as usize) else { return ItemStack::EMPTY };
+    let c = crate::content::content();
     match r.owner {
         Owner::Temp => m.temp.get(r.index as usize).copied().unwrap_or_default(),
-        Owner::Player => dim.entities.inventories.get(&player).and_then(|i| i.get(r.index as usize)).copied().unwrap_or_default(),
-        Owner::Entity(id) => dim.entities.inventories.get(&id).and_then(|i| i.get(r.index as usize)).copied().unwrap_or_default(),
+        Owner::Player => holder::get(dim, c, Inv::own(At::Entity(player)), r.index),
+        Owner::On(inv) => holder::get(dim, c, inv, r.index),
     }
 }
 
@@ -95,22 +111,33 @@ fn set(m: &mut OpenMenu, dim: &mut Dim, player: u64, slot: u32, stack: ItemStack
             }
         }
         Owner::Player => dim.entities.set_slot(player, r.index, stack),
-        Owner::Entity(id) => dim.entities.set_slot(id, r.index, stack),
+        Owner::On(inv) => holder::set(dim, crate::content::content(), inv, r.index, stack),
     }
 }
 
-fn call(m: &mut OpenMenu, dim: &mut Dim, c: &Content, player: u64, slot: u32, pick: impl Fn(&crate::registry::MenuDef) -> Option<abi::Callback>) {
+fn call(
+    m: &mut OpenMenu,
+    dim: &mut Dim,
+    c: &Content,
+    player: u64,
+    slot: u32,
+    pick: impl Fn(&crate::registry::MenuDef) -> Option<abi::Callback>,
+) {
     let def = &c.game.menus[m.kind as usize];
     let Some(cb) = pick(def) else { return };
-    let owner = m.owner;
+    let owner = match m.on {
+        None => abi::Holder::NONE,
+        Some(Inv { at: At::Entity(id), storage }) => abi::Holder { storage, ..abi::Holder::entity(id) },
+        Some(Inv { at: At::Stack { entity, slot }, storage }) => abi::Holder { storage, ..abi::Holder::held(entity, slot) },
+    };
     let mut call = MenuCall { menu: m as *mut OpenMenu, dim: dim as *mut Dim, player };
     let mut ctx = host::CallCtx { dim: dim as *mut Dim };
     let mut args = abi::MenuArgs { world: ctx.raw(), menu: &mut call as *mut MenuCall as *mut abi::MenuCtx, player, owner, slot };
     host::invoke(def.owner, cb, &mut args);
 }
 
-/// The slots of menu `kind` opened on `owner`, from its groups.
-pub fn slots(c: &Content, kind: u32, owner: u64) -> Vec<SlotRef> {
+/// The slots of menu `kind` opened on `on`, from its groups.
+pub fn slots(c: &Content, kind: u32, on: Option<Inv>, player: u64) -> Vec<SlotRef> {
     use abi::slot_owner as so;
     let def = &c.game.menus[kind as usize];
     let layout = &c.game.player_layout;
@@ -125,23 +152,32 @@ pub fn slots(c: &Content, kind: u32, owner: u64) -> Vec<SlotRef> {
         };
         let o = match g.owner {
             so::MENU => Owner::Temp,
-            so::BLOCK => Owner::Entity(owner),
+            so::MACHINE => Owner::On(on.unwrap_or(Inv::own(At::Entity(0)))),
             _ => Owner::Player,
         };
         for i in 0..n {
-            out.push(SlotRef { owner: o, index: g.index(layout, i), flags: g.flags, accepts, limit: g.limit, priority: g.priority });
+            let index = g.index(layout, i);
+            // The stack the menu is open on can't be moved while it is.
+            let locked = o == Owner::Player && on.is_some_and(|inv| inv.at == At::Stack { entity: player, slot: index });
+            let flags = if locked { g.flags | sf::LOCKED } else { g.flags };
+            out.push(SlotRef { owner: o, index, flags, accepts, limit: g.limit, priority: g.priority });
         }
     }
     out
 }
 
-pub fn open(dim: &mut Dim, c: &Content, player: u64, kind: u32, owner: u64) -> OpenMenu {
+pub fn open(dim: &mut Dim, c: &Content, player: u64, kind: u32, on: Option<Inv>) -> OpenMenu {
     let def = &c.game.menus[kind as usize];
+    let held_item = match on.map(|inv| inv.at) {
+        Some(At::Stack { entity, slot }) => holder::get(dim, c, Inv::own(At::Entity(entity)), slot).item,
+        _ => 0,
+    };
     let mut m = OpenMenu {
         on_block: false,
         kind,
-        owner,
-        slots: slots(c, kind, owner),
+        on,
+        held_item,
+        slots: slots(c, kind, on, player),
         temp: vec![ItemStack::EMPTY; def.temp_slots as usize],
         cursor: ItemStack::EMPTY,
         sent_slots: Vec::new(),
@@ -155,14 +191,18 @@ pub fn open(dim: &mut Dim, c: &Content, player: u64, kind: u32, owner: u64) -> O
 /// Whether what the menu is on is gone or too far away: modern's reach to a block plus 4. Virtual
 /// inventories have no place to walk away from.
 pub fn out_of_reach(m: &OpenMenu, dim: &Dim, player: u64) -> bool {
-    if m.owner == 0 {
-        return false;
+    let Some(on) = m.on else { return false };
+    let Some(owner) = dim.entities.get(m.owner()).filter(|o| !o.removed) else { return true };
+    if let At::Stack { entity, slot } = on.at {
+        let now = holder::get(dim, crate::content::content(), Inv::own(At::Entity(entity)), slot);
+        return now.item != m.held_item || now.is_empty();
     }
-    let Some(owner) = dim.entities.get(m.owner).filter(|o| !o.removed) else { return true };
     if owner.anchor.is_none() || !m.on_block {
         return false;
     }
-    dim.entities.get(player).is_none_or(|p| (p.pos - owner.pos).length_squared() > 8.5 * 8.5)
+    dim.entities
+        .get(player)
+        .is_none_or(|p| (p.pos - owner.pos).length_squared() > 8.5 * 8.5)
 }
 
 pub fn tick(m: &mut OpenMenu, dim: &mut Dim, c: &Content, player: u64) {
@@ -172,9 +212,19 @@ pub fn tick(m: &mut OpenMenu, dim: &mut Dim, c: &Content, player: u64) {
 /// Returns temp slots and the cursor to the player (dropping what does not fit). Output slots are
 /// previews, not real items, and are discarded.
 pub fn close(m: OpenMenu, dim: &mut Dim, c: &Content, player: u64) {
-    let outputs: Vec<u32> = m.slots.iter().filter(|s| s.owner == Owner::Temp && s.flags & sf::OUTPUT != 0).map(|s| s.index).collect();
-    let mut back: Vec<ItemStack> =
-        m.temp.iter().enumerate().filter(|(i, s)| !s.is_empty() && !outputs.contains(&(*i as u32))).map(|(_, s)| *s).collect();
+    let outputs: Vec<u32> = m
+        .slots
+        .iter()
+        .filter(|s| s.owner == Owner::Temp && s.flags & sf::OUTPUT != 0)
+        .map(|s| s.index)
+        .collect();
+    let mut back: Vec<ItemStack> = m
+        .temp
+        .iter()
+        .enumerate()
+        .filter(|(i, s)| !s.is_empty() && !outputs.contains(&(*i as u32)))
+        .map(|(_, s)| *s)
+        .collect();
     back.push(m.cursor);
     for s in back.into_iter().filter(|s| !s.is_empty()) {
         let rest = dim.entities.insert_item(c, player, s);
@@ -187,6 +237,17 @@ pub fn close(m: OpenMenu, dim: &mut Dim, c: &Content, player: u64) {
 }
 
 fn fits(c: &Content, s: &SlotRef, item: u32) -> bool {
+    if s.flags & sf::LOCKED != 0 || (s.flags & sf::OFF_HAND != 0 && !crate::content::fits_one_hand(c, item)) {
+        return false;
+    }
+    // Liquids by the millibucket go into liquid slots only, and nothing else does.
+    if item != 0 && (s.flags & sf::LIQUID != 0) != c.item_fluid.contains_key(&item) {
+        return false;
+    }
+    // A stack holding items doesn't go into another one.
+    if matches!(s.owner, Owner::On(Inv { at: At::Stack { .. }, .. })) && holder::item_slots(c, item) > 0 {
+        return false;
+    }
     s.accepts == u32::MAX || item == 0 || c.components.has(crate::components::ITEM, item, s.accepts)
 }
 
@@ -198,23 +259,95 @@ fn cap(c: &Content, s: &SlotRef, item: u32) -> u32 {
 
 /// Whether a player may take items out of `s` by hand.
 fn takeable(s: &SlotRef) -> bool {
-    s.flags & sf::INPUT == 0
+    s.flags & (sf::INPUT | sf::LOCKED | sf::LIQUID) == 0
+}
+
+/// What a bucket holds.
+const CONTAINER_MB: u32 = 1000;
+
+/// A click on a liquid slot with a container on the cursor: a full one pours into it, an empty
+/// one fills from it, a bucket at a time.
+fn liquid_click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, slot: u32) {
+    let (Some(s), cursor) = (m.slots.get(slot as usize).copied(), m.cursor) else { return };
+    if cursor.is_empty() || s.flags & sf::LOCKED != 0 {
+        return;
+    }
+    let here = get(m, dim, player, slot);
+    let capacity = if s.limit > 0 { s.limit } else { CONTAINER_MB };
+    let (new_slot, new_cursor) = if let Some(&(l, empty)) = c.item_liquid.get(&cursor.item) {
+        // Full containers don't stack; one at a time.
+        if cursor.count != 1 || s.flags & sf::OUTPUT != 0 {
+            return;
+        }
+        let fluid = c.fluid_items.get(l as usize).copied().unwrap_or(0);
+        if fluid == 0 || !fits(c, &s, fluid) || (!here.is_empty() && here.item != fluid) || here.count + CONTAINER_MB > capacity {
+            return;
+        }
+        let poured = ItemStack { item: fluid, count: here.count + CONTAINER_MB, ..here };
+        (poured, if empty == 0 { ItemStack::EMPTY } else { ItemStack::new(empty, 1) })
+    } else {
+        let Some(&l) = c.item_fluid.get(&here.item) else { return };
+        let Some(&filled) = c.containers.get(&(cursor.item, l)) else { return };
+        if here.count < CONTAINER_MB {
+            return;
+        }
+        let left = here.count - CONTAINER_MB;
+        let rest = if left == 0 { ItemStack::EMPTY } else { ItemStack { count: left, ..here } };
+        if cursor.count == 1 {
+            (rest, ItemStack::new(filled, 1))
+        } else {
+            // One of a stack of empty ones: the full one goes into the inventory.
+            if !dim
+                .entities
+                .insert_item(c, player, ItemStack::new(filled, 1))
+                .is_empty()
+            {
+                return;
+            }
+            (rest, ItemStack { count: cursor.count - 1, ..cursor })
+        }
+    };
+    let taken = new_slot.count < here.count;
+    set(m, dim, player, slot, new_slot);
+    m.cursor = new_cursor;
+    if taken && s.flags & sf::OUTPUT != 0 {
+        call(m, dim, c, player, slot, |d| d.on_take);
+    }
+    call(m, dim, c, player, slot, |d| d.on_change);
 }
 
 /// `button` 2..=10 over a slot: number key 1..9, swaps it with that hotbar slot (vanilla).
 pub const HOTBAR_SWAP: u8 = 2;
 /// Double click: gathers matching items from every slot onto the cursor, up to a full stack.
 pub const GATHER: u8 = 11;
+/// Middle click in creative: a full stack of what is in the slot onto an empty cursor.
+pub const CLONE: u8 = 12;
 
-/// `button`: 0 left, 1 right, or `HOTBAR_SWAP + n`, `GATHER`. `slot == u32::MAX` means outside
+/// `button`: 0 left, 1 right, or `HOTBAR_SWAP + n`, `GATHER`, `CLONE`. `slot == u32::MAX` means outside
 /// the window (drop the cursor).
 pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, slot: u32, button: u8, shift: bool) {
+    if m.slots
+        .get(slot as usize)
+        .is_some_and(|s| s.flags & sf::LIQUID != 0)
+    {
+        if button <= 1 && !shift {
+            liquid_click(m, dim, c, player, slot);
+        }
+        return;
+    }
     if (HOTBAR_SWAP..HOTBAR_SWAP + 9).contains(&button) {
         let hot = (button - HOTBAR_SWAP) as u32;
         if hot >= c.game.player_layout.hotbar {
             return;
         }
-        let Some(h) = m.slots.iter().position(|s| s.owner == Owner::Player && s.index == hot).map(|i| i as u32) else { return };
+        let Some(h) = m
+            .slots
+            .iter()
+            .position(|s| s.owner == Owner::Player && s.index == hot)
+            .map(|i| i as u32)
+        else {
+            return;
+        };
         let (Some(a), Some(b)) = (m.slots.get(slot as usize).copied(), m.slots.get(h as usize).copied()) else { return };
         if h == slot || !m.cursor.is_empty() {
             return;
@@ -223,7 +356,12 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
         // Results only come out (into an empty hotbar slot), inputs only take in, and fitted
         // slots take what fits.
         let output = a.flags & sf::OUTPUT != 0;
-        if (output && !sb.is_empty()) || (!takeable(&a) && !sa.is_empty()) || !fits(c, &a, sb.item) || !fits(c, &b, sa.item) || sb.count > cap(c, &a, sb.item) {
+        if (output && !sb.is_empty())
+            || (!takeable(&a) && !sa.is_empty())
+            || !fits(c, &a, sb.item)
+            || !fits(c, &b, sa.item)
+            || sb.count > cap(c, &a, sb.item)
+        {
             return;
         }
         set(m, dim, player, slot, sb);
@@ -233,6 +371,17 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
         }
         call(m, dim, c, player, slot, |d| d.on_change);
         call(m, dim, c, player, h, |d| d.on_change);
+        return;
+    }
+    if button == CLONE {
+        let creative = dim
+            .entities
+            .get(player)
+            .is_some_and(|e| e.mode.has(weft_abi::game_mode_flags::NO_COSTS));
+        let there = if (slot as usize) < m.slots.len() { get(m, dim, player, slot) } else { ItemStack::EMPTY };
+        if creative && m.cursor.is_empty() && !there.is_empty() {
+            m.cursor = ItemStack { count: c.max_stack(there.item), ..there };
+        }
         return;
     }
     if button == GATHER {
@@ -248,7 +397,13 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
                     break;
                 }
                 let s = get(m, dim, player, i);
-                if m.slots[i as usize].flags & sf::OUTPUT != 0 || !takeable(&m.slots[i as usize]) || s.is_empty() || s.item != want.item || s.data != want.data || (s.count >= max) != full {
+                if m.slots[i as usize].flags & sf::OUTPUT != 0
+                    || !takeable(&m.slots[i as usize])
+                    || s.is_empty()
+                    || s.item != want.item
+                    || s.data != want.data
+                    || (s.count >= max) != full
+                {
                     continue;
                 }
                 let n = s.count.min(max - m.cursor.count);
@@ -266,13 +421,14 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
             if m.cursor.count == 0 {
                 m.cursor = ItemStack::EMPTY;
             }
-            if let Some(p) = dim.entities.get(player).map(|e| e.drop_point(c)) {
-                dim.spawn_item(c, p, drop);
-            }
+            dim.throw(c, player, drop);
         }
         return;
     }
     let Some(r) = m.slots.get(slot as usize).copied() else { return };
+    if r.flags & sf::LOCKED != 0 {
+        return;
+    }
     let cur = get(m, dim, player, slot);
     let output = r.flags & sf::OUTPUT != 0;
     let max = |item: u32| c.max_stack(item);
@@ -338,7 +494,11 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
             .filter(|&i| {
                 let s = m.slots[i as usize];
                 // Not into a crafting grid: temporary slots are filled by hand.
-                i != slot && s.flags & sf::OUTPUT == 0 && s.owner != Owner::Temp && (s.owner == Owner::Player) != from_player && fits(c, &s, cur.item)
+                i != slot
+                    && s.flags & sf::OUTPUT == 0
+                    && s.owner != Owner::Temp
+                    && (s.owner == Owner::Player) != from_player
+                    && fits(c, &s, cur.item)
             })
             .collect();
         targets.sort_by_key(|&i| -m.slots[i as usize].priority);
@@ -358,7 +518,11 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
             (0..m.slots.len() as u32)
                 .filter(|&i| {
                     let s = m.slots[i as usize];
-                    s.owner == Owner::Player && s.index < layout.slots && !layout.worn.contains(&s.index) && (s.index < layout.hotbar) != hotbar
+                    s.owner == Owner::Player
+                        && s.index < layout.slots
+                        && !layout.worn.contains(&s.index)
+                        && s.flags & (sf::OFF_HAND | sf::LOCKED) == 0
+                        && (s.index < layout.hotbar) != hotbar
                 })
                 .collect()
         } else {
@@ -455,7 +619,9 @@ pub fn drag(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, s
         .filter(|&s| {
             let Some(r) = m.slots.get(s as usize) else { return false };
             let t = get(m, dim, player, s);
-            r.flags & sf::OUTPUT == 0 && fits(c, r, cur.item) && (t.is_empty() || (t.item == cur.item && t.data == cur.data && t.count < cap(c, r, cur.item)))
+            r.flags & sf::OUTPUT == 0
+                && fits(c, r, cur.item)
+                && (t.is_empty() || (t.item == cur.item && t.data == cur.data && t.count < cap(c, r, cur.item)))
         })
         .take(cur.count as usize)
         .collect();
@@ -482,7 +648,8 @@ pub fn drag(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, s
 /// Slots and cursor that changed since the last call.
 pub fn changes(m: &mut OpenMenu, dim: &Dim, player: u64) -> (Vec<(u32, ItemStack)>, Option<ItemStack>) {
     let n = m.slots.len();
-    m.sent_slots.resize(n, ItemStack { count: u32::MAX, ..ItemStack::EMPTY });
+    m.sent_slots
+        .resize(n, ItemStack { count: u32::MAX, ..ItemStack::EMPTY });
     let mut slots = Vec::new();
     for i in 0..n as u32 {
         let s = get(m, dim, player, i);

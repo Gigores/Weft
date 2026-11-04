@@ -6,10 +6,10 @@ mod beds;
 mod blocks;
 mod items;
 mod machines;
-mod redstone;
 mod mobs;
 mod player;
 mod recipes;
+mod redstone;
 mod sounds;
 mod worldgen;
 
@@ -50,21 +50,30 @@ fn init(r: &mut Registry) {
         .player_spawn()
         .sky_above(16)
         .day_length(24000)
-        .weather();
+        .weathers(&[&weathers::RAIN, &weathers::THUNDER]);
     // Second dimension on purpose: nothing in the engine may assume there is only one world.
     r.dimension(&FLATLANDS)
         .generator(worldgen::flat)
         .bare()
-        .spawn(|_| [0, 3, 0])
-        .height(-2, 8)
+        .spawn_point(|_| [0, 3, 0].into())
+        .height_cubes(-2, 8)
         .sky_above(1)
         .fixed_time(6000)
         .gravity(20.0)
-        .sky(0xb0c8ff, 0xe0e8ff);
+        .sky_color(0xb0c8ff, 0xe0e8ff);
     for dim in [&OVERWORLD, &FLATLANDS] {
         r.sky_stars(dim, &STARS).count(1500);
         r.sky_clouds(dim, &CLOUDS).texture("clouds");
-        r.sky_body(dim, &SUN).texture("sun").size(33.0).glow(0xFFE633);
-        r.sky_body(dim, &MOON).texture("moon_phases").frames(4, 2).size(23.0).phase(0.5);
+        r.sky_body(dim, &SUN)
+            .texture("sun")
+            .blend_add()
+            .size(33.0)
+            .glow(0xFFE633);
+        r.sky_body(dim, &MOON)
+            .texture("moon_phases")
+            .blend_add()
+            .frames(4, 2)
+            .size(23.0)
+            .phase(0.5);
     }
 }

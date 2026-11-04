@@ -10,7 +10,7 @@ CTM is created without code and works from both mods and resource packs, a pack'
 It works on blocks only, so no CTM on items or entities.\
 Every method works on every block except for liquids: a method looks at neighbors, not at what is drawn. A plant is one west face, so `vertical` and `top` are what it has most use for, and `horizontal` looks along z. The one exception is `compact`. Its tiles are cut for a cube's face: on a texture a plant or a model shows it logs `compact ctm doesn't support custom models` and stops the game. Use full `ctm`, or keep it off them with `blocks =`.\
 A tile can also [be a model](#models-as-tiles).\
-Examples to copy from are in `mods/base/assets/textures/block/`: `glass.ctm`, `log_oak.ctm`, `stone.ctm`.
+Examples to copy from are in `mods/base/assets/textures/block/`: `glass.ctm`, `stone.ctm`, `iron_ore.ctm`.
 
 Check [textures guide](textures.md) for more texturing options like overlays, glow and animation.
 
@@ -37,6 +37,8 @@ For example if a block uses glass texture as one of the faces, it will get the s
 A mod can only add `.ctm` files for its own textures.\
 A resource pack can add them for any mod's texture, since packs keeps files in a folder per namespace:\
 `glass.ctm` for the base game's glass is `<pack>/base/textures/block/glass.ctm`, and its tiles go into `<pack>/base/textures/block/glass/`.
+
+A pack that replaces a texture and has no `.ctm` for it turns the mod's rules for it off: they were made for the mod's picture, so you get your picture as it is. A `.ctm` in a pack without the picture applies to the picture below it, and between packs the rules only count if they are in the same pack as the picture or above it.
 
 The file uses `key = value` lines.\
 Comments are whole lines starting with `#`. A `#` after a value is a part of that value, so don't do it.
@@ -264,7 +266,7 @@ inner_seams = true
 with `glass/0.png` ... `glass/4.png` next to it.
 
 ### Logs that look like one trunk
-`log_oak.ctm`:
+A pack's `log_oak.ctm`:
 ```
 method = vertical
 tiles = log_oak/0-3

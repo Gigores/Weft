@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 use crate::assets::Assets;
 use crate::block_model::{self, FileModel};
 use crate::content::{Content, ModelBox, StateInfo};
-use weft_abi::Model;
+use weft_abi::BlockModel;
 
 #[derive(Default)]
 pub struct StateLook {
@@ -37,7 +37,7 @@ pub struct Looks {
 
 /// What a state is drawn as, a pack's model counted: all that goes by what a block shows asks here.
 pub struct Drawn<'a> {
-    pub model: Model,
+    pub model: BlockModel,
     pub boxes: &'a [ModelBox],
     pub textures: [u32; 6],
 }
@@ -46,9 +46,14 @@ impl Drawn<'_> {
     /// The textures it shows on a face. A plant has one face, the first.
     pub fn on_face(&self, dir: usize) -> Vec<u32> {
         match self.model {
-            Model::Boxes => self.boxes.iter().filter(|b| super::mesher::box_face(b, dir).is_some()).map(|b| b.textures[dir]).collect(),
-            Model::Cube => vec![self.textures[dir]],
-            Model::Cross if dir == 0 => vec![self.textures[0]],
+            BlockModel::Boxes => self
+                .boxes
+                .iter()
+                .filter(|b| super::mesher::box_face(b, dir).is_some())
+                .map(|b| b.textures[dir])
+                .collect(),
+            BlockModel::Cube => vec![self.textures[dir]],
+            BlockModel::Cross if dir == 0 => vec![self.textures[0]],
             _ => Vec::new(),
         }
     }
@@ -76,7 +81,11 @@ impl Looks {
     pub fn drawn<'a>(&'a self, state: u32, s: &'a StateInfo) -> Drawn<'a> {
         let look = self.state(state);
         let boxes = look.and_then(|l| l.boxes.as_deref());
-        Drawn { model: if boxes.is_some() { Model::Boxes } else { s.model }, boxes: boxes.unwrap_or(&s.boxes), textures: look.and_then(|l| l.textures).unwrap_or(s.textures) }
+        Drawn {
+            model: if boxes.is_some() { BlockModel::Boxes } else { s.model },
+            boxes: boxes.unwrap_or(&s.boxes),
+            textures: look.and_then(|l| l.textures).unwrap_or(s.textures),
+        }
     }
 
     pub fn item_draw<'a>(&'a self, c: &'a Content, item: u32) -> ItemDraw<'a> {
@@ -95,21 +104,25 @@ impl Looks {
     /// The sprite a block's item shows if it is flat.
     pub fn block_sprite(&self, state: u32, s: &StateInfo) -> Option<u32> {
         let d = self.drawn(state, s);
-        if d.model == Model::Boxes {
+        if d.model == BlockModel::Boxes {
             return None;
         }
-        s.item_sprite().map(|t| if s.liquid.is_none() { d.textures[0] } else { t })
+        s.item_sprite()
+            .map(|t| if s.liquid.is_none() { d.textures[0] } else { t })
     }
 
     /// The boxes a block's item shows if it isn't.
     pub fn block_shape(&self, state: u32, s: &StateInfo) -> Vec<ModelBox> {
         let d = self.drawn(state, s);
-        if d.model == Model::Boxes && !d.boxes.is_empty() { d.boxes.to_vec() } else { vec![ModelBox::whole(d.textures)] }
+        if d.model == BlockModel::Boxes && !d.boxes.is_empty() { d.boxes.to_vec() } else { vec![ModelBox::whole(d.textures)] }
     }
 
     pub fn texture_name<'a>(&'a self, c: &'a Content, id: u32) -> Option<&'a str> {
         let id = id as usize;
-        c.textures.get(id).or_else(|| self.names.get(id.checked_sub(c.textures.len())?)).map(String::as_str)
+        c.textures
+            .get(id)
+            .or_else(|| self.names.get(id.checked_sub(c.textures.len())?))
+            .map(String::as_str)
     }
 }
 
@@ -154,9 +167,21 @@ pub fn set(looks: Looks) {
 /// The packs' models, and the names of all textures so far.
 pub fn load(assets: &Assets, c: &Content) -> (Looks, Names) {
     let mut looks = Looks::default();
-    let mut names = Names { list: c.textures.clone(), ids: c.textures.iter().enumerate().map(|(i, n)| (n.clone(), i as u32)).collect() };
+    let mut names = Names {
+        list: c.textures.clone(),
+        ids: c
+            .textures
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.clone(), i as u32))
+            .collect(),
+    };
     let mut id = |name: &str| names.id(name);
-    let read = |name: &str| assets.read(name, "models", "json").map(|b| String::from_utf8_lossy(&b).into_owned());
+    let read = |name: &str| {
+        assets
+            .read(name, "models", "json")
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+    };
     let from_pack = |name: &str| -> Option<FileModel> {
         assets.pack_path(name, "models", "json")?;
         block_model::load(name, &read).unwrap_or_else(|e| {
@@ -173,7 +198,9 @@ pub fn load(assets: &Assets, c: &Content) -> (Looks, Names) {
             match &m.cube {
                 // Only a cube is kept one: it hides the faces against its neighbors. Anything
                 // else is redrawn as a cube's box.
-                Some(cube) if s.model == Model::Cube => look.textures = Some(std::array::from_fn(|i| if cube[i].is_empty() { s.textures[i] } else { id(&cube[i]) })),
+                Some(cube) if s.model == BlockModel::Cube => {
+                    look.textures = Some(std::array::from_fn(|i| if cube[i].is_empty() { s.textures[i] } else { id(&cube[i]) }))
+                }
                 _ => look.boxes = Some(file_boxes(&m, &|i| s.textures[i], &mut id)).filter(|b| !b.is_empty()),
             }
             if looks.states.len() <= st as usize {

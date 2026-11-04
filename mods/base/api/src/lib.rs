@@ -32,9 +32,9 @@ value! {
 pub static ADVANCEMENTS: Component<Advancements> = Component::named("base:advancements");
 
 value! {
-    /// Where a player respawns: the foot of the bed they last used and its dimension, when `set`
-    /// is 1. Kept through death.
-    pub struct BedSpawn { pub bed: [i32; 3], pub dim: u32, pub set: u32 }
+    /// Where a player respawns: the foot of the bed they last used and its dimension
+    /// (`dimension_key`), when `set` is 1. Kept through death.
+    pub struct BedSpawn { pub bed: [i32; 3], pub set: u32, pub dim_key: u64 }
 }
 pub static BED_SPAWN: Component<BedSpawn> = Component::named("base:bed_spawn");
 
@@ -63,7 +63,7 @@ pub fn eat(u: &mut ItemUse) -> bool {
     }
     h.food = (h.food + food.hunger as f32).min(20.0);
     h.saturation = (h.saturation + food.saturation).min(h.food);
-    u.set_stack(stack.shrink(1));
+    u.set_stack(consume_one(stack));
     true
 }
 /// Burn time in ticks.
@@ -88,7 +88,7 @@ pub static OVERWORLD: Dimension = Dimension::named("base:overworld");
 pub static FLATLANDS: Dimension = Dimension::named("base:flatlands");
 
 /// What is in the sky of the game's dimensions. Any of them can be changed or taken out by a mod:
-/// `r.sky_body(&OVERWORLD, &MOON).size(40.0)`, `r.remove_sky(&OVERWORLD, &STARS)`.
+/// `r.sky_body(&OVERWORLD, &MOON).size(40.0)`, `r.sky_remove(&OVERWORLD, &STARS)`.
 pub static SUN: SkyObject = SkyObject::named("base:sun");
 pub static MOON: SkyObject = SkyObject::named("base:moon");
 pub static STARS: SkyObject = SkyObject::named("base:stars");
