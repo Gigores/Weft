@@ -8,6 +8,7 @@ pub static DIAMOND: Item = Item::named("diamond");
 pub static WHEAT_SEEDS: Item = Item::named("wheat_seeds");
 pub static WHEAT: Item = Item::named("wheat");
 pub static BUCKET: Item = Item::named("bucket");
+pub static WATERING_CAN: Item = Item::named("watering_can");
 
 pub use base_api::{ARMOR, Armor, FLAMMABLE, FOOD, FUEL, Food};
 /// Tags of armor pieces, head to feet; `<tag>/<material>` picks the recipe (see recipes.rs).
@@ -57,6 +58,46 @@ fn till(u: &mut ItemUse) -> bool {
     }
     true
 }
+fn water(u: &mut ItemUse) -> bool {
+    let w = u.world();
+
+    let Some(hit) = w.target_block(u.player(), 5.0, true) else {
+        return false;
+    };
+
+    let stack = u.stack();
+    let Some(max) = DURABILITY.on_item(stack.item) else {
+        return false;
+    };
+
+    if crate::blocks::WATER.is(hit.state) && w.prop(hit.pos, "level") == Some("0") {
+        if !w.creative(u.player()) {
+            u.set_stack(stack.with_wear(0));
+        }
+        let air = Block::named("core:air").id();
+        if !w.set_block(hit.pos, air) {
+            return false;
+        }
+        return true;
+    }
+
+    if crate::blocks::FARMLAND.is(hit.state) {
+        if stack.wear() >= max {
+            return false;
+        }
+
+        if !w.prop_set(hit.pos, "isWet", "1") {
+            return false;
+        }
+
+        if !w.creative(u.player()) {
+            u.set_stack(stack.with_wear(stack.wear() + 1));
+        }
+        return true;
+    }
+
+    false
+}
 
 pub fn register(r: &mut Registry) {
     r.item(&STICK)
@@ -95,6 +136,12 @@ pub fn register(r: &mut Registry) {
         .tab(&crate::tabs::INGREDIENTS);
     // Filled buckets come with their liquids (blocks.rs); the engine fills and pours them.
     r.item(&BUCKET).max_stack(16).tab(&crate::tabs::TOOLS);
+    r.item(&WATERING_CAN)
+        .max_stack(0)
+        .tab(&crate::tabs::TOOLS)
+        .durability(32)
+        .texture("base:watering_can_filled")
+        .on_use(water);
     r.set("lava_bucket", &FUEL, 20000);
     r.tag("buckets/lava", &["lava_bucket"]);
     r.tag("bread", &["bread"]);

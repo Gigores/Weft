@@ -394,7 +394,17 @@ pub fn register(r: &mut Registry) {
         );
     r.block(&FARMLAND)
         .sound_group("gravel")
-        .textures("farmland", "dirt", "dirt")
+        .prop("isWet", 0..=1)
+        .prop("isFertilized", 0..=1)
+        .states(|p, s| {
+            let top = match (p.int("isWet"), p.int("isFertilized")) {
+                (1, 1) => "farmland_wet_fertilized",
+                (1, 0) => "farmland_wet",
+                (0, 1) => "farmland_fertilized",
+                _ => "farmland",
+            };
+            s.textures(top, "dirt", "dirt")
+        })
         .model_box([0.0, 0.0, 0.0], [16.0, 15.0, 16.0])
         .hardness(0.6)
         .mineable("shovel")
