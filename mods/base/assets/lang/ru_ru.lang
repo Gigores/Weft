@@ -245,3 +245,5 @@ block.base.floater = Флоатер
 block.base.golden_lamp = Золотая лампа
 block.base.anchor = Якорь
 block.base.slime_block = Блок слизи
+item.base.watering_can = Лейка
+item.base.fertilizer = Удобрения
