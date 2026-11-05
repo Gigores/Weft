@@ -9,6 +9,7 @@ pub static WHEAT_SEEDS: Item = Item::named("wheat_seeds");
 pub static WHEAT: Item = Item::named("wheat");
 pub static BUCKET: Item = Item::named("bucket");
 pub static WATERING_CAN: Item = Item::named("watering_can");
+pub static FERTILIZER: Item = Item::named("fertilizer");
 
 pub use base_api::{ARMOR, Armor, FLAMMABLE, FOOD, FUEL, Food};
 /// Tags of armor pieces, head to feet; `<tag>/<material>` picks the recipe (see recipes.rs).
@@ -85,7 +86,7 @@ fn water(u: &mut ItemUse) -> bool {
 
     let water_pos = |pos: BlockPos| {
         if w.prop(pos, "isWet") == Some("1") {
-            return true;
+            return false;
         }
         if !w.prop_set(pos, "isWet", "1") {
             return false;
@@ -122,6 +123,52 @@ fn water(u: &mut ItemUse) -> bool {
     }
 
     false
+}
+fn fertilize(u: &mut ItemUse) -> bool {
+    let Some((pos, face)) = u.target_block() else { return false };
+    if face == 2 {
+        return false;
+    }
+    let w = u.world();
+    let state = w.block(pos);
+
+    let stack = u.stack();
+    if stack.is_empty() {
+        return false;
+    }
+    let fert_pos = |pos: BlockPos| {
+        if w.prop(pos, "isFertilized") == Some("1") {
+            return false;
+        }
+        if !w.prop_set(pos, "isFertilized", "1") {
+            return false;
+        }
+        // w.schedule_tick(pos, crate::blocks::FARMLAND_DRY_TICKS);
+        true
+    };
+    if crate::blocks::FARMLAND.is(state) {
+        if !fert_pos(pos) {
+            return false;
+        }
+        if !w.creative(u.player()) {
+            u.set_stack(StackData::shrink(stack, 1));
+        }
+        true
+    } else if crate::blocks::WHEAT.is(state) {
+        let npos = BlockPos {
+            y: pos.y - 1,
+            ..pos
+        };
+        if !fert_pos(npos) {
+            return false;
+        }
+        if !w.creative(u.player()) {
+            u.set_stack(StackData::shrink(stack, 1));
+        }
+        true
+    } else {
+        false
+    }
 }
 
 pub fn register(r: &mut Registry) {
@@ -180,6 +227,9 @@ pub fn register(r: &mut Registry) {
             }
         )
         .on_use(water);
+    r.item(&FERTILIZER)
+        .tab(&crate::tabs::INGREDIENTS)
+        .on_use(fertilize);
     r.set("lava_bucket", &FUEL, 20000);
     r.tag("buckets/lava", &["lava_bucket"]);
     r.tag("bread", &["bread"]);
@@ -189,7 +239,7 @@ pub fn register(r: &mut Registry) {
         ("bread", 5, 6.0, ""),
         ("porkchop", 3, 1.8, "raw_meat/pork"),
         ("cooked_porkchop", 8, 12.8, "cooked_meat/pork"),
-      ("beef", 3, 1.8, "raw_meat/beef"),
+        ("beef", 3, 1.8, "raw_meat/beef"),
         ("cooked_beef", 8, 12.8, "cooked_meat/beef"),
         ("rotten_flesh", 4, 0.8, ""),
         ("chicken", 2, 1.2, "raw_meat/chicken"),
