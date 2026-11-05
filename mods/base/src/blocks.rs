@@ -54,9 +54,10 @@ pub static DIAMOND_BLOCK: Block = Block::named("diamond_block");
 pub static COAL_BLOCK: Block = Block::named("coal_block");
 pub static WOOL: Block = Block::named("wool");
 
-// 20 ticks * 60 secs * 20 mins = 1 day
-pub const FARMLAND_DRY_TICKS: u32 = 20 * 60 * 20;
-pub const FARMLAND_RAIN_CHECK_SECONDS: f32 = 5.0;
+pub const FARMLAND_DRY_MINS: u32 = 20;
+pub const FARMLAND_UNFERTILIZED_MINS: u32 = 60;
+/// Ticks between farmland timer updates: one minute.
+pub const FARMLAND_UPDATE_TICKS: u32 = 20 * 60;
 
 /// Log axis along the clicked face, like vanilla.
 fn axis_placement(p: &Place, props: &mut Props) {
@@ -387,24 +388,21 @@ pub fn register(r: &mut Registry) {
         .plant()
         .needs_below("#crop_soil")
         .no_item()
-        .grows(205.0, 9)
+        .grows(100.0, 9)
         .on_grow(|e| {
             let w = e.world();
             let p = e.pos();
-            let below = BlockPos {
-                y: p.y - 1,
-                ..p
-            };
+            let below = BlockPos { y: p.y - 1, ..p };
             let soil = w.block(below);
 
             let chance = if crate::blocks::FARMLAND.is(soil) {
-                let wet = w.prop(below, "isWet") == Some("1");
-                let fertilized = w.prop(below, "isFertilized") == Some("1");
+                let wet = w.prop_int(below, "isWet").unwrap_or(0) > 0;
+                let fertilized = w.prop_int(below, "isFertilized").unwrap_or(0) > 0;
                 match (wet, fertilized) {
                     (true, true) => 100,
-                    (true, false) => 65,
-                    (false, true) => 35,
-                    (false, false) => 15,
+                    (true, false) => 70,
+                    (false, true) => 40,
+                    (false, false) => 20,
                 }
             } else {
                 50 // modded soil fallback
@@ -414,7 +412,7 @@ pub fn register(r: &mut Registry) {
             }
             let age = w.prop_int(p, "age").unwrap_or(0);
             if age < 7 {
-                w.prop_set (p, "age", &(age + 1).to_string());
+                w.prop_set(p, "age", &(age + 1).to_string());
             }
         });
     // Modern's: unripe gives its seed back, ripe gives the wheat and up to 3 more seeds.
@@ -428,34 +426,34 @@ pub fn register(r: &mut Registry) {
         );
     r.block(&FARMLAND)
         .sound_group("gravel")
-        .prop("isWet", 0..=1)
-        .prop("isFertilized", 0..=1)
+        .prop("isWet", 0..=FARMLAND_DRY_MINS)
+        .prop("isFertilized", 0..=FARMLAND_UNFERTILIZED_MINS)
         .states(|p, s| {
-            let top = match (p.int("isWet"), p.int("isFertilized")) {
-                (1, 1) => "farmland_wet_fertilized",
-                (1, 0) => "farmland_wet",
-                (0, 1) => "farmland_fertilized",
+            let top = match (p.int("isWet") > 0, p.int("isFertilized") > 0) {
+                (true, true) => "farmland_wet_fertilized",
+                (true, false) => "farmland_wet",
+                (false, true) => "farmland_fertilized",
                 _ => "farmland",
             };
             s.textures(top, "dirt", "dirt")
         })
-        .on_scheduled(|e| {
-            if FARMLAND.is(e.state()) {
-                e.world().prop_set(e.pos(), "isWet", "0");
-            }
-        })
-        .grows(FARMLAND_RAIN_CHECK_SECONDS, 0)
+        .grows((FARMLAND_UPDATE_TICKS as f32) / 20.0, 0)
         .on_grow(|e| {
             let w = e.world();
             let p = e.pos();
 
-            if !FARMLAND.is(e.state()) || !w.raining() || w.sky_light(p.above()) != 15 {
-                return;
+            if let Some(wet) = w.prop_int(p, "isWet") {
+                if wet > 0 {
+                    w.prop_set(p, "isWet", &(wet - 1).to_string());
+                }
             }
-
-            // Already wet: keep the timer it has, rather than scheduling a new one every check.
-            if w.prop(p, "isWet") != Some("1") && w.prop_set(p, "isWet", "1") {
-                w.schedule_tick(p, FARMLAND_DRY_TICKS);
+            if let Some(fertilized) = w.prop_int(p, "isFertilized") {
+                if fertilized > 0 {
+                    w.prop_set(p, "isFertilized", &(fertilized - 1).to_string());
+                }
+            }
+            if w.raining() && w.sky_light(p.above()) >= 15 {
+                w.prop_set(p, "isWet", &FARMLAND_DRY_MINS.to_string());
             }
         })
         .model_box([0.0, 0.0, 0.0], [16.0, 15.0, 16.0])

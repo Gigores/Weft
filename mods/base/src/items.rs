@@ -50,11 +50,7 @@ fn till(u: &mut ItemUse) -> bool {
         let stack = u.stack();
         if let Some(max) = DURABILITY.on_item(stack.item) {
             let damage = stack.wear() + 1;
-            u.set_stack(if damage >= max {
-                ItemStack::EMPTY
-            } else {
-                stack.with_wear(damage)
-            });
+            u.set_stack(if damage >= max { ItemStack::EMPTY } else { stack.with_wear(damage) });
         }
     }
     true
@@ -85,13 +81,12 @@ fn water(u: &mut ItemUse) -> bool {
     }
 
     let water_pos = |pos: BlockPos| {
-        if w.prop(pos, "isWet") == Some("1") {
+        if w.prop(pos, "isWet") != Some("0") {
             return false;
         }
-        if !w.prop_set(pos, "isWet", "1") {
+        if !w.prop_set(pos, "isWet", &crate::blocks::FARMLAND_DRY_MINS.to_string()) {
             return false;
         }
-        w.schedule_tick(pos, crate::blocks::FARMLAND_DRY_TICKS);
         true
     };
 
@@ -109,10 +104,7 @@ fn water(u: &mut ItemUse) -> bool {
     }
 
     if CROPS.on_block(hit.state) {
-        let pos = BlockPos {
-            y: hit.pos.y - 1,
-            ..hit.pos
-        };
+        let pos = BlockPos { y: hit.pos.y - 1, ..hit.pos };
         if !water_pos(pos) {
             return false;
         }
@@ -137,13 +129,12 @@ fn fertilize(u: &mut ItemUse) -> bool {
         return false;
     }
     let fert_pos = |pos: BlockPos| {
-        if w.prop(pos, "isFertilized") == Some("1") {
+        if w.prop(pos, "isFertilized") != Some("0") {
             return false;
         }
-        if !w.prop_set(pos, "isFertilized", "1") {
+        if !w.prop_set(pos, "isFertilized", &crate::blocks::FARMLAND_UNFERTILIZED_MINS.to_string()) {
             return false;
         }
-        // w.schedule_tick(pos, crate::blocks::FARMLAND_DRY_TICKS);
         true
     };
     if crate::blocks::FARMLAND.is(state) {
@@ -155,10 +146,7 @@ fn fertilize(u: &mut ItemUse) -> bool {
         }
         true
     } else if crate::blocks::WHEAT.is(state) {
-        let npos = BlockPos {
-            y: pos.y - 1,
-            ..pos
-        };
+        let npos = BlockPos { y: pos.y - 1, ..pos };
         if !fert_pos(npos) {
             return false;
         }
@@ -215,17 +203,13 @@ pub fn register(r: &mut Registry) {
         .texture("base:watering_can_empty")
         .bar_always()
         .bar_color(0x4444FFFF)
-        .dynamic_texture(|s|
+        .dynamic_texture(|s| {
             if let Some(max) = DURABILITY.on_item(s.item) {
-                if s.wear() < max {
-                    Some("base:watering_can_filled")
-                } else {
-                    None
-                }
+                if s.wear() < max { Some("base:watering_can_filled") } else { None }
             } else {
                 None
             }
-        )
+        })
         .on_use(water);
     r.item(&FERTILIZER)
         .tab(&crate::tabs::INGREDIENTS)
