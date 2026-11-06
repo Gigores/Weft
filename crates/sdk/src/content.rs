@@ -2501,9 +2501,7 @@ impl Drop for BlockBuilder<'_> {
     }
 }
 
-fn model_for_stack_cb<R: AsRef<str>>(
-    f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
-) -> abi::Callback {
+fn model_for_stack_cb<R: AsRef<str>>(f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static) -> abi::Callback {
     thread_local! {
         static NAME: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
     }
@@ -2517,9 +2515,7 @@ fn model_for_stack_cb<R: AsRef<str>>(
     })
 }
 
-fn texture_for_stack_cb<R: AsRef<str>>(
-    f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
-) -> abi::Callback {
+fn texture_for_stack_cb<R: AsRef<str>>(f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static) -> abi::Callback {
     thread_local! {
         static NAME: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
     }
@@ -2697,20 +2693,14 @@ impl ItemBuilder<'_> {
     /// ```ignore
     /// .dynamic_texture(|s| (s.wear() > 0).then_some("mymod:item_worn"))
     /// ```
-    pub fn dynamic_texture<R: AsRef<str>>(
-        mut self,
-        f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
-    ) -> Self {
+    pub fn dynamic_texture<R: AsRef<str>>(mut self, f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static) -> Self {
         self.texture_for_stack = Some(texture_for_stack_cb(f));
         self
     }
 
     /// Which model a stack of this item shows as, chosen from the stack itself: `None` keeps the
     /// usual model. The name is a model (`models/<name>.geo.json`), not a bare texture.
-    pub fn dynamic_model<R: AsRef<str>>(
-        mut self,
-        f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static,
-    ) -> Self {
+    pub fn dynamic_model<R: AsRef<str>>(mut self, f: impl Fn(&abi::ItemStack) -> Option<R> + Send + Sync + 'static) -> Self {
         self.model_for_stack = Some(model_for_stack_cb(f));
         self
     }

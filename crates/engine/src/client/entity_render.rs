@@ -717,7 +717,9 @@ impl EntityRenderer {
         let white = Vec4::new(1.0, 1.0, 1.0, 0.0);
         let looks = super::looks::current();
         let mut sprite_color = white;
-        let dynamic = c.texture_for_stack(stack).map(|name| textures.layered(&name));
+        let dynamic = c
+            .texture_for_stack(stack)
+            .map(|name| textures.layered(&name));
         let sprite = if let Some(t) = dynamic {
             Some(t)
         } else {
