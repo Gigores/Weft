@@ -409,7 +409,7 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:simulation_distance", ck::INT, 8.0, 2.0, 64.0, 1.0).set(c::SCOPE, scope::WORLD),
         // Most cubes mods' tickets keep loaded with no player near (`Host::force_load`).
         number("core:max_forced_cubes", ck::INT, 4096.0, 0.0, 1048576.0, 1.0).set(c::SCOPE, scope::WORLD),
-        number("core:first_person_model", ck::BOOL, 0.0, 0.0, 1.0, 0.0),
+        number("core:first_person_model", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:show_avatars", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:occlusion_culling", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:allow_avatars", ck::BOOL, 1.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
