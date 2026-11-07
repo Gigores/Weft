@@ -121,7 +121,8 @@ pub(crate) fn freeze(
             .into_iter()
             .map(|r| (r.from, r.to))
             .collect();
-        let file = model_file(&e, read_model, errors);
+        // Its states may each have a model file and textures for it of their own: each read once.
+        let mut files: FxHashMap<(String, Vec<(String, String)>), Option<crate::block_model::FileModel>> = FxHashMap::default();
         let mut state_values = Vec::with_capacity(count as usize);
         let mut pieces = Vec::new();
         let mut tagged_here = vec![false; tagged.len()];
@@ -141,6 +142,18 @@ pub(crate) fn freeze(
             if s.or(abi::comp::HARDNESS, 1.0f32) < 0.0 && !liquids.contains(&e.name) {
                 s.0.push(Cow::Owned(RawValue::tag(abi::comp::UNBREAKABLE)));
             }
+            let file_name = s
+                .text(b::MODEL_FILE)
+                .filter(|f| !f.is_empty())
+                .unwrap_or(&e.name);
+            let own: Vec<(String, String)> = s
+                .or::<Vec<abi::ModelTexture>>(b::MODEL_TEXTURES, Vec::new())
+                .into_iter()
+                .map(|t| (t.name, t.texture))
+                .collect();
+            let file = files
+                .entry((file_name.to_string(), own))
+                .or_insert_with_key(|(name, own)| model_file(name, own, read_model, errors));
             let (info, head, raw, own_rules) = bake_state(&e.name, index, &s, &retexture, file.as_ref(), tex, errors);
             if !own_rules.is_empty() {
                 out.rules.push((out.states.len(), own_rules));
@@ -372,7 +385,7 @@ fn full_key(props: &[Prop], s: u32) -> String {
 }
 
 /// What only a block as a whole has: its states leave it out.
-const BLOCK_ONLY: [&str; 17] = [
+const BLOCK_ONLY: [&str; 15] = [
     b::PROPS,
     b::ON_USE,
     b::ON_NEIGHBOR,
@@ -386,8 +399,6 @@ const BLOCK_ONLY: [&str; 17] = [
     b::SIGNAL_READ,
     b::OPENS,
     b::SHARES_CELL,
-    b::MODEL_FILE,
-    b::MODEL_TEXTURES,
     b::SHAPES_OF,
     b::RETEXTURE,
 ];
@@ -440,6 +451,10 @@ impl<'a> Values<'a> {
 
     fn has(&self, name: &str) -> bool {
         self.value(name).is_some()
+    }
+
+    fn text(&self, name: &str) -> Option<&str> {
+        self.value(name).and_then(|v| v.text.as_deref())
     }
 
     fn get<T: data::Data>(&self, name: &str) -> Option<T> {
@@ -551,20 +566,17 @@ fn own_textures(block: &str) -> [String; 6] {
     std::array::from_fn(|_| format!("{ns}:block/{path}"))
 }
 
-/// Its model file (`models/block/<name>.json` of its namespace's mod, or `MODEL_FILE`): read here,
-/// so collision and selection follow it on the server and every client alike.
-fn model_file(e: &Entry, read: &dyn Fn(&str) -> Option<String>, errors: &mut Vec<String>) -> Option<crate::block_model::FileModel> {
-    let file = e
-        .text(b::MODEL_FILE)
-        .filter(|f| !f.is_empty())
-        .unwrap_or(&e.name);
+/// A state's model file (`models/block/<name>.json` of its namespace's mod, the block's name or
+/// `MODEL_FILE`), `own` its textures for the file's `#names`: read here, so collision and
+/// selection follow it on the server and every client alike.
+fn model_file(
+    file: &str,
+    own: &[(String, String)],
+    read: &dyn Fn(&str) -> Option<String>,
+    errors: &mut Vec<String>,
+) -> Option<crate::block_model::FileModel> {
     let (ns, path) = file.split_once(':')?;
-    let own: Vec<(String, String)> = e
-        .or::<Vec<abi::ModelTexture>>(b::MODEL_TEXTURES, Vec::new())
-        .into_iter()
-        .map(|t| (t.name, t.texture))
-        .collect();
-    crate::block_model::load_with(&format!("{ns}:block/{path}"), read, &own).unwrap_or_else(|err| {
+    crate::block_model::load_with(&format!("{ns}:block/{path}"), read, own).unwrap_or_else(|err| {
         errors.push(err);
         None
     })

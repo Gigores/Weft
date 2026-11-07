@@ -74,15 +74,22 @@ impl GameMode {
         self.def().flags & flag != 0
     }
 
-    /// The name players use: the engine's without `core:`.
+    /// The name players use: the engine's without `core:`. Before content is frozen (a world's
+    /// file written by a unit test), survival's.
     pub fn name(self) -> &'static str {
-        let n = &self.def().name;
+        let Some(c) = crate::content::try_content() else { return "survival" };
+        let n = &c
+            .game
+            .game_modes
+            .get(self.0 as usize)
+            .unwrap_or(&c.game.game_modes[0])
+            .name;
         n.strip_prefix("core:").unwrap_or(n)
     }
 
     /// By its name, with or without the engine's `core:`.
     pub fn parse(s: &str) -> Option<GameMode> {
-        let modes = &crate::content::content().game.game_modes;
+        let modes = &crate::content::try_content()?.game.game_modes;
         modes
             .iter()
             .position(|m| m.name == s || m.name.strip_prefix("core:") == Some(s))

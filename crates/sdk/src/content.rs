@@ -1365,6 +1365,19 @@ macro_rules! state_setters {
         pub fn light_filter(self, r: u8, g: u8, b: u8) -> Self {
             self.set(&bc::LIGHT_FILTER, [r, g, b])
         }
+        /// Its shape from model file `name` (`models/block/<path>.json` of that mod) instead of
+        /// the one named like the block: several blocks, any mod's, on one model (#88), or a state
+        /// on a model of its own (a drying rack with something on it).
+        pub fn model_file(self, name: &str) -> Self {
+            self.set_text(&bc::MODEL_FILE, &crate::full_name(name))
+        }
+        /// The texture put where the model file says `#name`: one model, each block its own
+        /// pictures (a hollow log's inside, stripped). A state's go over its block's. Relative
+        /// names are under `block/`.
+        pub fn model_texture(self, name: &str, texture: &str) -> Self {
+            let t = abi::ModelTexture { name: name.trim_start_matches('#').to_string(), texture: crate::asset("block", texture) };
+            self.push(&bc::MODEL_TEXTURES, t)
+        }
         /// Same texture on every face, relative names are under `block/`.
         pub fn texture(self, t: &str) -> Self {
             let t = crate::asset("block", t);
@@ -2205,19 +2218,6 @@ impl<'a> BlockBuilder<'a> {
     /// its whole cell). Blocks whose shapes don't overlap share a cell without asking.
     pub fn shares_cell_with(self, what: &str) -> Self {
         self.set_text(&bc::SHARES_CELL, what)
-    }
-
-    /// Its shape from model file `name` (`models/block/<path>.json` of that mod) instead of the one
-    /// named like the block: several blocks, any mod's, on one model (#88).
-    pub fn model_file(self, name: &str) -> Self {
-        self.set_text(&bc::MODEL_FILE, &crate::full_name(name))
-    }
-
-    /// The texture this block puts where the model file says `#name`: one model, each block
-    /// its own pictures (a hollow log's inside, stripped). Relative names are under `block/`.
-    pub fn model_texture(self, name: &str, texture: &str) -> Self {
-        let t = abi::ModelTexture { name: name.trim_start_matches('#').to_string(), texture: crate::asset("block", texture) };
-        self.push(&bc::MODEL_TEXTURES, t)
     }
 
     /// Not a block but a template: see `Registry::shapes_of`.

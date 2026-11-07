@@ -155,6 +155,16 @@ fn init(r: &mut Registry) {
     // Faces the file leaves to the block (`#top`, `#side`) show these.
     r.block(&PEDESTAL)
         .textures("machine_top", "generator", "machine_top")
+        // Without its crystal, a state on a model of its own with a texture of its own.
+        .prop("crystal", ["true", "false"])
+        .states(|p, s| {
+            if p.is("crystal", "false") {
+                s.model_file("pedestal_empty")
+                    .model_texture("socket", "base:gold_block")
+            } else {
+                s
+            }
+        })
         .hardness(1.0)
         .tab(&BASE_BUILDING);
 
