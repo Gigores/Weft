@@ -13,10 +13,19 @@ pub fn register(r: &mut Registry) {
     r.recipe_kind(S).inputs(1, 1).outputs(1, 1);
     r.shapeless(C, "#planks/{m}", 4, &["#logs/{m}"], 0);
     r.shaped(C, "stick", 4, &["#", "#"], &[('#', "#planks")]);
-    r.shaped(C, "#stairs/{m}", 4, &["#  ", "## ", "###"], &[('#', "#stairs_of/{m}")]);
+    // Shapes and back, by eighths of a block with nothing lost: stairs 6, slabs 4, beams 2.
+    r.shaped(C, "#stairs/{m}", 4, &["# ", "##"], &[('#', "#stairs_of/{m}")]);
+    r.shapeless(C, "#stairs_of/{m}", 3, &["#stairs/{m}"; 4], 0);
     r.shaped(C, "#slab/{m}", 6, &["###"], &[('#', "#slab_of/{m}")]);
+    r.shaped(C, "#slab_of/{m}", 1, &["#", "#"], &[('#', "#slab/{m}")]);
     r.shapeless(C, "#vertical_slab/{m}", 1, &["#slab/{m}"], 0);
     r.shapeless(C, "#slab/{m}", 1, &["#vertical_slab/{m}"], 0);
+    r.shaped(C, "#beam/{m}", 1, &["##"], &[('#', "#eighth/{m}")]);
+    r.shaped(C, "#slab/{m}", 1, &["##"], &[('#', "#beam/{m}")]);
+    r.shaped(C, "#vertical_slab/{m}", 1, &["#", "#"], &[('#', "#beam/{m}")]);
+    r.shaped(C, "#stairs/{m}", 1, &["# ", "##"], &[('#', "#beam/{m}")]);
+    r.shaped(C, "#eighth_of/{m}", 1, &["###", "# #", "###"], &[('#', "#eighth/{m}")]);
+    r.shaped(C, "woodcutter", 1, &[" i ", "###"], &[('i', "#ingots/iron"), ('#', "#planks")]);
     r.shaped(C, "crafting_table", 1, &["##", "##"], &[('#', "#planks")]);
     r.shaped(C, "furnace", 1, &["###", "# #", "###"], &[('#', "#cobblestone")]);
     r.shaped(C, "chest", 1, &["###", "# #", "###"], &[('#', "#planks")]);

@@ -1389,7 +1389,7 @@ pub async fn block_shapes(t: T) -> R {
         "a slab's recipe",
     );
     t.check_eq(
-        t.op("craft 3 3 base:bricks air air base:bricks base:bricks air base:bricks base:bricks base:bricks")
+        t.op("craft 2 2 base:bricks air base:bricks base:bricks")
             .await?,
         "base:bricks_stairs 4".to_string(),
         "a stair's",
@@ -1952,7 +1952,7 @@ pub async fn names_translated(t: T) -> R {
                 .strip_prefix("base:")
                 // Named after what hatches from them, or what they are made of.
                 .filter(|n| {
-                    !["_spawn_egg", "_stairs", "_slab"]
+                    !["_spawn_egg", "_stairs", "_slab", "_beam", "_eighth"]
                         .iter()
                         .any(|end| n.ends_with(end))
                 })

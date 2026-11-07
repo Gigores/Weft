@@ -12,6 +12,7 @@ mod player;
 mod recipes;
 mod redstone;
 mod sounds;
+mod woodcutter;
 mod worldgen;
 
 use weft_sdk::*;
@@ -47,6 +48,7 @@ fn init(r: &mut Registry) {
     advancements::register(r);
     beds::register(r);
     redstone::register(r);
+    woodcutter::register(r);
     // Its terrain is described in `worldgen`.
     r.dimension(&OVERWORLD)
         .player_spawn()

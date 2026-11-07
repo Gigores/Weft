@@ -1141,6 +1141,13 @@ impl MenuCtx {
     pub fn world(&self) -> World {
         World::from_raw(self.args.world)
     }
+    /// In `on_take`, which slot of group `name` was taken from; `None` for another group's.
+    pub fn taken_in(&self, name: &str) -> Option<u32> {
+        let g = self.find_group(name)?;
+        (g.start..g.start + g.len)
+            .contains(&self.args.slot)
+            .then(|| self.args.slot - g.start)
+    }
     pub fn player(&self) -> u64 {
         self.args.player
     }
@@ -1860,8 +1867,17 @@ pub struct RecipeView {
 
 /// The first recipe of `kind` whose inputs, with their counts, are all among `stacks`.
 pub fn recipe_find(kind: &RecipeKind, stacks: &[ItemStack]) -> Option<RecipeView> {
-    let n = unsafe { (host().recipe_find)(Str::new(kind.name()), stacks.as_ptr(), stacks.len() as u32) };
-    (n > 0).then(|| RecipeView { kind: kind.name().to_string(), index: n - 1 })
+    recipes_for(kind, stacks).next()
+}
+
+/// Every recipe of `kind` whose inputs are all among `stacks`, in order (what a stonecutter offers).
+pub fn recipes_for<'a>(kind: &'a RecipeKind, stacks: &'a [ItemStack]) -> impl Iterator<Item = RecipeView> + 'a {
+    let mut from = Some(0);
+    std::iter::from_fn(move || {
+        let n = unsafe { (host().recipe_find)(Str::new(kind.name()), stacks.as_ptr(), stacks.len() as u32, from?) };
+        from = (n > 0).then_some(n);
+        Some(RecipeView { kind: kind.name().to_string(), index: from? - 1 })
+    })
 }
 
 impl RecipeView {

@@ -1414,12 +1414,16 @@ fn recipe_at(kind: Str, recipe: u32) -> Option<&'static registry::Recipe> {
         .get(recipe as usize)
 }
 
-unsafe extern "C" fn recipe_find(kind: Str, stacks: *const ItemStack, count: u32) -> u32 {
+unsafe extern "C" fn recipe_find(kind: Str, stacks: *const ItemStack, count: u32, from: u32) -> u32 {
     let c = content();
     let stacks = unsafe { std::slice::from_raw_parts(stacks, count as usize) };
     let Some(list) = c.game.recipes.get(unsafe { kind.as_str() }) else { return 0 };
-    list.iter()
-        .position(|r| c.game.find_inputs(r, stacks, &c.components).is_some())
+    (from as usize..list.len())
+        .find(|&i| {
+            c.game
+                .find_inputs(&list[i], stacks, &c.components)
+                .is_some()
+        })
         .map_or(0, |i| i as u32 + 1)
 }
 

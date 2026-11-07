@@ -77,6 +77,8 @@ pub static SMELT_TIME: Chain = Chain::named("base:smelt_time");
 
 pub static CRAFTING: RecipeKind = RecipeKind::named("base:crafting");
 pub static SMELTING: RecipeKind = RecipeKind::named("base:smelting");
+/// What the woodcutter cuts: one input into smaller pieces of it.
+pub static WOODCUTTING: RecipeKind = RecipeKind::named("base:woodcutting");
 
 /// The player's equipment slots, head to feet.
 pub static HEAD: EquipmentSlot = EquipmentSlot::named("base:head");

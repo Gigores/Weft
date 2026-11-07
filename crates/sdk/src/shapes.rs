@@ -1,4 +1,4 @@
-//! Stairs, slabs and vertical slabs of any block, by tag or name: `r.stairs("#has_shapes")`. Each
+//! Stairs, slabs, vertical slabs, beams and eighths of any block, by tag or name: `r.stairs("#has_shapes")`. Each
 //! block found gets its own, with its textures and what it is like to mine, also from mods this
 //! one has never heard of. `.tab(..)` and the rest go on what they return, as on any block. And a
 //! torch's shape for any torch (`torch_state`).
@@ -138,6 +138,60 @@ impl Registry {
                 if p.placed("facing").and_then(Dir::from_name) == Some(props.facing().opposite()) {
                     props.set("double", "true");
                 }
+            })
+    }
+}
+
+impl Registry {
+    /// Beams of `sources` (see `shapes_of`), a quarter of a block (1 x 1/2 x 1/2): `<name>_beam`,
+    /// across where the player looks, in the half of the cell clicked, high or low. Several share a
+    /// cell, as eighths do.
+    pub fn beams<'a>(&'a mut self, sources: &str) -> BlockBuilder<'a> {
+        self.shapes_of("beam", sources, "_beam")
+            .tag("beams")
+            .shares_cell_with("#water")
+            .facing(Facings::HORIZONTAL, Toward::Away)
+            .prop("half", ["bottom", "top"])
+            // Written along the north side of its cell.
+            .states(|p: &Props, s| match p.get("half") {
+                "top" => s.model_box([0.0, 8.0, 0.0], [16.0, 16.0, 8.0]),
+                _ => s.model_box([0.0; 3], [16.0, 8.0, 8.0]),
+            })
+            .placement(|p, props| {
+                props.set("half", if upper_half(p) { "top" } else { "bottom" });
+                // On the side of the cell clicked, along the look.
+                let d = props.facing();
+                let (o, hit) = (d.offset(), p.hit());
+                let along = if o.x != 0 { (hit.x - 0.5) * o.x as f64 } else { (hit.z - 0.5) * o.z as f64 };
+                if along < 0.0 {
+                    props.set("facing", d.opposite().name());
+                }
+            })
+    }
+
+    /// Eighths of `sources` (see `shapes_of`), half a block each way: `<name>_eighth`, in the corner
+    /// of the cell clicked. Eight fill a cell, each broken alone.
+    pub fn eighths<'a>(&'a mut self, sources: &str) -> BlockBuilder<'a> {
+        self.shapes_of("eighth", sources, "_eighth")
+            .tag("eighths")
+            .shares_cell_with("#water")
+            .facing(Facings::HORIZONTAL, Toward::Away)
+            .prop("half", ["bottom", "top"])
+            // Written in the north-west corner; each facing turns it to the next corner.
+            .states(|p: &Props, s| match p.get("half") {
+                "top" => s.model_box([0.0, 8.0, 0.0], [8.0, 16.0, 8.0]),
+                _ => s.model_box([0.0; 3], [8.0; 3]),
+            })
+            .placement(|p, props| {
+                let hit = p.hit();
+                props.set("half", if upper_half(p) { "top" } else { "bottom" });
+                let corner = match (hit.x >= 0.5, hit.z >= 0.5) {
+                    (false, false) => Dir::North,
+                    (true, false) => Dir::East,
+                    (true, true) => Dir::South,
+                    (false, true) => Dir::West,
+                };
+                props.set("facing", corner.name());
             })
     }
 }

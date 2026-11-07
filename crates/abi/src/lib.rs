@@ -3312,9 +3312,9 @@ pub struct Host {
     pub recipe_match: unsafe extern "C" fn(kind: Str, grid: *const ItemStack, width: u32, height: u32) -> ItemStack,
     /// Processing recipe for one input item: output stack, time written to `time_out`.
     pub recipe_process: unsafe extern "C" fn(kind: Str, input: u32, time_out: *mut u32) -> ItemStack,
-    /// The first recipe of `kind` whose inputs (with counts) are all in `stacks`, any order:
-    /// its number + 1, or 0.
-    pub recipe_find: unsafe extern "C" fn(kind: Str, stacks: *const ItemStack, count: u32) -> u32,
+    /// The first recipe of `kind` from number `from` on whose inputs (with counts) are all in
+    /// `stacks`, any order: its number + 1, or 0.
+    pub recipe_find: unsafe extern "C" fn(kind: Str, stacks: *const ItemStack, count: u32, from: u32) -> u32,
     pub recipe_info: unsafe extern "C" fn(kind: Str, recipe: u32, out: *mut RecipeInfo) -> u32,
     /// Output `index` of a recipe, a liquid's as its item by the millibucket, and its chance.
     pub recipe_output: unsafe extern "C" fn(kind: Str, recipe: u32, index: u32, stack: *mut ItemStack, chance: *mut f32) -> u32,

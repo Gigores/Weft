@@ -130,6 +130,8 @@ pub fn register(r: &mut Registry) {
     r.stairs("#has_shapes").tab(&crate::tabs::BUILDING);
     r.slabs("#has_shapes").tab(&crate::tabs::BUILDING);
     r.vertical_slabs("#has_shapes").tab(&crate::tabs::BUILDING);
+    r.beams("#has_shapes").tab(&crate::tabs::BUILDING);
+    r.eighths("#has_shapes").tab(&crate::tabs::BUILDING);
     r.block(&STONE)
         .sound_group("stone")
         .hardness(1.5)
