@@ -194,11 +194,19 @@ pub fn register(r: &mut Registry) {
         .mined_by("shovel", tool_tier::HAND)
         .falling()
         .tab(&crate::tabs::NATURAL);
+    // Vanilla: flint one time in ten instead of the gravel.
+    r.loot(&GRAVEL).pool(
+        Pool::new()
+            .when(Cond::harvested())
+            .entry(Entry::item("flint"))
+            .entry(Entry::item("gravel").weight(9)),
+    );
     r.block(&CLAY)
         .sound_group("gravel")
         .hardness(0.6)
         .mined_by("shovel", tool_tier::HAND)
         .tag("clay")
+        .drops("clay_ball", 4)
         .tab(&crate::tabs::NATURAL);
     r.block(&SANDSTONE)
         .sound_group("stone")
