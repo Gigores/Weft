@@ -61,6 +61,42 @@ static RANG: Event<u64> = Event::named("rang");
 static RINGS: AtomicU32 = AtomicU32::new(0);
 /// Mobs walked by tests (`drive`): (entity, direction, ticks left).
 static DRIVEN: std::sync::Mutex<Vec<(u64, [f32; 2], u32)>> = std::sync::Mutex::new(Vec::new());
+/// A box watched tick by tick (`trace`): dimension, corners, ticks left, what each cell last was,
+/// and what changed: `tick x,y,z block signal`, as the tick before left it (signals go later).
+struct Trace {
+    dim: u32,
+    a: [i32; 3],
+    b: [i32; 3],
+    left: u32,
+    last: std::collections::HashMap<[i32; 3], (u32, u8)>,
+    lines: Vec<String>,
+}
+static TRACE: std::sync::Mutex<Option<Trace>> = std::sync::Mutex::new(None);
+
+fn trace_tick(w: &World) {
+    let mut guard = TRACE.lock().unwrap();
+    let Some(t) = guard
+        .as_mut()
+        .filter(|t| t.dim == w.dimension() && t.left > 0)
+    else {
+        return;
+    };
+    t.left -= 1;
+    let now = w.game_time();
+    for x in t.a[0]..=t.b[0] {
+        for y in t.a[1]..=t.b[1] {
+            for z in t.a[2]..=t.b[2] {
+                let p = [x, y, z];
+                let here = (w.block(p), w.signal(p));
+                let was = t.last.insert(p, here);
+                if was != Some(here) && (was.is_some() || here.0 != 0) {
+                    t.lines
+                        .push(format!("{now} {x},{y},{z} {} {}", block_name(here.0), here.1));
+                }
+            }
+        }
+    }
+}
 
 fn count(i: usize, n: usize) {
     COUNTS[i].fetch_add(n as u32, Ordering::Relaxed);
@@ -243,6 +279,7 @@ pub fn register(r: &mut Registry) {
         }
         driven.retain(|d| d.2 > 0);
     });
+    r.world_tick(trace_tick);
     register_ops(r);
 }
 
@@ -363,6 +400,21 @@ type Run = fn(&World, &Command, u64, [i32; 3]) -> Result<String, String>;
 /// that ran it (`Client::run_command`), as `ok ..` or `err ..`.
 const OPS: &[(&str, &str, Run)] = &[
     ("last_said", "", |_, _, _, _| Ok(LAST_SAID.lock().unwrap().clone())),
+    // Every change in a box for some ticks; `traced` gives what it saw.
+    ("traced", "", |_, _, _, _| {
+        Ok(TRACE
+            .lock()
+            .unwrap()
+            .take()
+            .map_or(String::new(), |t| t.lines.join("\n")))
+    }),
+    ("trace", "<a:pos> <b:pos> <ticks:int>", |w, cmd, _, _| {
+        let (a, b) = (pos(cmd, "a")?, pos(cmd, "b")?);
+        let (lo, hi) = (std::array::from_fn(|i| a[i].min(b[i])), std::array::from_fn(|i| a[i].max(b[i])));
+        *TRACE.lock().unwrap() =
+            Some(Trace { dim: w.dimension(), a: lo, b: hi, left: int(cmd, "ticks")?, last: Default::default(), lines: Vec::new() });
+        Ok(String::new())
+    }),
     ("show", "<who:word> <place:word> <text:text>", |w, cmd, player, _| {
         let pos = w.entity(player).map_or([0.0; 3], |e| e.pos.to_array());
         let who = match word(cmd, "who")? {

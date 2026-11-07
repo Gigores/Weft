@@ -295,7 +295,10 @@ impl Dim {
             .unwrap_or(IVec3::ZERO);
         log::debug!("floaters at {:?} set off with {} blocks", plan.floaters, plan.cells.len());
         let cells = self.with_riders(c, center, plan.cells.into_iter().collect());
-        self.lift(c, c.game.platform_kind, center.as_dvec3() + DVec3::new(0.5, 0.0, 0.5), cells, &[], Liveness::Free);
+        let (id, _) = self.lift(c, c.game.platform_kind, center.as_dvec3() + DVec3::new(0.5, 0.0, 0.5), cells, &[], Liveness::Free);
+        if let Some(b) = self.bodies.get_mut(&id) {
+            b.floated = true;
+        }
     }
 
     /// `what_is_ahead` along each axis `sign` has and across the corners between them.
@@ -382,8 +385,13 @@ impl Dim {
         }
         let Some(cell) = b.cell else { return };
         let Some(floaters) = b.signals.floaters(c) else { return };
-        // Without any it is a mod's.
+        // Without any it is a mod's, unless they were broken off it.
         if floaters.is_empty() {
+            if b.floated {
+                log::debug!("a platform at {cell} has no floaters left");
+                let (pos, vel) = (e.pos, e.vel);
+                self.bring_to_stop(id, pos, vel, None);
+            }
             return;
         }
         let v: DVec3 = floaters

@@ -3012,9 +3012,10 @@ impl SignalBuild {
         match self.kind {
             k::SWITCH => (sig.gives, sig.strong) = (0x3F, attach.map_or(0, own)),
             k::TORCH => {
-                // Off with power from what holds it; strong into the block on its far side.
+                // Off with power from what holds it, strong into every other block around it: on a
+                // wall both out and up, the same whichever way a build is turned.
                 sig.inputs = attach.map_or(side_bits(&[Side::Bottom]), own);
-                (sig.gives, sig.strong) = (0x3F & !sig.inputs, attach.map_or(side_bits(&[Side::Top]), |a| own(a.opposite())));
+                (sig.gives, sig.strong) = (0x3F & !sig.inputs, 0x3F & !sig.inputs);
             }
             k::REPEATER => {
                 sig.inputs = side_bits(&[Side::Rear]);

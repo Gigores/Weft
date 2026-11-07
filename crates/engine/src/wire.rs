@@ -30,10 +30,11 @@ pub fn holds_wire(c: &Content, state: u32) -> bool {
     c.states[state as usize].flags & bf::SOLID != 0
 }
 
-/// Whether a block carries power from what feeds it to what touches it.
+/// Whether a block carries power from what feeds it to what touches it. A sink (a lamp) does
+/// while it takes that power itself.
 pub fn conducts(c: &Content, state: u32) -> bool {
     let s = &c.states[state as usize];
-    s.flags & bf::SOLID != 0 && s.flags & bf::SIGNAL_BLOCKER == 0 && s.signal.kind == sk::NONE
+    s.flags & bf::SOLID != 0 && s.flags & bf::SIGNAL_BLOCKER == 0 && matches!(s.signal.kind, sk::NONE | sk::SINK)
 }
 
 /// Whether a kind of signal block is a device, something other than wire with a circuit.

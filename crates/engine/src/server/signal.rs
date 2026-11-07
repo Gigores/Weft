@@ -58,8 +58,8 @@ struct Device {
     pending: Option<(u8, u64)>,
     /// Power into a sink as it was last told.
     input: u8,
-    /// An observer saw something.
-    triggered: bool,
+    /// An observer saw something, the tick it changed: its delay counts from then.
+    triggered: Option<u64>,
     /// When a piston last started pushing something out.
     pushed_at: u64,
     flips: VecDeque<u64>,
@@ -384,18 +384,16 @@ impl Signals {
             }
             return Some(most);
         }
-        if let Some(s) = self.device_signal(c, n) {
-            return Some(direct(s, toward));
-        }
+        let given = self.device_signal(c, n).map_or(0, |s| direct(s, toward));
         let state = cubes.state(n)?;
         if wire::conducts(c, state) {
             // What feeds a block may be on any side of it.
             if DIRS.iter().any(|d| cubes.state(n + *d).is_none()) {
                 return None;
             }
-            return Some(self.strong_in(c, n).max(self.weak_in(n)?));
+            return Some(given.max(self.strong_in(c, n)).max(self.weak_in(n)?));
         }
-        Some(0)
+        Some(given)
     }
 
     fn mark_cell_nets(&mut self, p: IVec3) {
@@ -419,15 +417,21 @@ impl Signals {
                     }
                 }
             }
-        } else if let Some(s) = self.device_signal(c, cell) {
+            return out;
+        }
+        if let Some(s) = self.device_signal(c, cell) {
             for d in 0..6u8 {
                 out.all[d as usize] = direct(s, d);
                 out.to_wire[d as usize] = direct(s, d);
             }
-        } else if cubes.state(cell).is_some_and(|s| wire::conducts(c, s)) {
+        }
+        if cubes.state(cell).is_some_and(|s| wire::conducts(c, s)) {
             let strong = self.strong_in(c, cell);
-            out.to_wire = [strong; 6];
-            out.all = [strong.max(self.weak_in(cell).unwrap_or(0)); 6];
+            let all = strong.max(self.weak_in(cell).unwrap_or(0));
+            for d in 0..6 {
+                out.to_wire[d] = out.to_wire[d].max(strong);
+                out.all[d] = out.all[d].max(all);
+            }
         }
         out
     }
@@ -500,10 +504,15 @@ impl Signals {
 
     /// Something of another space came to `cell`, or left it.
     pub(super) fn passing(&mut self, cell: IVec3) {
+        self.seen(cell, self.now);
+    }
+
+    /// What is at `cell` changed at tick `when`, for observers watching it.
+    fn seen(&mut self, cell: IVec3, when: u64) {
         if let Some(list) = self.watchers.get(&cell) {
             for o in list.clone() {
                 if let Some(d) = self.devices.get_mut(&o) {
-                    d.triggered = true;
+                    d.triggered.get_or_insert(when);
                     self.dirty_devices.insert(o);
                 }
             }
@@ -613,11 +622,11 @@ impl Signals {
                 .or_default()
                 .push(p);
         }
-        let triggered = self.moved_observers.remove(&p);
+        let triggered = self.moved_observers.remove(&p).then_some(self.now);
         let device = match self.arriving.remove(&p).and_then(|m| m.device) {
             Some(mut d) => {
                 d.state = state;
-                d.triggered |= triggered;
+                d.triggered = d.triggered.or(triggered);
                 // On its way, and that goes on here.
                 if let Some((_, due)) = d.pending.as_mut() {
                     *due = (*due).max(self.now + 1);
@@ -718,14 +727,7 @@ impl Signals {
 
     fn apply_events(&mut self, c: &Content) {
         for (p, old, new) in std::mem::take(&mut self.events) {
-            if let Some(list) = self.watchers.get(&p) {
-                for o in list.clone() {
-                    if let Some(d) = self.devices.get_mut(&o) {
-                        d.triggered = true;
-                        self.dirty_devices.insert(o);
-                    }
-                }
-            }
+            self.seen(p, self.now);
             let (a, b) = (&c.states[old as usize], &c.states[new as usize]);
             // It may be what a piston couldn't move.
             if a.block != b.block || a.flags != b.flags {
@@ -942,10 +944,8 @@ impl Signals {
                 if self.outside.values().any(|m| m.contains_key(&at)) {
                     net.ports.push((i as u32, Port::Outside(at, e ^ 1)));
                 }
-                if let Some(s) = self.device_signal(c, at) {
-                    if can_give(s) {
-                        net.ports.push((i as u32, Port::Direct(at, e ^ 1)));
-                    }
+                if self.device_signal(c, at).is_some_and(can_give) {
+                    net.ports.push((i as u32, Port::Direct(at, e ^ 1)));
                 } else if !self.wires.contains_key(&at) {
                     match cubes.state(at) {
                         Some(state) if wire::conducts(c, state) => {
@@ -1051,6 +1051,8 @@ impl Signals {
             }
             self.level_changes.push((cell, face, level));
             self.piece_changed(cell, face);
+            // Wire's power is part of what it is, as an observer sees it.
+            self.seen(cell, self.now);
         }
         for &i in &net.lit {
             net.next[i as usize] = 0;
@@ -1177,8 +1179,9 @@ impl Signals {
                 let triggered = std::mem::take(&mut self.devices.get_mut(&p).expect("just read").triggered);
                 if s.level > 0 {
                     self.schedule(p, 0, s.delay, now);
-                } else if triggered {
-                    self.schedule(p, 15, s.delay, now);
+                } else if let Some(when) = triggered {
+                    let due = (when + s.delay as u64).max(now + 1);
+                    self.schedule(p, 15, (due - now) as u8, now);
                 }
             }
             sk::GATE => {
@@ -1364,6 +1367,11 @@ impl Dim {
         let during = std::mem::replace(&mut self.space.signals, s);
         self.space.signals.events.extend(during.events);
         self.signal_effects(c, effects);
+        // What changed in this tick is looked at in the next, but observers count from now.
+        let s = &mut self.space.signals;
+        for i in 0..s.events.len() {
+            s.seen(s.events[i].0, now);
+        }
     }
 
     fn signal_effects(&mut self, c: &'static Content, effects: Vec<Effect>) {
@@ -1509,6 +1517,12 @@ impl Dim {
                 break waiting;
             }
             for i in losers {
+                // Two bringing back one block both come back without it.
+                if !plans[i].extend && !plans[i].moved.is_empty() {
+                    let plan = &mut plans[i];
+                    (plan.moved, plan.riding, plan.broken) = Default::default();
+                    continue;
+                }
                 log::debug!(
                     "piston at {} gives way: {:?}",
                     plans[i].p,

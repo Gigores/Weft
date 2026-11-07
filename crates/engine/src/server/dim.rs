@@ -1875,6 +1875,8 @@ impl Dim {
 
     pub fn tick(&mut self, c: &'static Content) {
         self.time += 1;
+        // Whatever changes from here on changes in this tick, before signals have their turn.
+        self.space.signals.now = self.time;
         self.players = None;
         self.tick_blocks_first(c);
         self.fall_into_void(c);
@@ -1952,6 +1954,9 @@ impl Dim {
             .collect();
         for id in orphans {
             self.entities.remove(id);
+        }
+        for b in self.bodies.values_mut() {
+            b.signals.now = self.time;
         }
         self.cross_cells(c);
         let mut ids: Vec<u64> = self.bodies.keys().copied().collect();
