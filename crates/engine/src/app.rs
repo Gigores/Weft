@@ -1436,7 +1436,7 @@ impl Running {
                         relayout |= text::refresh(&mut t.spans, &test);
                     }
                     // Moving icons need drawing again, whatever the value does.
-                    Kind::Icons { bind, value, shake, effects, change, .. }
+                    Kind::Icons { bind, value, shake, effects, change, count, .. }
                         if !effects.is_empty() || shake.is_some_and(|s| (0.0..=s).contains(value)) =>
                     {
                         let v = bind(&ctx);
@@ -1444,9 +1444,11 @@ impl Running {
                             *change = Some((*value, crate::shaders::clock(), v > *value));
                         }
                         *value = v;
+                        let rows = crate::ui::icon_rows(*count, effects).1;
                         for e in effects.iter_mut() {
                             e.value = e.bind.as_ref().map_or(1.0, |b| b(&ctx));
                         }
+                        relayout |= crate::ui::icon_rows(*count, effects).1 != rows;
                         redraw = true;
                     }
                     Kind::Progress { bind, value, .. } | Kind::Icons { bind, value, .. } => {

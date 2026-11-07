@@ -711,6 +711,15 @@ crate::entry::entry_builder!(
     LootTable => LootBuilder, loot_entry;
 );
 
+impl AttributeBuilder<'_> {
+    /// Players' base of it is a world rule named like it (`/rule`), with its default and range;
+    /// `/attribute` sets one player's apart.
+    pub fn rule(self) -> Self {
+        use crate::WithComponents;
+        self.tag(abi::comp::attribute::RULE)
+    }
+}
+
 impl Registry {
     /// A system over a per-entity component (`Registry::entity_component`): once per tick and
     /// region with all values in one slice, no host call per entity.

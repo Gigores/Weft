@@ -718,6 +718,11 @@ impl Icons<'_> {
     pub fn wave_while(self, pixels: f32, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> Self {
         self.effect(abi::icon_effect::WAVE, pixels, Some(Box::new(f)))
     }
+    /// The halves the row holds, `f`'s value (none: twice the count): past the count more rows
+    /// go on above, closer the more there are (hearts past twenty health).
+    pub fn max_by(self, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> Self {
+        self.effect(abi::icon_effect::MAX, 0.0, Some(Box::new(f)))
+    }
     /// Any `abi::icon_effect` by `f`'s value (none: 1).
     pub fn effect(mut self, kind: u32, amount: f32, f: Option<Box<dyn Fn(&ClientView) -> f32 + Send + Sync>>) -> Self {
         let bind = f.map_or(abi::Callback::NONE, |f| bind_cb(move |c| f(c)));

@@ -172,6 +172,8 @@ impl Client {
                 self.player.speed_mul = self.attributes[a::MOVEMENT_SPEED as usize] as f64;
                 self.player.jump_mul = self.attributes[a::JUMP_STRENGTH as usize] as f64;
                 self.player.can_sprint = self.attributes[a::CAN_SPRINT as usize] >= 1.0;
+                // Flight goes with what allowed it (a mode, a ring), which comes a tick after the mode.
+                self.player.flying &= self.can_fly() || self.mode.has(crate::tag_bits::game_mode::ALWAYS_FLY);
             }
             ToClient::BreakRefused { frame, pos } => {
                 self.refused_break = Some((frame, pos));

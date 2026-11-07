@@ -749,6 +749,7 @@ pub mod screens {
     pub static CONTROLS: Menu = Menu::named("core:controls");
     pub static WORLDS: Menu = Menu::named("core:worlds");
     pub static CREATE_WORLD: Menu = Menu::named("core:create_world");
+    pub static WORLD_RULES: Menu = Menu::named("core:world_rules");
     pub static CHAT: Menu = Menu::named("core:chat");
     pub static INVENTORY: Menu = Menu::named("core:inventory");
     pub static MOD_SETTINGS: Menu = Menu::named("core:mod_settings");

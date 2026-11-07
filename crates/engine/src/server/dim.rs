@@ -1715,8 +1715,10 @@ impl Dim {
             .copied()
             .flatten()
             .is_some_and(|t| c.components.has(crate::components::ENTITY, e.kind, t));
+        // A rule may turn the cause off (`core:damage.fall`).
+        let off = c.game.damage_rules[cause as usize].is_some_and(|r| crate::config::get(r) == 0.0);
         // The void gets through everything, or /clear would silently fail.
-        if immune || (!def.has(df::PIERCES_INVULNERABLE) && (k.is(ef::INVULNERABLE) || e.mode.invulnerable())) {
+        if immune || off || (!def.has(df::PIERCES_INVULNERABLE) && (k.is(ef::INVULNERABLE) || e.mode.invulnerable())) {
             return false;
         }
         let recovering = e.hurt_cooldown > 0 && !def.has(df::IGNORES_COOLDOWN);

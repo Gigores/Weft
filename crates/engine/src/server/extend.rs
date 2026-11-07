@@ -212,8 +212,12 @@ pub const FOV: u32 = 9;
 pub const CAN_FLY: u32 = 10;
 
 impl Dim {
+    /// A player's base of an attribute that is a rule is the rule's (`comp::attribute::RULE`).
     fn base_attribute(&self, c: &Content, entity: u64, attr: u32) -> Option<f64> {
         let e = self.entities.get(entity)?;
+        if let Some(rule) = c.game.attr_rules[attr as usize].filter(|_| e.player) {
+            return Some(crate::config::get(rule));
+        }
         let def = &c.game.attributes[attr as usize];
         let own = def.comp.and_then(|id| {
             c.components
@@ -234,7 +238,7 @@ impl Dim {
         let def = &c.game.attributes[attr as usize];
         let Some(base) = self.base_attribute(c, entity, attr) else { return def.default };
         if !explain {
-            let (mut add, mut mul_base, mut mul_total) = (0.0, 0.0, 1.0);
+            let (mut add, mut mul_base, mut mul_total, mut set) = (0.0, 0.0, 1.0, None);
             if let Some(b) = self.entities.comps.get(&(entity, c.game.modifiers_comp)) {
                 each_mod(b, |a, op, amount, until, _| {
                     if a == def.hash && (until == 0 || until > self.time) {
@@ -242,12 +246,14 @@ impl Dim {
                             abi::attr_op::ADD => add += amount,
                             abi::attr_op::MULTIPLY_BASE => mul_base += amount,
                             abi::attr_op::MULTIPLY_TOTAL => mul_total *= 1.0 + amount,
-                            _ => {}
+                            _ => set = Some(amount),
                         }
                     }
                 });
             }
-            return ((base + add) * (1.0 + mul_base) * mul_total).clamp(def.min, def.max);
+            return set
+                .unwrap_or((base + add) * (1.0 + mul_base) * mul_total)
+                .clamp(def.min, def.max);
         }
         let mods: Vec<AttrMod> = self
             .modifiers_of(c, entity)
@@ -271,12 +277,13 @@ impl Dim {
         {
             v *= 1.0 + m.amount;
         }
-        let v = v.clamp(def.min, def.max);
+        let set = mods.iter().rev().find(|m| m.op as u32 == abi::attr_op::SET);
+        let v = set.map_or(v, |m| m.amount).clamp(def.min, def.max);
         if explain {
             let parts: Vec<String> = mods
                 .iter()
                 .map(|m| {
-                    let op = ["+", "x base +", "x"][m.op.min(2) as usize];
+                    let op = ["+", "x base +", "x", "= "][m.op.min(3) as usize];
                     let left = if m.until == 0 { String::new() } else { format!(" ({} ticks left)", m.until - self.time) };
                     format!("{} {op}{}{left}", m.id, m.amount)
                 })
@@ -294,7 +301,7 @@ impl Dim {
         let mut mods = self.modifiers_of(c, entity);
         let now = self.time;
         mods.retain(|m| !(m.attr == hash && m.id == id) && (m.until == 0 || m.until > now));
-        mods.push(AttrMod { attr: hash, op: op.min(2) as u8, amount, until: if ticks == 0 { 0 } else { now + ticks }, id: id.to_string() });
+        mods.push(AttrMod { attr: hash, op: op.min(3) as u8, amount, until: if ticks == 0 { 0 } else { now + ticks }, id: id.to_string() });
         self.entities
             .comps
             .insert((entity, c.game.modifiers_comp), encode_mods(&mods));
@@ -376,6 +383,7 @@ impl Dim {
             }
             match want.iter_mut().find(|w| (w.0, w.1) == (m.attr, m.op)) {
                 Some(w) if m.op == abi::attr_op::MULTIPLY_TOTAL => w.2 = (1.0 + w.2) * (1.0 + m.amount) - 1.0,
+                Some(w) if m.op == abi::attr_op::SET => w.2 = m.amount,
                 Some(w) => w.2 += m.amount,
                 None => want.push((m.attr, m.op, m.amount)),
             }
@@ -389,7 +397,7 @@ impl Dim {
             .collect();
         let now: Vec<(u64, u8, f64)> = want
             .iter()
-            .map(|&(a, op, x)| (c.game.attributes[a as usize].hash, op.min(2) as u8, x))
+            .map(|&(a, op, x)| (c.game.attributes[a as usize].hash, op.min(3) as u8, x))
             .collect();
         if had.len() == now.len() && now.iter().all(|w| had.contains(w)) {
             return;

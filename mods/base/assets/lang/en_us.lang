@@ -191,8 +191,10 @@ mod.base.authors = Weft Developers
 menu.news = {align:center}{img:base:icon_settings 16x16}{/align}
     {align:center}Weft is in development.{/align}
 command.base.feed = food set to {0}
-command.base.attribute.done = {0} changed by {1} (targets: {2})
+command.base.attribute.done = {0} set to {1} (targets: {2})
 command.base.attribute.cleared = {0} reset to normal (targets: {1})
+config.base.hunger_rate = Hunger rate
+config.core.damage.base.cactus = Cactus damage
 command.base.sethome.done = Home "{0}" set
 command.base.sethome.full = You can't have more than {0} homes, delete one with /delhome
 command.base.home.done = Welcome to home "{0}"

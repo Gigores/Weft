@@ -27,6 +27,8 @@ pub async fn screens(t: T) -> R {
         (&screens::LANGUAGE, &["text:English", "text:Done"][..]),
         (&screens::CONTROLS, &["text:Reset All", "text:Done"][..]),
         (&screens::WORLDS, &["text:Create New World", "id:saves_folder"][..]),
+        (&screens::CREATE_WORLD, &["text:World Rules", "text:Create New World"][..]),
+        (&screens::WORLD_RULES, &["text:Keep inventory on death: Off", "text:Done"][..]),
         (&screens::MODS, &["id:mod:base", "id:mod:testmod", "id:mod_description"][..]),
         (&screens::PROFILE, &["id:profile_name", "text:Copy Key"][..]),
     ] {

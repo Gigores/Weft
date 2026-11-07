@@ -414,12 +414,22 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:occlusion_culling", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:allow_avatars", ck::BOOL, 1.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
         number("core:keep_inventory", ck::BOOL, 0.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
+        // Deaths a player has before staying a spectator (0: no end); 1 is hardcore.
+        rule("core:lives", ck::INT, 0.0, 0.0, 100.0),
+        // Set when the world is made, nobody changes the rules after.
+        rule("core:rules_locked", ck::BOOL, 0.0, 0.0, 1.0),
     ];
     out.extend(
         keys.iter()
             .map(|(action, key)| string(&format!("core:key.{action}"), key)),
     );
     out
+}
+
+/// A world rule (`/rule`).
+pub fn rule(name: &str, kind: u32, default: f64, min: f64, max: f64) -> RawEntry {
+    let step = if kind == ck::FLOAT { 0.0 } else { 1.0 };
+    number(name, kind, default, min, max, step).set(weft_abi::comp::config::SCOPE, scope::WORLD)
 }
 
 /// A volume setting in percent.

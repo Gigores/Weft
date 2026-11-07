@@ -583,6 +583,11 @@ impl Server {
                     }
                     r.emit_engine(c, abi::event::PLAYER_RESPAWNED, &abi::PlayerEvent { player: entity });
                 }
+                // Out of lives: on as a spectator, as in vanilla's hardcore.
+                let lives = crate::config::get(c.game.lives) as u32;
+                if lives > 0 && self.players[pi].deaths >= lives {
+                    self.set_mode(pi, crate::world::GameMode::SPECTATOR);
+                }
             }
             ToServer::Chat(text) => {
                 let name = self.players[pi].name.clone();

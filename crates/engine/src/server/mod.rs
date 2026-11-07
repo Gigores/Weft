@@ -104,6 +104,8 @@ pub struct Player {
     window: u32,
     /// The frame its last move was in and where in that: walking and falls are measured there.
     last_place: (Option<u64>, DVec3),
+    /// Times it died in this world, for `core:lives`.
+    pub deaths: u32,
 
     first_sync: bool,
     /// View (dim, center, radius, height) whose cubes were all present at the last check, and the
@@ -504,6 +506,7 @@ impl Server {
                 menu: None,
                 window: 0,
                 last_place: (None, DVec3::ZERO),
+                deaths: 0,
 
                 first_sync: true,
                 gen_done: None,
@@ -730,6 +733,7 @@ impl Server {
                                 r.drop_inventory(c, player);
                             }
                         }
+                        p.deaths += 1;
                         p.conn.send(ToClient::Died);
                         log::info!("{} died", p.name);
                         let line = death_message(c, cause, killer, p.name.clone());

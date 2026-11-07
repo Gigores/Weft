@@ -402,6 +402,14 @@ pub struct Game {
     pub synced_comps: Vec<bool>,
     /// Config id of `core:mob_spawning`.
     pub mob_spawning: u32,
+    /// Per attribute, the world rule players' base of it is (`comp::attribute::RULE`).
+    pub attr_rules: Vec<Option<u32>>,
+    /// Per damage cause, the world rule that turns it off (`core:damage.<cause>`); none for what
+    /// gets through everything.
+    pub damage_rules: Vec<Option<u32>>,
+    /// Config ids of `core:lives` and `core:rules_locked`.
+    pub lives: u32,
+    pub rules_locked: u32,
     /// Config id of `core:keep_inventory`.
     pub keep_inventory: u32,
     /// Config id of `core:simulation_distance`.
@@ -1267,12 +1275,14 @@ pub struct AttrDef {
     pub hash: u64,
     /// The entity kind component of the same name holding a kind's own value.
     pub comp: Option<u32>,
+    /// Players' base of it is the world rule of its name (`comp::attribute::RULE`).
+    pub rule: bool,
 }
 
 fn engine_attributes() -> Vec<RawEntry> {
     use abi::attribute as a;
     [
-        (a::MAX_HEALTH, 20.0, 1.0, 1024.0),
+        (a::MAX_HEALTH, 20.0, 0.5, 1024.0),
         (a::MOVEMENT_SPEED, 1.0, 0.0, 16.0),
         (a::VISIBILITY, 1.0, 0.0, 16.0),
         (a::JUMP_STRENGTH, 1.0, 0.0, 16.0),
@@ -1286,9 +1296,11 @@ fn engine_attributes() -> Vec<RawEntry> {
     ]
     .iter()
     .map(|&(name, default, min, max)| {
-        RawEntry::engine(abi::entry_kind::ATTRIBUTE, name)
+        let e = RawEntry::engine(abi::entry_kind::ATTRIBUTE, name)
             .set(abi::comp::attribute::DEFAULT, default)
-            .set(abi::comp::attribute::RANGE, [min, max])
+            .set(abi::comp::attribute::RANGE, [min, max]);
+        // How many hearts players have is the world's to say.
+        if name == a::MAX_HEALTH { e.tag(abi::comp::attribute::RULE) } else { e }
     })
     .collect()
 }
@@ -1810,6 +1822,21 @@ pub fn freeze(
         });
         KeyDef { name: e.name.clone(), default: slots, contexts: e.flags(crate::input::context::TAGS) }
     });
+    (g.attributes, g.attr_names) = tables.bake(kind(ek::ATTRIBUTE), ek::ATTRIBUTE, mod_name, errors, |e, _| {
+        let [min, max] = e.or(abi::comp::attribute::RANGE, [f64::NEG_INFINITY, f64::INFINITY]);
+        let default = e.or(abi::comp::attribute::DEFAULT, 0.0);
+        AttrDef {
+            hash: name_hash(&e.name),
+            comp: c.id(&e.name),
+            name: e.name.clone(),
+            default,
+            min: min.min(max),
+            max,
+            rule: e.has(abi::comp::attribute::RULE),
+        }
+    });
+    (g.damage_causes, g.damage_cause_names) =
+        tables.bake(kind(ek::DAMAGE_CAUSE), ek::DAMAGE_CAUSE, mod_name, errors, |e, _| bake_damage_cause(e));
     // The settings, with a binding per key.
     let keys: Vec<(String, String)> = g
         .keys
@@ -1823,9 +1850,45 @@ pub fn freeze(
             .filter_map(|k| k.setting.as_deref())
             .map(crate::config::volume),
     );
+    // Rules that come of other things: an attribute that is one, a damage cause to turn off.
+    let damage_rule = |d: &DamageCauseDef| {
+        (!d.has(crate::tag_bits::damage::PIERCES_INVULNERABLE) && d.name != "core:heal").then(|| {
+            format!(
+                "core:damage.{}",
+                d.name
+                    .strip_prefix("core:")
+                    .unwrap_or(&d.name)
+                    .replace(':', ".")
+            )
+        })
+    };
+    all.extend(
+        g.attributes
+            .iter()
+            .filter(|a| a.rule)
+            .map(|a| crate::config::rule(&a.name, abi::config_kind::FLOAT, a.default, a.min, a.max)),
+    );
+    all.extend(
+        g.damage_causes
+            .iter()
+            .filter_map(damage_rule)
+            .map(|name| crate::config::rule(&name, abi::config_kind::BOOL, 1.0, 0.0, 1.0)),
+    );
     all.extend(configs);
     // By name: a mod's settings come together on its screen.
     (g.configs, g.config_names) = tables.bake_by(all, ek::CONFIG, mod_name, errors, |e| e.name.clone(), crate::config::bake);
+    g.attr_rules = g
+        .attributes
+        .iter()
+        .map(|a| a.rule.then(|| g.config_names[&a.name]))
+        .collect();
+    g.damage_rules = g
+        .damage_causes
+        .iter()
+        .map(|d| damage_rule(d).map(|name| g.config_names[&name]))
+        .collect();
+    g.lives = g.config_names["core:lives"];
+    g.rules_locked = g.config_names["core:rules_locked"];
     g.mob_spawning = g.config_names["core:mob_spawning"];
     g.keep_inventory = g.config_names["core:keep_inventory"];
     g.simulation_distance = g.config_names["core:simulation_distance"];
@@ -1841,11 +1904,6 @@ pub fn freeze(
         }
     }
     (g.cameras, g.camera_names) = tables.bake(kind(ek::CAMERA), ek::CAMERA, mod_name, errors, |e, _| bake_camera(e, conds));
-    (g.attributes, g.attr_names) = tables.bake(kind(ek::ATTRIBUTE), ek::ATTRIBUTE, mod_name, errors, |e, _| {
-        let [min, max] = e.or(abi::comp::attribute::RANGE, [f64::NEG_INFINITY, f64::INFINITY]);
-        let default = e.or(abi::comp::attribute::DEFAULT, 0.0);
-        AttrDef { hash: name_hash(&e.name), comp: c.id(&e.name), name: e.name.clone(), default, min: min.min(max), max }
-    });
     let (recipe_kinds, names) = tables.bake(kind(ek::RECIPE_KIND), ek::RECIPE_KIND, mod_name, errors, |e, _| {
         use abi::comp::recipe_kind as r;
         let layout = e.callback(r::LAYOUT);
@@ -1873,8 +1931,6 @@ pub fn freeze(
             .to_string();
         EquipmentSlot { name: e.name.clone(), roles: crate::model::roles_of(&bones), bones, background }
     });
-    (g.damage_causes, g.damage_cause_names) =
-        tables.bake(kind(ek::DAMAGE_CAUSE), ek::DAMAGE_CAUSE, mod_name, errors, |e, _| bake_damage_cause(e));
     (g.game_modes, g.game_mode_names) = tables.bake(kind(ek::GAME_MODE), ek::GAME_MODE, mod_name, errors, |e, _| bake_game_mode(e));
     (g.poses, g.pose_names) = tables.bake(kind(ek::POSE), ek::POSE, mod_name, errors, |e, _| bake_pose(e, conds));
     (g.precipitations, g.precipitation_names) =

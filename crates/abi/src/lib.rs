@@ -770,6 +770,9 @@ pub mod comp {
     pub mod attribute {
         pub const DEFAULT: &str = "attribute.default";
         pub const RANGE: &str = "attribute.range";
+        /// Tag: players' base of it is a world rule named like it (`/rule`), `DEFAULT` and
+        /// `RANGE` its own; `/attribute` sets one player's apart.
+        pub const RULE: &str = "attribute.rule";
     }
 
     /// A creative tab's `ICON` (`str`, an item); a sound category's tag `WORLD` (heard through
@@ -3045,6 +3048,9 @@ pub mod icon_effect {
     /// While the value is above 0, a wave runs along the row, `amount` pixels high (hearts
     /// regenerating).
     pub const WAVE: u32 = 5;
+    /// The halves the row holds (none: twice the icon count): past the count, more rows of it
+    /// go on above, closer together the more there are (hearts past twenty health).
+    pub const MAX: u32 = 6;
 }
 defaults!(UiNode {
     kind: 0,
@@ -4341,6 +4347,8 @@ pub mod attr_op {
     pub const ADD: u32 = 0;
     pub const MULTIPLY_BASE: u32 = 1;
     pub const MULTIPLY_TOTAL: u32 = 2;
+    /// The value is the amount, whatever the rest says (the last one given wins): `/attribute`.
+    pub const SET: u32 = 3;
 }
 
 crate::data! {

@@ -14,6 +14,8 @@ pub static CRAFTING: Menu = Menu::named("crafting_table");
 static HUD_HEALTH: HudElement = HudElement::named("health");
 static HUD_ARMOR: HudElement = HudElement::named("armor");
 static HUNGRY: Condition = Condition::named("hungry");
+/// How fast the food goes (1 vanilla's, 0 never): a world rule, and one player's by `/attribute`.
+static HUNGER_RATE: Attribute = Attribute::named("hunger_rate");
 static HUD_FOOD: HudElement = HudElement::named("food");
 static HUD_AIR: HudElement = HudElement::named("air");
 static HUD_ATTACK: HudElement = HudElement::named("attack_indicator");
@@ -58,6 +60,7 @@ pub fn register(r: &mut Registry) {
                 .is_some_and(|h| h.food <= 6.0)
         })
     });
+    r.attribute(&HUNGER_RATE, 1.0, 0.0, 10.0).rule();
     r.edit(&PLAYER)
         .attach(&HUNGER)
         .modifier(Modifier::add(&attribute::CAN_SPRINT, -1.0).when(&HUNGRY));
@@ -136,6 +139,7 @@ pub fn register(r: &mut Registry) {
     // Survival bars; a negative value hides them (creative).
     r.hud_element(&HUD_HEALTH, hud_anchor::HOTBAR_LEFT, 0, |ui| {
         ui.icons("heart", 10, |c| if c.outside_survival() { -1.0 } else { c.player_state().map_or(20.0, |s| s.health.ceil()) })
+            .max_by(|c| c.player_state().map_or(20.0, |s| s.max_health.ceil()))
             .shaking()
             .flash_on_gain(0.5)
             .flash_on_loss(1.0);
@@ -327,6 +331,7 @@ fn tick_players(w: &World) {
         if st.jumped != 0 {
             tire(w, id, if st.sprinting != 0 { 0.2 } else { 0.05 });
         }
+        let per_point = 4.0 / w.attribute(id, &HUNGER_RATE) as f32;
         let Some(h) = w.component_mut(id, &HUNGER) else { continue };
         // Modern's: 0.1 a block sprinting, 0.01 swimming, 0 walking; jumps are counted from `Move`.
         h.exhaustion += st.moved
@@ -337,8 +342,8 @@ fn tick_players(w: &World) {
             } else {
                 0.0
             };
-        if h.exhaustion > 4.0 {
-            h.exhaustion -= 4.0;
+        if h.exhaustion > per_point {
+            h.exhaustion -= per_point;
             if h.saturation > 0.0 {
                 h.saturation = (h.saturation - 1.0).max(0.0);
             } else {
