@@ -2469,10 +2469,14 @@ impl Client {
     }
 
     /// `list` goes in the world's pass, `early` before it.
+    /// The world into `list`; into `after` what is drawn over it once the depth of the solid world
+    /// has been taken for the next frame's occlusion culling: the sky, clouds, translucent
+    /// things, particles, weather and the hand, none of which hide what is behind them for good.
     pub fn render(
         &mut self,
         gpu: &mut dyn Backend,
         list: &mut CommandList,
+        after: &mut CommandList,
         early: &mut CommandList,
         frame: &FrameInfo,
         textures: &GameTextures,
@@ -2592,10 +2596,10 @@ impl Client {
         self.weather_render
             .draw(gpu, &mut late, frame, &cam, scene_buf, &self.world, self.look.falls, ticks, self.frame_dt);
         self.sky.draw_overlay(&mut hand_late, scene_buf);
-        list.append(&mut late);
-        list.append(&mut hand_late);
+        after.append(&mut late);
+        after.append(&mut hand_late);
         (self.late, self.hand_late) = (late, hand_late);
-        list.push(weft_render::Cmd::Mark);
+        after.push(weft_render::Cmd::Mark);
     }
 
     pub fn fog_color(&self) -> [f32; 4] {
