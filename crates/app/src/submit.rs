@@ -1,4 +1,4 @@
-//! `weft --submit-mod <dir> [--owner <login>]`: sends a mod's pushed commit to the mod index as
+//! `weft submit-mod <dir> [--owner <login>]`: sends a mod's pushed commit to the mod index as
 //! one new file, `mods/<id>/<version>.toml`. The index builds the mod itself from that commit, so
 //! nothing is uploaded from here. With the GitHub CLI (`gh`) logged in the pull request is opened
 //! from here; otherwise the browser opens GitHub's page for the new file, filled in.
@@ -91,7 +91,7 @@ fn pull_request(id: &str, version: &str, path: &str, file: &str) -> Result<Strin
         git(&tmp, &args)?;
     }
     let pr = Command::new("gh")
-        .args(["pr", "create", "--repo", INDEX, "--title", &title, "--body", "Submitted with weft --submit-mod."])
+        .args(["pr", "create", "--repo", INDEX, "--title", &title, "--body", "Submitted with weft submit-mod."])
         .current_dir(&tmp)
         .output()
         .map_err(|e| format!("gh: {e}"))?;

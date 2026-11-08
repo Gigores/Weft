@@ -1,4 +1,4 @@
-//! `weft --server`: the world and the network with nobody playing on this machine, no window and
+//! `weft server`: the world and the network with nobody playing on this machine, no window and
 //! no GPU. Options: `--world name` (made if new), `--seed n`, `--port n`, `--run-dir dir`. What it
 //! keeps is where a game keeps it (`config/`, `saves/`). `config/whitelist.txt`, keys one a line,
 //! limits who may join; without it anyone can, and nobody may do more than play until `op`.

@@ -67,7 +67,7 @@ pub struct ServerConfig {
     pub seed: u64,
     /// View radius in cubes, sideways and up and down alike.
     pub view_radius: i32,
-    /// `--server`: nobody plays on this machine, so nobody owns the world by connecting first.
+    /// `weft server`: nobody plays on this machine, so nobody owns the world by connecting first.
     pub dedicated: bool,
     /// Who may join: keys, one a line. No file, anyone.
     pub whitelist: Option<std::path::PathBuf>,
