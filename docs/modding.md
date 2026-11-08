@@ -398,6 +398,7 @@ It works on other mods' dimensions too, so adding a biome to base's overworld is
 - `r.shapeless(..)`
 
 Recipe kinds are registered too (`r.recipe_kind`), a furnace is just a kind with stations.\
+What else a recipe gives besides its result is loot pools: `.extra(Pool::new()..)` is rolled the way a loot table is, and `.output("slag", 1)` and `.output_chance("diamond", 1, 0.05)` are pools made for you. The recipe viewer shows each item with its chance, and `recipe.roll(&w)` gives what one run brings.\
 A recipe is named after its kind and output in the namespace of the mod making it: base's crafting recipe for torches is `base:crafting/torch`, a second one of base's for torches `base:crafting/torch/2`, and so on in the order it makes them; `.named("torch_from_coal")` gives it one of your choice. By that name other mods change it like anything else: `r.remove(&Recipe::named("base:crafting/torch"))`, or `r.edit(&SMELTING_ALL).hidden()` with `static SMELTING_ALL: Recipe = Recipe::named("base:smelting/*")`.
 
 ### Loot

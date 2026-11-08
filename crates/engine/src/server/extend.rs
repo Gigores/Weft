@@ -440,6 +440,17 @@ impl Dim {
         entity: u64,
     ) -> Vec<weft_abi::ItemStack> {
         let Some(t) = c.loot.get(table) else { return Vec::new() };
+        self.roll_table(c, t, ctx, pos, entity)
+    }
+
+    pub fn roll_table(
+        &mut self,
+        c: &'static Content,
+        t: &crate::loot::Table,
+        ctx: &crate::loot::Ctx,
+        pos: glam::DVec3,
+        entity: u64,
+    ) -> Vec<weft_abi::ItemStack> {
         let ask = crate::conditions::Ask { pos, entity, state: ctx.state, loot: Some(ctx), ..Default::default() };
         let me = std::cell::RefCell::new(self);
         let mut rng = || me.borrow_mut().random_unit();

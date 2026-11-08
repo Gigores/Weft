@@ -1718,12 +1718,20 @@ impl RecipeBuilder<'_> {
     }
     /// Another result (an item, or a liquid by its name and millibuckets).
     pub fn output(self, item: &str, count: u32) -> Self {
-        self.output_chance(item, count, 1.0)
+        self.extra(crate::Pool::new().items(item, count, count))
     }
-    /// A result that comes out with chance `chance` (0..1) each time.
+    /// A result that comes out with chance `chance` (0..1) each time: a pool of it and nothing.
     pub fn output_chance(self, item: &str, count: u32, chance: f32) -> Self {
-        let item = self.reg.ingredient(item);
-        self.push(&comps::recipe::OUTPUTS, abi::RecipeOutput { item, count, chance })
+        let w = (chance.clamp(0.0, 1.0) * 1000.0).round() as u32;
+        let pool = crate::Pool::new()
+            .entry(crate::Entry::item(item).count(count, count).weight(w))
+            .entry(crate::Entry::nothing().weight(1000 - w));
+        self.extra(pool)
+    }
+    /// Rolls of more results, as a loot table's (`r.loot(..).pool(..)`).
+    pub fn extra(self, pool: crate::Pool) -> Self {
+        let pool = pool.raw(self.reg.ns);
+        self.push(&comps::recipe::OUTPUTS, pool)
     }
     /// Works, but the recipe viewer doesn't list it.
     pub fn hidden(self) -> Self {
@@ -1899,6 +1907,13 @@ impl RecipeView {
                 (s, chance)
             })
             .collect()
+    }
+    /// What else one run of it gives this time, its pools rolled.
+    pub fn roll(&self, w: &crate::World) -> Vec<ItemStack> {
+        let mut buf = vec![ItemStack::EMPTY; 16];
+        let n = unsafe { (host().recipe_roll)(w.raw(), Str::new(&self.kind), self.index, buf.as_mut_ptr(), buf.len()) };
+        buf.truncate(n.min(buf.len()));
+        buf
     }
     /// A value the recipe carries (`r.shaped(..).set(&COMP, v)`): its entry's.
     pub fn value<T: Value, K>(&self, comp: &Component<T, K>) -> Option<T> {

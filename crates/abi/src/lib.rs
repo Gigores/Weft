@@ -912,8 +912,8 @@ pub mod comp {
     /// of key characters of a shaped one) with `KEYS` (`[RecipeKey]`), `INPUTS` (`[str]`, of a
     /// shapeless or processing one: item names or `#tags`, a liquid by its name) with `AMOUNTS`
     /// (`[u32]`, of each, millibuckets for liquids, 1), `OUTPUT` (`str`) and `COUNT` (`u32`, 1),
-    /// `TIME` (`u32`, ticks, the kind says what they mean, 0), `OUTPUTS` (`[RecipeOutput]`, more
-    /// results), tag `HIDDEN` (works, the recipe viewer doesn't list it). Any other component is
+    /// `TIME` (`u32`, ticks, the kind says what they mean, 0), `OUTPUTS` (`[LootPool]`, more
+    /// results, rolled as loot is: a 5% one is a pool of it and nothing by weight), tag `HIDDEN` (works, the recipe viewer doesn't list it). Any other component is
     /// data it carries for what makes it (energy per tick).
     pub mod recipe {
         pub const KIND: &str = "recipe.kind";
@@ -2783,12 +2783,6 @@ crate::data! {
     pub struct RecipeKey { pub name: alloc::string::String, pub item: alloc::string::String }
 }
 
-crate::data! {
-    /// A result of a recipe after its output: an item, or a liquid by its name and millibuckets,
-    /// coming out with `chance` (0..1) each time.
-    pub struct RecipeOutput { pub item: alloc::string::String, pub count: u32, pub chance: f32 }
-}
-
 /// A recipe the viewer shows with a kind's own `display`.
 #[repr(C)]
 pub struct RecipeUiArgs {
@@ -3318,8 +3312,11 @@ pub struct Host {
     /// `stacks`, any order: its number + 1, or 0.
     pub recipe_find: unsafe extern "C" fn(kind: Str, stacks: *const ItemStack, count: u32, from: u32) -> u32,
     pub recipe_info: unsafe extern "C" fn(kind: Str, recipe: u32, out: *mut RecipeInfo) -> u32,
-    /// Output `index` of a recipe, a liquid's as its item by the millibucket, and its chance.
+    /// Output `index` of a recipe, a liquid's as its item by the millibucket, and its chance: the
+    /// main one, then each its pools can give, with the most of it.
     pub recipe_output: unsafe extern "C" fn(kind: Str, recipe: u32, index: u32, stack: *mut ItemStack, chance: *mut f32) -> u32,
+    /// Rolls the recipe's pools for what else one run of it gives, like `roll_loot`.
+    pub recipe_roll: unsafe extern "C" fn(world: *mut WorldCtx, kind: Str, recipe: u32, out: *mut ItemStack, max: usize) -> usize,
     /// Takes the recipe's inputs out of `stacks` (counts, the matching stacks); 0 if they are not
     /// all there, then nothing changes.
     pub recipe_consume: unsafe extern "C" fn(kind: Str, recipe: u32, stacks: *mut ItemStack, count: u32) -> u32,

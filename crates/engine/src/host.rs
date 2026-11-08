@@ -84,6 +84,7 @@ pub static HOST: Host = Host {
     recipe_find,
     recipe_info,
     recipe_output,
+    recipe_roll,
     recipe_consume,
     item_block,
     ui_open: crate::client::modui::ui_open,
@@ -1438,6 +1439,17 @@ unsafe extern "C" fn recipe_output(kind: Str, recipe: u32, index: u32, stack: *m
         *chance = o.chance;
     }
     1
+}
+
+unsafe extern "C" fn recipe_roll(w: *mut abi::WorldCtx, kind: Str, recipe: u32, out: *mut ItemStack, max: usize) -> usize {
+    let Some(r) = recipe_at(kind, recipe) else { return 0 };
+    unsafe {
+        let stacks = dim(w).roll_table(content(), &r.extras, &Default::default(), DVec3::ZERO, 0);
+        for (i, s) in stacks.iter().take(max).enumerate() {
+            *out.add(i) = *s;
+        }
+        stacks.len()
+    }
 }
 
 unsafe extern "C" fn recipe_consume(kind: Str, recipe: u32, stacks: *mut ItemStack, count: u32) -> u32 {

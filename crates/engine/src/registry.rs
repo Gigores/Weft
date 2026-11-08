@@ -272,8 +272,10 @@ pub struct Recipe {
     pub inputs: Vec<Ingredient>,
     /// How many of each input (millibuckets for fluids).
     pub input_counts: Vec<u32>,
-    /// The main result first.
+    /// The main result, then each its pools can give (`extras`) with the most of it and its chance.
     pub outputs: Vec<RecipeOutput>,
+    /// What else one run gives, rolled as loot.
+    pub extras: crate::loot::Table,
     pub time: u32,
     /// Its entry, whose component table row has what else it carries (`comp::recipe::HIDDEN`, a
     /// mod's values).
@@ -711,8 +713,8 @@ pub struct RawRecipe {
     pub output: String,
     pub count: u32,
     pub time: u32,
-    /// (item, count, chance) after the main output; a liquid is its item.
-    pub outputs: Vec<(String, u32, f32)>,
+    /// Pools for what else it gives; a liquid is its item.
+    pub outputs: Vec<abi::LootPool>,
     /// Its entry: recipes expanded from one share it.
     pub entry: u32,
 }
@@ -1601,11 +1603,7 @@ fn raw_recipe(e: &Entry) -> RawRecipe {
         output: text(r::OUTPUT),
         count: e.or(r::COUNT, 1u32).max(1),
         time: e.or(r::TIME, 0),
-        outputs: e
-            .or::<Vec<abi::RecipeOutput>>(r::OUTPUTS, Vec::new())
-            .into_iter()
-            .map(|o| (o.item, o.count.max(1), o.chance))
-            .collect(),
+        outputs: e.or(r::OUTPUTS, Vec::new()),
         entry: 0,
     }
 }
@@ -2321,17 +2319,36 @@ pub fn freeze(
         let input_counts = (0..inputs.len())
             .map(|i| r.input_counts.get(i).copied().unwrap_or(1).max(1))
             .collect();
-        let mut outputs = vec![RecipeOutput { what: Ingredient::Item(output), count: r.count, chance: 1.0 }];
-        for (name, count, chance) in &r.outputs {
-            match one(name).map(Ingredient::Item) {
-                Ok(w) => outputs.push(RecipeOutput { what: w, count: *count, chance: chance.clamp(0.0, 1.0) }),
-                Err(e) => errors.push(format!("recipe for {}: output: {e}", r.output)),
+        // A tag stands for its first item here as in the main output.
+        let mut pools = r.outputs;
+        for e in pools.iter_mut().flat_map(|p| &mut p.entries) {
+            if e.item.starts_with('#') {
+                match one(&e.item) {
+                    Ok(i) => e.item = items[i as usize].name.clone(),
+                    Err(err) => errors.push(format!("recipe for {}: output: {err}", r.output)),
+                }
             }
+        }
+        let extras = crate::loot::Resolve { items: item_names, conds: &mut *conds }.pools(&pools, errors, &r.output);
+        let mut outputs = vec![RecipeOutput { what: Ingredient::Item(output), count: r.count, chance: 1.0 }];
+        for p in &extras.pools {
+            let total = p.entries.iter().map(|e| e.weight).sum::<u32>().max(1) as f32;
+            let rolls = (p.rolls.0 + p.rolls.1) as f32 / 2.0;
+            outputs.extend(
+                p.entries
+                    .iter()
+                    .filter(|e| e.item != 0)
+                    .map(|e| RecipeOutput {
+                        what: Ingredient::Item(e.item),
+                        count: e.max,
+                        chance: (e.weight as f32 / total * rolls).min(1.0),
+                    }),
+            );
         }
         g.recipes
             .entry(r.kind)
             .or_default()
-            .push(Recipe { shaped, inputs, input_counts, outputs, time: r.time, entry: r.entry });
+            .push(Recipe { shaped, inputs, input_counts, outputs, extras, time: r.time, entry: r.entry });
     }
     g
 }
@@ -2644,7 +2661,7 @@ fn expand_variables(r: RawRecipe, tags: &FxHashMap<&str, u32>) -> Result<Vec<Raw
         .map(|k| &k.1)
         .chain(&r.inputs)
         .chain(std::iter::once(&r.output))
-        .chain(r.outputs.iter().map(|o| &o.0))
+        .chain(r.outputs.iter().flat_map(|p| &p.entries).map(|e| &e.item))
         .collect();
     let Some(pattern) = names
         .iter()
@@ -2681,7 +2698,18 @@ fn expand_variables(r: RawRecipe, tags: &FxHashMap<&str, u32>) -> Result<Vec<Raw
                 output: sub(&r.output),
                 count: r.count,
                 time: r.time,
-                outputs: r.outputs.iter().map(|o| (sub(&o.0), o.1, o.2)).collect(),
+                outputs: r
+                    .outputs
+                    .iter()
+                    .map(|p| abi::LootPool {
+                        entries: p
+                            .entries
+                            .iter()
+                            .map(|e| abi::LootEntry { item: sub(&e.item), ..e.clone() })
+                            .collect(),
+                        ..p.clone()
+                    })
+                    .collect(),
                 entry: r.entry,
             });
         }

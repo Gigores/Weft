@@ -614,7 +614,7 @@ impl Pool {
     pub fn items(self, name: &str, min: u32, max: u32) -> Pool {
         self.entry(Entry::item(name).count(min, max))
     }
-    fn raw(&self, ns: &str) -> abi::LootPool {
+    pub(crate) fn raw(&self, ns: &str) -> abi::LootPool {
         let conds = |c: &[Cond]| c.iter().map(|c| c.0.clone()).collect();
         let entries = self
             .entries
