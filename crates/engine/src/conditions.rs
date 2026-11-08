@@ -226,7 +226,18 @@ impl Parser<'_, '_> {
         let engine = (id as usize) < k::NAMES.len();
         let Some(text) = arg else {
             return match id {
-                k::LIGHT | k::CHANCE | k::BLOCK | k::STATE | k::TOOL | k::TOOL_LEVEL | k::SIDE | k::BESIDE | k::OPEN | k::ATTRIBUTE
+                k::LIGHT
+                | k::CHANCE
+                | k::BLOCK
+                | k::STATE
+                | k::TOOL
+                | k::TOOL_LEVEL
+                | k::SIDE
+                | k::BESIDE
+                | k::OPEN
+                | k::ATTRIBUTE
+                | k::SKY
+                | k::HEIGHT
                     if engine =>
                 {
                     Err(format!("condition {name} needs an argument"))
@@ -247,7 +258,7 @@ impl Parser<'_, '_> {
         };
         Ok(match id {
             _ if !engine => Arg::Text(text),
-            k::LIGHT => range(&text)?,
+            k::LIGHT | k::SKY | k::HEIGHT => range(&text)?,
             k::ATTRIBUTE => {
                 let (attr, r) = text
                     .split_once(',')
@@ -385,8 +396,8 @@ fn server(d: &mut Dim, c: &'static Content, e: &Expr, a: &Ask) -> Option<bool> {
             return Some(v);
         }
         let def = c.game.conditions.get(id as usize)?;
-        let changes =
-            matches!(def.answer, Answer::Mod(..)) || matches!(id, k::DAY | k::NIGHT | k::UNDERGROUND | k::SURFACE | k::LIGHT | k::CHANCE);
+        let changes = matches!(def.answer, Answer::Mod(..))
+            || matches!(id, k::DAY | k::NIGHT | k::UNDERGROUND | k::SURFACE | k::LIGHT | k::CHANCE | k::SKY | k::SHELTERED);
         if a.could && changes {
             return None;
         }
@@ -413,6 +424,9 @@ fn server(d: &mut Dim, c: &'static Content, e: &Expr, a: &Ask) -> Option<bool> {
                 (k::SURFACE, _) => sky(),
                 (k::LIGHT, _) => in_range(arg, abi::light::effective(d.light(p), a.daylight.unwrap_or_else(|| d.daylight(c))) as f32),
                 (k::CHANCE, Arg::Num(n)) => d.random_unit() < *n,
+                (k::SKY, _) => in_range(arg, abi::light::sky(d.light(p)) as f32),
+                (k::SHELTERED, _) => c.game.weathers[d.weather as usize].shelters(),
+                (k::HEIGHT, _) => in_range(arg, a.pos.y as f32),
                 (k::ATTRIBUTE, _) => in_range(arg, d.attribute(c, a.entity, attr(arg), false) as f32),
                 (k::SIDE, Arg::Side(f, m)) => {
                     let solid = |s: u32| c.states[s as usize].flags & abi::block_flags::SOLID != 0;
@@ -486,6 +500,9 @@ pub fn client_holds(client: Option<&crate::client::Client>, e: &Expr, a: &Ask) -
                     in_range(arg, abi::light::effective(l, a.daylight.unwrap_or_else(|| cl.daylight())) as f32)
                 }),
                 k::ATTRIBUTE => client.is_some_and(|cl| in_range(arg, cl.attribute(attr(arg)))),
+                k::SKY => client.is_some_and(|cl| in_range(arg, abi::light::sky(cl.world.light(a.pos.floor().as_ivec3())) as f32)),
+                k::SHELTERED => client.is_some_and(|cl| c.game.weathers[cl.weather_id as usize].shelters()),
+                k::HEIGHT => in_range(arg, a.pos.y as f32),
                 // Rolled where the world is.
                 _ => false,
             },

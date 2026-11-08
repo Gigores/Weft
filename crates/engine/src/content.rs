@@ -614,6 +614,10 @@ pub struct DimensionDef {
     pub column: Option<(ModId, Callback)>,
     pub min_cube_y: i32,
     pub max_cube_y: i32,
+    /// What it does to the entities in it (`abi::comp::dimension::HAZARDS`): as registered, then
+    /// resolved with its void.
+    pub raw_hazards: Vec<abi::Hazard>,
+    pub hazards: Vec<Hazard>,
     pub sky_cube_y: i32,
     pub sky_light: bool,
     pub gravity: f32,
@@ -1463,6 +1467,8 @@ fn bake_dimension(e: &Entry) -> DimensionDef {
         .collect();
     daylight.sort_by(|a, b| a[0].total_cmp(&b[0]));
     DimensionDef {
+        raw_hazards: e.or(abi::comp::dimension::HAZARDS, Vec::new()),
+        hazards: Vec::new(),
         name: e.name.clone(),
         owner: e.owner,
         generator: e.callback(d::GENERATOR),
@@ -1502,6 +1508,8 @@ pub const VOID_DIM: &str = "core:void";
 
 fn void_dimension() -> DimensionDef {
     DimensionDef {
+        raw_hazards: Vec::new(),
+        hazards: Vec::new(),
         name: VOID_DIM.into(),
         owner: crate::registry::ENGINE,
         generator: None,
@@ -1919,7 +1927,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
         &mod_name,
         &mut errors,
     );
-    resolve_hazards(&mut states, raw_hazards, &game, &components, &mut conds, &mut errors);
+    resolve_hazards(&mut states, raw_hazards, &mut game, &mut dim_defs, &components, &mut conds, &mut errors);
     let source_mods = resolve_source_mods(&game, &components, item_defs.len(), &mut conds, &mut errors);
     let conds = crate::conditions::compile_all(
         &conds,
@@ -3124,38 +3132,46 @@ fn resolve_rules(
     }
 }
 
-/// Every state's hazards with their causes and conditions resolved, and the engine's: an opaque
-/// full block suffocates at the head, a `hot` one without its own burns like lava.
+/// Every state's, entity kind's and dimension's hazards with their causes and conditions
+/// resolved, and the engine's: an opaque full block suffocates at the head, a `hot` one without
+/// its own burns like lava, 64 blocks under a dimension's floor the void hurts.
 fn resolve_hazards(
     states: &mut [StateInfo],
     raw: Vec<(usize, Vec<abi::Hazard>)>,
-    game: &crate::registry::Game,
+    game: &mut crate::registry::Game,
+    dims: &mut [DimensionDef],
     components: &Components,
     conds: &mut crate::conditions::Texts,
     errors: &mut Vec<String>,
 ) {
     use abi::hazard_at as at;
-    let cause = |name: &str, errors: &mut Vec<String>| {
-        if name.is_empty() {
-            return None;
-        }
-        let id = game.damage_cause_names.get(name).copied();
-        if id.is_none() {
-            errors.push(format!("hazard: no damage cause {name}"));
-        }
-        id
+    let causes = &game.damage_cause_names;
+    let mut resolve = |list: Vec<abi::Hazard>, conds: &mut crate::conditions::Texts| -> Vec<Hazard> {
+        list.into_iter()
+            .map(|h| {
+                let cause = (!h.cause.is_empty())
+                    .then(|| causes.get(&h.cause).copied())
+                    .flatten();
+                if cause.is_none() && !h.cause.is_empty() {
+                    errors.push(format!("hazard: no damage cause {}", h.cause));
+                }
+                Hazard { at: h.at, damage: h.damage, cause, fire: h.fire, every: h.every, when: conds.all(&h.when) }
+            })
+            .collect()
     };
     for (state, list) in raw {
-        for h in list {
-            let cause = cause(&h.cause, errors);
-            states[state].hazards.push(Hazard {
-                at: h.at,
-                damage: h.damage,
-                cause,
-                fire: h.fire,
-                every: h.every,
-                when: conds.all(&h.when),
-            });
+        states[state].hazards = resolve(list, conds);
+    }
+    for k in &mut game.entities {
+        k.hazards = resolve(std::mem::take(&mut k.raw_hazards), conds);
+    }
+    for d in dims.iter_mut() {
+        d.hazards = resolve(std::mem::take(&mut d.raw_hazards), conds);
+        if d.min_cube_y != i32::MIN {
+            let below = conds.all(&[format!("height(..{})", d.min_cube_y * 16 - 64)]);
+            let void = Some(abi::damage_cause::VOID);
+            d.hazards
+                .push(Hazard { at: at::SELF, damage: 4.0, cause: void, fire: 0, every: 10, when: below });
         }
     }
     let hot = components.id(abi::comp::HOT);

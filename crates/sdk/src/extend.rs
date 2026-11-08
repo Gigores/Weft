@@ -502,9 +502,11 @@ impl Rule {
     }
 }
 
-/// What a block does to an entity meeting it (`.hazard(..)`): `Hazard::touch(1.0, &CACTUS)` a
-/// cactus, `Hazard::on(1.0, &HOT_FLOOR)` magma, `Hazard::inside(1.0, &damage_causes::FIRE).fire(160)`
-/// fire; `.every(ticks)` between hits, `.when(..)` conditions about the entity there.
+/// What a block, an entity kind or a dimension does to an entity meeting it (`.hazard(..)`):
+/// `Hazard::touch(1.0, &CACTUS)` a cactus, `Hazard::on(1.0, &HOT_FLOOR)` magma,
+/// `Hazard::inside(1.0, &damage_causes::FIRE).fire(160)` fire, `Hazard::own(..)` a kind's to
+/// itself or a dimension's to whoever is in it, `Hazard::crushed(..)` a body's to what it
+/// squeezes; `.every(ticks)` between hits, `.when(..)` conditions about the entity there.
 #[derive(Clone)]
 pub struct Hazard(pub(crate) abi::Hazard);
 
@@ -528,9 +530,23 @@ impl Hazard {
     pub fn touch(damage: f32, cause: &crate::DamageCause) -> Hazard {
         Hazard::of(abi::hazard_at::TOUCH, damage, cause)
     }
+    /// Wherever it is, asked at its eyes: an entity kind's to itself, a dimension's to everyone
+    /// in it (`.when(..)` says where: `height(..0)`).
+    pub fn own(damage: f32, cause: &crate::DamageCause) -> Hazard {
+        Hazard::of(abi::hazard_at::SELF, damage, cause)
+    }
+    /// A body of this kind squeezes it into something solid; the body crushes instead of pushing.
+    pub fn crushed(damage: f32, cause: &crate::DamageCause) -> Hazard {
+        Hazard::of(abi::hazard_at::CRUSHED, damage, cause)
+    }
     /// Sets it burning for that many ticks too.
     pub fn fire(mut self, ticks: u32) -> Hazard {
         self.0.fire = ticks;
+        self
+    }
+    /// No damage of its own: only `fire`.
+    pub fn harmless(mut self) -> Hazard {
+        self.0.cause.clear();
         self
     }
     pub fn every(mut self, ticks: u32) -> Hazard {

@@ -476,6 +476,7 @@ pub mod dimension {
     use crate::abi::{self, comp::dimension as d};
     use crate::kind::Dimension;
     pub static GENERATOR: Component<abi::Callback, Dimension> = Component::named(d::GENERATOR);
+    pub static HAZARDS: Component<Vec<abi::Hazard>, Dimension> = Component::named(d::HAZARDS);
     pub static SPAWN: Component<abi::Callback, Dimension> = Component::named(d::SPAWN);
     pub static COLUMN: Component<abi::Callback, Dimension> = Component::named(d::COLUMN);
     pub static CUBES: Component<[i32; 2], Dimension> = Component::named(d::CUBES);
@@ -540,6 +541,7 @@ pub mod entity {
     use crate::abi::{self, comp::entity as e};
     use crate::kind::Entity;
     pub static SIZE: Component<abi::BodySize, Entity> = Component::named(e::SIZE);
+    pub static HAZARDS: Component<Vec<abi::Hazard>, Entity> = Component::named(e::HAZARDS);
     pub static EYE: Component<f32, Entity> = Component::named(e::EYE);
     pub static SPEED: Component<f32, Entity> = Component::named(e::SPEED);
     pub static CARRY_HEIGHT: Component<f32, Entity> = Component::named(e::CARRY_HEIGHT);

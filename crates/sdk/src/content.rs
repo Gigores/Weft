@@ -2620,6 +2620,11 @@ pub struct DimensionBuilder<'a> {
 }
 
 impl DimensionBuilder<'_> {
+    /// What it does to whoever is in it (`Hazard::own(..).when(..)`), besides its void 64 blocks
+    /// under its floor.
+    pub fn hazard(self, h: crate::Hazard) -> Self {
+        self.push(&crate::comps::dimension::HAZARDS, h.0)
+    }
     /// Must be a pure function of its input: it runs in parallel and must give the same cube for the
     /// same seed and position on every machine.
     pub fn generator(self, f: impl Fn(&mut Gen) + Send + Sync + 'static) -> Self {

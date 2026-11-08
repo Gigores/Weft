@@ -1205,6 +1205,7 @@ pub mod comp {
         pub const COLUMN: &str = "dimension.column";
         pub const CUBES: &str = "dimension.cubes";
         pub const SKY_ABOVE: &str = "dimension.sky_above";
+        pub const HAZARDS: &str = "dimension.hazards";
         pub const GRAVITY: &str = "dimension.gravity";
         pub const DAY_LENGTH: &str = "dimension.day_length";
         pub const FIXED_TIME: &str = "dimension.fixed_time";
@@ -1295,15 +1296,14 @@ pub mod comp {
         pub const INVENTORY_MENU: &str = "entity.inventory_menu";
         pub const NO_GRAVITY: &str = "entity.no_gravity";
         pub const INVULNERABLE: &str = "entity.invulnerable";
-        /// Burns in daylight (undead).
-        pub const BURNS_IN_SUN: &str = "entity.burns_in_sun";
+        /// `[Hazard]`: what it does to entities, itself (`hazard_at::SELF`: the sun burning
+        /// the undead) or what it squeezes (`CRUSHED`).
+        pub const HAZARDS: &str = "entity.hazards";
         pub const SWIMS: &str = "entity.swims";
         /// A solid body: others stand on it (riding along), bump into it and get pushed by it.
         pub const SOLID: &str = "entity.solid";
         /// Moved exactly by its velocity (set by mod logic): no gravity, no block collision.
         pub const KINEMATIC: &str = "entity.kinematic";
-        /// A solid body hurts what it squeezes against blocks instead of only pushing.
-        pub const CRUSHES: &str = "entity.crushes";
         /// Its riders take the damage of its falls too, as a horse's rider does.
         pub const RIDERS_FALL: &str = "entity.riders_fall";
         /// Has the equipment slots (`Registry::equipment_slot`) the player has, after its own:
@@ -1625,14 +1625,22 @@ pub mod hazard_at {
     pub const HEAD: u32 = 2;
     /// Its box is within a sixteenth of the shape: a cactus.
     pub const TOUCH: u32 = 3;
+    /// Wherever it is, asked at its eyes: an entity kind's own (the sun burning a zombie) or a
+    /// dimension's (the void).
+    pub const SELF: u32 = 4;
+    /// A body of this kind squeezes it into something solid; a kind with one crushes instead of
+    /// only pushing.
+    pub const CRUSHED: u32 = 5;
 }
 
 crate::data! {
-    /// What a block does to an entity meeting it `at` (`hazard_at`, `comp::block::HAZARDS`): every
+    /// What a block, an entity kind or a dimension does to an entity meeting it `at` (`hazard_at`,
+    /// `comp::block::HAZARDS`, `comp::entity::HAZARDS`, `comp::dimension::HAZARDS`): every
     /// `every` ticks (0 or 1: each tick, a hurt entity's pause between hits aside) while all of
     /// `when` hold for the entity there (`condition`, `!flying`), `damage` of `cause` (a damage
     /// cause, empty for none) and `fire` ticks of burning. Every opaque full block suffocates
-    /// at the head; a `hot` one without hazards of its own burns like lava.
+    /// at the head; a `hot` one without hazards of its own burns like lava; every dimension's
+    /// void hurts 64 blocks below its floor.
     pub struct Hazard {
         pub at: u32,
         pub damage: f32,
@@ -3859,7 +3867,13 @@ pub mod condition {
     pub const OPEN: u32 = 19;
     /// Something opaque is on top.
     pub const COVERED: u32 = 20;
-    pub const NAMES: [&str; 21] = [
+    /// `sky(15)`, `sky(..7)`: the sky light there, 0..15, whatever the time of day.
+    pub const SKY: u32 = 21;
+    /// The weather now shelters from the sun (not `comp::weather::UNSHELTERED`): rain.
+    pub const SHELTERED: u32 = 22;
+    /// `height(..-64)`: the height there, in blocks.
+    pub const HEIGHT: u32 = 23;
+    pub const NAMES: [&str; 24] = [
         "core:day",
         "core:night",
         "core:underground",
@@ -3881,6 +3895,9 @@ pub mod condition {
         "core:beside",
         "core:open",
         "core:covered",
+        "core:sky",
+        "core:sheltered",
+        "core:height",
     ];
 }
 

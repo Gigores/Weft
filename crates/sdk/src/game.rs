@@ -857,9 +857,22 @@ impl EntityBuilder<'_> {
     pub fn kinematic(self) -> Self {
         self.tag(abi::comp::entity::KINEMATIC)
     }
+    /// What it does to entities: itself (`Hazard::own`) or what it squeezes (`Hazard::crushed`).
+    pub fn hazard(self, h: crate::Hazard) -> Self {
+        self.push(&crate::comps::entity::HAZARDS, h.0)
+    }
     /// A solid body that hurts what it squeezes into blocks instead of only pushing it.
     pub fn crushing(self) -> Self {
-        self.tag(abi::comp::entity::CRUSHES)
+        self.hazard(crate::Hazard::crushed(1.0, &crate::damage_causes::CRUSH))
+    }
+    /// Daylight from an open sky sets it burning for 8 seconds, as the undead in vanilla.
+    pub fn burns_in_sun(self) -> Self {
+        let sun = crate::Hazard::own(0.0, &crate::damage_causes::FIRE)
+            .harmless()
+            .fire(160)
+            .every(20)
+            .when(crate::Cond::new("day & sky(15) & !sheltered & !in_liquid"));
+        self.hazard(sun)
     }
     /// Riders up to `blocks` above the body (jumping, flying around inside it) keep moving with
     /// it and their own motion stays relative to it, so a jump on a fast ship lands on the ship.

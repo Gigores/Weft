@@ -121,6 +121,10 @@ pub struct EntityKind {
     pub effects: [crate::content::Fx; 4],
     /// Solid bodies: riders up to this high above it move with it.
     pub carry_height: f32,
+    /// What it does to entities, itself among them (`abi::comp::entity::HAZARDS`): as
+    /// registered, then resolved at freeze.
+    pub raw_hazards: Vec<abi::Hazard>,
+    pub hazards: Vec<crate::content::Hazard>,
     /// A moving structure: its template (`Content::templates`), by name until the freeze.
     pub template_name: String,
     pub template: Option<u32>,
@@ -1490,6 +1494,8 @@ fn bake_entity(e: &Entry) -> EntityKind {
         worn: 0..0,
         effects: [crate::content::Fx::NONE; 4],
         carry_height: e.or(k::CARRY_HEIGHT, 0.0),
+        raw_hazards: e.or(k::HAZARDS, Vec::new()),
+        hazards: Vec::new(),
         template_name: text(k::TEMPLATE),
         template: None,
         seats: e

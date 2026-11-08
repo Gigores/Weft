@@ -135,11 +135,11 @@ A kind of entity: mobs, players, projectiles, moving platforms, block entities. 
 | `FRAMES` | `[callback]` | none | client frame hooks (`r.client_entity_frame`) |
 | `SLOT_GROUPS`, `INVENTORY_MENU` | `[SlotGroupDef]`, `str` | 9 + 27 | the player's inventory (`r.player_slots`, `r.player_menu`) |
 
-Shared ones: `MODEL`, `ANIMATIONS`, `SOUND`, `SHADER`, `SWIMS_IN`, `INVENTORY_SLOTS`, attributes (`.max_health`, `.reach`). Tags (`abi::comp::entity`): `NO_GRAVITY`, `INVULNERABLE`, `BURNS_IN_SUN`, `SWIMS`, `SOLID`, `KINEMATIC`, `CRUSHES`, `RIDERS_FALL`, `WEARS` (`.equipment()`), and `NO_FALL_DAMAGE`, `UNPUSHABLE` turning off what every kind does; `immune/<cause>` against a damage cause.
+Shared ones: `MODEL`, `ANIMATIONS`, `SOUND`, `SHADER`, `SWIMS_IN`, `INVENTORY_SLOTS`, `HAZARDS` (`.hazard(..)`, `.burns_in_sun()`, `.crushing()`), attributes (`.max_health`, `.reach`). Tags (`abi::comp::entity`): `NO_GRAVITY`, `INVULNERABLE`, `SWIMS`, `SOLID`, `KINEMATIC`, `RIDERS_FALL`, `WEARS` (`.equipment()`), and `NO_FALL_DAMAGE`, `UNPUSHABLE` turning off what every kind does; `immune/<cause>` against a damage cause.
 
 ```rust
 static ZOMBIE: EntityKind = EntityKind::named("base:zombie");
-r.edit(&ZOMBIE).walk_speed(4.0).untag("entity.burns_in_sun");
+r.edit(&ZOMBIE).walk_speed(4.0).unset(&comps::entity::HAZARDS);
 r.edit(&PLAYER).attach(&MANA).max_health(30.0);
 ```
 

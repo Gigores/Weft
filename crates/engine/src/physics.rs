@@ -194,15 +194,15 @@ pub fn boxes(c: &Content, state: u32, out: &mut Vec<[f64; 6]>) {
 }
 
 /// A solid body this step: its box after its move (around all its blocks for a structure), how
-/// far it moved, how high above it riders still move with it, whether it crushes what it
-/// squeezes, and the blocks it is built of with where they are.
+/// far it moved, how high above it riders still move with it, what it does to what it squeezes
+/// (`hazard_at::CRUSHED`, none: only pushes), and the blocks it is built of with where they are.
 #[derive(Clone, Copy)]
 pub struct Body<'a> {
     pub id: u64,
     pub aabb: Aabb,
     pub delta: DVec3,
     pub carry: f64,
-    pub crushes: bool,
+    pub crushes: &'a [crate::content::Hazard],
     pub blocks: Option<(&'a dyn Blocks, Transform)>,
 }
 
@@ -211,7 +211,7 @@ impl<'a> Body<'a> {
     /// blocks, an empty one not at all.
     pub fn of(
         id: u64,
-        kind: &crate::registry::EntityKind,
+        kind: &'a crate::registry::EntityKind,
         pos: DVec3,
         size: (f64, f64),
         delta: DVec3,
@@ -226,7 +226,7 @@ impl<'a> Body<'a> {
             None => Aabb::around(pos, size.0, size.1),
         };
         let blocks = built.map(|s| (s, place));
-        Some(Body { id, aabb, delta, carry: kind.carry_height as f64, crushes: kind.is(crate::tag_bits::entity::CRUSHES), blocks })
+        Some(Body { id, aabb, delta, carry: kind.carry_height as f64, crushes: &kind.hazards, blocks })
     }
 
     /// Its solid boxes touching `area`, in world space (until `f` returns true).
@@ -350,10 +350,10 @@ pub fn body_below(c: &Content, pos: DVec3, half_width: f64, bodies: &[Body<'_>],
 }
 
 /// What bodies did to a box before its own move: the last move of one it let go of (for keeping
-/// its momentum), and whether a crushing one squeezed it into blocks.
+/// its momentum), and the hazards of one that squeezed it into blocks (`hazard_at::CRUSHED`).
 pub struct Carried {
     pub released: Option<DVec3>,
-    pub crushed: bool,
+    pub crushed: Vec<crate::content::Hazard>,
 }
 
 /// The body a box rides moves it first (blocks still stop it), then bodies that ran into it push.
@@ -375,11 +375,17 @@ pub fn carried(
         *pos = move_box(c, block, *pos, half_width, height, rode.carry, 0.0).pos;
     }
     let (shift, crushes) = push(c, *pos, half_width, height, bodies, skip, *support);
-    let mut crushed = false;
+    let mut crushed = Vec::new();
     if shift != DVec3::ZERO {
         let to = move_box(c, block, *pos, half_width, height, shift, 0.0).pos;
         // It hurts what it cannot push away.
-        crushed = crushes && (to - *pos - shift).length_squared() > 1e-6;
+        if (to - *pos - shift).length_squared() > 1e-6 {
+            crushed = crushes
+                .iter()
+                .filter(|h| h.at == weft_abi::hazard_at::CRUSHED)
+                .copied()
+                .collect();
+        }
         *pos = to;
     }
     Carried { released: rode.released, crushed }
@@ -391,13 +397,21 @@ pub fn standing_on(c: &Content, pos: DVec3, half_width: f64, bodies: &[Body<'_>]
 }
 
 /// How far bodies that moved this step and overlap a box push it out of them, along each body's
-/// main direction of travel, and whether a crushing one did. A box already inside goes out too
+/// main direction of travel, and the hazards of those that did. A box already inside goes out too
 /// (like vanilla's shulker boxes): a body that showed up around a rider, or a rider put on a
 /// deck the client draws ahead of the server, must not stay stuck in it. The body it rides and
 /// `skip` (itself) do not push.
-pub fn push(c: &Content, pos: DVec3, half_width: f64, height: f64, bodies: &[Body<'_>], skip: u64, support: Option<u64>) -> (DVec3, bool) {
+pub fn push<'a>(
+    c: &Content,
+    pos: DVec3,
+    half_width: f64,
+    height: f64,
+    bodies: &[Body<'a>],
+    skip: u64,
+    support: Option<u64>,
+) -> (DVec3, &'a [crate::content::Hazard]) {
     let me = Aabb::around(pos, half_width, height);
-    let (mut shift, mut crushes) = (DVec3::ZERO, false);
+    let (mut shift, mut crushes): (DVec3, &[crate::content::Hazard]) = (DVec3::ZERO, &[]);
     for b in bodies
         .iter()
         .filter(|b| b.id != skip && Some(b.id) != support && b.delta != DVec3::ZERO)
@@ -417,7 +431,9 @@ pub fn push(c: &Content, pos: DVec3, half_width: f64, height: f64, bodies: &[Bod
                 if need.abs() > shift[axis].abs() {
                     shift[axis] = need;
                 }
-                crushes |= b.crushes;
+                if !b.crushes.is_empty() {
+                    crushes = b.crushes;
+                }
             }
             false
         });

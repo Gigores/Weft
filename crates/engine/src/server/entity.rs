@@ -629,7 +629,8 @@ pub fn fall_damage(kind: &crate::registry::EntityKind, fell: f32) -> Option<f32>
 /// squeezed it into blocks.
 pub struct Stepped {
     pub land: Option<f32>,
-    pub crushed: bool,
+    /// The hazards of a body that squeezed it into blocks.
+    pub crushed: Vec<crate::content::Hazard>,
 }
 
 /// One physics step (1/20 s) for a non-player entity. `block` gives states, `None` = unloaded;
@@ -656,7 +657,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     }
     const DT: f64 = crate::world::TICK;
     let k = &c.game.entities[e.kind as usize];
-    let mut out = Stepped { land: None, crushed: false };
+    let mut out = Stepped { land: None, crushed: Vec::new() };
     // A rider goes where its seat is, a mount a player steers where that player's client says.
     if e.anchor.is_some() || e.vehicle.is_some() || e.driver.is_some() {
         return out;

@@ -179,7 +179,7 @@ pub struct Dim {
     pub dim_timers: Vec<DimTimer>,
 }
 
-fn physics_body<'a>(c: &Content, e: &Entity, built: Option<&'a Box<Space>>, delta: DVec3) -> Option<crate::physics::Body<'a>> {
+fn physics_body<'a>(c: &'a Content, e: &Entity, built: Option<&'a Box<Space>>, delta: DVec3) -> Option<crate::physics::Body<'a>> {
     let crate::physics::Dims { half_width: hw, height: h, .. } = e.dims(c);
     let built = built.map(|s| &**s as &dyn crate::physics::Blocks);
     crate::physics::Body::of(e.id, &c.game.entities[e.kind as usize], e.pos, (hw, h), delta, built)
@@ -674,14 +674,13 @@ struct TickHit {
     fell: Option<f32>,
     splash: bool,
     burn: bool,
-    crushed: bool,
-    /// Hazards it meets (`content::Hazard`): the state and which of its.
-    met: Vec<(u32, usize)>,
+    /// Hazards it meets (`content::Hazard`), and the block state they are of (0: none).
+    met: Vec<(u32, crate::content::Hazard)>,
 }
 
 /// The hazards entity `e` meets, by state and which of its: those in the cells its box is in or
 /// a sixteenth from, at its eyes, under its feet. What isn't a body meets only those it is in.
-fn hazards_met(c: &Content, block: &impl crate::physics::Cells, e: &super::entity::Entity) -> Vec<(u32, usize)> {
+fn hazards_met(c: &Content, block: &impl crate::physics::Cells, e: &super::entity::Entity) -> Vec<(u32, crate::content::Hazard)> {
     use abi::hazard_at as at;
     const GROW: f64 = 1.0 / 16.0;
     let (b, body) = (e.aabb(c), e.is_body());
@@ -723,7 +722,9 @@ fn hazards_met(c: &Content, block: &impl crate::physics::Cells, e: &super::entit
             look((e.pos - DVec3::Y * 0.05).floor().as_ivec3(), &mut out, &|h, _| h.at == at::ON);
         }
     }
-    out
+    out.into_iter()
+        .map(|(s, i)| (s, c.states[s as usize].hazards[i]))
+        .collect()
 }
 
 impl Dim {
@@ -1903,25 +1904,6 @@ impl Dim {
         true
     }
 
-    /// Far below the world's floor: vanilla's 4 damage, 64 blocks under it.
-    fn fall_into_void(&mut self, c: &'static Content) {
-        let floor = c.dims[self.id as usize].min_cube_y;
-        if self.time % 10 != 0 || floor == i32::MIN {
-            return;
-        }
-        let limit = (floor * 16 - 64) as f64;
-        let falling: Vec<u64> = self
-            .entities
-            .list
-            .iter()
-            .filter(|e| e.in_world() && e.pos.y < limit && !e.mode.has(crate::tag_bits::game_mode::NOCLIP))
-            .map(|e| e.id)
-            .collect();
-        for id in falling {
-            self.damage(c, id, 4.0, 0, damage::VOID);
-        }
-    }
-
     /// What a dead player carried falls where it died.
     pub fn drop_inventory(&mut self, c: &Content, id: u64) {
         let Some(items) = self.entities.inventories.get(&id).cloned() else { return };
@@ -1950,7 +1932,6 @@ impl Dim {
         self.space.signals.now = self.time;
         self.players = None;
         self.tick_blocks_first(c);
-        self.fall_into_void(c);
         self.source_modifiers(c);
         self.natural_spawns(c);
         self.tick_entities(c);
@@ -2391,9 +2372,7 @@ impl Dim {
         self.navigation(c);
         self.steer_mounts(c);
 
-        let gravity = c.dims[self.id as usize].gravity as f64;
-        let day = self.daylight(c);
-        let sheltered = c.game.weathers[self.weather as usize].shelters();
+        let (here, gravity) = (self.id, c.dims[self.id as usize].gravity as f64);
         let players: Vec<DVec3> = self
             .entities
             .list
@@ -2462,7 +2441,7 @@ impl Dim {
                 }
                 let k = &c.game.entities[e.kind as usize];
                 let (mut land, mut fell, mut splash) = (None, None, false);
-                let mut crushed = false;
+                let mut crushed = Vec::new();
                 // Players move on their client, bodies moved above; the rest here.
                 if !e.player && !k.is(ef::SOLID) {
                     let (wet, falling) = (e.in_liquid, -e.vel.y * crate::world::TICK);
@@ -2480,23 +2459,22 @@ impl Dim {
                             .and_then(|s| c.states[s as usize].liquid)
                             .is_some_and(|l| !c.liquids[l as usize].burns())
                     });
-                let met = hazards_met(c, &block, e);
-                let hot = met
-                    .iter()
-                    .any(|&(s, i)| c.states[s as usize].hazards[i].fire > 0);
+                let mut met = hazards_met(c, &block, e);
+                // Being in what burns, which keeps doing its own damage.
+                let hot = met.iter().any(|(_, h)| h.fire > 0);
+                // Its kind's own and the dimension's, and what squeezed it.
+                let own = k.hazards.iter().chain(&c.dims[here as usize].hazards);
+                met.extend(
+                    own.filter(|h| h.at == abi::hazard_at::SELF)
+                        .map(|h| (0, *h)),
+                );
+                met.extend(crushed.drain(..).map(|h| (0, h)));
+                if e.mode.has(crate::tag_bits::game_mode::NOCLIP) {
+                    met.clear();
+                }
                 // What sets things burning burns a dropped stack up, as lava and fire do in vanilla.
                 if hot && !e.item.is_empty() {
                     e.removed = true;
-                }
-                // Sunlight sets them on fire for 8 seconds; burning hurts once a second, water puts it out.
-                if k.is(ef::BURNS_IN_SUN) && day > 0.5 && !sheltered && e.age % crate::world::TPS as u64 == 0 && !e.in_liquid {
-                    let head = (e.pos + DVec3::Y * e.eye(c)).floor().as_ivec3();
-                    let sky = cubes
-                        .get(&cube_of(head))
-                        .map_or(0, |cb| abi::light::sky(cb.light(local_index(head))));
-                    if sky >= 15 {
-                        e.fire = e.fire.max(160);
-                    }
                 }
                 if wet && !hot {
                     e.fire = 0;
@@ -2518,13 +2496,12 @@ impl Dim {
                         e.removed = true;
                     }
                 }
-                (land.is_some() || fell.is_some() || splash || burn || crushed || !met.is_empty()).then_some(TickHit {
+                (land.is_some() || fell.is_some() || splash || burn || !met.is_empty()).then_some(TickHit {
                     id: e.id,
                     land,
                     fell,
                     splash,
                     burn,
-                    crushed,
                     met,
                 })
             })
@@ -2533,20 +2510,16 @@ impl Dim {
             self.entities.list[i].vel += push;
         }
         self.seat_riders(c);
-        for TickHit { id, land, fell, splash, burn, crushed, met } in hits {
+        for TickHit { id, land, fell, splash, burn, met } in hits {
             self.fall_effects(c, id, fell, splash);
             if let Some(amount) = land {
                 self.damage(c, id, amount, 0, damage::FALL);
                 self.riders_fall(c, id, amount);
             }
-            if crushed {
-                self.damage(c, id, 1.0, 0, damage::CRUSH);
-            }
             if burn {
                 self.damage(c, id, 1.0, 0, damage::FIRE);
             }
-            for (state, i) in met {
-                let h = c.states[state as usize].hazards[i];
+            for (state, h) in met {
                 let Some(e) = self
                     .entities
                     .get(id)
@@ -2554,7 +2527,9 @@ impl Dim {
                 else {
                     continue;
                 };
-                let ask = crate::conditions::Ask { pos: e.pos, entity: id, state, body: Some(e.body()), ..Default::default() };
+                // What is about itself is asked at its eyes (the sky over its head).
+                let pos = if h.at == abi::hazard_at::SELF { e.pos + DVec3::Y * e.eye(c) } else { e.pos };
+                let ask = crate::conditions::Ask { pos, entity: id, state, body: Some(e.body()), ..Default::default() };
                 if h.when
                     .is_some_and(|w| !crate::conditions::on_server(self, c, w, &ask))
                 {
