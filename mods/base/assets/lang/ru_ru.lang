@@ -267,3 +267,4 @@ block.base.golden_lamp = Золотая лампа
 block.base.anchor = Якорь
 block.base.slime_block = Блок слизи
 death.base.cactus = {0} исколот до смерти
+block.base.tall_tallgrass = Высокая трава

@@ -55,6 +55,7 @@ pub static GOLD_BLOCK: Block = Block::named("gold_block");
 pub static DIAMOND_BLOCK: Block = Block::named("diamond_block");
 pub static COAL_BLOCK: Block = Block::named("coal_block");
 pub static WOOL: Block = Block::named("wool");
+pub static TALL_TALL_GRASS: Block = Block::named("tall_tallgrass");
 
 static HOE_TAG: Tag = Tag::named("tools/hoe");
 
@@ -329,9 +330,21 @@ pub fn register(r: &mut Registry) {
         .replaceable()
         .needs_below("#plant_soil")
         .tint(&tints::GRASS)
-        .no_item();
+        .tab(&crate::tabs::NATURAL);
     r.loot(&TALL_GRASS)
         .pool(Pool::new().when(Cond::chance(0.125)).item("wheat_seeds"));
+    r.block(&TALL_TALL_GRASS)
+        .sound_group("grass")
+        .texture("tall_tallgrass_bottom")
+        .plant()
+        .replaceable()
+        .tint(&tints::GRASS)
+        .two_part("half", ["lower", "upper"], |_| Dir::Up)
+        .state_where("half=upper", |s| s.texture("tall_tallgrass_top"))
+        .state_where("half=lower", |s| s.needs_below("#plant_soil"))
+        .tab(&crate::tabs::NATURAL);
+    r.loot(&TALL_TALL_GRASS)
+        .pool(Pool::new().when(Cond::chance(0.25)).item("wheat_seeds"));
     plant(r, &DANDELION, "flower_dandelion");
     plant(r, &ROSE, "flower_rose");
     r.block(&SAPLING)
