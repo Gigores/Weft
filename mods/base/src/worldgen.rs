@@ -145,6 +145,14 @@ pub fn register(r: &mut Registry) {
         .base_height(SEA as f64 - 8.0)
         .sea(SEA, "water")
         .feature(preset::continents(22.0))
+        .field(
+            "temperature",
+            Expr::fbm(0x22, 3300.0, 3) * Expr::value(1.4),
+        )
+        .field(
+            "humidity",
+            Expr::fbm(0x33, 1600.0, 3) * Expr::value(1.4),
+        )
         // Biomes shape the land through their climate, not their borders, so nothing seams:
         // the cold flattens hills into tundra, deserts get dunes.
         .feature(preset::hills(16.0, 110.0).mask(Expr::temperature().ramp(-0.35, -0.6).not()))
