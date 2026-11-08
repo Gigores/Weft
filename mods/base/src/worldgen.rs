@@ -18,6 +18,7 @@ static SUGAR_CANE_SOIL: Tag = Tag::named("sugar_cane_soil");
 /// `.frozen(..)`), `dry` (cacti).
 pub static TREES: Component<f32> = Component::named("trees");
 pub static GRASS_COVER: Component<f32> = Component::named("grass");
+pub static TALL_GRASS_COVER: Component<f32> = Component::named("tall_grass");
 /// The logs of the trees a biome grows, with weights: `"base:birch_log:1 base:oak_log:4"`
 /// (oaks where unset).
 pub static TREE_KINDS: Component<BlockList> = Component::named("tree_kinds");
@@ -50,7 +51,8 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .tag("spawn_biome")
         .set(&TREES, 0.025)
-        .set(&GRASS_COVER, 0.5);
+        .set(&GRASS_COVER, 0.5)
+        .set(&TALL_GRASS_COVER, 0.2);
     r.biome(&FOREST)
         .humidity(0.25..)
         .surface("grass", "dirt", 3)
@@ -284,7 +286,7 @@ pub fn grow_tree(w: World, p: [i32; 3]) {
     }
     tree_blocks(&t, |x, y, z, s, overwrite| {
         let cur = w.block([x, y, z]);
-        if overwrite || cur == 0 || TALL_GRASS.is(cur) {
+        if overwrite || cur == 0 || TALL_GRASS.is(cur) || TALL_TALL_GRASS.is(cur) {
             w.set_block([x, y, z], s);
         }
     });
@@ -322,6 +324,7 @@ fn decorate(g: &mut Gen) {
             if FROZEN.on_biome(b) {
                 continue;
             }
+            let tall_grass_chance = TALL_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64;
             let grass_chance = GRASS_COVER.on_biome(b).unwrap_or(0.05) as f64;
             // What is under the lowest layer takes a look at the terrain: only if anything would grow.
             if y == 0 && roll >= grass_chance.max(0.08) {
@@ -335,6 +338,14 @@ fn decorate(g: &mut Gen) {
                         .map_or_else(|| [DANDELION.id(), ROSE.id()][(h >> 32) as usize % 2], |l| l.pick(h >> 32).unwrap_or(0));
                     if flower != 0 {
                         g.set(x, y, z, flower);
+                    }
+                } else if roll < tall_grass_chance {
+                    let upper = TALL_TALL_GRASS.with(&[("half", "upper")]);
+                    if y + 1 < 16 && g.get(x, y + 1, z) == 0 && upper != u32::MAX {
+                        g.set(x, y, z, TALL_TALL_GRASS.id());
+                        g.set(x, y + 1, z, upper);
+                    } else {
+                        g.set(x, y, z, TALL_GRASS.id());
                     }
                 } else if roll < grass_chance {
                     g.set(x, y, z, TALL_GRASS.id());
