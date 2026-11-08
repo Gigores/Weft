@@ -1445,20 +1445,18 @@ pub mod comp {
     pub const WEAR_PER_HIT: &str = "wear_per_hit";
     /// Tag of biomes players may start in (the engine's spawn search tries them first).
     pub const SPAWN_BIOME: &str = "spawn_biome";
-    /// Block: spreads onto these blocks (`match`; grass onto dirt) within `spread_reach`,
-    /// where the target has light (`spread_light`) and nothing opaque on top (unless tagged
-    /// `spreads_covered`). In `spread_time` seconds on average, sooner with more of it around.
+    /// Block: spreads onto these blocks (`match`; grass onto dirt) within `spread_reach` while
+    /// `spread_when` holds for the target. In `spread_time` seconds on average, sooner with more
+    /// of it around.
     pub const SPREADS_TO: &str = "spreads_to";
     /// `[i32;6]`: the box it reaches, from itself to the target, min x y z then max x y z, at
     /// most 4 each way; by default 1 sideways, 3 down and 1 up (grass).
     pub const SPREAD_REACH: &str = "spread_reach";
-    /// Block tag: it spreads onto covered targets too (moss on a wall), taking the light of
-    /// the target's brightest side.
-    pub const SPREADS_COVERED: &str = "spreads_covered";
     /// `f32`: mean seconds for one spreading block to take a target (vanilla grass about 765).
     pub const SPREAD_TIME: &str = "spread_time";
-    /// `u32`: light the target needs above it (vanilla grass 9).
-    pub const SPREAD_LIGHT: &str = "spread_light";
+    /// `[str]`: conditions about the target (`condition`), by default `light(9.., up)` and
+    /// `!covered` (vanilla grass); moss up a wall takes `light(9.., any)`.
+    pub const SPREAD_WHEN: &str = "spread_when";
     /// Block: a particle kind (`str`) clients show around it now and then, near the player only
     /// (vanilla's torch smoke); nothing of it reaches the server.
     pub const AMBIENT_PARTICLE: &str = "ambient_particle";
@@ -3825,7 +3823,8 @@ pub mod condition {
     pub const UNDERGROUND: u32 = 2;
     pub const SURFACE: u32 = 3;
     /// `light(min..max)`, `light(..7)`, `light(9..)`: the light there is in the range, the
-    /// brighter of sky light times daylight and block light (0..15).
+    /// brighter of sky light times daylight and block light (0..15); `light(9.., up)` on that
+    /// side of the cell, `light(9.., any)` on its brightest.
     pub const LIGHT: u32 = 4;
     /// `chance(0.05)`: holds that share of the times it is asked; only where the world is.
     pub const CHANCE: u32 = 5;

@@ -27,6 +27,8 @@ pub enum Arg {
     None,
     /// Inclusive.
     Range(f32, f32),
+    /// A light range on a side of the cell (`FACE_NAMES`; 6 the cell itself, 7 its brightest side).
+    LightAt(f32, f32, u8),
     Num(f32),
     /// A block matcher's states, a bit each (`refs::compile`).
     Blocks(Vec<u64>),
@@ -258,7 +260,23 @@ impl Parser<'_, '_> {
         };
         Ok(match id {
             _ if !engine => Arg::Text(text),
-            k::LIGHT | k::SKY | k::HEIGHT => range(&text)?,
+            k::SKY | k::HEIGHT => range(&text)?,
+            // `light(9.., up)`: on a side of the cell (6: itself, 7: its brightest).
+            k::LIGHT => match text.split_once(',') {
+                Some((r, side)) => {
+                    let Arg::Range(a, b) = range(r)? else { unreachable!() };
+                    let side = side.trim();
+                    let f = match side {
+                        "any" => 7,
+                        _ => abi::FACE_NAMES
+                            .iter()
+                            .position(|n| *n == side)
+                            .ok_or_else(|| format!("condition {name}({text}): no side {side}"))? as u8,
+                    };
+                    Arg::LightAt(a, b, f)
+                }
+                None => range(&text)?,
+            },
             k::ATTRIBUTE => {
                 let (attr, r) = text
                     .split_once(',')
@@ -350,7 +368,21 @@ fn eval(e: &Expr, rec: &mut dyn FnMut(u32, &Arg) -> Option<bool>) -> Option<bool
 }
 
 fn in_range(arg: &Arg, v: f32) -> bool {
-    matches!(arg, Arg::Range(a, b) | Arg::Attr(_, a, b) if (*a..=*b).contains(&v))
+    matches!(arg, Arg::Range(a, b) | Arg::Attr(_, a, b) | Arg::LightAt(a, b, _) if (*a..=*b).contains(&v))
+}
+
+/// The light `light(..)` reads, of the cell or a side of it (`Arg::LightAt`), by `light` at a
+/// cell and `daylight`.
+fn light_for(arg: &Arg, p: glam::IVec3, light: &dyn Fn(glam::IVec3) -> u32, daylight: f32) -> f32 {
+    let at = |q: glam::IVec3| abi::light::effective(light(q), daylight) as f32;
+    match arg {
+        Arg::LightAt(_, _, 7) => crate::world::DIRS
+            .iter()
+            .map(|&d| at(p + d))
+            .fold(0.0, f32::max),
+        Arg::LightAt(_, _, f) if *f < 6 => at(p + crate::world::DIRS[*f as usize]),
+        _ => at(p),
+    }
 }
 
 fn attr(arg: &Arg) -> u32 {
@@ -422,7 +454,10 @@ fn server(d: &mut Dim, c: &'static Content, e: &Expr, a: &Ask) -> Option<bool> {
                 (k::NIGHT, _) => d.daylight(c) <= 0.5,
                 (k::UNDERGROUND, _) => !sky(),
                 (k::SURFACE, _) => sky(),
-                (k::LIGHT, _) => in_range(arg, abi::light::effective(d.light(p), a.daylight.unwrap_or_else(|| d.daylight(c))) as f32),
+                (k::LIGHT, _) => {
+                    let daylight = a.daylight.unwrap_or_else(|| d.daylight(c));
+                    in_range(arg, light_for(arg, p, &|q| d.light(q), daylight))
+                }
                 (k::CHANCE, Arg::Num(n)) => d.random_unit() < *n,
                 (k::SKY, _) => in_range(arg, abi::light::sky(d.light(p)) as f32),
                 (k::SHELTERED, _) => c.game.weathers[d.weather as usize].shelters(),
@@ -496,8 +531,8 @@ pub fn client_holds(client: Option<&crate::client::Client>, e: &Expr, a: &Ask) -
                 k::UNDERGROUND => enclosed(),
                 k::SURFACE => client.is_some() && !enclosed(),
                 k::LIGHT => client.is_some_and(|cl| {
-                    let l = cl.world.light(a.pos.floor().as_ivec3());
-                    in_range(arg, abi::light::effective(l, a.daylight.unwrap_or_else(|| cl.daylight())) as f32)
+                    let daylight = a.daylight.unwrap_or_else(|| cl.daylight());
+                    in_range(arg, light_for(arg, a.pos.floor().as_ivec3(), &|q| cl.world.light(q), daylight))
                 }),
                 k::ATTRIBUTE => client.is_some_and(|cl| in_range(arg, cl.attribute(attr(arg)))),
                 k::SKY => client.is_some_and(|cl| in_range(arg, abi::light::sky(cl.world.light(a.pos.floor().as_ivec3())) as f32)),

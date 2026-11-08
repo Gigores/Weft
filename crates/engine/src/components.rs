@@ -36,7 +36,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     (abi::comp::TINT_FACES, "u8"),
     (abi::comp::SPREADS_TO, "match"),
     (abi::comp::SPREAD_TIME, "f32"),
-    (abi::comp::SPREAD_LIGHT, "u32"),
+    (abi::comp::SPREAD_WHEN, "[str]"),
     (abi::comp::AMBIENT_PARTICLE, "str"),
     (abi::comp::DRIP, "str"),
     (abi::comp::SPLASH, "str"),

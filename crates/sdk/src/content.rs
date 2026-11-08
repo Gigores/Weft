@@ -1881,16 +1881,20 @@ impl<'a> BlockBuilder<'a> {
     pub fn spreads(self, to: &str, mean_seconds: f32, min_light: u32) -> Self {
         self.set_text(&c::SPREADS_TO, to)
             .set(&c::SPREAD_TIME, mean_seconds)
-            .set(&c::SPREAD_LIGHT, min_light)
+            .spread_when(crate::Cond::new(&format!("light({min_light}.., up) & !covered")))
+    }
+
+    /// What has to hold for a target of `spreads` instead (moss up a wall:
+    /// `Cond::new("light(9.., any)")`, covered or not).
+    pub fn spread_when(self, when: impl Into<crate::Cond>) -> Self {
+        self.set(&c::SPREAD_WHEN, vec![when.into().0])
     }
 
     /// Where `spreads` reaches, from this block to the target: min and max offsets, at most 4
-    /// each way (grass: `[-1, -3, -1]` to `[1, 1, 1]`, the default). With `covered`, targets
-    /// with something opaque on top count too, lit by their brightest side (moss up a wall).
-    pub fn spread_reach(self, min: impl Into<BlockPos>, max: impl Into<BlockPos>, covered: bool) -> Self {
+    /// each way (grass: `[-1, -3, -1]` to `[1, 1, 1]`, the default).
+    pub fn spread_reach(self, min: impl Into<BlockPos>, max: impl Into<BlockPos>) -> Self {
         let (min, max) = (min.into(), max.into());
-        let b = self.set(&c::SPREAD_REACH, [min.x, min.y, min.z, max.x, max.y, max.z]);
-        if covered { b.tag(abi::comp::SPREADS_COVERED) } else { b }
+        self.set(&c::SPREAD_REACH, [min.x, min.y, min.z, max.x, max.y, max.z])
     }
 
     /// Turns into `block` in `mean_seconds` on average once something opaque covers it (grass

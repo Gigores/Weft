@@ -770,13 +770,11 @@ pub struct Spread {
     /// Matcher of the targets.
     pub to: u32,
     pub mean: f64,
-    /// Light the target needs.
-    pub light: u32,
+    /// What has to hold for the target (`Content::conds`).
+    pub when: Option<u32>,
     /// From the spreader to the target, inclusive.
     pub min: IVec3,
     pub max: IVec3,
-    /// The target must have nothing opaque on top.
-    pub open_top: bool,
 }
 
 #[derive(Clone)]
@@ -1871,8 +1869,8 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
     let BiomeTables { biome_defs, biome_rules, biome_names, .. } = biome_tables;
     let DimTables { mut dim_defs, dim_names, spawn_dim, void_dim, .. } = dim_tables;
     let ids = component_ids(&components);
-    flatten_components(&mut states, &mut item_defs, &components, &ids);
     let mut conds = crate::conditions::Texts::default();
+    flatten_components(&mut states, &mut item_defs, &components, &ids, &mut conds);
     resolve_rules(&mut states, &block_defs, &block_names, raw_rules, &mut conds, &mut errors);
     for b in &block_defs {
         let grows = (b.first_state..b.first_state + b.states).any(|s| {
@@ -2577,7 +2575,13 @@ fn component_ids(components: &Components) -> Ids {
 }
 
 /// What hot code reads per state (physics, light, breaking) goes into flat fields.
-fn flatten_components(states: &mut [StateInfo], item_defs: &mut [ItemDef], components: &Components, ids: &Ids) {
+fn flatten_components(
+    states: &mut [StateInfo],
+    item_defs: &mut [ItemDef],
+    components: &Components,
+    ids: &Ids,
+    conds: &mut crate::conditions::Texts,
+) {
     let id = |n: &str| components.id(n);
     let get = |state: u32, name: &str| id(name).and_then(|c| components.bytes(comps::BLOCK, state, c));
     let f32_of = |state: u32, name: &str| get(state, name).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
@@ -2613,14 +2617,11 @@ fn flatten_components(states: &mut [StateInfo], item_defs: &mut [ItemDef], compo
                 }
                 None => (IVec3::new(-1, -3, -1), IVec3::new(1, 1, 1)),
             };
-            s.spread = Some(Spread {
-                to,
-                mean: secs as f64 * crate::world::TPS as f64,
-                light: u32_of(st, abi::comp::SPREAD_LIGHT).unwrap_or(9),
-                min,
-                max,
-                open_top: !id(abi::comp::SPREADS_COVERED).is_some_and(|t| components.has(comps::BLOCK, st, t)),
-            });
+            let when = id(abi::comp::SPREAD_WHEN)
+                .and_then(|w| components.bytes(comps::BLOCK, st, w))
+                .and_then(|b| abi::data::from_bytes::<Vec<String>>(b))
+                .unwrap_or_else(|| vec!["light(9.., up)".into(), "!covered".into()]);
+            s.spread = Some(Spread { to, mean: secs as f64 * crate::world::TPS as f64, when: conds.all(&when), min, max });
         }
     }
     for (i, d) in item_defs.iter_mut().enumerate() {

@@ -3453,10 +3453,12 @@ impl Dim {
             }
         }
         if let Some(state) = self.get(p).filter(|&s| c.spread_target(s)) {
-            let covered = self
-                .get(p + IVec3::Y)
-                .is_some_and(|s| c.states[s as usize].flags & bf::OPAQUE != 0);
-            if let (Some((_, sp)), n) = self.spreaders_near(c, p, state, covered) {
+            let ask = self.ask_at(p, state);
+            if let (Some((_, sp)), n) = self.spreaders_near(c, p, state)
+                && sp
+                    .when
+                    .is_none_or(|w| crate::conditions::may_server(self, c, w, &ask))
+            {
                 out.push((Chance::Spread, n as f64 / sp.mean));
             }
         }
@@ -3475,9 +3477,9 @@ impl Dim {
         }
     }
 
-    /// A block that spreads onto `state` at `p` from where it reaches it (and, while `covered`,
-    /// one that spreads onto covered blocks): its state and rule, and how many there are.
-    fn spreaders_near(&self, c: &Content, p: IVec3, state: u32, covered: bool) -> (Option<(u32, crate::content::Spread)>, u32) {
+    /// A block that spreads onto `state` at `p` from where it reaches it: its state and rule, and
+    /// how many there are.
+    fn spreaders_near(&self, c: &Content, p: IVec3, state: u32) -> (Option<(u32, crate::content::Spread)>, u32) {
         let mut first = None;
         let mut n = 0;
         let (lo, hi) = c.spread_search;
@@ -3487,7 +3489,6 @@ impl Dim {
                     let at = IVec3::new(dx, dy, dz);
                     let Some(s) = self.get(p + at) else { continue };
                     if let Some(sp) = c.states[s as usize].spread
-                        && (!covered || !sp.open_top)
                         && (-at).cmpge(sp.min).all()
                         && (-at).cmple(sp.max).all()
                         && c.matchers.has(sp.to, state)
@@ -3501,26 +3502,16 @@ impl Dim {
         (first, n)
     }
 
-    /// Something spreading onto the block at `p` comes due at `at`: it takes it where the light
-    /// is enough, else tries again later.
-    fn spread_onto(&mut self, c: &'static Content, p: IVec3, state: u32, at: u64) {
-        let covered = self
-            .get(p + IVec3::Y)
-            .is_some_and(|s| c.states[s as usize].flags & bf::OPAQUE != 0);
-        if let (Some((into, sp)), _) = self.spreaders_near(c, p, state, covered) {
-            // Covered, the light of its brightest side.
-            let light = if sp.open_top {
-                self.light(p + IVec3::Y)
-            } else {
-                crate::world::DIRS
-                    .iter()
-                    .map(|&d| self.light(p + d))
-                    .max_by_key(|&l| abi::light::effective(l, 1.0))
-                    .unwrap_or(0)
-            };
-            if abi::light::effective(light, self.daylight_at(c, at)) >= sp.light {
-                self.set(c, p, into);
-            }
+    /// Something spreading onto the block at `p` comes due: it takes it if its conditions hold
+    /// then (`growing_at` gives the daylight), else tries again later.
+    fn spread_onto(&mut self, c: &'static Content, p: IVec3, state: u32) {
+        let ask = self.ask_at(p, state);
+        if let (Some((into, sp)), _) = self.spreaders_near(c, p, state)
+            && sp
+                .when
+                .is_none_or(|w| crate::conditions::on_server(self, c, w, &ask))
+        {
+            self.set(c, p, into);
         }
     }
 
@@ -3565,7 +3556,7 @@ impl Dim {
                         }
                         Chance::Spread => {
                             if let Some(state) = self.get(p) {
-                                self.spread_onto(c, p, state, at);
+                                self.spread_onto(c, p, state);
                             }
                         }
                     }
