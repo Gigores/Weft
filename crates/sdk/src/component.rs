@@ -432,7 +432,7 @@ impl<T: Data, K> Component<T, K> {
         self.lookup.id(self.name, &T::schema)
     }
     /// Its value on entry `id` of `kind` (`abi::entry_kind`): a weather's, a game mode's, any
-    /// kind's but those without a table (recipes, ores, sky objects ...).
+    /// kind's but word sets and component declarations.
     #[inline]
     pub fn on(&self, kind: u32, id: u32) -> Option<T> {
         self.lookup.read(kind, id, self.name, &T::schema)
@@ -540,15 +540,33 @@ impl Storage {
     }
 }
 
-/// A component without a value: membership in a group (`plant_soil`, `logs`, `ingots/iron`).
-pub struct Tag {
-    name: &'static str,
-    lookup: Lookup,
+impl<T: Data, K: crate::kind::HasId> Component<T, K> {
+    /// Its value on entry `id` of its kind: `FALLS.on_id(w.weather())`.
+    #[inline]
+    pub fn on_id(&self, id: u32) -> Option<T> {
+        self.on(K::KIND, id)
+    }
 }
 
-impl Tag {
+/// A component without a value: membership in a group (`plant_soil`, `logs`, `ingots/iron`).
+/// `K` is the kind it is about (`crate::kind`), any kind by default, like `Component`'s.
+pub struct Tag<K = crate::kind::Any> {
+    name: &'static str,
+    lookup: Lookup,
+    _p: PhantomData<fn() -> K>,
+}
+
+impl<K: crate::kind::HasId> Tag<K> {
+    /// Entry `id` of its kind has it: `DRY.on_id(w.weather())`.
+    #[inline]
+    pub fn on_id(&self, id: u32) -> bool {
+        self.on(K::KIND, id)
+    }
+}
+
+impl<K> Tag<K> {
     pub const fn named(name: &'static str) -> Self {
-        Tag { name, lookup: Lookup::new() }
+        Tag { name, lookup: Lookup::new(), _p: PhantomData }
     }
     pub fn name(&self) -> &'static str {
         self.name
@@ -557,7 +575,7 @@ impl Tag {
     pub fn id(&self) -> u32 {
         self.lookup.id(self.name, &tag_schema)
     }
-    /// Entry `id` of `kind` (`abi::entry_kind`) has it: `DRY.on(entry_kind::WEATHER, w.weather())`.
+    /// Entry `id` of `kind` (`abi::entry_kind`) has it.
     #[inline]
     pub fn on(&self, kind: u32, id: u32) -> bool {
         self.lookup.has(kind, id, self.name, &tag_schema)
@@ -772,17 +790,10 @@ pub static DRAG: Component<f32> = Component::named(abi::comp::DRAG);
 pub static LIGHT: Component<[u8; 3]> = Component::named(abi::comp::LIGHT);
 pub static TINT: Component<TintRef> = Component::named(abi::comp::TINT);
 pub static TINT_FACES: Component<u8> = Component::named(abi::comp::TINT_FACES);
-pub static SUPPORT_FACE: Component<u8> = Component::named(abi::comp::SUPPORT_FACE);
-pub static SUPPORT: Component<Matcher> = Component::named(abi::comp::SUPPORT);
-pub static SUPPORT_NEAR: Component<Matcher> = Component::named(abi::comp::SUPPORT_NEAR);
 pub static SPREADS_TO: Component<Matcher> = Component::named(abi::comp::SPREADS_TO);
-pub static GROW_TIME: Component<f32> = Component::named(abi::comp::GROW_TIME);
-pub static GROW_LIGHT: Component<u32> = Component::named(abi::comp::GROW_LIGHT);
 pub static SPREAD_TIME: Component<f32> = Component::named(abi::comp::SPREAD_TIME);
 pub static SPREAD_LIGHT: Component<u32> = Component::named(abi::comp::SPREAD_LIGHT);
 pub static SPREAD_REACH: Component<[i32; 6]> = Component::named(abi::comp::SPREAD_REACH);
-pub static SMOTHERED_INTO: Component<BlockRef> = Component::named(abi::comp::SMOTHERED_INTO);
-pub static SMOTHER_TIME: Component<f32> = Component::named(abi::comp::SMOTHER_TIME);
 pub static AMBIENT_PARTICLE: Component<Text> = Component::named(abi::comp::AMBIENT_PARTICLE);
 pub static DRIP: Component<Text> = Component::named(abi::comp::DRIP);
 pub static SPLASH: Component<Text> = Component::named(abi::comp::SPLASH);
@@ -801,6 +812,14 @@ pub static SHADER: Component<Text> = Component::named(abi::comp::SHADER);
 pub static MODEL: Component<Text> = Component::named(abi::comp::MODEL);
 pub static ANIMATIONS: Component<Text> = Component::named(abi::comp::ANIMATIONS);
 pub static SOUND: Component<Text> = Component::named(abi::comp::SOUND);
+pub static EFFECTS: Component<Vec<abi::Effect>> = Component::named(abi::comp::EFFECTS);
+pub static MODIFIERS: Component<Vec<abi::Modifier>> = Component::named(abi::comp::MODIFIERS);
+
+/// An `abi::Effect`, its sound event and particle kind by full name.
+pub(crate) fn effect(event: &str, sound: &str, particle: &str) -> abi::Effect {
+    let name = |n: &str| if matches!(n, "" | "none") { n.to_string() } else { crate::full_name(n) };
+    abi::Effect { event: event.to_string(), sound: name(sound), particle: name(particle) }
+}
 
 /// The stack after one of it is used up (burnt as fuel, taken by a recipe): one less, and the
 /// last one leaves its `remainder` behind (a lava bucket its bucket).

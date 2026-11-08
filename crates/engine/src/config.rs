@@ -392,6 +392,8 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:terrain_check", ck::BOOL, 0.0, 0.0, 1.0, 0.0),
         number("core:client_visibility", ck::INT, 0.0, 0.0, 2.0, 1.0),
         number("core:fov", ck::FLOAT, 70.0, 30.0, 110.0, 1.0),
+        // How much sprinting, flying and speed widen the view, as vanilla's FOV effects.
+        number("core:fov_effects", ck::FLOAT, 1.0, 0.0, 1.0, 0.0),
         number("core:sensitivity", ck::FLOAT, 1.0, 0.01, 3.0, 0.01),
         number("core:brightness", ck::FLOAT, 0.5, 0.0, 1.0, 0.0),
         number("core:debug_groups", ck::INT, u32::MAX as f64, 0.0, u32::MAX as f64, 1.0),
@@ -407,17 +409,27 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:simulation_distance", ck::INT, 8.0, 2.0, 64.0, 1.0).set(c::SCOPE, scope::WORLD),
         // Most cubes mods' tickets keep loaded with no player near (`Host::force_load`).
         number("core:max_forced_cubes", ck::INT, 4096.0, 0.0, 1048576.0, 1.0).set(c::SCOPE, scope::WORLD),
-        number("core:first_person_model", ck::BOOL, 0.0, 0.0, 1.0, 0.0),
+        number("core:first_person_model", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:show_avatars", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:occlusion_culling", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:allow_avatars", ck::BOOL, 1.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
         number("core:keep_inventory", ck::BOOL, 0.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
+        // Deaths a player has before staying a spectator (0: no end); 1 is hardcore.
+        rule("core:lives", ck::INT, 0.0, 0.0, 100.0),
+        // Set when the world is made, nobody changes the rules after.
+        rule("core:rules_locked", ck::BOOL, 0.0, 0.0, 1.0),
     ];
     out.extend(
         keys.iter()
             .map(|(action, key)| string(&format!("core:key.{action}"), key)),
     );
     out
+}
+
+/// A world rule (`/rule`).
+pub fn rule(name: &str, kind: u32, default: f64, min: f64, max: f64) -> RawEntry {
+    let step = if kind == ck::FLOAT { 0.0 } else { 1.0 };
+    number(name, kind, default, min, max, step).set(weft_abi::comp::config::SCOPE, scope::WORLD)
 }
 
 /// A volume setting in percent.
@@ -450,7 +462,7 @@ pub fn bake(e: &Entry, errors: &mut Vec<String>) -> ConfigDef {
         max,
         step: e.or(c::STEP, 0.0),
         choices: e.or(c::CHOICES, Vec::new()),
-        flags: e.flags(&c::FLAGS),
+        flags: e.flags(crate::tag_bits::config::TAGS),
         scope: e.or(c::SCOPE, scope::CLIENT),
         text: e.text(c::TEXT).unwrap_or_default().to_string(),
     };

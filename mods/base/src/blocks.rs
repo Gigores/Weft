@@ -29,6 +29,8 @@ pub static SPRUCE_PLANKS: Block = Block::named("spruce_planks");
 pub static OAK_LEAVES: Block = Block::named("oak_leaves");
 pub static BIRCH_LEAVES: Block = Block::named("birch_leaves");
 pub static SPRUCE_LEAVES: Block = Block::named("spruce_leaves");
+/// What a cactus does to who touches it.
+pub static PRICKED: DamageCause = DamageCause::named("cactus");
 pub static WATER: Block = Block::named("water");
 pub static LAVA: Block = Block::named("lava");
 pub static TALL_GRASS: Block = Block::named("tall_grass");
@@ -91,9 +93,9 @@ fn leaves(r: &mut Registry, handle: &'static Block, tex: &str) {
     // Vanilla: a sapling one time in 20, oak leaves an apple one time in 200.
     let table = r
         .loot(handle)
-        .pool(Pool::new().when(Cond::Chance(0.05)).item("sapling"));
+        .pool(Pool::new().when(Cond::chance(0.05)).item("sapling"));
     if std::ptr::eq(handle, &OAK_LEAVES) {
-        table.pool(Pool::new().when(Cond::Chance(0.005)).item("apple"));
+        table.pool(Pool::new().when(Cond::chance(0.005)).item("apple"));
     }
 }
 
@@ -128,6 +130,8 @@ pub fn register(r: &mut Registry) {
     r.stairs("#has_shapes").tab(&crate::tabs::BUILDING);
     r.slabs("#has_shapes").tab(&crate::tabs::BUILDING);
     r.vertical_slabs("#has_shapes").tab(&crate::tabs::BUILDING);
+    r.beams("#has_shapes").tab(&crate::tabs::BUILDING);
+    r.eighths("#has_shapes").tab(&crate::tabs::BUILDING);
     r.block(&STONE)
         .sound_group("stone")
         .hardness(1.5)
@@ -192,11 +196,19 @@ pub fn register(r: &mut Registry) {
         .mined_by("shovel", tool_tier::HAND)
         .falling()
         .tab(&crate::tabs::NATURAL);
+    // Vanilla: flint one time in ten instead of the gravel.
+    r.loot(&GRAVEL).pool(
+        Pool::new()
+            .when(Cond::harvested())
+            .entry(Entry::item("flint"))
+            .entry(Entry::item("gravel").weight(9)),
+    );
     r.block(&CLAY)
         .sound_group("gravel")
         .hardness(0.6)
         .mined_by("shovel", tool_tier::HAND)
         .tag("clay")
+        .drops("clay_ball", 4)
         .tab(&crate::tabs::NATURAL);
     r.block(&SANDSTONE)
         .sound_group("stone")
@@ -297,7 +309,7 @@ pub fn register(r: &mut Registry) {
         .fog(0x050533, 96.0)
         .bucket(Item::generated("water_bucket".into()), &crate::items::BUCKET, &crate::tabs::TOOLS);
     r.liquid(&LAVA)
-        .block(|b| b.light(15).drag(0.4).tag("lava"))
+        .block(|b| b.light(15).drag(0.4).tag("lava").tag("cools_into_stone"))
         .flow_delay(30)
         .drop_off(2)
         .slope_find(2)
@@ -305,7 +317,7 @@ pub fn register(r: &mut Registry) {
         .fog(0x991A00, 1.0)
         .no_overlay()
         .bucket(Item::generated("lava_bucket".into()), &crate::items::BUCKET, &crate::tabs::TOOLS);
-    r.liquid_reaction("#hot", "#water")
+    r.liquid_reaction("#cools_into_stone", "#water")
         .source_turns_into("obsidian")
         .flowing_turns_into("cobblestone")
         .below_turns_into("stone");
@@ -319,7 +331,7 @@ pub fn register(r: &mut Registry) {
         .tint(&tints::GRASS)
         .no_item();
     r.loot(&TALL_GRASS)
-        .pool(Pool::new().when(Cond::Chance(0.125)).item("wheat_seeds"));
+        .pool(Pool::new().when(Cond::chance(0.125)).item("wheat_seeds"));
     plant(r, &DANDELION, "flower_dandelion");
     plant(r, &ROSE, "flower_rose");
     r.block(&SAPLING)
@@ -340,6 +352,7 @@ pub fn register(r: &mut Registry) {
         .grows(270.0, 0)
         .on_grow(|e| grow_column(e, &SUGAR_CANE))
         .tab(&crate::tabs::NATURAL);
+    r.damage_cause(&PRICKED).death_message("death.base.cactus");
     r.block(&CACTUS)
         .sound_group("cloth")
         .textures("cactus_top", "cactus_side", "cactus_top")
@@ -347,6 +360,7 @@ pub fn register(r: &mut Registry) {
         .hitbox([1.0, 0.0, 1.0], [15.0, 16.0, 15.0])
         .hardness(0.4)
         .needs_below("#cactus_soil")
+        .hazard(Hazard::touch(1.0, &PRICKED))
         .grows(270.0, 0)
         .on_grow(|e| grow_column(e, &CACTUS))
         .tab(&crate::tabs::NATURAL);
@@ -360,11 +374,11 @@ pub fn register(r: &mut Registry) {
         .grows(205.0, 9);
     // Modern's: unripe gives its seed back, ripe gives the wheat and up to 3 more seeds.
     r.loot(&WHEAT)
-        .pool(Pool::new().when(Cond::BlockState("age=7")).item("wheat"))
+        .pool(Pool::new().when(Cond::state("age=7")).item("wheat"))
         .pool(Pool::new().entry(Entry::item("wheat_seeds")))
         .pool(
             Pool::new()
-                .when(Cond::BlockState("age=7"))
+                .when(Cond::state("age=7"))
                 .entry(Entry::item("wheat_seeds").count(0, 3)),
         );
     r.block(&FARMLAND)

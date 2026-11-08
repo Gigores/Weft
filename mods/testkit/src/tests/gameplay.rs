@@ -1179,8 +1179,8 @@ pub async fn block_shapes(t: T) -> R {
         "base:oak_planks_stairs[facing=east]",
         "base:oak_planks_slab",
         "base:oak_planks_slab[type=top]",
-        "base:bricks_vertical_slab[side=north]",
-        "base:bricks_vertical_slab[side=west]",
+        "base:bricks_vertical_slab[facing=south]",
+        "base:bricks_vertical_slab[facing=east]",
         "base:sandstone_slab[type=double]",
         "base:spruce_planks_stairs[facing=south,half=top]",
         "base:mossy_cobblestone_stairs[facing=north]",
@@ -1325,12 +1325,12 @@ pub async fn block_shapes(t: T) -> R {
     t.frames(3).await?;
     t.press("core:use");
     t.secs(0.3).await?;
-    t.check(t.block(cell).await?.contains("side=north"), format!("against the wall it is on: {}", t.block(cell).await?));
+    t.check(t.block(cell).await?.contains("facing=south"), format!("against the wall it is on: {}", t.block(cell).await?));
     aim(&t, centre(cell, 0.5, 0.5, 0.5));
     t.frames(3).await?;
     t.press("core:use");
     t.secs(0.3).await?;
-    t.check(t.block(cell).await?.contains("side=double"), format!("and a second one joins it: {}", t.block(cell).await?));
+    t.check(t.block(cell).await?.contains("double=true"), format!("and a second one joins it: {}", t.block(cell).await?));
     t.set(cell, "air").await?;
 
     // Corners, by vanilla's rules: what is behind a stair crossways makes it an outer corner, what
@@ -1369,9 +1369,9 @@ pub async fn block_shapes(t: T) -> R {
     let up = t.state().pos;
     t.check(up.y >= f[1] as f64 + 0.99, format!("up the stairs, one block: {up:?}"));
     let v = add(f, [-16, 0, 2]);
-    t.set(v, "base:oak_planks_vertical_slab[side=north]")
+    t.set(v, "base:oak_planks_vertical_slab[facing=south]")
         .await?;
-    t.set(add(v, [0, 1, 0]), "base:oak_planks_vertical_slab[side=north]")
+    t.set(add(v, [0, 1, 0]), "base:oak_planks_vertical_slab[facing=south]")
         .await?;
     t.c().teleport(centre(v, 0.5, 0.0, 2.5));
     t.c().set_look(0.0, 0.0);
@@ -1389,7 +1389,7 @@ pub async fn block_shapes(t: T) -> R {
         "a slab's recipe",
     );
     t.check_eq(
-        t.op("craft 3 3 base:bricks air air base:bricks base:bricks air base:bricks base:bricks base:bricks")
+        t.op("craft 2 2 base:bricks air base:bricks base:bricks")
             .await?,
         "base:bricks_stairs 4".to_string(),
         "a stair's",
@@ -1488,6 +1488,12 @@ pub async fn cell_parts(t: T) -> R {
     t.secs(0.3).await?;
     let full = t.op(&parts(pool)).await?;
     t.check(full.contains("type=double") && !full.contains("water"), format!("whole, it has no room for it: {full}"));
+    aim(&t, centre(pool, 0.5, 0.8, 1.0));
+    t.frames(3).await?;
+    t.press("core:attack");
+    t.secs(0.3).await?;
+    let half = t.op(&parts(pool)).await?;
+    t.check(half.contains("type=bottom"), format!("a hit takes the half aimed at: {half}"));
 
     // Stairs hold it too, from a bucket.
     let steps = add(pool, [3, 0, 0]);
@@ -1546,8 +1552,20 @@ pub async fn cell_parts(t: T) -> R {
     t.frames(4).await?;
     let stair = t.op(&parts(a)).await?;
     t.check(stair.contains("torch") && stair.contains("shape=outer_right"), format!("a part keeps up with its neighbors: {stair}"));
-    t.check(t.op(&format!("addpart {} base:glowstone", at(a))).await? == "0", "only one in a cell gives light");
     t.fill(a, add(a, [1, 0, 0]), "air").await?;
+    // Any part shines, not only what the cell stands for.
+    let lamp = add(f, [12, 0, 12]);
+    t.set(lamp, "base:stone_slab[type=top]").await?;
+    t.op(&format!("addpart {} base:torch[facing=up]", at(lamp)))
+        .await?;
+    t.frames(3).await?;
+    let lit: u32 = t
+        .op(&format!("light {}", at(lamp)))
+        .await?
+        .parse()
+        .unwrap_or(0);
+    t.check(lit >> 8 != 0, format!("a torch in with a slab lights the cell: {lit:x}"));
+    t.set(lamp, "air").await?;
 
     // A piston moves all of a cell.
     let row = add(f, [-6, 0, 6]);
@@ -1934,7 +1952,7 @@ pub async fn names_translated(t: T) -> R {
                 .strip_prefix("base:")
                 // Named after what hatches from them, or what they are made of.
                 .filter(|n| {
-                    !["_spawn_egg", "_stairs", "_slab"]
+                    !["_spawn_egg", "_stairs", "_slab", "_beam", "_eighth"]
                         .iter()
                         .any(|end| n.ends_with(end))
                 })

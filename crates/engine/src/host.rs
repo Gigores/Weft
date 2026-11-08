@@ -85,7 +85,6 @@ pub static HOST: Host = Host {
     recipe_find,
     recipe_info,
     recipe_output,
-    recipe_value,
     recipe_consume,
     item_block,
     ui_open: crate::client::modui::ui_open,
@@ -133,6 +132,7 @@ pub static HOST: Host = Host {
     client_state: crate::app::api::client_state,
     client_input: crate::app::api::client_input,
     client_key_state: crate::app::api::client_pressed,
+    keys_state: crate::input::keys_state,
     client_control: crate::app::api::client_set_player,
     client_op: crate::app::api::client_command,
     client_text: crate::app::api::client_text,
@@ -168,7 +168,9 @@ pub static HOST: Host = Host {
     attribute_remove_modifier,
     attribute_explain,
     reg_entry,
+    mod_loaded,
     roll_loot,
+    holds,
     break_block,
     client_menu_owner: crate::client::modui::client_menu_owner,
     reg_system,
@@ -1412,19 +1414,22 @@ fn recipe_at(kind: Str, recipe: u32) -> Option<&'static registry::Recipe> {
         .get(recipe as usize)
 }
 
-unsafe extern "C" fn recipe_find(kind: Str, stacks: *const ItemStack, count: u32) -> u32 {
+unsafe extern "C" fn recipe_find(kind: Str, stacks: *const ItemStack, count: u32, from: u32) -> u32 {
     let c = content();
     let stacks = unsafe { std::slice::from_raw_parts(stacks, count as usize) };
     let Some(list) = c.game.recipes.get(unsafe { kind.as_str() }) else { return 0 };
-    list.iter()
-        .position(|r| c.game.find_inputs(r, stacks, &c.components).is_some())
+    (from as usize..list.len())
+        .find(|&i| {
+            c.game
+                .find_inputs(&list[i], stacks, &c.components)
+                .is_some()
+        })
         .map_or(0, |i| i as u32 + 1)
 }
 
 unsafe extern "C" fn recipe_info(kind: Str, recipe: u32, out: *mut abi::RecipeInfo) -> u32 {
     let Some(r) = recipe_at(kind, recipe) else { return 0 };
-    let flags = if r.hidden { abi::recipe_flags::HIDDEN } else { 0 };
-    unsafe { *out = abi::RecipeInfo { time: r.time, inputs: r.inputs.len() as u32, outputs: r.outputs.len() as u32, flags } };
+    unsafe { *out = abi::RecipeInfo { time: r.time, inputs: r.inputs.len() as u32, outputs: r.outputs.len() as u32, entry: r.entry } };
     1
 }
 
@@ -1438,15 +1443,6 @@ unsafe extern "C" fn recipe_output(kind: Str, recipe: u32, index: u32, stack: *m
         *chance = o.chance;
     }
     1
-}
-
-unsafe extern "C" fn recipe_value(kind: Str, recipe: u32, component: Str, out: *mut u8, cap: u32) -> u32 {
-    let c = content();
-    let Some(id) = c.components.id(unsafe { component.as_str() }) else { return 0 };
-    let Some(v) = recipe_at(kind, recipe).and_then(|r| r.value(id)) else { return 0 };
-    let n = v.len().min(cap as usize);
-    unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, n) };
-    v.len() as u32
 }
 
 unsafe extern "C" fn recipe_consume(kind: Str, recipe: u32, stacks: *mut ItemStack, count: u32) -> u32 {
@@ -1497,15 +1493,6 @@ unsafe extern "C" fn find(kind: u32, name: Str, count: *mut u32) -> u32 {
         names.position(|n| n == name).map(|i| i as u32)
     }
     let id = match kind {
-        // `#tag`: the first block carrying it, in mod load order (biome surfaces by tag).
-        // `#tag`: its preferred block (mod load order) or item.
-        abi::entry_kind::BLOCK if name.starts_with('#') => crate::refs::Ref::parse(name)
-            .ok()
-            .and_then(|r| crate::refs::state(&r, &c.block_names, &c.blocks, &c.components).ok())
-            .inspect(|&s| n = c.block_of(s).states),
-        abi::entry_kind::ITEM if name.starts_with('#') => crate::refs::Ref::parse(name)
-            .ok()
-            .and_then(|r| crate::refs::item(&r, &c.item_names, &c.components, &c.tag_items).ok()),
         abi::entry_kind::BLOCK if name.contains('[') => c.state_by_name(name),
         abi::entry_kind::BLOCK => c.block_names.get(name).map(|&b| {
             n = c.blocks[b as usize].states;
@@ -1543,7 +1530,7 @@ unsafe extern "C" fn find(kind: u32, name: Str, count: *mut u32) -> u32 {
         abi::entry_kind::TINT_KIND => at(c.tint_kinds.iter().map(|k| k.0.as_str()), name),
         abi::entry_kind::RECIPE_KIND => c.game.recipe_kinds.get(name).copied(),
         abi::entry_kind::ATTRIBUTE => c.game.attr_names.get(name).copied(),
-        abi::entry_kind::KEY => at(c.game.keys.iter().map(|k| k.0.as_str()), name),
+        abi::entry_kind::KEY => at(c.game.keys.iter().map(|k| k.name.as_str()), name),
         abi::entry_kind::LIQUID => at(c.liquids.iter().map(|l| l.name.as_str()), name),
         _ => None,
     };
@@ -1914,17 +1901,23 @@ unsafe extern "C" fn reg_entry(r: *mut abi::Registrar, d: *const abi::EntryDesc)
     }
 }
 
+unsafe extern "C" fn mod_loaded(id: Str) -> u32 {
+    unsafe { crate::modloader::mod_loaded(id.as_str()) as u32 }
+}
+
+unsafe extern "C" fn holds(w: *mut abi::WorldCtx, text: Str, pos: abi::Vec3, entity: u64) -> u32 {
+    unsafe {
+        let c = content();
+        let ask = crate::conditions::Ask { pos: crate::world::dvec(pos), entity, ..Default::default() };
+        c.condition(text.as_str())
+            .is_some_and(|e| crate::conditions::holds_server(dim(w), c, &e, &ask)) as u32
+    }
+}
+
 unsafe extern "C" fn roll_loot(w: *mut abi::WorldCtx, name: Str, ctx: *const abi::LootCtx, out: *mut ItemStack, max: usize) -> usize {
     unsafe {
         let x = if ctx.is_null() { abi::LootCtx::DEFAULT } else { *ctx };
-        let ctx = crate::loot::Ctx {
-            tool: x.tool,
-            by_player: x.by_player != 0,
-            on_fire: x.on_fire != 0,
-            mined: x.mined,
-            state: x.mined,
-            holds: Vec::new(),
-        };
+        let ctx = crate::loot::Ctx { tool: x.tool, by_player: x.by_player != 0, on_fire: x.on_fire != 0, mined: x.mined, state: x.mined };
         let stacks = dim(w).roll_loot(content(), name.as_str(), &ctx, DVec3::ZERO, 0);
         for (i, s) in stacks.iter().take(max).enumerate() {
             *out.add(i) = *s;

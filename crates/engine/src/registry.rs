@@ -3,8 +3,9 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::tag_bits::entity as ef;
 use rustc_hash::FxHashMap;
-use weft_abi::{self as abi, Callback, ModId, entity_flags as ef, entry_kind as ek};
+use weft_abi::{self as abi, Callback, ModId, entry_kind as ek};
 
 use crate::components::{self as comps, Components, RawValue};
 use crate::entries::{Entry, RawEntry, bake, bake_by};
@@ -116,8 +117,8 @@ pub struct EntityKind {
     /// Its equipment slots in that inventory (`entity_flags::WEARS`, the player's): never filled
     /// by pickups, worn on the model. Laid out at freeze.
     pub worn: std::ops::Range<u32>,
-    /// Sound events hurt, death, ambient, step (`u32::MAX` none), from its `sound` component.
-    pub sounds: [u32; 4],
+    /// What its events sound and show (`entity_event`).
+    pub effects: [crate::content::Fx; 4],
     /// Solid bodies: riders up to this high above it move with it.
     pub carry_height: f32,
     /// A moving structure: its template (`Content::templates`), by name until the freeze.
@@ -178,7 +179,7 @@ pub struct MenuDef {
     pub on_tick: Option<(ModId, Callback)>,
     pub screen: Option<(ModId, Callback)>,
     pub on_key: Option<(ModId, Callback)>,
-    /// How its screen behaves, `abi::screen_flags`.
+    /// How its screen behaves, `crate::tag_bits::screen`.
     pub flags: u32,
 }
 
@@ -274,10 +275,9 @@ pub struct Recipe {
     /// The main result first.
     pub outputs: Vec<RecipeOutput>,
     pub time: u32,
-    /// (component, value) the recipe carries.
-    pub values: Vec<(u32, Vec<u8>)>,
-    /// Not shown in the recipe viewer.
-    pub hidden: bool,
+    /// Its entry, whose component table row has what else it carries (`comp::recipe::HIDDEN`, a
+    /// mod's values).
+    pub entry: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -294,13 +294,6 @@ impl Recipe {
             Some(RecipeOutput { what: Ingredient::Item(i), count, .. }) => weft_abi::ItemStack::new(*i, *count),
             _ => weft_abi::ItemStack::EMPTY,
         }
-    }
-
-    pub fn value(&self, comp: u32) -> Option<&[u8]> {
-        self.values
-            .iter()
-            .find(|v| v.0 == comp)
-            .map(|v| v.1.as_slice())
     }
 }
 
@@ -378,8 +371,8 @@ pub struct Game {
     /// Mod message channels by id (sorted by name, so both sides agree).
     pub packets: Vec<PacketDef>,
     pub packet_names: FxHashMap<String, u32>,
-    /// Mod key bindings: (action, default key).
-    pub keys: Vec<(String, String)>,
+    /// Key bindings, the engine's and the mods'.
+    pub keys: Vec<KeyDef>,
     pub events: Vec<EventDef>,
     pub event_names: FxHashMap<String, u32>,
     pub interceptors: FxHashMap<String, Vec<(ModId, Callback)>>,
@@ -409,6 +402,14 @@ pub struct Game {
     pub synced_comps: Vec<bool>,
     /// Config id of `core:mob_spawning`.
     pub mob_spawning: u32,
+    /// Per attribute, the world rule players' base of it is (`comp::attribute::RULE`).
+    pub attr_rules: Vec<Option<u32>>,
+    /// Per damage cause, the world rule that turns it off (`core:damage.<cause>`); none for what
+    /// gets through everything.
+    pub damage_rules: Vec<Option<u32>>,
+    /// Config ids of `core:lives` and `core:rules_locked`.
+    pub lives: u32,
+    pub rules_locked: u32,
     /// Config id of `core:keep_inventory`.
     pub keep_inventory: u32,
     /// Config id of `core:simulation_distance`.
@@ -457,8 +458,8 @@ pub struct MusicDef {
     pub name: String,
     pub tracks: Vec<String>,
     pub dimension: Option<u32>,
-    /// Conditions that all hold while it may play.
-    pub when: Vec<u32>,
+    /// A condition (`Content::conds`) that holds while it may play.
+    pub when: Option<u32>,
 }
 
 /// A condition and who answers it.
@@ -710,8 +711,8 @@ pub struct RawRecipe {
     pub time: u32,
     /// (item, count, chance) after the main output; a liquid is its item.
     pub outputs: Vec<(String, u32, f32)>,
-    pub values: Vec<crate::components::RawValue>,
-    pub flags: u32,
+    /// Its entry: recipes expanded from one share it.
+    pub entry: u32,
 }
 
 #[derive(Default)]
@@ -745,18 +746,15 @@ pub struct RawGame {
 pub struct SpawnRule {
     pub entity: u32,
     pub category: u32,
-    pub biome: Option<u32>,
-    /// Matcher of the block it rests on.
-    pub ground: Option<u32>,
+    pub biome: Option<Box<[u64]>>,
     /// `abi::spawn_place`.
     pub place: u32,
-    /// A condition the spot must meet.
-    pub condition: Option<u32>,
+    /// A condition (`Content::conds`) the spot and the block it rests on meet.
+    pub when: Option<u32>,
     /// Blocks of room the mob needs up.
     pub height: i32,
     /// Dimensions it spawns in, empty: any.
     pub dims: Vec<u32>,
-    pub light: [u32; 2],
     pub y: [i32; 2],
     pub group: [u32; 2],
     pub weight: u32,
@@ -908,7 +906,7 @@ fn engine_sound_categories() -> Vec<RawEntry> {
 /// `SoundDef::category` of the engine's music track: the first category.
 pub const MUSIC_CATEGORY: u32 = 0;
 
-/// A damage cause: what the engine does differently for it (`abi::damage_flags`), and how a
+/// A damage cause: what the engine does differently for it (`crate::tag_bits::damage`), and how a
 /// death by it reads.
 #[derive(Clone, Debug)]
 pub struct DamageCauseDef {
@@ -954,7 +952,7 @@ fn bake_damage_cause(e: &Entry) -> DamageCauseDef {
     let text = |c: &str| e.text(c).unwrap_or_default().to_string();
     DamageCauseDef {
         name: e.name.clone(),
-        flags: e.flags(&d::FLAGS),
+        flags: e.flags(crate::tag_bits::damage::TAGS),
         death_message: text(d::DEATH_MESSAGE),
         death_message_by: text(d::DEATH_MESSAGE_BY),
     }
@@ -969,7 +967,7 @@ impl DamageCauseDef {
 #[derive(Clone, Debug)]
 pub struct WeatherDef {
     pub name: String,
-    /// `abi::weather_flags`.
+    /// `crate::tag_bits::weather`.
     pub flags: u32,
     pub look: abi::WeatherLook,
     pub sound_name: String,
@@ -981,13 +979,13 @@ pub struct WeatherDef {
 
 impl WeatherDef {
     pub fn falls(&self) -> bool {
-        self.flags & abi::weather_flags::FALLS != 0
+        self.flags & crate::tag_bits::weather::FALLS != 0
     }
     pub fn lightning(&self) -> bool {
-        self.flags & abi::weather_flags::LIGHTNING != 0
+        self.flags & crate::tag_bits::weather::LIGHTNING != 0
     }
     pub fn shelters(&self) -> bool {
-        self.flags & abi::weather_flags::SHELTERS != 0
+        self.flags & crate::tag_bits::weather::SHELTERS != 0
     }
 }
 
@@ -1016,7 +1014,8 @@ fn engine_weathers() -> Vec<RawEntry> {
 
 /// A weather from its entry: rain's look and flags where it says nothing.
 fn bake_weather(e: &crate::entries::Entry) -> WeatherDef {
-    use weft_abi::{comp::weather as w, weather_flags as f};
+    use crate::tag_bits::weather as f;
+    use weft_abi::comp::weather as w;
     let share = |c: &str, rain: f32| e.or(c, rain).clamp(0.0, 1.0);
     let flags =
         (!e.has(w::DRY) as u32 * f::FALLS) | (e.has(w::LIGHTNING) as u32 * f::LIGHTNING) | (!e.has(w::UNSHELTERED) as u32 * f::SHELTERS);
@@ -1064,8 +1063,8 @@ pub struct PoseDef {
     pub priority: i32,
     /// The action held for it, empty for none.
     pub key: String,
-    /// `abi::pose_when`.
-    pub when: u32,
+    /// A condition (`Content::conds`) it is taken under.
+    pub when: Option<u32>,
     /// Names as registered, then the poses they are (`fallback`).
     pub fallback_names: String,
     pub fallback: Vec<crate::world::Pose>,
@@ -1084,28 +1083,25 @@ fn engine_poses() -> Vec<RawEntry> {
             .set(p::PRIORITY, priority)
     };
     let fallback = |e: RawEntry, poses: &[&str]| e.set(p::FALLBACK, poses.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-    let (in_liquid, not_flying, sprinting) = (p::WHEN[0].0, p::WHEN[1].0, p::WHEN[2].0);
+    let when = |e: RawEntry, c: &str| e.set(p::WHEN, vec![c.to_string()]);
     // Modern vanilla's: the player's 1.8 and 1.62 standing. Under a low ceiling it crouches, and
     // where that has no room either it swims in a liquid and crawls out of one.
     vec![
         fallback(pose("stand", 1.0, 1.0, 1.0, t::UPRIGHT, "", 0), &["core:crouch", "core:swim", "core:crawl"]),
-        fallback(pose("crouch", 1.5 / 1.8, 1.27 / 1.62, 0.3, t::UPRIGHT, "sneak", 10), &["core:swim", "core:crawl"])
-            .set(p::KEY, "core:sneak".to_string())
-            .tag(not_flying),
-        fallback(pose("swim", 0.6 / 1.8, 0.4 / 1.62, 1.0, t::ALONG_LOOK, "swim", 30), &["core:crouch", "core:crawl"])
-            .tag(p::NO_BOB)
-            .tag(sprinting)
-            .tag(in_liquid)
-            .tag(not_flying),
-        pose("crawl", 0.6 / 1.8, 0.4 / 1.62, 0.3, t::FACE_DOWN, "crawl", 20)
-            .set(p::KEY, "core:crawl".to_string())
-            .tag(not_flying),
+        when(fallback(pose("crouch", 1.5 / 1.8, 1.27 / 1.62, 0.3, t::UPRIGHT, "sneak", 10), &["core:swim", "core:crawl"]), "!flying")
+            .set(p::KEY, "core:sneak".to_string()),
+        when(
+            fallback(pose("swim", 0.6 / 1.8, 0.4 / 1.62, 1.0, t::ALONG_LOOK, "swim", 30), &["core:crouch", "core:crawl"]),
+            "sprinting & in_liquid & !flying",
+        )
+        .tag(p::NO_BOB),
+        when(pose("crawl", 0.6 / 1.8, 0.4 / 1.62, 0.3, t::FACE_DOWN, "crawl", 20), "!flying").set(p::KEY, "core:crawl".to_string()),
         // Only where a mod holds it.
         pose("sleep", 0.2 / 1.8, 0.45 / 1.62, 0.0, t::ON_BACK, "", i32::MIN).tag(p::NO_BOB),
     ]
 }
 
-fn bake_pose(e: &Entry) -> PoseDef {
+fn bake_pose(e: &Entry, conds: &mut crate::conditions::Texts) -> PoseDef {
     use abi::comp::pose as p;
     let share = |c: &str| {
         e.get::<f32>(c)
@@ -1122,7 +1118,7 @@ fn bake_pose(e: &Entry) -> PoseDef {
         bob: !e.has(p::NO_BOB),
         priority: e.or(p::PRIORITY, 0),
         key: e.text(p::KEY).unwrap_or_default().to_string(),
-        when: e.flags(&p::WHEN),
+        when: conds.all(&e.or::<Vec<String>>(p::WHEN, Vec::new())),
         fallback_names: e.or::<Vec<String>>(p::FALLBACK, Vec::new()).join(" "),
         fallback: Vec::new(),
     }
@@ -1131,8 +1127,9 @@ fn bake_pose(e: &Entry) -> PoseDef {
 pub fn engine_pose_defs() -> &'static [PoseDef] {
     static DEFS: std::sync::OnceLock<Vec<PoseDef>> = std::sync::OnceLock::new();
     DEFS.get_or_init(|| {
-        let (mut defs, _) =
-            crate::entries::bake(engine_poses(), abi::entry_kind::POSE, &|_| String::new(), &mut Vec::new(), |e, _| bake_pose(e));
+        let (mut defs, _) = crate::entries::bake(engine_poses(), abi::entry_kind::POSE, &|_| String::new(), &mut Vec::new(), |e, _| {
+            bake_pose(e, &mut Default::default())
+        });
         let names: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
         for d in &mut defs {
             d.fallback = d
@@ -1146,57 +1143,61 @@ pub fn engine_pose_defs() -> &'static [PoseDef] {
     })
 }
 
-/// A game mode: what its players may do (`abi::game_mode_flags`) and the attribute modifiers
+/// A game mode: what its players may do (`crate::tag_bits::game_mode`) and the attribute modifiers
 /// they get, (attribute, op, amount).
 #[derive(Clone, Debug)]
 pub struct GameModeDef {
     pub name: String,
     pub flags: u32,
-    pub modifiers: Vec<(String, u32, f64)>,
+    /// What its players get (`content::SourceMods`).
+    pub modifiers: Vec<abi::Modifier>,
 }
 
 fn engine_game_modes() -> Vec<RawEntry> {
-    use abi::comp::game_mode as m;
-    let tag = |f: u32| m::FLAGS.iter().find(|t| t.1 == f).unwrap().0;
-    let modifier = |attribute: &str, op: u32, amount: f64| abi::ModeModifier { attribute: attribute.to_string(), op, amount };
-    let mode = |name: &str, flags: &[u32], modifiers: Vec<abi::ModeModifier>| {
+    let tag = |f: u32| {
+        crate::tag_bits::game_mode::TAGS
+            .iter()
+            .find(|t| t.1 == f)
+            .unwrap()
+            .0
+    };
+    let modifier =
+        |attribute: &str, op: u32, amount: f64| abi::Modifier { attribute: attribute.to_string(), op, amount, ..Default::default() };
+    let mode = |name: &str, flags: &[u32], modifiers: Vec<abi::Modifier>| {
         flags
             .iter()
             .fold(RawEntry::engine(abi::entry_kind::GAME_MODE, name), |e, f| e.tag(tag(*f)))
-            .set(m::MODIFIERS, modifiers)
+            .set(abi::comp::MODIFIERS, modifiers)
     };
-    use abi::game_mode_flags as f;
+    let flies = || modifier(abi::attribute::CAN_FLY, abi::attr_op::ADD, 1.0);
+    use crate::tag_bits::game_mode as f;
     // Unseen by mobs outside survival; creative reaches further.
     let unseen = || modifier(abi::attribute::VISIBILITY, abi::attr_op::MULTIPLY_TOTAL, -1.0);
     vec![
         mode("core:survival", &[], Vec::new()),
         mode(
             "core:creative",
-            &[f::INSTANT_BREAK, f::NO_COSTS, f::INVULNERABLE, f::CAN_FLY, f::CREATIVE_INVENTORY],
+            &[f::INSTANT_BREAK, f::NO_COSTS, f::INVULNERABLE, f::CREATIVE_INVENTORY],
             vec![
                 modifier(abi::attribute::BLOCK_REACH, abi::attr_op::ADD, 0.5),
                 modifier(abi::attribute::ENTITY_REACH, abi::attr_op::ADD, 2.0),
                 unseen(),
+                flies(),
             ],
         ),
         mode(
             "core:spectator",
             &[f::INVULNERABLE, f::ALWAYS_FLY, f::NOCLIP, f::NO_INTERACT, f::HIDDEN, f::NO_HUD, f::NO_COSTS],
-            vec![unseen()],
+            vec![unseen(), flies()],
         ),
     ]
 }
 
 fn bake_game_mode(e: &Entry) -> GameModeDef {
-    use abi::comp::game_mode as m;
     GameModeDef {
         name: e.name.clone(),
-        flags: e.flags(&m::FLAGS),
-        modifiers: e
-            .or::<Vec<abi::ModeModifier>>(m::MODIFIERS, Vec::new())
-            .into_iter()
-            .map(|m| (m.attribute, m.op, m.amount))
-            .collect(),
+        flags: e.flags(crate::tag_bits::game_mode::TAGS),
+        modifiers: e.or(abi::comp::MODIFIERS, Vec::new()),
     }
 }
 
@@ -1274,12 +1275,14 @@ pub struct AttrDef {
     pub hash: u64,
     /// The entity kind component of the same name holding a kind's own value.
     pub comp: Option<u32>,
+    /// Players' base of it is the world rule of its name (`comp::attribute::RULE`).
+    pub rule: bool,
 }
 
 fn engine_attributes() -> Vec<RawEntry> {
     use abi::attribute as a;
     [
-        (a::MAX_HEALTH, 20.0, 1.0, 1024.0),
+        (a::MAX_HEALTH, 20.0, 0.5, 1024.0),
         (a::MOVEMENT_SPEED, 1.0, 0.0, 16.0),
         (a::VISIBILITY, 1.0, 0.0, 16.0),
         (a::JUMP_STRENGTH, 1.0, 0.0, 16.0),
@@ -1289,12 +1292,15 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::ENTITY_REACH, 3.0, 0.0, 1024.0),
         (a::MINING_SPEED, 1.0, 0.0, 1024.0),
         (a::FOV, 1.0, 0.05, 8.0),
+        (a::CAN_FLY, 0.0, 0.0, 1.0),
     ]
     .iter()
     .map(|&(name, default, min, max)| {
-        RawEntry::engine(abi::entry_kind::ATTRIBUTE, name)
+        let e = RawEntry::engine(abi::entry_kind::ATTRIBUTE, name)
             .set(abi::comp::attribute::DEFAULT, default)
-            .set(abi::comp::attribute::RANGE, [min, max])
+            .set(abi::comp::attribute::RANGE, [min, max]);
+        // How many hearts players have is the world's to say.
+        if name == a::MAX_HEALTH { e.tag(abi::comp::attribute::RULE) } else { e }
     })
     .collect()
 }
@@ -1330,6 +1336,7 @@ pub fn engine_entries(kind: u32) -> Vec<RawEntry> {
         ek::SOUND => engine_sounds(),
         ek::ENTITY_CATEGORY => engine_categories(),
         ek::CAMERA => engine_cameras(),
+        ek::KEY => engine_keys(),
         ek::ATTRIBUTE => engine_attributes(),
         ek::DAMAGE_CAUSE => engine_damage_causes(),
         ek::GAME_MODE => engine_game_modes(),
@@ -1349,6 +1356,26 @@ pub fn engine_entries(kind: u32) -> Vec<RawEntry> {
     }
 }
 
+/// An action players bind keys to (`entry_kind::KEY`).
+pub struct KeyDef {
+    pub name: String,
+    pub default: crate::input::Slots,
+    /// `input::context` bits.
+    pub contexts: u32,
+}
+
+fn engine_keys() -> Vec<RawEntry> {
+    crate::input::ENGINE_KEYS
+        .iter()
+        .map(|&(name, keys, contexts)| {
+            crate::input::context::TAGS
+                .iter()
+                .filter(|t| contexts & t.1 != 0)
+                .fold(RawEntry::engine(ek::KEY, name).set(abi::comp::KEY_DEFAULT, keys.to_string()), |e, t| e.tag(t.0))
+        })
+        .collect()
+}
+
 /// FNV-1a, for names stored in saves.
 pub fn name_hash(s: &str) -> u64 {
     weft_noise::fnv(s.as_bytes())
@@ -1359,8 +1386,9 @@ fn bake_spawn(
     e: &Entry,
     g: &Game,
     c: &Components,
-    mut matcher: impl FnMut(&str) -> Result<u32, String>,
+    conds: &mut crate::conditions::Texts,
     dim_names: &FxHashMap<String, u32>,
+    biome_names: &FxHashMap<String, u32>,
     errors: &mut Vec<String>,
 ) -> Option<SpawnRule> {
     use abi::comp::{common as p, spawn as s};
@@ -1370,33 +1398,13 @@ fn bake_spawn(
         errors.push(format!("{what}: unknown entity {name:?}"));
         return None;
     };
-    let ground = match e.text(s::GROUND).unwrap_or_default() {
-        "" => None,
-        t => Some(
-            matcher(t)
-                .map_err(|err| errors.push(format!("{what}: ground: {err}")))
-                .ok()?,
-        ),
-    };
-    let biome = crate::content::biome_tag(c, &what, e, errors).ok()?;
+    let biome = crate::content::biomes(c, biome_names, &what, e, errors).ok()?;
     let names: Vec<String> = e.or(p::DIMENSIONS, Vec::new());
-    let dims: Vec<u32> = names
-        .iter()
-        .filter_map(|d| dim_names.get(d).copied())
-        .collect();
-    if dims.len() != names.len() {
-        errors.push(format!("{what}: unknown dimension in {names:?}"));
-        return None;
-    }
-    let condition = match e.text(s::WHEN).unwrap_or_default() {
-        "" => None,
-        n => match g.condition_names.get(n) {
-            Some(&id) => Some(id),
-            None => {
-                errors.push(format!("{what}: no condition {n}"));
-                return None;
-            }
-        },
+    let dims = match names.is_empty() {
+        true => Vec::new(),
+        false => crate::refs::set(&names.join(" "), comps::DIMENSION, dim_names, dim_names.len() as u32, c, "dimension")
+            .map_err(|err| errors.push(format!("{what}: {err}")))
+            .ok()?,
     };
     let kind = &g.entities[entity as usize];
     let [min, max] = e.or(s::GROUP, [1u32, 1]);
@@ -1404,14 +1412,12 @@ fn bake_spawn(
         entity,
         category: kind.category,
         biome,
-        ground,
         place: e
             .or(s::PLACE, abi::spawn_place::GROUND)
             .min(abi::spawn_place::CEILING),
         height: (kind.height.ceil() as i32).max(1),
-        condition,
+        when: conds.all(&e.or::<Vec<String>>(s::WHEN, Vec::new())),
         dims,
-        light: e.or(s::LIGHT, [0, 15]),
         y: e.or(p::Y, [i32::MIN, i32::MAX]),
         group: [min.max(1), max.max(min).max(1)],
         weight: e.or(s::WEIGHT, 1),
@@ -1456,7 +1462,7 @@ fn bake_entity(e: &Entry) -> EntityKind {
         height: size.height,
         eye: e.or(k::EYE, size.height * EYE),
         speed: e.or(k::SPEED, 3.0),
-        flags: (ef::FALL_DAMAGE | ef::PUSHABLE | e.flags(&k::FLAGS)) & !e.flags(&k::OFF),
+        flags: (ef::FALL_DAMAGE | ef::PUSHABLE | e.flags(crate::tag_bits::entity::TAGS)) & !e.flags(crate::tag_bits::entity::OFF),
         category: 0,
         category_name: text(k::CATEGORY),
         texture: e
@@ -1476,7 +1482,7 @@ fn bake_entity(e: &Entry) -> EntityKind {
         values: Vec::new(),
         slots: 0,
         worn: 0..0,
-        sounds: [u32::MAX; 4],
+        effects: [crate::content::Fx::NONE; 4],
         carry_height: e.or(k::CARRY_HEIGHT, 0.0),
         template_name: text(k::TEMPLATE),
         template: None,
@@ -1536,7 +1542,7 @@ fn bake_menu(e: &Entry) -> MenuDef {
         on_tick: e.callback(m::ON_TICK),
         screen: e.callback(m::SCREEN),
         on_key: e.callback(m::ON_KEY),
-        flags: e.flags(&m::FLAGS),
+        flags: e.flags(crate::tag_bits::screen::TAGS),
     }
 }
 
@@ -1575,7 +1581,7 @@ fn engine_entities() -> Vec<RawEntry> {
     ]
 }
 
-/// A recipe from its entry; the components that aren't `recipe.*` are values it carries.
+/// A recipe from its entry; what else it carries stays in the entry's component table row.
 fn raw_recipe(e: &Entry) -> RawRecipe {
     use abi::comp::recipe as r;
     let text = |name: &str| e.text(name).unwrap_or_default().to_string();
@@ -1597,13 +1603,7 @@ fn raw_recipe(e: &Entry) -> RawRecipe {
             .into_iter()
             .map(|o| (o.item, o.count.max(1), o.chance))
             .collect(),
-        values: e
-            .values
-            .iter()
-            .filter(|v| !v.name.starts_with("recipe."))
-            .cloned()
-            .collect(),
-        flags: if e.has(r::HIDDEN) { abi::recipe_flags::HIDDEN } else { 0 },
+        entry: 0,
     }
 }
 
@@ -1631,12 +1631,13 @@ pub(crate) fn write_cell(cell: usize, id: u32) {
 
 pub use weft_abi::EYE_SHARE as EYE;
 
-/// What an entity kind's `sounds` hold.
-pub mod entity_sound {
+/// An entity kind's events, by `EntityKind::effects` index.
+pub mod entity_event {
     pub const HURT: usize = 0;
     pub const DEATH: usize = 1;
     pub const AMBIENT: usize = 2;
     pub const STEP: usize = 3;
+    pub const NAMES: [&str; 4] = ["hurt", "death", "ambient", "step"];
 }
 
 /// Entity component with attribute modifiers.
@@ -1720,16 +1721,15 @@ pub fn freeze(
     mut raws: Vec<RawGame>,
     entities: Entities,
     block_names: &FxHashMap<String, u32>,
-    block_defs: &[crate::content::BlockDef],
-    matchers: &mut crate::refs::Matchers,
     item_names: &FxHashMap<String, u32>,
     items: &[crate::content::ItemDef],
     dim_names: &FxHashMap<String, u32>,
+    biome_names: &FxHashMap<String, u32>,
     c: &Components,
     decls: &[ComponentDecl],
-    tag_items: &FxHashMap<u32, Vec<u32>>,
     order: &dyn Fn(ModId) -> u32,
     tables: &mut crate::entries::Tables,
+    conds: &mut crate::conditions::Texts,
     mod_name: &dyn Fn(ModId) -> String,
     errors: &mut Vec<String>,
 ) -> Game {
@@ -1772,7 +1772,7 @@ pub fn freeze(
     let (particles, names) = tables.bake_by(kind(ek::PARTICLE), ek::PARTICLE, mod_name, errors, |e| e.name.clone(), |e, _| e.clone());
     g.particle_names = names;
     freeze_particles(&mut g, &particles, errors);
-    let (sky, _) = bake(kind(ek::SKY), ek::SKY, mod_name, errors, |e, errors| bake_sky(e, dim_names, errors));
+    let (sky, _) = tables.bake(kind(ek::SKY), ek::SKY, mod_name, errors, |e, errors| bake_sky(e, dim_names, errors));
     g.sky = (0..dim_names.len()).map(|_| Vec::new()).collect();
     for (dim, s) in sky.into_iter().flatten() {
         g.sky[dim as usize].push(s);
@@ -1792,14 +1792,17 @@ pub fn freeze(
         let motion = crate::model::BoneMotion { gravity: e.or(b::GRAVITY, 0.0), spring: e.or(b::SPRING, 0.0), drag: e.or(b::DRAG, 0.0) };
         (model.to_string(), bone.to_string(), motion)
     });
-    (g.screen_parts, _) = bake(kind(ek::SCREEN_PART), ek::SCREEN_PART, mod_name, errors, |e, _| {
+    (g.screen_parts, _) = tables.bake(kind(ek::SCREEN_PART), ek::SCREEN_PART, mod_name, errors, |e, _| {
         use abi::comp::screen_part as s;
         let (owner, cb) = e.callback(s::CALL).unwrap_or((e.owner, Callback::NONE));
         let text = |name: &str| e.text(name).unwrap_or_default().to_string();
         ScreenPart { screen: text(s::SCREEN), area: text(s::AREA), order: e.or(s::ORDER, 0), owner, cb }
     });
     g.screen_parts.sort_by_key(|p| (p.order, order(p.owner)));
-    let (recipes, _) = bake(kind(ek::RECIPE), ek::RECIPE, mod_name, errors, |e, _| raw_recipe(e));
+    let (mut recipes, _) = tables.bake(kind(ek::RECIPE), ek::RECIPE, mod_name, errors, |e, _| raw_recipe(e));
+    for (i, r) in recipes.iter_mut().enumerate() {
+        r.entry = i as u32;
+    }
     (g.sound_categories, _) = tables.bake(kind(ek::SOUND_CATEGORY), ek::SOUND_CATEGORY, mod_name, errors, |e, _| {
         SoundCategory::new(&e.name, e.has(abi::comp::SOUND_CATEGORY_WORLD))
     });
@@ -1812,26 +1815,34 @@ pub fn freeze(
         |e, errors| bake_sound(e, &g.sound_categories, errors),
     );
     (g.keys, _) = tables.bake(kind(ek::KEY), ek::KEY, mod_name, errors, |e, errors| {
-        let key = e
-            .text(abi::comp::KEY_DEFAULT)
-            .unwrap_or_default()
-            .to_string();
-        if crate::input::Chord::parse(&key).is_none() {
-            errors.push(format!("key {}: unknown key name {key:?}", e.name));
-        }
-        (e.name.clone(), key)
+        let key = e.text(abi::comp::KEY_DEFAULT).unwrap_or_default();
+        let slots = crate::input::Binding::parse_slots(key).unwrap_or_else(|| {
+            errors.push(format!("key {}: unknown key {key:?}", e.name));
+            [None; crate::input::SLOTS]
+        });
+        KeyDef { name: e.name.clone(), default: slots, contexts: e.flags(crate::input::context::TAGS) }
     });
-    // The engine's settings, with a binding per key: the engine's and the mods'.
-    let mut keys: Vec<(String, String)> = crate::input::ENGINE_KEYS
-        .iter()
-        .map(|(a, k)| (a.to_string(), k.to_string()))
-        .collect();
-    for (action, key) in &g.keys {
-        match crate::input::Binding::parse_slots(key) {
-            Some(k) => keys.push((action.clone(), crate::input::Binding::slots_id(&k))),
-            None => errors.push(format!("key {action}: unknown key {key}")),
+    (g.attributes, g.attr_names) = tables.bake(kind(ek::ATTRIBUTE), ek::ATTRIBUTE, mod_name, errors, |e, _| {
+        let [min, max] = e.or(abi::comp::attribute::RANGE, [f64::NEG_INFINITY, f64::INFINITY]);
+        let default = e.or(abi::comp::attribute::DEFAULT, 0.0);
+        AttrDef {
+            hash: name_hash(&e.name),
+            comp: c.id(&e.name),
+            name: e.name.clone(),
+            default,
+            min: min.min(max),
+            max,
+            rule: e.has(abi::comp::attribute::RULE),
         }
-    }
+    });
+    (g.damage_causes, g.damage_cause_names) =
+        tables.bake(kind(ek::DAMAGE_CAUSE), ek::DAMAGE_CAUSE, mod_name, errors, |e, _| bake_damage_cause(e));
+    // The settings, with a binding per key.
+    let keys: Vec<(String, String)> = g
+        .keys
+        .iter()
+        .map(|k| (k.name.clone(), crate::input::Binding::slots_id(&k.default)))
+        .collect();
     let mut all = crate::config::engine_configs(&keys);
     all.extend(
         g.sound_categories
@@ -1839,9 +1850,45 @@ pub fn freeze(
             .filter_map(|k| k.setting.as_deref())
             .map(crate::config::volume),
     );
+    // Rules that come of other things: an attribute that is one, a damage cause to turn off.
+    let damage_rule = |d: &DamageCauseDef| {
+        (!d.has(crate::tag_bits::damage::PIERCES_INVULNERABLE) && d.name != "core:heal").then(|| {
+            format!(
+                "core:damage.{}",
+                d.name
+                    .strip_prefix("core:")
+                    .unwrap_or(&d.name)
+                    .replace(':', ".")
+            )
+        })
+    };
+    all.extend(
+        g.attributes
+            .iter()
+            .filter(|a| a.rule)
+            .map(|a| crate::config::rule(&a.name, abi::config_kind::FLOAT, a.default, a.min, a.max)),
+    );
+    all.extend(
+        g.damage_causes
+            .iter()
+            .filter_map(damage_rule)
+            .map(|name| crate::config::rule(&name, abi::config_kind::BOOL, 1.0, 0.0, 1.0)),
+    );
     all.extend(configs);
     // By name: a mod's settings come together on its screen.
     (g.configs, g.config_names) = tables.bake_by(all, ek::CONFIG, mod_name, errors, |e| e.name.clone(), crate::config::bake);
+    g.attr_rules = g
+        .attributes
+        .iter()
+        .map(|a| a.rule.then(|| g.config_names[&a.name]))
+        .collect();
+    g.damage_rules = g
+        .damage_causes
+        .iter()
+        .map(|d| damage_rule(d).map(|name| g.config_names[&name]))
+        .collect();
+    g.lives = g.config_names["core:lives"];
+    g.rules_locked = g.config_names["core:rules_locked"];
     g.mob_spawning = g.config_names["core:mob_spawning"];
     g.keep_inventory = g.config_names["core:keep_inventory"];
     g.simulation_distance = g.config_names["core:simulation_distance"];
@@ -1856,12 +1903,7 @@ pub fn freeze(
             None => errors.push(format!("entity {}: no category {}", k.name, k.category_name)),
         }
     }
-    (g.cameras, g.camera_names) = tables.bake(kind(ek::CAMERA), ek::CAMERA, mod_name, errors, |e, _| bake_camera(e));
-    (g.attributes, g.attr_names) = tables.bake(kind(ek::ATTRIBUTE), ek::ATTRIBUTE, mod_name, errors, |e, _| {
-        let [min, max] = e.or(abi::comp::attribute::RANGE, [f64::NEG_INFINITY, f64::INFINITY]);
-        let default = e.or(abi::comp::attribute::DEFAULT, 0.0);
-        AttrDef { hash: name_hash(&e.name), comp: c.id(&e.name), name: e.name.clone(), default, min: min.min(max), max }
-    });
+    (g.cameras, g.camera_names) = tables.bake(kind(ek::CAMERA), ek::CAMERA, mod_name, errors, |e, _| bake_camera(e, conds));
     let (recipe_kinds, names) = tables.bake(kind(ek::RECIPE_KIND), ek::RECIPE_KIND, mod_name, errors, |e, _| {
         use abi::comp::recipe_kind as r;
         let layout = e.callback(r::LAYOUT);
@@ -1889,10 +1931,8 @@ pub fn freeze(
             .to_string();
         EquipmentSlot { name: e.name.clone(), roles: crate::model::roles_of(&bones), bones, background }
     });
-    (g.damage_causes, g.damage_cause_names) =
-        tables.bake(kind(ek::DAMAGE_CAUSE), ek::DAMAGE_CAUSE, mod_name, errors, |e, _| bake_damage_cause(e));
     (g.game_modes, g.game_mode_names) = tables.bake(kind(ek::GAME_MODE), ek::GAME_MODE, mod_name, errors, |e, _| bake_game_mode(e));
-    (g.poses, g.pose_names) = tables.bake(kind(ek::POSE), ek::POSE, mod_name, errors, |e, _| bake_pose(e));
+    (g.poses, g.pose_names) = tables.bake(kind(ek::POSE), ek::POSE, mod_name, errors, |e, _| bake_pose(e, conds));
     (g.precipitations, g.precipitation_names) =
         tables.bake(kind(ek::PRECIPITATION), ek::PRECIPITATION, mod_name, errors, |e, _| bake_precipitation(e));
     (g.text_places, g.text_place_names) =
@@ -1934,13 +1974,7 @@ pub fn freeze(
                 }
                 id
             });
-        let mut when = Vec::new();
-        for n in e.or::<Vec<String>>(m::WHEN, Vec::new()) {
-            match g.condition_names.get(&n) {
-                Some(&id) => when.push(id),
-                None => errors.push(format!("music {}: no condition {n}", e.name)),
-            }
-        }
+        let when = conds.all(&e.or::<Vec<String>>(m::WHEN, Vec::new()));
         MusicDef { name: e.name.clone(), tracks: e.or(m::TRACKS, Vec::new()), dimension, when }
     });
     (g.weathers, g.weather_names) = tables.bake(kind(ek::WEATHER), ek::WEATHER, mod_name, errors, |e, errors| {
@@ -1970,10 +2004,8 @@ pub fn freeze(
     g.pose_order = (0..g.poses.len() as u16).map(crate::world::Pose).collect();
     g.pose_order
         .sort_by_key(|p| std::cmp::Reverse(g.poses[p.0 as usize].priority));
-    let (spawns, _) = bake(kind(ek::SPAWN), ek::SPAWN, mod_name, errors, |e, errors| {
-        let ground = |text: &str| matchers.add(text, block_names, block_defs, c);
-        bake_spawn(e, &g, c, ground, dim_names, errors)
-    });
+    let (spawns, _) =
+        tables.bake(kind(ek::SPAWN), ek::SPAWN, mod_name, errors, |e, errors| bake_spawn(e, &g, c, conds, dim_names, biome_names, errors));
     g.spawns = spawns.into_iter().flatten().collect();
     // Natural spawning (`spawns`) runs while this is on.
 
@@ -2129,7 +2161,7 @@ pub fn freeze(
             .min(1 << 16);
         if k.name == PLAYER {
             k.worn = g.player_layout.worn.clone();
-        } else if k.flags & weft_abi::entity_flags::WEARS != 0 {
+        } else if k.flags & crate::tag_bits::entity::WEARS != 0 {
             k.worn = k.slots..k.slots + g.player_layout.worn.len() as u32;
             k.slots = k.worn.end;
         }
@@ -2191,10 +2223,11 @@ pub fn freeze(
         }
     }
 
-    let _ = items;
-    let tag_names: FxHashMap<&str, u32> = tag_items
-        .keys()
-        .map(|&t| (c.names[t as usize].as_str(), t))
+    // The tags items carry, what `{m}` in a recipe goes through.
+    let tag_names: FxHashMap<&str, u32> = (1..items.len() as u32)
+        .flat_map(|i| c.of(comps::ITEM, i))
+        .filter(|&t| c.is_tag(t))
+        .map(|t| (c.names[t as usize].as_str(), t))
         .collect();
     let mut expanded = Vec::new();
     for r in recipes {
@@ -2214,19 +2247,28 @@ pub fn freeze(
                 return Ingredient::Empty;
             }
         };
+        // One tag stays a tag, read when matching; anything wider is the items it stands for.
         let found = match &r {
-            crate::refs::Ref::Tags(p) if !p.contains('*') => {
-                crate::refs::items(&r, item_names, c, tag_items).map(|_| Ingredient::Tag(c.id(p).unwrap_or(u32::MAX)))
+            crate::refs::Ref::Tags(p) if !p.contains('*') && !s.trim().contains(' ') => {
+                Ok(c.id(p).map_or(Ingredient::Any(Vec::new()), Ingredient::Tag))
             }
-            crate::refs::Ref::Tags(_) => crate::refs::items(&r, item_names, c, tag_items).map(Ingredient::Any),
-            _ => crate::refs::item(&r, item_names, c, tag_items).map(Ingredient::Item),
+            crate::refs::Ref::Name(..) if !s.trim().contains(' ') => crate::refs::one(s, item_names, "item").map(Ingredient::Item),
+            _ => crate::refs::set(s, comps::ITEM, item_names, items.len() as u32, c, "item").map(Ingredient::Any),
         };
         found.unwrap_or_else(|e| {
             errors.push(format!("recipe: {e}"));
             Ingredient::Empty
         })
     };
-    let one = |s: &str| crate::refs::Ref::parse(s).and_then(|r| crate::refs::item(&r, item_names, c, tag_items));
+    // A result by tag (`#planks/{m}`, logs into planks of the same material) is the first item
+    // with it in mod load order; anything else names its item.
+    let one = |s: &str| match crate::refs::Ref::parse(s)? {
+        crate::refs::Ref::Tags(_) => crate::refs::set(s, comps::ITEM, item_names, items.len() as u32, c, "item")?
+            .into_iter()
+            .min_by_key(|&i| items[i as usize].order)
+            .ok_or_else(|| format!("no item is {}", s.trim())),
+        _ => crate::refs::one(s, item_names, "item"),
+    };
     let recipes = expanded;
     for r in recipes {
         if !g.recipe_kinds.contains_key(&r.kind) {
@@ -2282,16 +2324,10 @@ pub fn freeze(
                 Err(e) => errors.push(format!("recipe for {}: output: {e}", r.output)),
             }
         }
-        let values = r
-            .values
-            .iter()
-            .filter_map(|v| c.id(&v.name).map(|id| (id, v.bytes.clone())))
-            .collect();
-        let hidden = r.flags & weft_abi::recipe_flags::HIDDEN != 0;
         g.recipes
             .entry(r.kind)
             .or_default()
-            .push(Recipe { shaped, inputs, input_counts, outputs, time: r.time, values, hidden });
+            .push(Recipe { shaped, inputs, input_counts, outputs, time: r.time, entry: r.entry });
     }
     g
 }
@@ -2443,8 +2479,9 @@ fn bake_sound(e: &Entry, categories: &[SoundCategory], errors: &mut Vec<String>)
 
 /// Kinds the engine spawns itself; mods change or replace their look like any other.
 fn engine_particles() -> Vec<RawEntry> {
+    use crate::tag_bits::particle as pf;
     use abi::comp::particle as p;
-    use abi::{particle as k, particle_event as pe, particle_flags as pf, particle_then as pt, particle_when as pw};
+    use abi::{particle as k, particle_event as pe, particle_then as pt, particle_when as pw};
     let kind = |name: &str, textures: Vec<String>, [life, size]: [[f32; 2]; 2], [gravity, drag]: [f32; 2], color: [u32; 2], flags: u32| {
         let e = RawEntry::engine(ek::PARTICLE, name)
             .set(p::TEXTURES, textures)
@@ -2453,7 +2490,7 @@ fn engine_particles() -> Vec<RawEntry> {
             .set(p::GRAVITY, gravity)
             .set(p::DRAG, drag)
             .set(p::COLOR, color);
-        p::FLAGS
+        crate::tag_bits::particle::TAGS
             .iter()
             .filter(|f| flags & f.1 != 0)
             .fold(e, |e, f| e.tag(f.0))
@@ -2540,7 +2577,7 @@ fn freeze_particles(g: &mut Game, entries: &[Entry], errors: &mut Vec<String>) {
         let hits = rules
             .iter()
             .any(|r| matches!(r.event, pe::LAND | pe::WALL | pe::CEILING));
-        let flags = e.flags(&p::FLAGS) | if hits { abi::particle_flags::COLLIDE } else { 0 };
+        let flags = e.flags(crate::tag_bits::particle::TAGS) | if hits { crate::tag_bits::particle::COLLIDE } else { 0 };
         let [life_min, life_max] = e.or(p::LIFE, [0.5f32, 1.0]);
         let [size_min, size_max] = e.or(p::SIZE, [0.1f32, 0.2]);
         let [color, color_end] = e.or(p::COLOR, [0xFFFFFFFFu32; 2]);
@@ -2561,7 +2598,7 @@ fn freeze_particles(g: &mut Game, entries: &[Entry], errors: &mut Vec<String>) {
             longest: 0.0,
         });
     }
-    let translucent = |k: &ParticleDef| k.flags & abi::particle_flags::TRANSLUCENT != 0;
+    let translucent = |k: &ParticleDef| k.flags & crate::tag_bits::particle::TRANSLUCENT != 0;
     for k in &g.particles {
         for r in k
             .rules
@@ -2641,8 +2678,7 @@ fn expand_variables(r: RawRecipe, tags: &FxHashMap<&str, u32>) -> Result<Vec<Raw
                 count: r.count,
                 time: r.time,
                 outputs: r.outputs.iter().map(|o| (sub(&o.0), o.1, o.2)).collect(),
-                values: r.values.clone(),
-                flags: r.flags,
+                entry: r.entry,
             });
         }
     }
@@ -2737,6 +2773,9 @@ pub struct CameraMode {
     pub call: Option<(ModId, Callback)>,
     pub transition: f32,
     pub easing: u32,
+    /// A condition (`Content::conds`) the server checks for a player turning it on, with
+    /// `action::CAMERA`; `None`: the client turns it on by itself.
+    pub when: Option<u32>,
 }
 
 impl CameraMode {
@@ -2754,9 +2793,9 @@ pub mod camera {
 }
 
 fn engine_cameras() -> Vec<RawEntry> {
-    use abi::camera_flags as cf;
+    use crate::tag_bits::camera as cf;
     let mode = |name: &str, flags: u32| {
-        abi::comp::camera::FLAGS
+        crate::tag_bits::camera::TAGS
             .iter()
             .filter(|f| flags & f.1 != 0)
             .fold(RawEntry::engine(abi::entry_kind::CAMERA, name), |e, f| e.tag(f.0))
@@ -2765,16 +2804,17 @@ fn engine_cameras() -> Vec<RawEntry> {
         mode("core:first_person", cf::HAND | cf::HUD | cf::EFFECTS | cf::CYCLE),
         mode("core:behind", cf::BODY | cf::HUD | cf::CLIP | cf::CYCLE),
         mode("core:front", cf::BODY | cf::HUD | cf::CLIP | cf::CYCLE),
-        mode("core:free", cf::BODY | cf::SOLID | cf::DETACHED | cf::NO_INTERACT | cf::ASK)
+        mode("core:free", cf::BODY | cf::SOLID | cf::DETACHED | cf::NO_INTERACT)
+            .set(abi::comp::camera::WHEN, vec!["attribute(core:can_fly, 1..)".to_string()])
             .set(abi::comp::camera::KEY, "core:freecam".to_string()),
     ]
 }
 
-fn bake_camera(e: &Entry) -> CameraMode {
+fn bake_camera(e: &Entry, conds: &mut crate::conditions::Texts) -> CameraMode {
     use abi::comp::camera as c;
     CameraMode {
         name: e.name.clone(),
-        flags: e.flags(&c::FLAGS),
+        flags: e.flags(crate::tag_bits::camera::TAGS),
         key: e.text(c::KEY).filter(|k| !k.is_empty()).map(str::to_string),
         call: e.callback(c::CALL),
         transition: e
@@ -2782,5 +2822,6 @@ fn bake_camera(e: &Entry) -> CameraMode {
             .filter(|t| t.is_finite())
             .map_or(0.0, |t| t.max(0.0)),
         easing: e.or(c::EASING, abi::easing::IN_OUT),
+        when: conds.all(&e.or::<Vec<String>>(c::WHEN, Vec::new())),
     }
 }

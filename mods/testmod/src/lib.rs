@@ -155,6 +155,16 @@ fn init(r: &mut Registry) {
     // Faces the file leaves to the block (`#top`, `#side`) show these.
     r.block(&PEDESTAL)
         .textures("machine_top", "generator", "machine_top")
+        // Without its crystal, a state on a model of its own with a texture of its own.
+        .prop("crystal", ["true", "false"])
+        .states(|p, s| {
+            if p.is("crystal", "false") {
+                s.model_file("pedestal_empty")
+                    .model_texture("socket", "base:gold_block")
+            } else {
+                s
+            }
+        })
         .hardness(1.0)
         .tab(&BASE_BUILDING);
 
@@ -462,7 +472,7 @@ fn init(r: &mut Registry) {
         }
     });
     r.edit(crate::riding::STEED.loot())
-        .pool(Pool::new().when(Cond::Chance(0.05)).item("tin_ingot"));
+        .pool(Pool::new().when(Cond::chance(0.05)).item("tin_ingot"));
 
     r.command("tagbench", "[millions:int]", tag_bench);
     // The engine's /gizmo suggests this mod's group too.

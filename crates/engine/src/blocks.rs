@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use weft_abi::{self as abi, BlockModel, ModId, RenderLayer, block_flags as bf, comp::block as b, data, value_op as vo};
 
 use crate::components::{RawValue, matches};
-use crate::content::{BlockCallbacks, BlockDef, ModelBox, Prop, Signal, StateInfo};
+use crate::content::{AIR, BlockCallbacks, BlockDef, ModelBox, Piece, Prop, Signal, StateInfo};
 use crate::entries::{self, Entry, Folded, RawEntry, RawOp};
 
 type Part = (String, Vec<RawOp>);
@@ -31,6 +31,10 @@ pub(crate) struct Blocks {
     pub retextures: Vec<(String, Vec<(String, String)>)>,
     /// Edits by pattern: mod, name, whether they matched anything.
     pub patterns: Vec<(ModId, String, bool)>,
+    /// Each state's rules, still text.
+    pub rules: Vec<(usize, Vec<abi::BlockRule>)>,
+    /// Each state's hazards, still text.
+    pub hazards: Vec<(usize, Vec<abi::Hazard>)>,
 }
 
 /// Every mod's block entries in load order, frozen. Templates copy their item in `items` for each
@@ -97,6 +101,8 @@ pub(crate) fn freeze(
         opens_names: Vec::new(),
         block_names: FxHashMap::default(),
         shares: Vec::new(),
+        rules: Vec::new(),
+        hazards: Vec::new(),
         shapes,
         retextures: Vec::new(),
         patterns: Vec::new(),
@@ -115,8 +121,10 @@ pub(crate) fn freeze(
             .into_iter()
             .map(|r| (r.from, r.to))
             .collect();
-        let file = model_file(&e, read_model, errors);
+        // Its states may each have a model file and textures for it of their own: each read once.
+        let mut files: FxHashMap<(String, Vec<(String, String)>), Option<crate::block_model::FileModel>> = FxHashMap::default();
         let mut state_values = Vec::with_capacity(count as usize);
+        let mut pieces = Vec::new();
         let mut tagged_here = vec![false; tagged.len()];
         for picked in &picks {
             let mut s = Values::of(&e.parts, picked, &e.name, errors);
@@ -134,9 +142,31 @@ pub(crate) fn freeze(
             if s.or(abi::comp::HARDNESS, 1.0f32) < 0.0 && !liquids.contains(&e.name) {
                 s.0.push(Cow::Owned(RawValue::tag(abi::comp::UNBREAKABLE)));
             }
-            let (info, head) = bake_state(&e.name, index, &s, &retexture, file.as_ref(), tex, errors);
+            let file_name = s
+                .text(b::MODEL_FILE)
+                .filter(|f| !f.is_empty())
+                .unwrap_or(&e.name);
+            let own: Vec<(String, String)> = s
+                .or::<Vec<abi::ModelTexture>>(b::MODEL_TEXTURES, Vec::new())
+                .into_iter()
+                .map(|t| (t.name, t.texture))
+                .collect();
+            let file = files
+                .entry((file_name.to_string(), own))
+                .or_insert_with_key(|(name, own)| model_file(name, own, read_model, errors));
+            let (info, head, raw, own_rules) = bake_state(&e.name, index, &s, &retexture, file.as_ref(), tex, errors);
+            if !own_rules.is_empty() {
+                out.rules.push((out.states.len(), own_rules));
+            }
+            let hazards = s.or::<Vec<abi::Hazard>>(b::HAZARDS, Vec::new());
+            if !hazards.is_empty() {
+                out.hazards.push((out.states.len(), hazards));
+            }
             if !head.is_empty() {
                 heads.push((out.states.len(), head));
+            }
+            if !raw.is_empty() {
+                pieces.push((out.states.len(), raw));
             }
             out.states.push(info);
             state_values.push(
@@ -210,8 +240,22 @@ pub(crate) fn freeze(
             on_signal: e.callback(b::ON_SIGNAL),
             signal_gate: e.callback(b::SIGNAL_GATE),
         };
-        out.block_defs
-            .push(BlockDef { name: e.name, owner: e.owner, first_state: first, states: count, props, cb, opens: None, sides });
+        let def = BlockDef { name: e.name, owner: e.owner, first_state: first, states: count, props, cb, opens: None, sides };
+        // A piece's properties are of the state it is in.
+        for (state, raw) in pieces {
+            let to = |text: &str| def.changed_text(state as u32, text);
+            for (bounds, left, alone) in raw {
+                match (to(&left), to(&alone)) {
+                    (Ok(left), Ok(alone)) => {
+                        // What lies on sides is gone with its last one.
+                        let left = if sides != 0 && out.states[left as usize].sides == 0 { AIR } else { left };
+                        out.states[state].pieces.push(Piece { bounds, left, alone });
+                    }
+                    (Err(e), _) | (_, Err(e)) => errors.push(format!("{} piece: {e}", def.name)),
+                }
+            }
+        }
+        out.block_defs.push(def);
     }
     out.block_names = out
         .block_defs
@@ -305,9 +349,7 @@ fn picks(name: &str, props: &[Prop], count: u32, parts: &[Part], errors: &mut Ve
 /// The states (from 0) a key `prop=value,..` picks: those with every value it names.
 fn picked(props: &[Prop], count: u32, key: &str) -> Result<Vec<u32>, String> {
     let mut fixed: Vec<(&Prop, u32)> = Vec::new();
-    for kv in key.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        let Some((k, v)) = kv.split_once('=') else { return Err(format!("{kv} is not property=value")) };
-        let (k, v) = (k.trim(), v.trim());
+    for (k, v) in crate::content::prop_pairs(key)? {
         let Some(p) = props.iter().find(|p| p.name == k) else {
             let known: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
             return Err(format!("no property {k} (it has: {})", if known.is_empty() { "none".into() } else { known.join(", ") }));
@@ -343,7 +385,7 @@ fn full_key(props: &[Prop], s: u32) -> String {
 }
 
 /// What only a block as a whole has: its states leave it out.
-const BLOCK_ONLY: [&str; 17] = [
+const BLOCK_ONLY: [&str; 15] = [
     b::PROPS,
     b::ON_USE,
     b::ON_NEIGHBOR,
@@ -357,8 +399,6 @@ const BLOCK_ONLY: [&str; 17] = [
     b::SIGNAL_READ,
     b::OPENS,
     b::SHARES_CELL,
-    b::MODEL_FILE,
-    b::MODEL_TEXTURES,
     b::SHAPES_OF,
     b::RETEXTURE,
 ];
@@ -411,6 +451,10 @@ impl<'a> Values<'a> {
 
     fn has(&self, name: &str) -> bool {
         self.value(name).is_some()
+    }
+
+    fn text(&self, name: &str) -> Option<&str> {
+        self.value(name).and_then(|v| v.text.as_deref())
     }
 
     fn get<T: data::Data>(&self, name: &str) -> Option<T> {
@@ -522,27 +566,25 @@ fn own_textures(block: &str) -> [String; 6] {
     std::array::from_fn(|_| format!("{ns}:block/{path}"))
 }
 
-/// Its model file (`models/block/<name>.json` of its namespace's mod, or `MODEL_FILE`): read here,
-/// so collision and selection follow it on the server and every client alike.
-fn model_file(e: &Entry, read: &dyn Fn(&str) -> Option<String>, errors: &mut Vec<String>) -> Option<crate::block_model::FileModel> {
-    let file = e
-        .text(b::MODEL_FILE)
-        .filter(|f| !f.is_empty())
-        .unwrap_or(&e.name);
+/// A state's model file (`models/block/<name>.json` of its namespace's mod, the block's name or
+/// `MODEL_FILE`), `own` its textures for the file's `#names`: read here, so collision and
+/// selection follow it on the server and every client alike.
+fn model_file(
+    file: &str,
+    own: &[(String, String)],
+    read: &dyn Fn(&str) -> Option<String>,
+    errors: &mut Vec<String>,
+) -> Option<crate::block_model::FileModel> {
     let (ns, path) = file.split_once(':')?;
-    let own: Vec<(String, String)> = e
-        .or::<Vec<abi::ModelTexture>>(b::MODEL_TEXTURES, Vec::new())
-        .into_iter()
-        .map(|t| (t.name, t.texture))
-        .collect();
-    crate::block_model::load_with(&format!("{ns}:block/{path}"), read, &own).unwrap_or_else(|err| {
+    crate::block_model::load_with(&format!("{ns}:block/{path}"), read, own).unwrap_or_else(|err| {
         errors.push(err);
         None
     })
 }
 
 /// One state as its values say (absent: the defaults), its textures renamed by `retexture` and
-/// shaped by its block's model file. Also gives its piston head's name.
+/// shaped by its block's model file. Also gives its piston head's name and its pieces, their
+/// properties still text.
 fn bake_state(
     name: &str,
     block: u32,
@@ -551,7 +593,7 @@ fn bake_state(
     file: Option<&crate::block_model::FileModel>,
     tex: &mut dyn FnMut(&str) -> u32,
     errors: &mut Vec<String>,
-) -> (StateInfo, String) {
+) -> (StateInfo, String, Vec<([f32; 6], String, String)>, Vec<abi::BlockRule>) {
     let mut model = model_of(s.or(b::MODEL, BlockModel::Cube as u32));
     let own_layer = if model == BlockModel::Boxes { RenderLayer::Cutout } else { RenderLayer::Opaque };
     let mut layer = layer_of(s.or(b::LAYER, own_layer as u32));
@@ -604,7 +646,7 @@ fn bake_state(
                 .collect();
         }
     }
-    let mut flags = b::FLAGS
+    let mut flags = crate::tag_bits::block::TAGS
         .iter()
         .filter(|f| s.has(f.0))
         .fold(if s.has(b::NOT_SOLID) { 0 } else { bf::SOLID }, |all, f| all | f.1);
@@ -630,6 +672,15 @@ fn bake_state(
             .collect()
     };
     let (hitbox, outline) = (sixteenths(b::HITBOX), sixteenths(b::OUTLINE));
+    let rules = s.or::<Vec<abi::BlockRule>>(b::RULES, Vec::new());
+    let pieces = s
+        .or::<Vec<abi::Piece>>(b::PIECES, Vec::new())
+        .into_iter()
+        .map(|p| {
+            let (a, b) = turn.bounds(p.min, p.max, 16.0);
+            ([a[0], a[1], a[2], b[0], b[1], b[2]].map(|v| v / 16.0), p.left, p.alone)
+        })
+        .collect();
     let signal: abi::SignalDesc = s.get(b::SIGNAL).unwrap_or(abi::SignalDesc::DEFAULT);
     let mut boxes: Vec<ModelBox> = boxes
         .iter()
@@ -666,9 +717,7 @@ fn bake_state(
     } else {
         vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]
     };
-    let selection: Vec<[f32; 6]> = if !outline.is_empty() {
-        outline
-    } else if !hitbox.is_empty() {
+    let selection: Vec<[f32; 6]> = if !hitbox.is_empty() {
         hitbox
     } else if model == BlockModel::Cube {
         vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]
@@ -695,17 +744,19 @@ fn bake_state(
         opacity,
         tint: 0,
         tint_faces: 0x3F,
-        grow: None,
         layer,
         level: 0,
         model,
         signal: Signal {
             kind: signal.kind,
-            attach: signal.attach as u8,
-            front: signal.front as u8,
+            inputs: turn.faces(signal.inputs as u8),
+            locks: turn.faces(signal.locks as u8),
+            watches: turn.faces(signal.watches as u8),
+            gives: turn.faces(signal.gives as u8),
+            strong: turn.faces(signal.strong as u8),
+            front: if signal.front < 6 { turn.face(signal.front as usize) as u8 } else { 6 },
             delay: signal.delay.min(31) as u8,
             flags: signal.flags as u8,
-            inputs: signal.inputs as u8,
             ..Signal::default()
         },
         // A box model's faces default to these (the particles of breaking it show them too).
@@ -714,18 +765,19 @@ fn bake_state(
         boxes,
         collision,
         selection,
+        outline,
         hardness: 1.0,
         friction: 0.6,
         drag: 1.0,
         conductor: false,
         liquid: None,
-        support: None,
-        support_near: None,
         spread: None,
-        smother: None,
-        sounds: [u32::MAX; 4],
+        effects: [crate::content::Fx::NONE; 6],
+        pieces: Vec::new(),
+        rules: Vec::new(),
+        hazards: Vec::new(),
     };
-    (info, signal.head)
+    (info, signal.head, pieces, rules)
 }
 
 fn air() -> StateInfo {
@@ -733,7 +785,6 @@ fn air() -> StateInfo {
         turn: weft_abi::Turn::NONE,
         sides: 0,
         liquid_walls: u8::MAX,
-        grow: None,
         signal: Signal::default(),
         block: 0,
         flags: bf::REPLACEABLE | bf::NOT_TARGETABLE,
@@ -750,16 +801,17 @@ fn air() -> StateInfo {
         boxes: Vec::new(),
         collision: Vec::new(),
         selection: Vec::new(),
+        outline: Vec::new(),
         hardness: -1.0,
         friction: 0.6,
         drag: 1.0,
         conductor: false,
         liquid: None,
-        support: None,
-        support_near: None,
         spread: None,
-        smother: None,
-        sounds: [u32::MAX; 4],
+        effects: [crate::content::Fx::NONE; 6],
+        pieces: Vec::new(),
+        rules: Vec::new(),
+        hazards: Vec::new(),
     }
 }
 
@@ -767,7 +819,7 @@ fn air() -> StateInfo {
 /// say what it is, which a stair of it isn't.
 fn carries_over(v: &RawValue) -> bool {
     // Its steps are states of that block, which a stair hasn't got.
-    if v.name == abi::comp::GROW_TIME || v.name == abi::comp::GROW_LIGHT || v.name.starts_with("block.") {
+    if v.name.starts_with("block.") {
         return false;
     }
     !v.schema.is_empty() || !v.bytes.is_empty() || v.text.is_some() || v.name.starts_with("mineable/")
@@ -791,12 +843,13 @@ fn expand_templates(
         return (Vec::new(), Vec::new());
     }
     templates.sort_by(|&a, &b| blocks[a].name.cmp(&blocks[b].name));
+    // What any template takes; what it leaves out (`!#tag`) is checked per template.
     let words: Vec<String> = templates
         .iter()
         .flat_map(|&t| {
             let of: abi::ShapesOf = blocks[t].or(b::SHAPES_OF, abi::ShapesOf::default());
-            of.sources
-                .split_whitespace()
+            abi::matcher_terms(&of.sources)
+                .filter(|w| !w.starts_with('!'))
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         })
@@ -861,7 +914,10 @@ fn expand_templates(
                 Some(pattern) => tags.iter().any(|t| matches(pattern, t)),
                 None => source.name == w,
             };
-            if model_of(first.or(b::MODEL, BlockModel::Cube as u32)) != BlockModel::Cube || !of.sources.split_whitespace().any(fits) {
+            let terms: Vec<&str> = abi::matcher_terms(&of.sources).collect();
+            let taken =
+                terms.iter().any(|w| !w.starts_with('!') && fits(w)) && !terms.iter().any(|w| w.strip_prefix('!').is_some_and(fits));
+            if model_of(first.or(b::MODEL, BlockModel::Cube as u32)) != BlockModel::Cube || !taken {
                 continue;
             }
             let name = format!("{}{}", source.name, of.suffix);
@@ -880,15 +936,16 @@ fn expand_templates(
                     .filter(|t| **t == r.from)
                     .for_each(|t| *t = r.to.clone());
             }
+            let of_source = |v: RawValue| of_source(v, &source.name, &textures);
             let parts: Vec<Part> = states
                 .iter()
                 .enumerate()
                 .map(|(i, own)| {
                     let v = shaped(own.clone(), first, &textures, &format!("{short}/{id}"));
-                    (full_key(&props, i as u32), v.into_iter().map(set_op).collect())
+                    (full_key(&props, i as u32), v.into_iter().map(of_source).map(set_op).collect())
                 })
                 .collect();
-            let mut values = template.values.clone();
+            let mut values: Vec<RawValue> = template.values.iter().cloned().map(of_source).collect();
             values.retain(|v| v.name != b::SHAPES_OF);
             shapes.push((name.clone(), source.name.clone(), format!("shape.{short}")));
             if let Some(i) = item {
@@ -924,6 +981,50 @@ fn expand_templates(
     (made, shapes)
 }
 
+/// `v` of a block made of `source` (its name) with `{source}` in its texts as that name and
+/// `{source.side}` (`top`, `bottom`, or a face: `north`..) as its texture there. Of texts with
+/// alternatives (`{source.side}_inner | {source.top}`) the first texture that exists is taken.
+fn of_source(v: RawValue, source: &str, textures: &[String; 6]) -> RawValue {
+    if !v.bytes.windows(7).any(|w| w == b"{source") {
+        return v;
+    }
+    let face = |name: &str| match name {
+        "side" => Some(4),
+        "top" => Some(3),
+        "bottom" => Some(2),
+        n => abi::FACE_NAMES.iter().position(|f| *f == n),
+    };
+    let one = |t: &str| -> String {
+        let mut out = t.trim().replace("{source}", source);
+        while let Some(at) = out.find("{source.") {
+            let Some(end) = out[at..].find('}') else { break };
+            let tex = face(&out[at + 8..at + end])
+                .map_or("", |f| textures[f].as_str())
+                .to_string();
+            out.replace_range(at..at + end + 1, &tex);
+        }
+        out
+    };
+    let mut f = |t: &str| -> String {
+        if !t.contains("{source") {
+            return t.to_string();
+        }
+        let all: Vec<String> = t.split('|').map(one).collect();
+        let exists = |n: &&String| crate::modloader::asset_exists(n, "textures", "png");
+        all.iter()
+            .find(exists)
+            .or(all.last())
+            .cloned()
+            .unwrap_or_default()
+    };
+    let bytes = crate::components::map_texts(&v.schema, &v.bytes, &mut f).unwrap_or(v.bytes);
+    let text = v
+        .text
+        .as_ref()
+        .map(|_| abi::data::from_bytes::<String>(&bytes).unwrap_or_default());
+    RawValue { bytes, text, ..v }
+}
+
 /// A template's state `own` made of `source`'s first state: its textures and light filter; for a
 /// cube its look and flags too, for another shape a translucent source's layer; its values (but
 /// how it grows) unless the template sets them; and the tag `tag` naming the source.
@@ -940,7 +1041,7 @@ fn shaped(own: Vec<RawValue>, source: &Values, textures: &[String; 6], tag: &str
     if model == BlockModel::Cube {
         for name in [b::LAYER, b::LIGHT_OPACITY, b::NOT_SOLID]
             .into_iter()
-            .chain(b::FLAGS.iter().map(|f| f.0))
+            .chain(crate::tag_bits::block::TAGS.iter().map(|f| f.0))
         {
             set(&mut own, name, source.value(name));
         }
@@ -979,5 +1080,18 @@ mod tests {
         assert_eq!(picked(&props, 8, "lit=true,lit=false").unwrap(), Vec::<u32>::new());
         assert!(picked(&props, 8, "age=1").is_err() && picked(&props, 8, "lit=maybe").is_err());
         assert_eq!(full_key(&props, 5), "facing=south,lit=true");
+    }
+
+    #[test]
+    fn values_of_the_source() {
+        let textures: [String; 6] = std::array::from_fn(|i| format!("m:block/log{}", if i / 2 == 1 { "_top" } else { "" }));
+        let mut e = Entry::default();
+        e.set(b::MODEL_TEXTURES, vec![abi::ModelTexture { name: "inside".into(), texture: "{source.side}_none | {source.top}".into() }]);
+        e.set(abi::comp::item::BLOCK, "{source}".to_string());
+        let [list, name] = [&e.values[0], &e.values[1]].map(|v| of_source(v.clone(), "m:log", &textures));
+        let list: Vec<abi::ModelTexture> = abi::data::from_bytes(&list.bytes).unwrap();
+        // No such texture: the next one.
+        assert_eq!(list[0].texture, "m:block/log_top");
+        assert_eq!(name.text.as_deref(), Some("m:log"));
     }
 }

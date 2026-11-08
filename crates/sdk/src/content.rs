@@ -546,7 +546,7 @@ pub mod poses {
 /// r.pose(&SIT).height(0.7).eye(0.62).speed(0.0).action("sit");
 /// w.set_pose(pet, Some(&SIT), None);
 /// // Taken by the player: a slide while sprinting and holding crawl, above the engine's crawl.
-/// r.pose(&SLIDE).height(0.4).eye(0.35).speed(1.2).key(&keys::CRAWL).when(pose_when::SPRINTING).priority(25);
+/// r.pose(&SLIDE).height(0.4).eye(0.35).speed(1.2).key(&keys::CRAWL).when(Cond::sprinting()).priority(25);
 /// ```
 pub struct PoseBuilder<'a> {
     reg: &'a mut crate::Registry,
@@ -562,6 +562,10 @@ impl crate::Registry {
 }
 
 impl PoseBuilder<'_> {
+    /// An attribute modifier its holder gets while in it (`Modifier`).
+    pub fn modifier(self, m: crate::Modifier) -> Self {
+        self.push(&crate::component::MODIFIERS, m.0)
+    }
     /// Box height as a share of standing (crouching is 1.5 / 1.8).
     pub fn height(self, share: f32) -> Self {
         self.set(&crate::comps::pose::HEIGHT, share)
@@ -596,12 +600,9 @@ impl PoseBuilder<'_> {
         let name = key.name().to_string();
         self.set_text(&crate::comps::pose::KEY, &name)
     }
-    /// And only where these hold (`abi::pose_when`).
-    pub fn when(self, flags: u32) -> Self {
-        abi::comp::pose::WHEN
-            .iter()
-            .filter(|w| flags & w.1 != 0)
-            .fold(self, |b, w| b.tag(w.0))
+    /// And only where this holds (`Cond::in_liquid`, `!Cond::flying()`); again for more.
+    pub fn when(self, c: impl Into<crate::Cond>) -> Self {
+        self.push(&crate::comps::pose::WHEN, c.into().0)
     }
     /// Where it has no room, the first of these that has and whose `when` holds; the last
     /// even without room.
@@ -671,7 +672,7 @@ impl GameModeBuilder<'_> {
     pub fn flight(self, how: Flight) -> Self {
         use abi::comp::game_mode as g;
         match how {
-            Flight::Allowed => self.tag(g::CAN_FLY),
+            Flight::Allowed => self.modifier(&crate::attribute::CAN_FLY, abi::attr_op::ADD, 1.0),
             Flight::Always => self.tag(g::ALWAYS_FLY),
             Flight::None => self,
         }
@@ -709,7 +710,7 @@ impl GameModeBuilder<'_> {
     }
     /// An attribute modifier its players have while in it (longer reach, `visibility` 0).
     pub fn modifier(self, attribute: &crate::Attribute, op: u32, amount: f64) -> Self {
-        let m = abi::ModeModifier { attribute: attribute.name().to_string(), op, amount };
+        let m = abi::Modifier { attribute: attribute.name().to_string(), op, amount, ..Default::default() };
         self.push(&crate::comps::game_mode::MODIFIERS, m)
     }
 }
@@ -1005,6 +1006,12 @@ impl Registry {
         self.ns
     }
 
+    /// Whether mod `id` is loaded, to register what goes with it only then (all mods are known
+    /// before any registers, whatever the order).
+    pub fn has_mod(&self, id: &str) -> bool {
+        unsafe { (crate::host().mod_loaded)(abi::Str::new(id)) != 0 }
+    }
+
     /// `<this mod>:<path>`, numbered `/2`, `/3`.. when this mod gave it already.
     pub(crate) fn derive_name(&mut self, path: &str) -> String {
         let base = format!("{}:{path}", self.ns);
@@ -1071,6 +1078,7 @@ impl Registry {
             item: true,
             item_texture: String::new(),
             facing: None,
+            sides: None,
             signal: None,
             placement: None,
             merge: None,
@@ -1357,6 +1365,19 @@ macro_rules! state_setters {
         pub fn light_filter(self, r: u8, g: u8, b: u8) -> Self {
             self.set(&bc::LIGHT_FILTER, [r, g, b])
         }
+        /// Its shape from model file `name` (`models/block/<path>.json` of that mod) instead of
+        /// the one named like the block: several blocks, any mod's, on one model (#88), or a state
+        /// on a model of its own (a drying rack with something on it).
+        pub fn model_file(self, name: &str) -> Self {
+            self.set_text(&bc::MODEL_FILE, &crate::full_name(name))
+        }
+        /// The texture put where the model file says `#name`: one model, each block its own
+        /// pictures (a hollow log's inside, stripped). A state's go over its block's. Relative
+        /// names are under `block/`.
+        pub fn model_texture(self, name: &str, texture: &str) -> Self {
+            let t = abi::ModelTexture { name: name.trim_start_matches('#').to_string(), texture: crate::asset("block", texture) };
+            self.push(&bc::MODEL_TEXTURES, t)
+        }
         /// Same texture on every face, relative names are under `block/`.
         pub fn texture(self, t: &str) -> Self {
             let t = crate::asset("block", t);
@@ -1404,15 +1425,28 @@ macro_rules! state_setters {
             self.needs(crate::Dir::Down, what)
         }
         /// Needs the neighbor that way to be one `what` takes (a block matcher), or to be solid
-        /// if `what` is empty.
+        /// if `what` is empty: a rule breaking it off without (`Rule::neighbor`), which also keeps
+        /// it from being placed so. That way is of its own frame, turning with it.
         pub fn needs(self, side: crate::Dir, what: &str) -> Self {
-            let s = self.set(&c::SUPPORT_FACE, side.face() as u8);
-            if what.is_empty() { s } else { s.set_text(&c::SUPPORT, what) }
+            self.rule(
+                crate::Rule::neighbor()
+                    .when(!crate::Cond::side(side, what))
+                    .breaks(),
+            )
         }
-        /// The supporting block must have one `what` takes beside it (a block matcher, sugar
-        /// cane: `#water`), unless it is this same block.
-        pub fn needs_near(self, what: &str) -> Self {
-            self.set_text(&c::SUPPORT_NEAR, what)
+        /// A rule of what happens to it by itself (`Rule`), of this state or every state.
+        pub fn rule(self, r: crate::Rule) -> Self {
+            self.push(&bc::RULES, r.0)
+        }
+        /// What `event` (`break`, `place`, `step`, `hit`, `land`, `sprint`) sounds and shows
+        /// instead of its sound group's and the engine's pieces of it: a sound event and a
+        /// particle kind, `""` for what it would be anyway, `"none"` for nothing.
+        pub fn effect(self, event: &str, sound: &str, particle: &str) -> Self {
+            self.push(&c::EFFECTS, crate::component::effect(event, sound, particle))
+        }
+        /// What it does to entities meeting it (`Hazard`), of this state or every state.
+        pub fn hazard(self, h: crate::Hazard) -> Self {
+            self.push(&bc::HAZARDS, h.0)
         }
         /// A plant: tagged `plantable`, cross model, no collision. Placing a block into it is
         /// refused, as for vanilla's flowers and sugar cane; grass that gives way is `.replaceable()`.
@@ -1422,10 +1456,6 @@ macro_rules! state_setters {
                 .cutout()
                 .hardness(0.0)
                 .tag("plantable")
-        }
-        /// Keeps the liquid source it is placed in, and a bucket fills it: waterlogging.
-        pub fn holds_liquid(self) -> Self {
-            self.tag(abi::comp::block::HOLDS_LIQUID)
         }
         pub fn not_solid(self) -> Self {
             self.tag(abi::comp::block::NOT_SOLID)
@@ -1522,9 +1552,16 @@ macro_rules! state_setters {
         pub fn outline(self, min: [f32; 3], max: [f32; 3]) -> Self {
             self.push(&bc::OUTLINE, [min[0], min[1], min[2], max[0], max[1], max[2]])
         }
-        /// The sides a liquid in it can't pass (`.holds_liquid()`): without this, the ones its
-        /// hitbox covers whole (a stair's back holds water, a hollow log's open ends don't). `&[]`
-        /// lets it out everywhere.
+        /// A piece a player breaks off alone (in 1/16, like the boxes): a hit inside it leaves
+        /// this state with the properties `left` sets and drops what the state with those `alone`
+        /// sets would. A double slab's lower half: `.piece([0.0; 3], [16.0, 8.0, 16.0],
+        /// "type=top", "type=bottom")`. Without pieces a hit breaks all of it.
+        pub fn piece(self, min: [f32; 3], max: [f32; 3], left: &str, alone: &str) -> Self {
+            self.push(&bc::PIECES, abi::Piece { min, max, left: left.into(), alone: alone.into() })
+        }
+        /// The sides a liquid in its cell can't pass (`.shares_cell_with("#water")`): without
+        /// this, the ones its hitbox covers whole (a stair's back holds water, a hollow log's open
+        /// ends don't). `&[]` lets it out everywhere.
         pub fn liquid_walls(self, sides: &[crate::Dir]) -> Self {
             self.set(&bc::LIQUID_WALLS, sides.iter().fold(0u8, |m, d| m | 1 << d.face()))
         }
@@ -1535,16 +1572,6 @@ macro_rules! state_setters {
                 .tag(abi::comp::block::NOT_TARGETABLE)
                 .set(&bc::MODEL, BlockModel::None as u32)
                 .set(&bc::LAYER, RenderLayer::Opaque as u32)
-        }
-        /// Raw `block_flags` on top of what the presets set (opaque is what a cube on the opaque
-        /// layer is).
-        pub fn with(mut self, f: u32) -> Self {
-            for (tag, bit) in abi::comp::block::FLAGS {
-                if f & bit != 0 {
-                    self = self.tag(tag);
-                }
-            }
-            if f & bf::SOLID != 0 { self.untag(abi::comp::block::NOT_SOLID) } else { self }
         }
     };
 }
@@ -1586,6 +1613,8 @@ pub struct BlockBuilder<'a> {
     item: bool,
     item_texture: String,
     facing: Option<(crate::Facings, crate::Toward)>,
+    /// `on_sides`: the sides it may lie on.
+    pub(crate) sides: Option<crate::Facings>,
     signal: Option<SignalBuild>,
     placement: Option<std::sync::Arc<dyn Fn(&Place, &mut Props) + Send + Sync>>,
     merge: Option<Box<dyn Fn(&Place, &mut Props) + Send + Sync>>,
@@ -1739,7 +1768,7 @@ impl<'a> BlockBuilder<'a> {
 
     /// Tools of `class` (`tools/<class>` items) mine it at their speed (tag `mineable/<class>`),
     /// and it drops nothing unless mined by one of at least `level` (`tool_tier`; `HAND`: drops
-    /// anyway). The level is the `harvest_level` component, checked by `Cond::Harvested`.
+    /// anyway). The level is the `harvest_level` component, checked by `Cond::harvested`.
     pub fn mined_by(self, class: &str, level: u32) -> Self {
         let b = self.tag(&format!("mineable/{class}"));
         if level != abi::tool_tier::HAND { b.set(&c::HARVEST_LEVEL, level) } else { b }
@@ -1756,6 +1785,10 @@ impl<'a> BlockBuilder<'a> {
     pub fn tab(self, tab: &CreativeTab) -> Self {
         self.tag(&tab_tag(tab))
     }
+    /// Its item is in no creative tab (`.untag(abi::comp::NO_TAB)` brings it back).
+    pub fn no_tab(self) -> Self {
+        self.tag(abi::comp::NO_TAB)
+    }
 
     /// Sounds from the group `<ns>:block.<group>` (`.break`, `.place`, `.step`, `.hit` events);
     /// a name with a namespace is used as it is (`base:block.stone` from another mod).
@@ -1764,7 +1797,7 @@ impl<'a> BlockBuilder<'a> {
         self.set_text(&c::SOUND, &prefix)
     }
 
-    /// Its loot table: `count` of `item` when harvested (`Cond::Harvested`). Without it the
+    /// Its loot table: `count` of `item` when harvested (`Cond::harvested`). Without it the
     /// block drops its own item the same way; `r.loot(&BLOCK)` writes any other table.
     pub fn drops(mut self, item: &str, count: u32) -> Self {
         self.drops = Some((item.to_string(), count));
@@ -1798,10 +1831,22 @@ impl<'a> BlockBuilder<'a> {
 
     /// Grows over time, a step every `mean_seconds` on average (spread like random ticks) while
     /// the light is at least `min_light`: by default to the next state until the last. Timed by
-    /// world time, so unloaded plants catch up when their area loads again.
+    /// world time, so unloaded plants catch up when their area loads again. A rule
+    /// (`Rule::random(..).grows()`).
     pub fn grows(self, mean_seconds: f32, min_light: u32) -> Self {
-        self.set(&c::GROW_TIME, mean_seconds)
-            .set(&c::GROW_LIGHT, min_light)
+        let r = crate::Rule::random(mean_seconds).grows();
+        self.rule(if min_light > 0 { r.when(crate::Cond::light(min_light, 15)) } else { r })
+    }
+
+    /// The block it stands on must have one `what` takes beside it (a block matcher, sugar
+    /// cane: `#water`), unless that is this same block.
+    pub fn needs_near(self, what: &str) -> Self {
+        let own = crate::Cond::side(crate::Dir::Down, &self.e.name);
+        self.rule(
+            crate::Rule::neighbor()
+                .when(!own & !crate::Cond::beside(crate::Dir::Down, what))
+                .breaks(),
+        )
     }
 
     /// What a growth step does instead of moving to the next state (growing a tree, a block on
@@ -1832,8 +1877,11 @@ impl<'a> BlockBuilder<'a> {
     /// Turns into `block` in `mean_seconds` on average once something opaque covers it (grass
     /// into dirt).
     pub fn smothered_into(self, block: &str, mean_seconds: f32) -> Self {
-        self.set_text(&c::SMOTHERED_INTO, block)
-            .set(&c::SMOTHER_TIME, mean_seconds)
+        self.rule(
+            crate::Rule::random(mean_seconds)
+                .when(crate::Cond::covered())
+                .becomes(block),
+        )
     }
 
     /// Particles of `kind` clients show around it now and then, near the player (vanilla's
@@ -1985,13 +2033,11 @@ impl<'a> BlockBuilder<'a> {
     /// Falls like sand when nothing holds it up: a block next to it changing checks two ticks
     /// later whether below is free, and if so it drops as a moving block (`World::fall_block`).
     pub fn falling(self) -> Self {
-        self.on_neighbor(|e| e.world().schedule_tick(e.pos(), 2))
-            .on_scheduled(|e| {
-                let (w, p) = (e.world(), e.pos());
-                if w.block_flags([p.x, p.y - 1, p.z]) & abi::block_flags::REPLACEABLE != 0 {
-                    w.fall_block(p);
-                }
-            })
+        self.rule(
+            crate::Rule::after(0.1)
+                .when(crate::Cond::open(crate::Dir::Down))
+                .falls(),
+        )
     }
 
     /// Each placed block gets a block entity, an invisible entity of a kind named like the block
@@ -2140,12 +2186,17 @@ impl<'a> BlockBuilder<'a> {
         self.tag(abi::comp::block::NOT_STOOD_ON)
             .signal_props(abi::signal_kind::PISTON_HEAD, 0, false, false)
     }
-    /// A gate with logic of your own, on the clicked face: what comes out of the front a
+    /// A gate with logic of your own, on the clicked face: what comes out of its outputs a
     /// `gate`'s delay after what goes in at its inputs calls for it. Runs only when something
     /// around it changes.
     pub fn signal_gate(mut self, gate: Gate, f: impl Fn(&GateInputs) -> u8 + Send + Sync + 'static) -> Self {
         // In redstone ticks, like a repeater's: two game ticks each.
-        self.signal = Some(SignalBuild { delay: Some(gate.delay * 2), inputs: gate.inputs, ..self.signal.unwrap_or_default() });
+        self.signal = Some(SignalBuild {
+            delay: Some(gate.delay * 2),
+            inputs: gate.inputs,
+            outputs: gate.outputs,
+            ..self.signal.unwrap_or_default()
+        });
         self.set(&bc::SIGNAL_GATE, callback(move |a: &mut abi::GateArgs| a.output = f(GateInputs::wrap(a)) as u32))
             .signal_props(abi::signal_kind::GATE, 16, true, true)
     }
@@ -2163,22 +2214,10 @@ impl<'a> BlockBuilder<'a> {
     }
 
     /// What may be in one cell with it though their shapes overlap (a block matcher): snow on a
-    /// plant. Blocks whose shapes don't overlap share a cell without asking.
+    /// plant, `#water` for a source of water to stay in it and a bucket to fill it (a liquid fills
+    /// its whole cell). Blocks whose shapes don't overlap share a cell without asking.
     pub fn shares_cell_with(self, what: &str) -> Self {
         self.set_text(&bc::SHARES_CELL, what)
-    }
-
-    /// Its shape from model file `name` (`models/block/<path>.json` of that mod) instead of the one
-    /// named like the block: several blocks, any mod's, on one model (#88).
-    pub fn model_file(self, name: &str) -> Self {
-        self.set_text(&bc::MODEL_FILE, &crate::full_name(name))
-    }
-
-    /// The texture this block puts where the model file says `#name`: one model, each block
-    /// its own pictures (a hollow log's inside, stripped). Relative names are under `block/`.
-    pub fn model_texture(self, name: &str, texture: &str) -> Self {
-        let t = abi::ModelTexture { name: name.trim_start_matches('#').to_string(), texture: crate::asset("block", texture) };
-        self.push(&bc::MODEL_TEXTURES, t)
     }
 
     /// Not a block but a template: see `Registry::shapes_of`.
@@ -2237,8 +2276,8 @@ impl BlockBuilder<'_> {
         }
         let attaches = signal.is_some_and(|b| b.attaches);
         let switch = signal.is_some_and(|b| b.kind == abi::signal_kind::SWITCH);
-        if self.facing.is_some() || self.placement.is_some() || attaches || self.axis {
-            let (facing, axis, user) = (self.facing, self.axis, self.placement.take());
+        if self.facing.is_some() || self.placement.is_some() || attaches || self.axis || self.sides.is_some() {
+            let (facing, axis, sides, user) = (self.facing, self.axis, self.sides, self.placement.take());
             let defaults = Props {
                 values: self
                     .props
@@ -2249,13 +2288,22 @@ impl BlockBuilder<'_> {
             let cb = callback(move |a: &mut abi::PlaceArgs| {
                 let mut p = defaults.clone();
                 if let Some((allowed, toward)) = facing {
-                    p.set("facing", toward.choose(allowed, a.face, a.look).name());
+                    p.set("facing", toward.choose(allowed, a.face, a.look, a.hit).name());
+                }
+                // Against what was clicked, else the allowed side nearest the look; the engine adds
+                // it to what is there.
+                let back = crate::Dir::from_face(a.face).opposite();
+                if let Some(allowed) = sides {
+                    let on = if allowed.allows(back) { back } else { crate::Toward::Away.choose(allowed, a.face, a.look, a.hit) };
+                    for d in allowed.dirs() {
+                        p.set(d.name(), if d == on { "true" } else { "false" });
+                    }
                 }
                 if axis {
                     p.set("axis", ["x", "y", "z"][a.face as usize / 2 % 3]);
                 }
                 if attaches {
-                    let attach = crate::Dir::from_face(a.face).opposite();
+                    let attach = back;
                     p.set("attach", attach.name());
                     // A switch on a wall is always upright, as in vanilla; a gate goes with the look.
                     let front =
@@ -2268,6 +2316,17 @@ impl BlockBuilder<'_> {
                 a.state = p.state_from(a.state);
             });
             self.e.ops.push(bc::PLACEMENT.raw_value(&cb));
+        }
+        // What lies on sides takes in its own item as one more side.
+        let sides = self
+            .sides
+            .map(|allowed| allowed.dirs().map(|d| d.name()).collect::<Vec<_>>());
+        if let Some(sides) = sides.filter(|_| self.merge.is_none()) {
+            self.merge = Some(Box::new(move |p, props| {
+                for d in sides.iter().filter(|d| p.placed(d) == Some("true")) {
+                    props.set(d, "true");
+                }
+            }));
         }
         if let Some(f) = self.merge.take() {
             let names: Vec<String> = self.props.iter().map(|p| p.0.clone()).collect();
@@ -2327,7 +2386,7 @@ impl BlockBuilder<'_> {
                 drop(
                     table.pool(
                         crate::extend::Pool::new()
-                            .when(crate::extend::Cond::Harvested)
+                            .when(crate::extend::Cond::harvested())
                             .items(&item, count, count),
                     ),
                 );
@@ -2349,6 +2408,10 @@ crate::entry::entry_builder!(
 );
 
 impl ItemBuilder<'_> {
+    /// An attribute modifier its holder gets while it is in the main hand, or `.worn()` in an equipment slot (`Modifier`).
+    pub fn modifier(self, m: crate::Modifier) -> Self {
+        self.push(&crate::component::MODIFIERS, m.0)
+    }
     /// How a stack of it looks by what is in it, decided once per kind of stack (its data):
     /// `.condition(|s, v| if s.wear() > 0 { v.texture("can_empty"); })`. Other players' hands
     /// show the usual look: their stacks aren't sent.
@@ -2451,6 +2514,11 @@ impl ItemBuilder<'_> {
     /// Creative inventory tab, see `Registry::creative_tab`.
     pub fn tab(self, tab: &CreativeTab) -> Self {
         self.tag(&tab_tag(tab))
+    }
+    /// In no creative tab nor its search, still obtainable (`.untag(abi::comp::NO_TAB)` brings it
+    /// back).
+    pub fn no_tab(self) -> Self {
+        self.tag(abi::comp::NO_TAB)
     }
     /// Worn in equipment `slot` (any mod's), where it shows on the wearer's model over the parts
     /// the slot covers: `texture` (under `entity/`, like `armor/iron_1`) in the wearer's skin
@@ -2673,9 +2741,10 @@ where
     fn dimension(self, dimension: &Dimension) -> Self {
         self.push(&crate::comps::common::DIMENSIONS, dimension.name().to_string())
     }
-    /// Only where the biome has this tag (underground ones too: `#cave`).
-    fn biome(self, tag: &str) -> Self {
-        self.set_text(&crate::comps::common::BIOME, tag)
+    /// Only in these biomes, underground ones too: any reference to them (`#cave`,
+    /// `base:plains`, `#forest !base:birch_forest`).
+    fn biome(self, biomes: &str) -> Self {
+        self.set_text(&crate::comps::common::BIOME, biomes)
     }
     /// Heights, inclusive: where an ore's veins start, a scatter's site, a structure's ground,
     /// a spawn spot.
@@ -2925,35 +2994,54 @@ struct SignalBuild {
     attaches: bool,
     delay: Option<u32>,
     flags: u32,
+    /// A gate's faces (`Side` bits).
     inputs: u32,
+    outputs: u32,
     head: &'static str,
 }
 
 impl SignalBuild {
     fn apply<'s>(&self, p: &Props, mut s: State<'s>) -> State<'s> {
+        use abi::signal_kind as k;
         let dir = |name: &str| crate::Dir::from_name(p.get(name));
-        let front = dir("front").or(dir("facing"));
-        let mut sig = abi::SignalDesc {
-            kind: self.kind,
-            flags: self.flags,
-            inputs: self.inputs,
-            head: self.head.to_string(),
-            ..abi::SignalDesc::DEFAULT
-        };
-        if let Some(a) = dir("attach") {
-            sig.attach = a.face();
-            if self.attaches {
-                // Written unturned, as the model is.
-                let own = s.turn().own(a);
-                s = s.needs(own, "");
+        // Faces as the model is written: what `facing` and `attach` name, turned back.
+        let turn = s.turn();
+        let own = |d: crate::Dir| 1u32 << turn.own(d).face();
+        let mut sig = abi::SignalDesc { kind: self.kind, flags: self.flags, head: self.head.to_string(), ..abi::SignalDesc::DEFAULT };
+        let (attach, facing) = (dir("attach"), dir("facing"));
+        match self.kind {
+            k::SWITCH => (sig.gives, sig.strong) = (0x3F, attach.map_or(0, own)),
+            k::TORCH => {
+                // Off with power from what holds it, strong into every other block around it: on a
+                // wall both out and up, the same whichever way a build is turned.
+                sig.inputs = attach.map_or(side_bits(&[Side::Bottom]), own);
+                (sig.gives, sig.strong) = (0x3F & !sig.inputs, 0x3F & !sig.inputs);
             }
-            // A torch powers the block on the far side of it, as high as it stands.
-            if self.kind == abi::signal_kind::TORCH {
-                sig.front = a.opposite().face();
+            k::REPEATER => {
+                sig.inputs = side_bits(&[Side::Rear]);
+                sig.locks = side_bits(&[Side::Left, Side::Right]);
+                (sig.gives, sig.strong) = (side_bits(&[Side::Front]), side_bits(&[Side::Front]));
             }
+            k::COMPARATOR => {
+                sig.inputs = side_bits(&[Side::Rear, Side::Left, Side::Right]);
+                (sig.gives, sig.strong) = (side_bits(&[Side::Front]), side_bits(&[Side::Front]));
+            }
+            k::GATE => (sig.inputs, sig.gives, sig.strong) = (self.inputs, self.outputs, self.outputs),
+            k::OBSERVER => {
+                let f = facing.unwrap_or(crate::Dir::North);
+                (sig.watches, sig.gives, sig.strong) = (own(f), own(f.opposite()), own(f.opposite()));
+            }
+            k::SINK => sig.inputs = 0x3F,
+            // Their front is stuck to what they take along, or is where the head goes.
+            k::PISTON | k::FLOATER | k::PISTON_HEAD => {
+                let f = turn.own(facing.unwrap_or(crate::Dir::Up)).face();
+                sig.front = f;
+                sig.inputs = if self.kind == k::PISTON_HEAD { 0 } else { 0x3F & !(1 << f) };
+            }
+            _ => {}
         }
-        if let Some(f) = front {
-            sig.front = f.face();
+        if let Some(a) = attach.filter(|_| self.attaches) {
+            s = s.needs(turn.own(a), "");
         }
         if let Some(t) = self.delay {
             sig.delay = t;
@@ -3025,19 +3113,25 @@ impl SignalEvent {
     }
 }
 
-/// A gate's faces, from where it looks (`Gate::inputs`, `GateInputs::side`).
+/// A device's faces, from where it looks: its own, as its model is written (front north, bottom
+/// down), so they turn with it (`Gate::inputs`, `GateInputs::side`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
-    Front = 0,
-    Rear = 1,
-    Left = 2,
-    Right = 3,
-    /// Away from what it is on.
-    Top = 4,
-    Bottom = 5,
+    Left = 0,
+    Right = 1,
+    /// Against what it is on.
+    Bottom = 2,
+    Top = 3,
+    Front = 4,
+    Rear = 5,
 }
 
-/// Which faces of a `BlockBuilder::signal_gate` read power, and its delay.
+fn side_bits(sides: &[Side]) -> u32 {
+    sides.iter().fold(0, |m, s| m | 1 << *s as u32)
+}
+
+/// Which faces of a `BlockBuilder::signal_gate` read power and give it (strongly, into the block
+/// there and on), and its delay.
 ///
 /// ```ignore
 /// // a repeater-like AND of the sides, two redstone ticks late
@@ -3046,20 +3140,24 @@ pub enum Side {
 #[derive(Clone, Copy, Debug)]
 pub struct Gate {
     inputs: u32,
+    outputs: u32,
     delay: u32,
 }
 
 impl Gate {
-    /// Reads behind it and both sides, one redstone tick late.
+    /// Reads behind it and both sides, gives out of the front, one redstone tick late.
     pub fn new() -> Gate {
-        Gate { inputs: 1 << abi::gate_side::REAR | 1 << abi::gate_side::LEFT | 1 << abi::gate_side::RIGHT, delay: 1 }
+        Gate { inputs: side_bits(&[Side::Rear, Side::Left, Side::Right]), outputs: side_bits(&[Side::Front]), delay: 1 }
     }
-    /// The faces it reads. The front is its output, never an input.
+    /// The faces it reads; an output is never an input.
     pub fn inputs(mut self, sides: &[Side]) -> Gate {
-        self.inputs = sides
-            .iter()
-            .filter(|s| **s != Side::Front)
-            .fold(0, |m, s| m | 1 << *s as u32);
+        self.inputs = side_bits(sides) & !self.outputs;
+        self
+    }
+    /// The faces it gives at.
+    pub fn outputs(mut self, sides: &[Side]) -> Gate {
+        self.outputs = side_bits(sides);
+        self.inputs &= !self.outputs;
         self
     }
     /// In redstone ticks, two game ticks each.
@@ -3182,10 +3280,6 @@ impl Place {
     /// In `merge`: a property of how its item would go.
     pub fn placed(&self, prop: &str) -> Option<&'static str> {
         crate::world::state_prop(self.args.placed, prop)
-    }
-    /// Which way around the player looks.
-    pub fn look_facing(&self) -> crate::Dir {
-        crate::Dir::nearest(self.args.look, crate::Facings::HORIZONTAL)
     }
 }
 

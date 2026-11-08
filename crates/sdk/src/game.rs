@@ -7,7 +7,7 @@ use crate::content::{
 use crate::ui::{Ui, ui_cb};
 use crate::{Id, Registry, WithComponents, World, callback, comps, host, qualify};
 
-pub use abi::{EYE_SHARE, Energy, EntityState, component_flags, damage_cause, entity_flags, slot_flags};
+pub use abi::{EYE_SHARE, Energy, EntityState, component_flags, damage_cause, entity_state, slot_flags};
 
 /// The engine's player kind, for hooks and components on players.
 pub static PLAYER: EntityKind = EntityKind::named("core:player");
@@ -283,7 +283,7 @@ impl World {
     }
     /// A player whose mode spares it damage, hunger and air (creative, spectator).
     pub fn outside_survival(&self, id: u64) -> bool {
-        crate::comps::game_mode::INVULNERABLE.on(abi::entry_kind::GAME_MODE, self.game_mode(id))
+        crate::comps::game_mode::INVULNERABLE.on_id(self.game_mode(id))
     }
     /// The id of its game mode (`game_modes::CREATIVE.id()`): survival for what isn't a player.
     pub fn game_mode(&self, id: u64) -> u32 {
@@ -852,6 +852,10 @@ pub struct EntityBuilder<'a> {
 crate::entry::entry_builder!(Entity => EntityBuilder, entity, finish;);
 
 impl EntityBuilder<'_> {
+    /// An attribute modifier its entities have, `.when(..)` while conditions hold (`Modifier`).
+    pub fn modifier(self, m: crate::Modifier) -> Self {
+        self.push(&crate::component::MODIFIERS, m.0)
+    }
     /// Every entity of this kind carries `component` (declared with `r.entity_component`, by any
     /// mod), starting at its declared value; another mod's kind with `r.edit(&PLAYER).attach(..)`.
     /// Not `.set`: that is one value of the kind itself, `.attach` gives each entity its own,
@@ -873,11 +877,11 @@ impl EntityBuilder<'_> {
     /// A solid body: others stand on it and ride along, bump into it and get pushed by it
     /// (platforms, boats, lifts). Not pushed around itself.
     pub fn solid(self) -> Self {
-        self.with(entity_flags::SOLID).unpushable()
+        self.tag(abi::comp::entity::SOLID).unpushable()
     }
     /// Takes no damage (no hurt flash, health stays); `/clear` and the void still remove it.
     pub fn invulnerable(self) -> Self {
-        self.with(entity_flags::INVULNERABLE)
+        self.tag(abi::comp::entity::INVULNERABLE)
     }
     /// Neither pushes nor is pushed by other entities (ghosts, projectiles).
     pub fn unpushable(self) -> Self {
@@ -886,11 +890,11 @@ impl EntityBuilder<'_> {
     /// Moved exactly by the velocity mod logic gives it (`entity_modify`), through blocks, no
     /// gravity: lifts, airships, contraptions.
     pub fn kinematic(self) -> Self {
-        self.with(entity_flags::KINEMATIC)
+        self.tag(abi::comp::entity::KINEMATIC)
     }
     /// A solid body that hurts what it squeezes into blocks instead of only pushing it.
     pub fn crushing(self) -> Self {
-        self.with(entity_flags::CRUSHES)
+        self.tag(abi::comp::entity::CRUSHES)
     }
     /// Riders up to `blocks` above the body (jumping, flying around inside it) keep moving with
     /// it and their own motion stays relative to it, so a jump on a fast ship lands on the ship.
@@ -914,13 +918,21 @@ impl EntityBuilder<'_> {
     /// The client makes no steps, idle noises or death smoke for it: `r.client_entity_frame`
     /// does its effects instead.
     pub fn own_effects(self) -> Self {
-        self.with(entity_flags::OWN_EFFECTS)
+        self.effect("step", "none", "none")
+            .effect("ambient", "none", "none")
+            .effect("death", "", "none")
+    }
+    /// What `event` (`hurt`, `death`, `ambient`, `step`) sounds and shows instead of its
+    /// `.sound(..)` and the engine's (smoke when it dies): a sound event and a particle kind,
+    /// `""` for what it would be anyway, `"none"` for nothing.
+    pub fn effect(self, event: &str, sound: &str, particle: &str) -> Self {
+        self.push(&crate::component::EFFECTS, crate::component::effect(event, sound, particle))
     }
     /// It has the player's equipment slots (`Registry::equipment_slot`) after its own: what it
     /// wears shows on its model and counts like a player's armor; `group(EQUIPMENT_GROUP)` or a
     /// slot's name in `w.inventory(id)` reaches them.
     pub fn equipment(self) -> Self {
-        self.with(entity_flags::WEARS)
+        self.tag(abi::comp::entity::WEARS)
     }
     /// Damage of its melee hits (`World::attack`), like an item's.
     pub fn attack_damage(self, damage: f32) -> Self {
@@ -947,13 +959,6 @@ impl EntityBuilder<'_> {
     }
     pub fn walk_speed(self, s: f32) -> Self {
         self.set(&comps::entity::SPEED, s)
-    }
-    /// These `entity_flags` on, on top of what the presets set (`abi::comp::entity::FLAGS`).
-    pub fn with(self, flags: u32) -> Self {
-        abi::comp::entity::FLAGS
-            .iter()
-            .filter(|f| flags & f.1 != 0)
-            .fold(self, |b, f| b.tag(f.0))
     }
     /// A category registered with `Registry::entity_category` (any mod's), for spawn caps and
     /// despawning.
@@ -1074,7 +1079,7 @@ impl EntityBuilder<'_> {
     }
     /// How the keys of a player in a seat that steers move it (`steer::*`, or your own).
     pub fn steering(self, s: crate::riding::Steering) -> Self {
-        let cb = callback(move |a: &mut abi::SteerArgs| a.out = (s.0)(&a.input, &a.mount));
+        let cb = callback(move |a: &mut abi::SteerArgs| a.out = (s.0)(&crate::client::Keys::of(a.keys, a.yaw, a.pitch), &a.mount));
         self.set(&comps::entity::STEER, cb)
     }
     /// What its riders may do (`RiderRules`).
@@ -1084,7 +1089,7 @@ impl EntityBuilder<'_> {
     }
     /// Its falls hurt its riders too, as a horse's.
     pub fn riders_fall(self) -> Self {
-        self.with(entity_flags::RIDERS_FALL)
+        self.tag(abi::comp::entity::RIDERS_FALL)
     }
     /// Blocks the third-person camera stays further back while riding it, 0 for none; without
     /// this, by its size.
@@ -1135,6 +1140,13 @@ pub struct MenuCtx {
 impl MenuCtx {
     pub fn world(&self) -> World {
         World::from_raw(self.args.world)
+    }
+    /// In `on_take`, which slot of group `name` was taken from; `None` for another group's.
+    pub fn taken_in(&self, name: &str) -> Option<u32> {
+        let g = self.find_group(name)?;
+        (g.start..g.start + g.len)
+            .contains(&self.args.slot)
+            .then(|| self.args.slot - g.start)
     }
     pub fn player(&self) -> u64 {
         self.args.player
@@ -1365,29 +1377,22 @@ impl MenuBuilder<'_> {
     pub fn screen(self, f: impl Fn(&mut Ui) + Send + Sync + 'static) -> Self {
         self.set(&comps::menu::SCREEN, ui_cb(f))
     }
-    /// These `screen_flags` on: how its screen behaves.
-    pub fn with(self, flags: u32) -> Self {
-        abi::comp::menu::FLAGS
-            .iter()
-            .filter(|f| flags & f.1 != 0)
-            .fold(self, |b, f| b.tag(f.0))
-    }
     /// Single player stops while it is open (the pause and settings screens).
     pub fn pauses(self) -> Self {
-        self.with(abi::screen_flags::PAUSES)
+        self.tag(abi::comp::menu::PAUSES)
     }
     /// Escape doesn't close it (the death screen).
     pub fn keep_on_escape(self) -> Self {
-        self.with(abi::screen_flags::KEEP_ON_ESCAPE)
+        self.tag(abi::comp::menu::KEEP_ON_ESCAPE)
     }
     /// It closes when the player respawns.
     pub fn closes_on_respawn(self) -> Self {
-        self.with(abi::screen_flags::CLOSES_ON_RESPAWN)
+        self.tag(abi::comp::menu::CLOSES_ON_RESPAWN)
     }
     /// Like the chat screen: the HUD leaves the messages to it and Enter sends the text of its
     /// input of class `chat`.
     pub fn shows_chat(self) -> Self {
-        self.with(abi::screen_flags::SHOWS_CHAT)
+        self.tag(abi::comp::menu::SHOWS_CHAT)
     }
     /// Keys pressed while it is on top, by their settings name (`Enter`, `KeyE`, `mouse3`), before
     /// Escape and the other global keys.
@@ -1512,7 +1517,8 @@ impl Registry {
         b.e.mode = mode;
         drop(f(b
             .no_egg()
-            .with(entity_flags::NO_GRAVITY | entity_flags::INVULNERABLE)
+            .tag(abi::comp::entity::NO_GRAVITY)
+            .tag(abi::comp::entity::INVULNERABLE)
             .set_text(&comps::entity::BLOCK, block.name())));
     }
 
@@ -1861,8 +1867,17 @@ pub struct RecipeView {
 
 /// The first recipe of `kind` whose inputs, with their counts, are all among `stacks`.
 pub fn recipe_find(kind: &RecipeKind, stacks: &[ItemStack]) -> Option<RecipeView> {
-    let n = unsafe { (host().recipe_find)(Str::new(kind.name()), stacks.as_ptr(), stacks.len() as u32) };
-    (n > 0).then(|| RecipeView { kind: kind.name().to_string(), index: n - 1 })
+    recipes_for(kind, stacks).next()
+}
+
+/// Every recipe of `kind` whose inputs are all among `stacks`, in order (what a stonecutter offers).
+pub fn recipes_for<'a>(kind: &'a RecipeKind, stacks: &'a [ItemStack]) -> impl Iterator<Item = RecipeView> + 'a {
+    let mut from = Some(0);
+    std::iter::from_fn(move || {
+        let n = unsafe { (host().recipe_find)(Str::new(kind.name()), stacks.as_ptr(), stacks.len() as u32, from?) };
+        from = (n > 0).then_some(n);
+        Some(RecipeView { kind: kind.name().to_string(), index: from? - 1 })
+    })
 }
 
 impl RecipeView {
@@ -1885,12 +1900,9 @@ impl RecipeView {
             })
             .collect()
     }
-    /// A value the recipe carries (`r.shaped(..).set(&COMP, v)`).
-    pub fn value<T: Value>(&self, comp: &Component<T>) -> Option<T> {
-        let mut buf = vec![0u8; std::mem::size_of::<T>()];
-        let n =
-            unsafe { (host().recipe_value)(Str::new(&self.kind), self.index, Str::new(comp.name()), buf.as_mut_ptr(), buf.len() as u32) };
-        (n as usize == buf.len()).then(|| unsafe { std::ptr::read_unaligned(buf.as_ptr() as *const T) })
+    /// A value the recipe carries (`r.shaped(..).set(&COMP, v)`): its entry's.
+    pub fn value<T: Value, K>(&self, comp: &Component<T, K>) -> Option<T> {
+        comp.on(abi::entry_kind::RECIPE, self.info().entry)
     }
     /// Takes its inputs out of `stacks` (the ones `recipe_find` was given); false, and nothing
     /// taken, if they are not all there.
@@ -1971,9 +1983,9 @@ impl SpawnBuilder<'_> {
         self
     }
     /// Only on blocks `what` takes (a block matcher; under the spot, what `place` says it rests
-    /// on).
+    /// on): `when(Cond::block(what))`.
     pub fn ground(self, what: &str) -> Self {
-        self.set_text(&comps::spawn::GROUND, what)
+        self.when(crate::Cond::block(what))
     }
     /// What kind of spot it takes: on the ground (the default), in a liquid, under a ceiling.
     /// The mob's height decides how much room it needs.
@@ -1984,13 +1996,13 @@ impl SpawnBuilder<'_> {
             None => b,
         }
     }
-    /// Only where this condition holds too.
-    pub fn when(self, condition: &crate::Condition) -> Self {
-        self.set_text(&comps::spawn::WHEN, condition.name())
+    /// Only where this holds too (asked about the spot and the block it rests on).
+    pub fn when(self, c: impl Into<crate::Cond>) -> Self {
+        self.push(&comps::spawn::WHEN, c.into().0)
     }
-    /// Light at the spot, inclusive (0..15).
+    /// Light at the spot, inclusive (0..15): `when(Cond::light(min, max))`.
     pub fn light(self, min: u32, max: u32) -> Self {
-        self.set(&comps::spawn::LIGHT, [min, max])
+        self.when(crate::Cond::light(min, max))
     }
     pub fn pack_size(self, min: u32, max: u32) -> Self {
         self.set(&comps::spawn::GROUP, [min, max])

@@ -36,7 +36,7 @@ r.ore(&TIN_ORE).y(-64, 90).veins(5).vein_size(8).replaces("#stone_ore_replaceabl
 - `replaces(..)`: which blocks the ore may replace ([written like this](modding.md#references))
 - `replaces_with("#granite", &GRANITE_IRON_ORE)`: where the vein meets these, that block goes instead, so a vein doesn't stop at a stone border
 - `exposed(0.5)`: leaves out that share of what would touch a cave, as vanilla's gold and diamonds
-- `biome("#cave")`: only in biomes with this tag, underground ones included
+- `biome("#cave")`: only in these biomes, underground ones included; names and tags like anywhere else, `!` leaving some out
 
 An ore is named like its block, so `r.edit(base::IRON_ORE.ore()).veins(10)` changes base's iron: what you set replaces its own (`replaces` too: a block in `#stone_ore_replaceables` is in every ore's way), and `r.remove(base::IRON_ORE.ore())` takes it out of the world.
 
@@ -65,7 +65,7 @@ Structures stand on the surface of the dimension's [terrain](#terrain). A dimens
 - `place(SpawnPlace::in_liquid("#water"))` or `place(SpawnPlace::ceiling())`: a spot in a liquid or hanging under a block instead of on the ground. The mob's own height decides how much room it needs
 - `dimension(&D)`: only in that dimension
 - `light(min, max)` and `y(min, max)`: the light level (0 to 15) and heights it needs
-- `when(&CONDITION)`: only where a condition holds too
+- `when(cond)`: only where a [condition](modding.md) holds too, asked about the spot and the block under it: `when(Cond::new("night & !block(#mycelium)"))`
 - `pack_size(min, max)`: how many appear together
 - `weight(n)` and `chance(c)`: how likely it is picked among the rules that fit, and how likely it is to happen per try
 

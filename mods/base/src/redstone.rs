@@ -299,6 +299,7 @@ pub fn register(r: &mut Registry) {
     // Vanilla's copper bulb: each new pulse flips it, and a comparator reads which way it is.
     r.block(&GOLDEN_LAMP)
         .signal_sink()
+        .signal_blocker()
         .prop("power", ["off", "on"])
         .prop("lit", ["false", "true"])
         .states(|p, s| {

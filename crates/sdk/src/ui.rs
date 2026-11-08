@@ -80,7 +80,7 @@ impl ClientView {
     }
     /// The local player's mode spares it damage and hunger: no bars to show.
     pub fn outside_survival(&self) -> bool {
-        crate::comps::game_mode::INVULNERABLE.on(abi::entry_kind::GAME_MODE, self.game_mode())
+        crate::comps::game_mode::INVULNERABLE.on_id(self.game_mode())
     }
     /// `abi::game_mode`.
     pub fn game_mode(&self) -> u32 {
@@ -717,6 +717,11 @@ impl Icons<'_> {
     /// While `f` is above 0 a wave runs along the row, `pixels` high (hearts regenerating).
     pub fn wave_while(self, pixels: f32, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> Self {
         self.effect(abi::icon_effect::WAVE, pixels, Some(Box::new(f)))
+    }
+    /// The halves the row holds, `f`'s value (none: twice the count): past the count more rows
+    /// go on above, closer the more there are (hearts past twenty health).
+    pub fn max_by(self, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> Self {
+        self.effect(abi::icon_effect::MAX, 0.0, Some(Box::new(f)))
     }
     /// Any `abi::icon_effect` by `f`'s value (none: 1).
     pub fn effect(mut self, kind: u32, amount: f32, f: Option<Box<dyn Fn(&ClientView) -> f32 + Send + Sync>>) -> Self {
