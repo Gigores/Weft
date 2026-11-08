@@ -215,13 +215,6 @@ pub fn state_facing(state: u32) -> crate::Dir {
         .unwrap_or(crate::Dir::Up)
 }
 
-/// Where the other part of a `two_part` block is, from the part `state` at `pos`.
-pub fn other_part(pos: impl Into<BlockPos>, state: u32, prop: &str, second: &str, way: impl Fn(u32) -> crate::Dir) -> BlockPos {
-    let pos = pos.into();
-    let (d, s) = (way(state).offset(), if state_prop(state, prop) == Some(second) { -1 } else { 1 });
-    [pos.x + d.x * s, pos.y + d.y * s, pos.z + d.z * s].into()
-}
-
 /// The middle of a block.
 pub fn block_center(p: impl Into<BlockPos>) -> Vec3 {
     p.into().center()

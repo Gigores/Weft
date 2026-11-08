@@ -1405,7 +1405,7 @@ impl Client {
         let target = self.target;
         self.refused_break = self
             .refused_break
-            .filter(|&r| input.held("core:attack") && target.is_some_and(|h| (h.frame, h.block) == r));
+            .filter(|&r| input.held("core:attack") && target.is_some_and(|h| (h.frame, h.origin) == r));
         let keeps = (self.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK) && c.no_creative_break(self.held().item))
             || self.mode.has(crate::tag_bits::game_mode::NO_BREAK);
         let refused = keeps || self.refused_break.is_some();
@@ -1433,31 +1433,31 @@ impl Client {
                     self.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK),
                 );
                 let done = match self.breaking {
-                    Some((f, p, v)) if (f, p) == (hit.frame, hit.block) && self.breaking_part == hit.state => v,
+                    Some((f, p, v)) if (f, p) == (hit.frame, hit.origin) && self.breaking_part == hit.state => v,
                     _ => 0.0,
                 };
                 self.breaking_part = hit.state;
                 let progress = if rate >= 1.0 { 1.0 } else { done + dt as f32 * self.tick_rate as f32 * rate };
                 if progress >= 1.0 && (input.pressed("core:attack") || self.break_delay <= 0.0) {
                     send_look.send(&mut self.conn);
-                    let at = self.hit_point(&hit);
+                    let at = self.hit_point(&hit, hit.origin);
                     self.conn
-                        .send(ToServer::Break { pos: hit.block, part: hit.state, face: hit.face, hit: at, frame: hit.frame });
+                        .send(ToServer::Break { pos: hit.origin, part: hit.state, face: hit.face, hit: at, frame: hit.frame });
                     let after = c.states[hit.state as usize]
                         .piece_hit(at, hit.face)
                         .map_or(crate::content::AIR, |p| p.left);
                     match hit.frame {
-                        0 => self.world.replace_part(hit.block, hit.state, after),
+                        0 => self.world.replace_part(hit.origin, hit.state, after),
                         f => {
                             if let Some(s) = self.entities.get_mut(&f).and_then(|e| e.structure.as_mut()) {
-                                s.replace_part(hit.block, hit.state, after);
+                                s.replace_part(hit.origin, hit.state, after);
                             }
                         }
                     }
                     self.breaking = None;
                     self.break_delay = 0.25;
                 } else if rate < 1.0 {
-                    self.breaking = Some((hit.frame, hit.block, progress.min(1.0)));
+                    self.breaking = Some((hit.frame, hit.origin, progress.min(1.0)));
                 } else {
                     // Instant breaks (creative, grass) show no cracks while the next waits.
                     self.breaking = None;
@@ -1484,12 +1484,12 @@ impl Client {
         }
     }
 
-    /// Where the crosshair is on what it hit, from the block's corner.
-    fn hit_point(&self, hit: &crate::physics::Hit) -> [f32; 3] {
+    /// Where the crosshair is on what it hit, from the corner of `cell`.
+    fn hit_point(&self, hit: &crate::physics::Hit, cell: IVec3) -> [f32; 3] {
         let at = self
             .frame_place(hit.frame)
             .to_local(self.camera().pos + self.camera().forward().as_dvec3() * hit.dist);
-        (at - hit.block.as_dvec3()).as_vec3().to_array()
+        (at - cell.as_dvec3()).as_vec3().to_array()
     }
 
     fn use_held(&mut self, input: &Input, dt: f64, look: DVec3, send_look: &mut LookOnce) {
@@ -1505,7 +1505,7 @@ impl Client {
                 self.conn.send(ToServer::Interact(id));
             } else if let Some(hit) = self.target {
                 let sneak = input.held("core:sneak");
-                let at = self.hit_point(&hit);
+                let at = self.hit_point(&hit, hit.block);
                 self.conn.send(ToServer::Use {
                     pos: hit.block,
                     part: hit.state,
@@ -1659,7 +1659,7 @@ impl Client {
         let c = content();
         self.hit_dust -= dt as f32;
         if let (Some((frame, pos, _)), Some(hit)) = (self.breaking, self.target) {
-            if self.hit_dust <= 0.0 && (hit.frame, hit.block) == (frame, pos) {
+            if self.hit_dust <= 0.0 && (hit.frame, hit.origin) == (frame, pos) {
                 self.hit_dust = 0.05;
                 let kind = c.states[hit.state as usize].effects[crate::content::block_event::HIT].particle;
                 if kind != u32::MAX {
@@ -2047,7 +2047,7 @@ impl Client {
         self.hit_sound -= dt;
         if let Some(hit) = self.target.filter(|h| {
             self.breaking
-                .is_some_and(|(f, p, _)| (f, p) == (h.frame, h.block))
+                .is_some_and(|(f, p, _)| (f, p) == (h.frame, h.origin))
         }) {
             if self.hit_sound <= 0.0 {
                 // Vanilla knocks every four ticks while mining.
@@ -2057,7 +2057,7 @@ impl Client {
                     sound,
                     pos: Some(
                         self.frame_place(hit.frame)
-                            .to_world(hit.block.as_dvec3() + DVec3::splat(0.5)),
+                            .to_world(hit.origin.as_dvec3() + DVec3::splat(0.5)),
                     ),
                     volume: 0.4,
                     pitch: 0.0,

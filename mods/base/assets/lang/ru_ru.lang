@@ -59,6 +59,7 @@ tagged.armor = {#5555ff}Броня: +{value.points}{/}{if:value.toughness>0}\n{#
 tagged.fuel = Переплавляет предметов: {value/200}
 block.base.bed = Кровать
 block.base.bed.tooltip = Проспите ночь и возрождайтесь здесь после смерти.
+block.base.oak_door = Дубовая дверь
 block.base.chest = Сундук
 block.base.torch = Факел
 block.base.ladder = Лестница

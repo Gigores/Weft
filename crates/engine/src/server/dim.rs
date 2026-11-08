@@ -1061,6 +1061,12 @@ impl Dim {
         if !c.dims[self.id as usize].editable {
             return None;
         }
+        // What is done to a big block's other cell is done to the block.
+        if c.covered_step(state).is_none()
+            && let Some((at, _)) = self.block_at(c, p).filter(|(at, _)| *at != p)
+        {
+            return self.write_cell(c, at, state, extras, carried);
+        }
         let cp = cube_of(p);
         if self.frame != 0 && state != AIR {
             self.space.structure_cube(c, cp);
@@ -1122,10 +1128,28 @@ impl Dim {
                 }
             }
         }
-        if !carried && c.states[old as usize].block != c.states[state as usize].block {
-            self.signal_block_gone(c, p, old, state);
-        }
+        self.cover(c, p, old, state, carried);
         Some(old)
+    }
+
+    /// The cell whose block `p` is and that block (`Content::block_at`): a big block's own cell
+    /// for its others.
+    pub fn block_at(&self, c: &Content, p: IVec3) -> Option<(IVec3, u32)> {
+        c.block_at(|q| self.get(q), p)
+    }
+
+    /// A big block's other cells follow it from `old` to `new` at `p`: those it no longer takes
+    /// go, those it takes point to it.
+    fn cover(&mut self, c: &'static Content, p: IVec3, old: u32, new: u32, carried: bool) {
+        let (was, now) = (&c.states[old as usize].cells, &c.states[new as usize].cells);
+        for &(o, _) in was.iter().filter(|(o, _)| !now.iter().any(|n| n.0 == *o)) {
+            if self.get(p + o).is_some_and(|s| c.covered_step(s).is_some()) {
+                self.write_cell(c, p + o, AIR, None, carried);
+            }
+        }
+        for &(o, to) in now {
+            self.write_cell(c, p + o, c.covered + to as u32, None, carried);
+        }
     }
 
     /// Block entities go with their blocks from the cell at `p` and come with new ones, what one
@@ -1250,7 +1274,8 @@ impl Dim {
     pub fn seen(&self, p: IVec3) -> Option<u32> {
         match self.space.acting {
             Some((at, part)) if at == p => Some(part),
-            _ => self.get(p),
+            // A big block's other cell is the block, to a mod as to a player.
+            _ => self.block_at(crate::content::content(), p).map(|b| b.1),
         }
     }
 
@@ -3012,6 +3037,7 @@ impl Dim {
         player: u64,
         drops: bool,
     ) -> bool {
+        let p = self.block_at(c, p).map_or(p, |b| b.0);
         let state = self.aimed_part(c, p, part);
         let Some(&piece) = c.states[state as usize]
             .piece_hit(hit, face)
@@ -3048,6 +3074,7 @@ impl Dim {
 
     /// The part a client says it aimed at, if it is there and can be; the block of the cell if not.
     pub fn aimed_part(&self, c: &Content, p: IVec3, part: u32) -> u32 {
+        let p = self.block_at(c, p).map_or(p, |b| b.0);
         let can = self.has_part(p, part)
             && c.states
                 .get(part as usize)
@@ -3057,7 +3084,7 @@ impl Dim {
 
     /// `break_block` of all that is in the cell that can be aimed at: a liquid in it stays.
     pub fn break_block(&mut self, c: &'static Content, p: IVec3, tool: ItemStack, player: u64, drops: bool) -> bool {
-        let Some(main) = self.get(p) else { return false };
+        let Some((p, main)) = self.block_at(c, p) else { return false };
         if self.space.extras(p).is_empty() {
             return self.break_part(c, p, main, tool, player, drops);
         }
@@ -3074,10 +3101,6 @@ impl Dim {
 
     /// Breaks one block of the cell at `p`.
     pub fn break_part(&mut self, c: &'static Content, p: IVec3, state: u32, tool: ItemStack, player: u64, drops: bool) -> bool {
-        // A piston's head is broken by breaking the piston.
-        if let Some(base) = self.head_of_piston(c, p, state) {
-            return self.break_block(c, base, tool, player, drops);
-        }
         if state == AIR || c.states[state as usize].hardness < 0.0 {
             return false;
         }
@@ -3239,6 +3262,19 @@ impl Dim {
         if !self.supported(c, p, shape_of) {
             return false;
         }
+        // A big block needs all its cells, and takes them whole or not at all.
+        // A covered cell no block takes is air.
+        let room = |q: IVec3| {
+            self.block_at(c, q)
+                .is_some_and(|(at, s)| s == AIR || (at == q && c.states[s as usize].flags & bf::REPLACEABLE != 0))
+        };
+        if c.states[shape_of as usize]
+            .cells
+            .iter()
+            .any(|(o, _)| !room(p + *o) || self.space.signals.reserved(p + *o))
+        {
+            return false;
+        }
         // Not into anyone there, the one placing it too, as far as it fills the block. A structure
         // is where its blocks are, not where its entity is.
         let mut shape = Vec::new();
@@ -3289,6 +3325,7 @@ impl Dim {
 
     /// True if the block consumed the click.
     pub fn player_use(&mut self, c: &'static Content, p: IVec3, part: u32, face: u8, player: u64) -> bool {
+        let p = self.block_at(c, p).map_or(p, |b| b.0);
         let state = self.aimed_part(c, p, part);
         if state == AIR {
             return false;

@@ -527,6 +527,7 @@ pub mod block {
     pub static SIGNAL: Component<abi::SignalDesc, Block> = Component::named(b::SIGNAL);
     pub static LIQUID_WALLS: Component<u8, Block> = Component::named(b::LIQUID_WALLS);
     pub static PIECES: Component<Vec<abi::Piece>, Block> = Component::named(b::PIECES);
+    pub static CELLS: Component<Vec<[i32; 3]>, Block> = Component::named(b::CELLS);
     pub static RULES: Component<Vec<abi::BlockRule>, Block> = Component::named(b::RULES);
     pub static HAZARDS: Component<Vec<abi::Hazard>, Block> = Component::named(b::HAZARDS);
 }

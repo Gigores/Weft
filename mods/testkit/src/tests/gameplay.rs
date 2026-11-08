@@ -584,8 +584,8 @@ pub async fn beds(t: T) -> R {
     let f = t.feet();
     let foot = place_bed(&t).await?;
     let head = add(foot, [0, 0, -1]);
-    t.check(t.block(foot).await?.contains("part=foot"), format!("the foot where it was placed: {}", t.block(foot).await?));
-    t.check(t.block(head).await?.contains("part=head"), format!("the head beyond it: {}", t.block(head).await?));
+    let (a, b) = (t.block(foot).await?, t.block(head).await?);
+    t.check(a.starts_with("base:bed") && a == b, format!("one bed where it was placed and beyond: {a}, {b}"));
 
     // By day only the respawn point.
     t.look_at(foot);
@@ -682,8 +682,7 @@ pub async fn beds(t: T) -> R {
         t.until(&format!("the {facing} bed"), Duration::from_secs(3), |t| t.c().block(head).is_some_and(|s| s != 0))
             .await?;
         let (a, b) = (t.block(foot).await?, t.block(head).await?);
-        t.check(a.contains("part=foot") && a.contains(&format!("facing={facing}")), format!("the foot: {a}"));
-        t.check(b.contains("part=head") && b.contains(&format!("facing={facing}")), format!("the head: {b}"));
+        t.check(a == b && a.contains(&format!("facing={facing}")), format!("one bed on both cells: {a}, {b}"));
     }
     t.c()
         .teleport([f[0] as f64 + 0.5, f[1] as f64 + 7.0, f[2] as f64 + 0.5]);

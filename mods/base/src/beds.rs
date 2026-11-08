@@ -61,23 +61,16 @@ const OCCUPIED: &str = "bed.base.occupied";
 const MISSING: &str = "bed.base.missing";
 const OBSTRUCTED: &str = "bed.base.obstructed";
 
-/// The other half of the bed half `state` at `pos`: the head lies away from where the bed faces
-/// (the player who placed it), the foot toward it.
-fn other_half(pos: [i32; 3], state: u32) -> [i32; 3] {
-    other_part(pos, state, "part", "head", head_way).to_array()
-}
-
-fn head_way(state: u32) -> Dir {
-    state_facing(state).opposite()
-}
-
-fn foot_of(pos: [i32; 3], state: u32) -> [i32; 3] {
-    if state_prop(state, "part") == Some("head") { other_half(pos, state) } else { pos }
+/// The head of the bed with its foot at `foot`: away from where the bed faces (the player who
+/// placed it).
+fn head_of(foot: [i32; 3], state: u32) -> [i32; 3] {
+    let d = state_facing(state).opposite().offset();
+    [foot[0] + d.x, foot[1] + d.y, foot[2] + d.z]
 }
 
 /// Where a player lying on the bed is: over the middle of it, the body's middle on the mattress.
 fn lying_on_bed(foot: [i32; 3], state: u32) -> [f64; 3] {
-    let head = other_half(foot, state);
+    let head = head_of(foot, state);
     [(foot[0] + head[0]) as f64 / 2.0 + 0.5, foot[1] as f64 + 0.39, (foot[2] + head[2]) as f64 / 2.0 + 0.5]
 }
 
@@ -175,18 +168,22 @@ pub fn register(r: &mut Registry) {
     r.block(&BED)
         .sound_group("wood")
         .facing(Facings::HORIZONTAL, Toward::Player)
-        .two_part("part", ["foot", "head"], head_way)
+        // One block on two cells, its own the foot, the head away from the player.
+        .cells(&[[0, 0, -1]])
         .states(|p, s| {
-            let head = p.is("part", "head");
-            // What the model file of a bed says for one facing south, turned to this one.
+            // What the model file of a bed says for one facing south, turned to this one; the head
+            // is the next cell north.
             let mut s = s
                 .cutout()
                 .orientation(Orientation::new(Dir::Down, p.facing().opposite()))
-                .hitbox([0.0; 3], [16.0, 9.0, 16.0]);
-            for b in if head { HEAD_BOXES } else { FOOT_BOXES } {
-                let mut faces = b.2;
-                faces[3].0 = TOP[head as usize];
-                s = s.model_box_faces(b.0, b.1, faces);
+                .hitbox([0.0, 0.0, -16.0], [16.0, 9.0, 16.0]);
+            for (head, boxes) in [(false, FOOT_BOXES), (true, HEAD_BOXES)] {
+                let z = if head { -16.0 } else { 0.0 };
+                for b in boxes {
+                    let mut faces = b.2;
+                    faces[3].0 = TOP[head as usize];
+                    s = s.model_box_faces([b.0[0], b.0[1], b.0[2] + z], [b.1[0], b.1[1], b.1[2] + z], faces);
+                }
             }
             s
         })
@@ -236,7 +233,7 @@ pub fn register(r: &mut Registry) {
 fn use_bed(u: &mut Use) -> bool {
     let w = u.world();
     let player = u.player();
-    let foot = foot_of(u.pos().to_array(), u.state());
+    let foot = u.pos().to_array();
     // Vanilla's order: nothing is set on a bed that can't be used at all.
     if w.players().into_iter().any(|o| {
         o != player

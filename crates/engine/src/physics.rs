@@ -173,6 +173,16 @@ impl Cells for BodyCells<'_> {
     }
 }
 
+/// The block a cell is part of, its cell and what else is there: a big block's own cell and
+/// block for its others (`Content::block_at`), whose boxes reach this one.
+fn block_of_cell<'a>(c: &Content, block: &'a impl Cells, p: IVec3, main: u32, extras: &'a [u32]) -> Option<(IVec3, u32, &'a [u32])> {
+    if c.covered_step(main).is_none() {
+        return Some((p, main, extras));
+    }
+    let (at, s) = c.block_at(|q| block.main(q), p)?;
+    Some((at, s, if at == p { &[] } else { block.extras(at) }))
+}
+
 /// Collision boxes of a state in block-local coordinates.
 pub fn boxes(c: &Content, state: u32, out: &mut Vec<[f64; 6]>) {
     out.extend(
@@ -435,6 +445,8 @@ fn each_solid(c: &Content, block: &impl Cells, area: Aabb, mut f: impl FnMut(Aab
                     }
                     continue;
                 };
+                let Some((at, s, extras)) = block_of_cell(c, block, p, s, extras) else { continue };
+                let b = at.as_dvec3();
                 for s in std::iter::once(s).chain(extras.iter().copied()) {
                     for bx in &c.states[s as usize].collision {
                         let bx = bx.map(|v| v as f64);
@@ -586,6 +598,8 @@ pub struct Hit {
     /// In the coordinates of `frame`: the moving structure (entity) the block is part of, 0 for
     /// the world.
     pub block: IVec3,
+    /// The cell of the block hit: `block` itself, or a big block's own cell (`Content::block_at`).
+    pub origin: IVec3,
     pub frame: u64,
     /// Face index (-X, +X, -Y, +Y, -Z, +Z) that was entered.
     pub face: u8,
@@ -653,8 +667,11 @@ pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: 
     }
     let mut t = 0.0;
     while t <= max {
-        if let Some((main, extras)) = block.cell(p) {
-            let local = origin - p.as_dvec3();
+        if let Some((at, main, extras)) = block
+            .cell(p)
+            .and_then(|(main, extras)| block_of_cell(c, block, p, main, extras))
+        {
+            let local = origin - at.as_dvec3();
             // The nearest of what is in the cell; when asking for liquids, one in it comes first.
             let mut best: Option<Hit> = None;
             for state in std::iter::once(main).chain(extras.iter().copied()) {
@@ -681,10 +698,10 @@ pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: 
                 };
                 if let Some((dist, face)) = near {
                     if wanted {
-                        return Some(Hit { frame: 0, block: p, face, state, dist });
+                        return Some(Hit { frame: 0, block: p, origin: at, face, state, dist });
                     }
                     if best.is_none_or(|b| dist < b.dist) {
-                        best = Some(Hit { frame: 0, block: p, face, state, dist });
+                        best = Some(Hit { frame: 0, block: p, origin: at, face, state, dist });
                     }
                 }
             }
