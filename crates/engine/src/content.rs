@@ -208,6 +208,7 @@ pub enum Then {
     Grow,
     Break,
     Fall,
+    Shed(u32),
 }
 
 /// A piece of a state: in `bounds` (block units), leaving `left` and dropping what `alone` does.
@@ -1173,7 +1174,7 @@ impl Content {
         match then {
             Then::Grow => self.block_of(state).cb.on_grow.is_some() || self.grown(state).is_some(),
             // Becoming what it is changes nothing, and leaves the next rule its turn.
-            Then::Become(s) => s != state,
+            Then::Become(s) | Then::Shed(s) => s != state,
             _ => true,
         }
     }
@@ -3121,6 +3122,7 @@ fn resolve_rules(
                     def.changed_text(state as u32, &r.into).map(Then::Become)
                 }
                 abi::rule_then::BECOME => crate::refs::state(&r.into, names, blocks).map(Then::Become),
+                abi::rule_then::SHED => def.changed_text(state as u32, &r.into).map(Then::Shed),
                 abi::rule_then::GROW => Ok(Then::Grow),
                 abi::rule_then::BREAK => Ok(Then::Break),
                 abi::rule_then::FALL => Ok(Then::Fall),

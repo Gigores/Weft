@@ -2848,7 +2848,7 @@ impl Dim {
 
     /// A part of the cell at `p` hears of a change at `from`.
     fn neighbor_changed(&mut self, c: &'static Content, p: IVec3, state: u32, from: IVec3) {
-        if self.sides_fall(c, p, state) || self.neighbor_rules(c, p, state, false) {
+        if self.neighbor_rules(c, p, state, false) {
             return;
         }
         for r in &c.states[state as usize].rules {
@@ -2876,14 +2876,11 @@ impl Dim {
     /// The block `state` would be held up at `p`: no neighbor rule of it breaks it, and what it
     /// lies on holds (unloaded neighbors count as holding).
     fn supported(&mut self, c: &'static Content, p: IVec3, state: u32) -> bool {
-        if self.sides_held(c, p, state) != c.states[state as usize].sides {
-            return false;
-        }
         let ask = self.ask_at(p, state);
         !c.states[state as usize]
             .rules
             .iter()
-            .filter(|r| matches!(r.when, When::Neighbor(_)) && r.then == Then::Break)
+            .filter(|r| matches!(r.when, When::Neighbor(_)) && matches!(r.then, Then::Break | Then::Shed(_)))
             .any(|r| {
                 r.cond
                     .is_none_or(|w| crate::conditions::on_server(self, c, w, &ask))
@@ -2948,39 +2945,23 @@ impl Dim {
                 }
             },
             Then::Break => self.break_off(c, p, part),
+            Then::Shed(into) => {
+                let alone = c.states[part as usize]
+                    .pieces
+                    .iter()
+                    .find(|pc| pc.left == into)
+                    .map(|pc| pc.alone);
+                let gone = c.states[part as usize].sides != 0 && c.states[into as usize].sides == 0;
+                self.replace_part(c, p, part, if gone { AIR } else { into });
+                self.block_dust(c, p, part);
+                if let Some(alone) = alone {
+                    self.drop_block_loot(c, p, alone, ItemStack::EMPTY, false, 0);
+                }
+            }
             Then::Fall => {
                 self.fall_block(c, p);
             }
         }
-    }
-
-    /// Which sides of an `on_sides` block something holds up; the unloaded holds.
-    fn sides_held(&self, c: &Content, p: IVec3, state: u32) -> u8 {
-        let mask = c.states[state as usize].sides;
-        (0..6u8)
-            .filter(|&f| {
-                mask & 1 << f != 0
-                    && self
-                        .get(p + DIRS[f as usize])
-                        .is_none_or(|s| crate::wire::holds_wire(c, s))
-            })
-            .fold(0, |m, f| m | 1 << f)
-    }
-
-    /// Sides of an `on_sides` block that lost what held them up come off, each dropping what it
-    /// would alone. Whether any did.
-    fn sides_fall(&mut self, c: &'static Content, p: IVec3, state: u32) -> bool {
-        let (mask, left) = (c.states[state as usize].sides, self.sides_held(c, p, state));
-        if left == mask {
-            return false;
-        }
-        let def = c.block_of(state);
-        for f in (0..6u8).filter(|&f| (mask ^ left) & 1 << f != 0) {
-            self.drop_block_loot(c, p, def.with_sides(state, 1 << f), ItemStack::EMPTY, false, 0);
-        }
-        self.block_dust(c, p, state);
-        self.replace_part(c, p, state, if left == 0 { AIR } else { def.with_sides(state, left) });
-        true
     }
 
     /// Breaks a block that lost its support, dropping what it drops.

@@ -1665,6 +1665,9 @@ pub mod rule_then {
     pub const BREAK: u32 = 2;
     /// It falls as a moving block (`Host::fall_block`, sand).
     pub const FALL: u32 = 3;
+    /// A piece of it comes off: it becomes `into` (properties, `north=false`), dropping what
+    /// the piece left so drops alone (a side of a vine or of wire); with nothing left, air.
+    pub const SHED: u32 = 4;
 }
 
 crate::data! {

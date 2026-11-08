@@ -493,6 +493,11 @@ impl Rule {
         self.0.then = abi::rule_then::GROW;
         self
     }
+    /// A piece comes off: it becomes `into` (`north=false`), dropping what the piece drops.
+    pub fn sheds(mut self, into: &str) -> Rule {
+        (self.0.then, self.0.into) = (abi::rule_then::SHED, into.to_string());
+        self
+    }
     /// Breaks off, dropping what it drops.
     pub fn breaks(mut self) -> Rule {
         self.0.then = abi::rule_then::BREAK;
