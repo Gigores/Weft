@@ -1705,6 +1705,8 @@ unsafe extern "C" fn timer(w: *mut abi::WorldCtx, h: *const abi::Holder, ticks: 
                 *list = v.into_boxed_slice();
             }
             abi::holder::ENTITY => {}
+            // A block's own tick is the same whoever set it.
+            abi::holder::BLOCK if event == c.game.block_tick => d.schedule(ip(&h.pos), ticks),
             abi::holder::BLOCK => d.timer_at(ip(&h.pos), ticks, event, data),
             abi::holder::NONE => d.dim_timers.push((until, event, data.into())),
             _ => misuse("timer", || "a stack doesn't tick, so it can't hold a timer".into()),
@@ -2014,7 +2016,7 @@ unsafe extern "C" fn entity_effect(w: *mut abi::WorldCtx, id: u64, effect: u32, 
             return;
         }
         let comp = c.game.fields.effect;
-        let mut list: Vec<_> = crate::server::dim::effects_on(d.entities.comps.get(&(id, comp)), d.time)
+        let mut list: Vec<_> = crate::server::dim::effects_on(d.entities.comps.get(&(id, comp)).map(|b| &b[..]), d.time)
             .filter(|f| f.0 != effect)
             .collect();
         if ticks > 0 {

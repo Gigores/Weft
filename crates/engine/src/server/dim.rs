@@ -454,8 +454,13 @@ pub fn scatter_site(
     use crate::content::{Chance, SiteShape};
     let h = hash(seed ^ s.salt, cell.0 as i64, 0, cell.1 as i64);
     // A template stands within the cell from its lowest corner, its ground the column in its middle.
+    let random = hash(h, 1, 2, 3);
     let (room, mid, sink) = match &s.shape {
-        SiteShape::Template { extent, sink, .. } => ((s.cell - extent.x.max(extent.z)).max(1), (extent.x / 2, extent.z / 2), *sink),
+        SiteShape::Template { extent, sink, turns, .. } => {
+            let across = *turns && quarter(random) % 2 == 1;
+            let mid = if across { (extent.z / 2, extent.x / 2) } else { (extent.x / 2, extent.z / 2) };
+            ((s.cell - extent.x.max(extent.z)).max(1), mid, *sink)
+        }
         SiteShape::Callback(..) => (s.cell, (0, 0), 0),
     };
     let (x, z) = (cell.0 * s.cell + (h % room as u64) as i32, cell.1 * s.cell + ((h >> 8) % room as u64) as i32);
@@ -485,14 +490,19 @@ pub fn scatter_site(
     if weft_noise::unit(h.rotate_left(17)) >= chance as f64 || def.carved(seed, x + mid.0, z + mid.1) {
         return None;
     }
-    Some((IVec3::new(x, col.height + 1 - sink, z), col.biome, hash(h, 1, 2, 3)))
+    Some((IVec3::new(x, col.height + 1 - sink, z), col.biome, random))
+}
+
+/// Which quarter a turning template at a site is turned (0..4), by its random bits.
+fn quarter(random: u64) -> usize {
+    (random >> 40) as usize % 4
 }
 
 /// A template's blocks at a site, from its lowest corner, turned a quarter `random` picks when
 /// it `turns` (its states with it), all put over what is there.
 fn template_blocks(c: &Content, blocks: &[(IVec3, u32)], turns: bool, random: u64) -> Vec<abi::ScatterBlock> {
     // East to south, west, north: quarters about the vertical.
-    let turn = if turns { [1, 5, 0, 4][(random >> 40) as usize % 4] } else { 1 };
+    let turn = if turns { [1, 5, 0, 4][quarter(random)] } else { 1 };
     let t = abi::Turn { east: turn, up: 3 };
     let moved: Vec<(IVec3, u32)> = blocks
         .iter()
@@ -609,9 +619,9 @@ pub fn scattered_near(def: &crate::content::DimensionDef, c: &Content, seed: u64
 
 /// The entity effects in an `EFFECT` component still on at `now` (`u64::MAX`: all): effect,
 /// strength, the tick it ends.
-pub fn effects_on(bytes: Option<&Box<[u8]>>, now: u64) -> impl Iterator<Item = (u32, f32, u64)> + '_ {
+pub fn effects_on(bytes: Option<&[u8]>, now: u64) -> impl Iterator<Item = (u32, f32, u64)> + '_ {
     bytes
-        .map_or(&[][..], |b| &b[..])
+        .unwrap_or_default()
         .chunks_exact(16)
         .map(|b| {
             let word = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
@@ -777,12 +787,13 @@ impl Dim {
             .filter(|e| e.player && !e.removed)
             .map(|e| e.id)
             .collect();
-        let attrs: Vec<Vec<u8>> = players
+        let attrs: FxHashMap<u64, Vec<u8>> = players
             .iter()
             .map(|&id| {
-                (0..c.game.attributes.len() as u32)
+                let all = (0..c.game.attributes.len() as u32)
                     .flat_map(|a| (self.attribute(c, id, a, false) as f32).to_le_bytes())
-                    .collect()
+                    .collect();
+                (id, all)
             })
             .collect();
         let maxes: Vec<(u64, f32)> = self
@@ -830,8 +841,8 @@ impl Dim {
             if e.player {
                 put(comps, game_mode, &(e.mode.0 as u32).to_le_bytes());
                 put(comps, permission, &e.permission.to_le_bytes());
-                if let Some(i) = players.iter().position(|&p| p == e.id) {
-                    put(comps, attributes, &attrs[i]);
+                if let Some(a) = attrs.get(&e.id) {
+                    put(comps, attributes, a);
                 }
                 let inv = inventories.get(&e.id).map_or(&[][..], |i| &i[..]);
                 let item = crate::content::in_main_hand(c, inv, e.selected);
@@ -1076,7 +1087,15 @@ impl Dim {
             grew |= grows;
             let modified = self.space.modified.remove(&pos);
             let on_disk = self.on_disk.remove(&pos);
-            if modified || on_disk || !inside.is_empty() || !self.timers_in(pos).is_empty() {
+            if modified
+                || on_disk
+                || !inside.is_empty()
+                || self
+                    .space
+                    .scheduled
+                    .iter()
+                    .any(|t| cube_of(IVec3::from_array(t.0.1)) == pos)
+            {
                 if grows {
                     Arc::make_mut(&mut cube).ticked = self.time;
                 }
@@ -1990,6 +2009,8 @@ impl Dim {
                 continue;
             }
             let p = IVec3::from_array(at);
+            let pos: Vec<u8> = at.iter().flat_map(|v| v.to_le_bytes()).collect();
+            self.emit(c, event, &pos);
             for state in self.parts(p) {
                 if !self.has_part(p, state) {
                     continue;
@@ -2322,7 +2343,7 @@ impl Dim {
         }
     }
 
-    /// Timers (`Host::entity_after`) of this region's entities that are due fire their events.
+    /// Timers (`Host::timer`) of this region's entities that are due fire their events.
     fn fire_timers(&mut self, c: &'static Content) {
         let comp = c.game.timers_comp;
         let ids: Vec<u64> = self
@@ -2398,7 +2419,7 @@ impl Dim {
         self.navigation(c);
         self.steer_mounts(c);
 
-        let (here, gravity) = (self.id, c.dims[self.id as usize].gravity as f64);
+        let (here, now, gravity) = (self.id, self.time, c.dims[self.id as usize].gravity as f64);
         let players: Vec<DVec3> = self
             .entities
             .list
@@ -2491,12 +2512,14 @@ impl Dim {
                 let hot = met.iter().any(|(_, h)| h.fire > 0);
                 // Its kind's own and the dimension's, and what squeezed it.
                 let own = k.hazards.iter().chain(&c.dims[here as usize].hazards);
+                let due = |h: &&crate::content::Hazard| h.every <= 1 || (now + e.id) % h.every as u64 == 0;
                 met.extend(
                     own.filter(|h| h.at == abi::hazard_at::SELF)
+                        .filter(due)
                         .map(|h| (0, *h)),
                 );
                 met.extend(crushed.drain(..).map(|h| (0, h)));
-                for (f, ..) in effects_on(comps.get(&(e.id, c.game.fields.effect)), u64::MAX) {
+                for (f, ..) in effects_on(comps.get(&(e.id, c.game.fields.effect)).map(|b| &b[..]), now) {
                     let of = c
                         .game
                         .entity_effects
@@ -3438,12 +3461,17 @@ impl Dim {
         }
         if let Some(state) = self.get(p).filter(|&s| c.spread_target(s)) {
             let ask = self.ask_at(p, state);
-            if let (Some((_, sp)), n) = self.spreaders_near(c, p, state)
-                && sp
-                    .when
-                    .is_none_or(|w| crate::conditions::may_server(self, c, w, &ask))
-            {
-                out.push((Chance::Spread, n as f64 / sp.mean));
+            let rate: f64 = self
+                .spreaders_near(c, p, state)
+                .into_iter()
+                .filter(|(_, sp)| {
+                    sp.when
+                        .is_none_or(|w| crate::conditions::may_server(self, c, w, &ask))
+                })
+                .map(|(_, sp)| 1.0 / sp.mean)
+                .sum();
+            if rate > 0.0 {
+                out.push((Chance::Spread, rate));
             }
         }
         out
@@ -3461,11 +3489,9 @@ impl Dim {
         }
     }
 
-    /// A block that spreads onto `state` at `p` from where it reaches it: its state and rule, and
-    /// how many there are.
-    fn spreaders_near(&self, c: &Content, p: IVec3, state: u32) -> (Option<(u32, crate::content::Spread)>, u32) {
-        let mut first = None;
-        let mut n = 0;
+    /// The blocks that spread onto `state` at `p` from where they reach it: state and rule.
+    fn spreaders_near(&self, c: &Content, p: IVec3, state: u32) -> Vec<(u32, crate::content::Spread)> {
+        let mut out = Vec::new();
         let (lo, hi) = c.spread_search;
         for dy in lo.y..=hi.y {
             for dz in lo.z..=hi.z {
@@ -3477,24 +3503,26 @@ impl Dim {
                         && (-at).cmple(sp.max).all()
                         && c.matchers.has(sp.to, state)
                     {
-                        first.get_or_insert((s, sp));
-                        n += 1;
+                        out.push((s, sp));
                     }
                 }
             }
         }
-        (first, n)
+        out
     }
 
     /// Something spreading onto the block at `p` comes due: it takes it if its conditions hold
     /// then (`growing_at` gives the daylight), else tries again later.
     fn spread_onto(&mut self, c: &'static Content, p: IVec3, state: u32) {
         let ask = self.ask_at(p, state);
-        if let (Some((into, sp)), _) = self.spreaders_near(c, p, state)
-            && sp
-                .when
-                .is_none_or(|w| crate::conditions::on_server(self, c, w, &ask))
-        {
+        let into = self
+            .spreaders_near(c, p, state)
+            .into_iter()
+            .find(|(_, sp)| {
+                sp.when
+                    .is_none_or(|w| crate::conditions::on_server(self, c, w, &ask))
+            });
+        if let Some((into, _)) = into {
             self.set(c, p, into);
         }
     }
@@ -3561,6 +3589,18 @@ impl Dim {
             .filter(|t| cube_of(IVec3::from_array(t.0.1)) == cube)
             .map(|t| t.0.clone())
             .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The timers on the blocks of a cube going away, taken out with it.
+    pub fn take_timers(&mut self, cube: IVec3) -> Vec<BlockTimer> {
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.space.scheduled)
+            .into_iter()
+            .partition(|t| cube_of(IVec3::from_array(t.0.1)) == cube);
+        self.space.scheduled = kept.into_iter().collect();
+        let mut out: Vec<BlockTimer> = gone.into_iter().map(|t| t.0).collect();
         out.sort_unstable();
         out.dedup();
         out

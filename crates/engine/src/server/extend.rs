@@ -228,10 +228,28 @@ impl Dim {
     }
 
     fn modifiers_of(&self, c: &Content, entity: u64) -> Vec<AttrMod> {
-        self.entities
+        let mut out = self
+            .entities
             .comps
             .get(&(entity, c.game.modifiers_comp))
-            .map_or_else(Vec::new, |b| decode_mods(b))
+            .map_or_else(Vec::new, |b| decode_mods(b));
+        let kind = self.entities.get(entity).map_or(u32::MAX, |e| e.kind);
+        out.extend(
+            c.source_mods
+                .kinds
+                .get(&kind)
+                .into_iter()
+                .flatten()
+                .filter(|m| m.when.is_none())
+                .map(|m| AttrMod {
+                    attr: c.game.attributes[m.attr as usize].hash,
+                    op: m.op as u8,
+                    amount: m.amount,
+                    until: 0,
+                    id: "core:kind".into(),
+                }),
+        );
+        out
     }
 
     /// Value of attribute `attr` for an entity; with `explain` the steps go to `explanation`.
@@ -240,6 +258,24 @@ impl Dim {
         let Some(base) = self.base_attribute(c, entity, attr) else { return def.default };
         if !explain {
             let (mut add, mut mul_base, mut mul_total, mut set) = (0.0, 0.0, 1.0, None);
+            // A kind's own modifiers hold whatever it is (a dropped stack is invulnerable from
+            // its first tick); `keep_sources` keeps the ones under conditions.
+            let kind = self.entities.get(entity).map_or(u32::MAX, |e| e.kind);
+            for m in c
+                .source_mods
+                .kinds
+                .get(&kind)
+                .into_iter()
+                .flatten()
+                .filter(|m| m.when.is_none() && m.attr == attr)
+            {
+                match m.op {
+                    abi::attr_op::ADD => add += m.amount,
+                    abi::attr_op::MULTIPLY_BASE => mul_base += m.amount,
+                    abi::attr_op::MULTIPLY_TOTAL => mul_total *= 1.0 + m.amount,
+                    _ => set = Some(m.amount),
+                }
+            }
             if let Some(b) = self.entities.comps.get(&(entity, c.game.modifiers_comp)) {
                 each_mod(b, |a, op, amount, until, _| {
                     if a == def.hash && (until == 0 || until > self.time) {
@@ -346,9 +382,16 @@ impl Dim {
         let s = &c.source_mods;
         let Some(e) = self.entities.get(id) else { return };
         let (kind, pose, pos, mode, body) = (e.kind, e.pose, e.pos, e.mode, e.body());
-        let mut from: Vec<SourceMod> = s.kinds.get(&kind).cloned().unwrap_or_default();
+        let mut from: Vec<SourceMod> = s
+            .kinds
+            .get(&kind)
+            .into_iter()
+            .flatten()
+            .filter(|m| m.when.is_some())
+            .cloned()
+            .collect();
         let comp = c.game.fields.effect;
-        let on: Vec<_> = super::dim::effects_on(self.entities.comps.get(&(id, comp)), self.time).collect();
+        let on: Vec<_> = super::dim::effects_on(self.entities.comps.get(&(id, comp)).map(|b| &b[..]), self.time).collect();
         if on.len() * 16 != self.entities.comps.get(&(id, comp)).map_or(0, |b| b.len()) {
             if on.is_empty() {
                 self.entities.comps.remove(&(id, comp));

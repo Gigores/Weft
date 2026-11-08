@@ -425,6 +425,10 @@ impl DimSet {
     /// parts. Data moves in parcels; each region keeps the part it holds most of.
     pub fn regionize(&mut self, c: &Content) {
         self.dirty = false;
+        // Timers set on the dimension stay with it whatever happens to the regions.
+        for r in &mut self.regions {
+            self.timers.append(&mut r.dim_timers);
+        }
         self.regions
             .retain(|r| !r.space.cubes.is_empty() || !r.entities.list.is_empty());
         let per_region: Vec<FxHashSet<IVec3>> = self.regions.iter().map(|r| r.sections()).collect();

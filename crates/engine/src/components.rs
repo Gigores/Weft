@@ -254,6 +254,8 @@ pub struct Components {
     columns: Vec<Vec<abi::Column>>,
     refs: Option<Box<Refs>>,
     abi: Box<abi::ComponentTable>,
+    /// Per component: the table holds a `Slice` to its packed items (a list).
+    packed: Vec<bool>,
 }
 
 unsafe impl Send for Components {}
@@ -280,8 +282,7 @@ impl Components {
             return None;
         }
         let v = self.tables[kind].value(entry, comp)?;
-        let schema = &self.schemas[comp as usize];
-        if schema.starts_with('<') || abi::data::list_of(schema).is_some() {
+        if self.packed[comp as usize] {
             let s = unsafe { std::ptr::read_unaligned(v.as_ptr() as *const abi::Slice<u8>) };
             return Some(unsafe { s.as_slice() });
         }
@@ -594,7 +595,11 @@ impl Builder {
         let columns: Vec<Vec<abi::Column>> = tables.iter().map(Table::columns).collect();
         let kinds: [abi::KindTable; KINDS] = std::array::from_fn(|k| tables[k].view(&columns[k]));
         let abi = Box::new(abi::ComponentTable { components: names.len() as u32, kinds });
-        Components { names, schemas, by_name: ids, tables, texts, blobs, columns, refs, abi }
+        let packed = schemas
+            .iter()
+            .map(|s| s.starts_with('<') || abi::data::list_of(s).is_some())
+            .collect();
+        Components { names, schemas, by_name: ids, tables, texts, blobs, columns, refs, abi, packed }
     }
 }
 

@@ -135,7 +135,7 @@ A kind of entity: mobs, players, projectiles, moving platforms, block entities. 
 | `FRAMES` | `[callback]` | none | client frame hooks (`r.client_entity_frame`) |
 | `SLOT_GROUPS`, `INVENTORY_MENU` | `[SlotGroupDef]`, `str` | 9 + 27 | the player's inventory (`r.player_slots`, `r.player_menu`) |
 
-Shared ones: `MODEL`, `ANIMATIONS`, `SOUND`, `SHADER`, `SWIMS_IN`, `INVENTORY_SLOTS`, `HAZARDS` (`.hazard(..)`, `.burns_in_sun()`, `.crushing()`), attributes (`.max_health`, `.reach`). Tags (`abi::comp::entity`): `NO_GRAVITY`, `INVULNERABLE`, `SWIMS`, `SOLID`, `KINEMATIC`, `RIDERS_FALL`, `WEARS` (`.equipment()`), and `NO_FALL_DAMAGE`, `UNPUSHABLE` turning off what every kind does; `immune/<cause>` against a damage cause.
+Shared ones: `MODEL`, `ANIMATIONS`, `SOUND`, `SHADER`, `SWIMS_IN`, `INVENTORY_SLOTS`, `HAZARDS` (`.hazard(..)`, `.burns_in_sun()`, `.crushing()`), attributes (`.max_health`, `.reach`). Tags (`abi::comp::entity`): `NO_GRAVITY`, `SWIMS`, `SOLID`, `KINEMATIC`, `RIDERS_FALL`, `WEARS` (`.equipment()`), and `NO_FALL_DAMAGE`, `UNPUSHABLE` turning off what every kind does; `immune/<cause>` against a damage cause.
 
 ```rust
 static ZOMBIE: EntityKind = EntityKind::named("base:zombie");
@@ -344,7 +344,7 @@ Named `<mod>:<kind>/<output>`, `/2`.. unless `.named`. `r.shaped(..)`, `r.shapel
 | `PATTERN`, `KEYS` | `[str]`, `[RecipeKey]` | shaped |
 | `INPUTS`, `AMOUNTS` | `[str]`, `[u32]` | shapeless or processing (`.input_amounts`) |
 | `TIME` | `u32` | ticks, 0 |
-| `OUTPUTS` | `[RecipeOutput]` | more results (`.output`, `.output_chance`) |
+| `OUTPUTS` | `[LootPool]` | more results, rolled as loot (`.extra`, `.output`, `.output_chance`) |
 
 Tag `recipe.hidden` (`.hidden()`). Any other component is data it carries (energy per tick).
 

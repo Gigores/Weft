@@ -1688,11 +1688,7 @@ pub const EFFECT: &str = "core:effect";
 pub const FORCED_POSE: &str = "core:forced_pose";
 /// What it rides (`u64` id) and its seat (`u32`), empty: nothing. Saved, and seen by everyone.
 pub const RIDING: &str = "core:riding";
-/// A player's game mode (`u32` id), permission level (`u32`) and every attribute's value (`f32`
-/// by id), for its own client.
-pub const GAME_MODE: &str = "core:game_mode";
-pub const PERMISSION: &str = "core:permission";
-pub const ATTRIBUTES: &str = "core:attributes";
+use abi::comp::{ATTRIBUTES, GAME_MODE, PERMISSION};
 /// Entity component (`u64`, saved): the world time a system last simulated it to, so it can
 /// catch up on what it missed (`Dim::run_systems`).
 pub const SIMULATED: &str = "core:simulated";

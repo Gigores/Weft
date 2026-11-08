@@ -984,6 +984,7 @@ impl Server {
             .flat_map(|d| {
                 d.timers
                     .iter()
+                    .chain(d.regions.iter().flat_map(|r| &r.dim_timers))
                     .map(|(at, e, data)| (c.dims[d.id as usize].name.clone(), *at, c.game.events[*e as usize].name.clone(), data.to_vec()))
             })
             .collect();

@@ -3162,30 +3162,37 @@ fn resolve_hazards(
 ) {
     use abi::hazard_at as at;
     let causes = &game.damage_cause_names;
-    let mut resolve = |list: Vec<abi::Hazard>, conds: &mut crate::conditions::Texts| -> Vec<Hazard> {
-        list.into_iter()
-            .map(|h| {
-                let cause = (!h.cause.is_empty())
-                    .then(|| causes.get(&h.cause).copied())
-                    .flatten();
-                if cause.is_none() && !h.cause.is_empty() {
-                    errors.push(format!("hazard: no damage cause {}", h.cause));
-                }
-                Hazard { at: h.at, damage: h.damage, cause, fire: h.fire, every: h.every, when: conds.all(&h.when) }
-            })
-            .collect()
+    let mut resolve = |list: Vec<abi::Hazard>, allowed: &[u32], conds: &mut crate::conditions::Texts| -> Vec<Hazard> {
+        let mut out = Vec::new();
+        for h in list {
+            if !allowed.contains(&h.at) {
+                errors.push(format!(
+                    "hazard at {} where nothing meets it there (blocks: inside, on, head, touch; kinds: self, crushed; dimensions and effects: self)",
+                    h.at
+                ));
+                continue;
+            }
+            let cause = (!h.cause.is_empty())
+                .then(|| causes.get(&h.cause).copied())
+                .flatten();
+            if cause.is_none() && !h.cause.is_empty() {
+                errors.push(format!("hazard: no damage cause {}", h.cause));
+            }
+            out.push(Hazard { at: h.at, damage: h.damage, cause, fire: h.fire, every: h.every, when: conds.all(&h.when) });
+        }
+        out
     };
     for (state, list) in raw {
-        states[state].hazards = resolve(list, conds);
+        states[state].hazards = resolve(list, &[at::INSIDE, at::ON, at::HEAD, at::TOUCH], conds);
     }
     for k in &mut game.entities {
-        k.hazards = resolve(std::mem::take(&mut k.raw_hazards), conds);
+        k.hazards = resolve(std::mem::take(&mut k.raw_hazards), &[at::SELF, at::CRUSHED], conds);
     }
     for f in &mut game.entity_effects {
-        f.hazards = resolve(std::mem::take(&mut f.raw_hazards), conds);
+        f.hazards = resolve(std::mem::take(&mut f.raw_hazards), &[at::SELF], conds);
     }
     for d in dims.iter_mut() {
-        d.hazards = resolve(std::mem::take(&mut d.raw_hazards), conds);
+        d.hazards = resolve(std::mem::take(&mut d.raw_hazards), &[at::SELF], conds);
         if d.min_cube_y != i32::MIN {
             let below = conds.all(&[format!("height(..{})", d.min_cube_y * 16 - 64)]);
             let void = Some(abi::damage_cause::VOID);

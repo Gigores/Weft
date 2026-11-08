@@ -2191,8 +2191,7 @@ impl Client {
                     .get(f.0 as usize)
                     .is_some_and(|d| !d.shader.is_empty())
             };
-            let boxed: Box<[u8]> = bytes.into();
-            e.effect = crate::server::dim::effects_on(Some(&boxed), now)
+            e.effect = crate::server::dim::effects_on(Some(bytes), now)
                 .filter(shown)
                 .last()
                 .map(|(id, strength, until)| (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32));

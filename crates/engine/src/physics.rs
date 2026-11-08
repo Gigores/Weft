@@ -431,7 +431,10 @@ pub fn push<'a>(
                 if need.abs() > shift[axis].abs() {
                     shift[axis] = need;
                 }
-                if !b.crushes.is_empty() {
+                if b.crushes
+                    .iter()
+                    .any(|h| h.at == weft_abi::hazard_at::CRUSHED)
+                {
                     crushes = b.crushes;
                 }
             }

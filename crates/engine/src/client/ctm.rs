@@ -424,7 +424,8 @@ pub fn load(assets: &Assets, c: &Content, looks: &Looks, mut names: Names) -> (C
             let blocks = kv.get("blocks").map_or(Vec::new(), |v| {
                 crate::refs::compile(v, &c.block_names, &c.blocks, &c.components).unwrap_or_else(|e| {
                     log::error!("{name}.ctm: blocks: {e}");
-                    Vec::new()
+                    // No block, rather than every block.
+                    vec![0]
                 })
             });
             let biomes = kv.get("biomes").map(|v| {

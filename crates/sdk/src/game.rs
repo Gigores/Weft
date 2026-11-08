@@ -353,7 +353,7 @@ impl World {
 
     /// Effect `effect` on an entity for everyone who sees it, at `strength` (0..1) for
     /// `ticks` (0 ends it): `w.entity_effect(id, &entity_effects::GLOW, 1.0, 200)`, or one of
-    /// your own (`Registry::entity_effect`). A new one replaces the last.
+    /// your own (`Registry::entity_effect`). Several at once, one of each: giving one again replaces it.
     pub fn entity_effect(&self, id: u64, effect: impl Into<crate::Id<crate::EntityEffect>>, strength: f32, ticks: u32) {
         unsafe { (host().entity_effect)(self.raw(), id, effect.into().raw(), strength, ticks) }
     }
@@ -1888,7 +1888,7 @@ impl RecipeView {
     }
     /// What else one run of it gives this time, its pools rolled.
     pub fn roll(&self, w: &crate::World) -> Vec<ItemStack> {
-        let mut buf = vec![ItemStack::EMPTY; 16];
+        let mut buf = vec![ItemStack::EMPTY; 256];
         let n = unsafe { (host().recipe_roll)(w.raw(), Str::new(&self.kind), self.index, buf.as_mut_ptr(), buf.len()) };
         buf.truncate(n.min(buf.len()));
         buf

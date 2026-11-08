@@ -12,8 +12,8 @@ pub struct ClientView {
     raw: *mut abi::ClientCtx,
 }
 
-static GAME_MODE: Component<u32> = Component::named("core:game_mode");
-static PERMISSION: Component<u32> = Component::named("core:permission");
+static GAME_MODE: Component<u32> = Component::named(abi::comp::GAME_MODE);
+static PERMISSION: Component<u32> = Component::named(abi::comp::PERMISSION);
 
 impl ClientView {
     pub(crate) fn from_raw(raw: *mut abi::ClientCtx) -> ClientView {

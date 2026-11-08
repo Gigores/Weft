@@ -783,8 +783,14 @@ pub mod comp {
     pub const SOUND_CATEGORY_WORLD: &str = "sound_category.world";
     pub const TINT_KIND_DEFAULT: &str = "tint_kind.default";
     pub const KEY_DEFAULT: &str = "key.default";
-    /// Attribute modifiers (`[Modifier]`) of a game mode, an item, a pose or an entity kind.
+    /// Attribute modifiers (`[Modifier]`) of a game mode, an item, a pose, an entity kind or
+    /// an entity effect.
     pub const MODIFIERS: &str = "modifiers";
+    /// A player's own, for its client: game mode (`u32` id), permission level (`u32`), every
+    /// attribute's value (`f32` by id).
+    pub const GAME_MODE: &str = "core:game_mode";
+    pub const PERMISSION: &str = "core:permission";
+    pub const ATTRIBUTES: &str = "core:attributes";
 
     /// A key's contexts, tags of its entry: where it acts. Two keys on one binding conflict
     /// only where their contexts meet; a key with none acts wherever the world has the input
