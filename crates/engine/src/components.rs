@@ -42,7 +42,6 @@ pub const BUILTIN: &[(&str, &str)] = &[
     (abi::comp::SPLASH, "str"),
     (abi::comp::BUBBLE, "str"),
     (abi::comp::SWIMS_IN, "match"),
-    (abi::comp::JOINS, "match"),
     (abi::comp::LIQUIDS, ""),
     (abi::comp::UNBREAKABLE, ""),
     (abi::comp::CONDUCTOR, ""),

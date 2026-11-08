@@ -1473,9 +1473,6 @@ pub mod comp {
     /// Entity kinds and worn items: the liquids sprinting swims in (`match`); a worn item's add
     /// to its wearer's.
     pub const SWIMS_IN: &str = "swims_in";
-    /// Block: what it joins on the sides its `true`/`false` side properties name (`match`,
-    /// fences: `#fences`), kept up to date by the SDK's `joins`.
-    pub const JOINS: &str = "joins";
     /// Tag the engine puts on every liquid's block.
     pub const LIQUIDS: &str = "liquids";
     /// Tag the engine puts on blocks of negative `hardness`, liquids aside.

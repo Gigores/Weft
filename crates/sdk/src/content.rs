@@ -1964,20 +1964,21 @@ impl<'a> BlockBuilder<'a> {
     /// by `p.is("north", "true")`.
     pub fn joins(mut self, sides: crate::Facings, to: &str) -> Self {
         for d in sides.dirs() {
-            self = self.prop(d.name(), ["false", "true"]);
+            let there = crate::Cond::new(&format!("side({}, {to})", d.name()));
+            self = self
+                .prop(d.name(), ["false", "true"])
+                .rule(
+                    crate::Rule::neighbor()
+                        .when(there.clone())
+                        .becomes(&format!("{}=true", d.name())),
+                )
+                .rule(
+                    crate::Rule::neighbor()
+                        .when(!there)
+                        .becomes(&format!("{}=false", d.name())),
+                );
         }
-        self = self.set_text(&c::JOINS, to);
-        self.derive_each(move |n, e| {
-            let to = c::JOINS.on_block(e.state());
-            for d in sides.dirs() {
-                let there = n.at(d);
-                let joins = there != 0 && to.is_some_and(|m| m.has(there));
-                let want = if joins { "true" } else { "false" };
-                if n.world().prop(n.pos(), d.name()) != Some(want) {
-                    n.world().prop_set(n.pos(), d.name(), want);
-                }
-            }
-        })
+        self
     }
 
     /// Property `prop` worked out from the blocks around, kept up to date by the engine as they

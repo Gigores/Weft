@@ -1172,7 +1172,12 @@ impl Content {
     /// Whether a rule doing `then` has something to do for a block in `state`: a growth step
     /// ahead of it.
     pub fn acts(&self, state: u32, then: Then) -> bool {
-        then != Then::Grow || self.block_of(state).cb.on_grow.is_some() || self.grown(state).is_some()
+        match then {
+            Then::Grow => self.block_of(state).cb.on_grow.is_some() || self.grown(state).is_some(),
+            // Becoming what it is changes nothing, and leaves the next rule its turn.
+            Then::Become(s) => s != state,
+            _ => true,
+        }
     }
 
     /// Whether something may happen to a block in `state` with time: a rule now and then, or
