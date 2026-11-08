@@ -75,8 +75,9 @@ pub fn run(dir: &Path, owner: Option<String>) -> Result<String, String> {
 fn pull_request(id: &str, version: &str, path: &str, file: &str) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("weft-submit-{}", std::process::id()));
     let clone = Command::new("gh")
-        .args(["repo", "fork", INDEX, "--clone", "--default-branch-only", "--", "--depth=1"])
+        .args(["repo", "fork", INDEX, "--clone", "--default-branch-only", "--"])
         .arg(&tmp)
+        .arg("--depth=1")
         .status()
         .map_err(|e| format!("gh: {e}"))?;
     if !clone.success() {
