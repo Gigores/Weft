@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use weft_sdk::*;
 
-use crate::items::ARMOR;
+use crate::items::ARMOR_PIECE;
 
 pub use base_api::{ADVANCEMENTS, Advancements};
 
@@ -165,7 +165,7 @@ fn check_players(w: &World) {
             .collect();
         let worn = inv.find_group(EQUIPMENT_GROUP).map_or(0, |g| {
             (0..g.len())
-                .filter(|&i| ARMOR.on_item(g.get(i).item).is_some())
+                .filter(|&i| ARMOR_PIECE.on_item(g.get(i).item))
                 .count() as u32
         });
         let y = st.pos.y;

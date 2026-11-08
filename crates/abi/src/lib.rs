@@ -597,8 +597,6 @@ pub mod comp {
         pub const NO_PLACE: &str = "game_mode.no_place";
         /// Nothing used up: placed blocks, poured buckets, wear; picking a block gives a stack.
         pub const NO_COSTS: &str = "game_mode.no_costs";
-        /// No damage, hunger or air (mods read it as `World::outside_survival`).
-        pub const INVULNERABLE: &str = "game_mode.invulnerable";
         /// Always flies.
         pub const ALWAYS_FLY: &str = "game_mode.always_fly";
         /// Goes through blocks.
@@ -658,8 +656,10 @@ pub mod comp {
     }
 
     /// An entity effect's `SHADER` (`str`, `shaders/entity_effect/<name>.wgsl`, its own name by
-    /// default); a condition's `CALL` (`callback`, `ConditionArgs`).
+    /// default; empty: none), `HAZARDS` (`[Hazard]`, `hazard_at::SELF`: poison) and `MODIFIERS`
+    /// (`[Modifier]`: speed) while it is on; a condition's `CALL` (`callback`, `ConditionArgs`).
     pub const ENTITY_EFFECT_SHADER: &str = "entity_effect.shader";
+    pub const ENTITY_EFFECT_HAZARDS: &str = "entity_effect.hazards";
     pub const CONDITION_CALL: &str = "condition.call";
 
     /// A sound event's: `FILES` (`[str]`, `sounds/<name>.ogg` or `.wav`, one picked at random),
@@ -1295,7 +1295,6 @@ pub mod comp {
         pub const SLOT_GROUPS: &str = "entity.slot_groups";
         pub const INVENTORY_MENU: &str = "entity.inventory_menu";
         pub const NO_GRAVITY: &str = "entity.no_gravity";
-        pub const INVULNERABLE: &str = "entity.invulnerable";
         /// `[Hazard]`: what it does to entities, itself (`hazard_at::SELF`: the sun burning
         /// the undead) or what it squeezes (`CRUSHED`).
         pub const HAZARDS: &str = "entity.hazards";
@@ -3559,8 +3558,9 @@ pub struct Host {
     pub weather_now: unsafe extern "C" fn(world: *mut WorldCtx) -> u32,
     /// The weather the client has now.
     pub client_weather: unsafe extern "C" fn(client: *mut ClientCtx) -> u32,
-    /// Shader effect `effect` on an entity for everyone who sees it (players coming along later
-    /// too) at `strength` for `ticks`; 0 ticks ends it. One at a time: a new one replaces it.
+    /// Effect `effect` on an entity for `ticks` at `strength` (its shader's, for everyone who sees
+    /// it, players coming along later too), with its hazards and modifiers; 0 ticks ends it.
+    /// Several at once, one of each: giving one again replaces it.
     pub entity_effect: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, effect: u32, strength: f32, ticks: u32),
     /// Holds an entity in `pose` (players too: their client follows), or with `u32::MAX` lets
     /// it go back to what its movement makes. `yaw` (radians) keeps it facing that way and still
@@ -4358,6 +4358,9 @@ pub mod attribute {
     pub const FOV: &str = "core:fov";
     /// Whether it may fly, jumping twice (0; 1 in creative): a flying ring is a modifier.
     pub const CAN_FLY: &str = "core:can_fly";
+    /// 1: takes no damage, hunger or air (creative, a block entity, a shield effect) but from
+    /// causes that pierce it (the void); mods read it as `World::outside_survival`.
+    pub const INVULNERABLE: &str = "core:invulnerable";
 }
 
 /// How an attribute modifier applies, like vanilla: ADD amounts sum onto the base, then times

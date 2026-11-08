@@ -73,6 +73,8 @@ pub mod attribute {
     pub static FOV: Attribute = Attribute::named(crate::abi::attribute::FOV);
     /// 1 or more: may fly, jumping twice (0; 1 in creative).
     pub static CAN_FLY: Attribute = Attribute::named(crate::abi::attribute::CAN_FLY);
+    /// 1: no damage, hunger or air but from what pierces it (creative, a shield effect).
+    pub static INVULNERABLE: Attribute = Attribute::named(crate::abi::attribute::INVULNERABLE);
 }
 
 /// An attribute modifier that comes with something (`.modifier(..)` on an item, a pose, an

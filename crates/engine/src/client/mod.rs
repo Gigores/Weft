@@ -2184,12 +2184,18 @@ impl Client {
         } else if comp == shape {
             (e.size, e.look) = shaped();
         } else if comp == effect {
-            e.effect = (bytes.len() >= 16).then(|| {
-                let id = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-                let strength = f32::from_le_bytes(bytes[4..8].try_into().unwrap());
-                let until = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-                (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32)
-            });
+            // Of several, the latest drawn one shows.
+            let shown = |f: &(u32, f32, u64)| {
+                c.game
+                    .entity_effects
+                    .get(f.0 as usize)
+                    .is_some_and(|d| !d.shader.is_empty())
+            };
+            let boxed: Box<[u8]> = bytes.into();
+            e.effect = crate::server::dim::effects_on(Some(&boxed), now)
+                .filter(shown)
+                .last()
+                .map(|(id, strength, until)| (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32));
         }
         if !mine {
             return;
@@ -2219,14 +2225,18 @@ impl Client {
             self.permission = words(bytes).next().map_or(0, u32::from_le_bytes);
         } else if comp == attributes {
             use crate::server::extend as a;
+            let could = self.can_fly();
             for (dst, v) in self.attributes.iter_mut().zip(&f) {
                 *dst = *v;
             }
             self.player.speed_mul = self.attributes[a::MOVEMENT_SPEED as usize] as f64;
             self.player.jump_mul = self.attributes[a::JUMP_STRENGTH as usize] as f64;
             self.player.can_sprint = self.attributes[a::CAN_SPRINT as usize] >= 1.0;
-            // Flight goes with what allowed it (a mode, a ring), which comes a tick after the mode.
-            self.player.flying &= self.can_fly() || self.mode.has(crate::tag_bits::game_mode::ALWAYS_FLY);
+            // Flight goes with what allowed it (a mode, a ring), which comes a tick after the mode;
+            // a mod's flight without it stays.
+            if could && !self.can_fly() && !self.mode.has(crate::tag_bits::game_mode::ALWAYS_FLY) {
+                self.player.flying = false;
+            }
         }
     }
 

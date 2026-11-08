@@ -606,6 +606,30 @@ fn place_structures(def: &crate::content::DimensionDef, seed: u64, pos: IVec3, b
     built
 }
 
+/// The entity effects in an `EFFECT` component still on at `now` (`u64::MAX`: all): effect,
+/// strength, the tick it ends.
+pub fn effects_on(bytes: Option<&Box<[u8]>>, now: u64) -> impl Iterator<Item = (u32, f32, u64)> + '_ {
+    bytes
+        .map_or(&[][..], |b| &b[..])
+        .chunks_exact(16)
+        .map(|b| {
+            let word = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+            (word(0), f32::from_bits(word(4)), u64::from_le_bytes(b[8..16].try_into().unwrap()))
+        })
+        .filter(move |f| now == u64::MAX || f.2 > now)
+}
+
+pub fn encode_effects(list: &[(u32, f32, u64)]) -> Box<[u8]> {
+    list.iter()
+        .flat_map(|(f, s, until)| {
+            f.to_le_bytes()
+                .into_iter()
+                .chain(s.to_le_bytes())
+                .chain(until.to_le_bytes())
+        })
+        .collect()
+}
+
 /// A timer on a dimension: when, the event and its value.
 pub type DimTimer = (u64, u32, Box<[u8]>);
 
@@ -1769,6 +1793,7 @@ impl Dim {
     /// Damage to an entity, or with a negative `amount` healing: one entry for every change of
     /// health that mods may watch or change.
     pub fn damage(&mut self, c: &'static Content, id: u64, amount: f32, source: u64, cause: u32) -> bool {
+        let spared = self.attribute(c, id, super::extend::INVULNERABLE, false) >= 1.0;
         let Some(e) = self.entities.get(id) else { return false };
         let k = &c.game.entities[e.kind as usize];
         if !e.alive() || amount.is_nan() {
@@ -1790,7 +1815,7 @@ impl Dim {
         // A rule may turn the cause off (`core:damage.fall`).
         let off = c.game.damage_rules[cause as usize].is_some_and(|r| crate::config::get(r) == 0.0);
         // The void gets through everything, or /clear would silently fail.
-        if immune || off || (!def.has(df::PIERCES_INVULNERABLE) && (k.is(ef::INVULNERABLE) || e.mode.invulnerable())) {
+        if immune || off || (!def.has(df::PIERCES_INVULNERABLE) && spared) {
             return false;
         }
         let recovering = e.hurt_cooldown > 0 && !def.has(df::IGNORES_COOLDOWN);
@@ -2416,6 +2441,7 @@ impl Dim {
         // Physics only reads blocks and bodies and writes its own entity, so entities move in
         // parallel; damage is applied afterwards in list order to stay deterministic.
         let inventories = &self.entities.inventories;
+        let comps = &self.entities.comps;
         let hits: Vec<TickHit> = self
             .entities
             .list
@@ -2469,6 +2495,18 @@ impl Dim {
                         .map(|h| (0, *h)),
                 );
                 met.extend(crushed.drain(..).map(|h| (0, h)));
+                for (f, ..) in effects_on(comps.get(&(e.id, c.game.fields.effect)), u64::MAX) {
+                    let of = c
+                        .game
+                        .entity_effects
+                        .get(f as usize)
+                        .map_or(&[][..], |f| &f.hazards[..]);
+                    met.extend(
+                        of.iter()
+                            .filter(|h| h.at == abi::hazard_at::SELF)
+                            .map(|h| (0, *h)),
+                    );
+                }
                 if e.mode.has(crate::tag_bits::game_mode::NOCLIP) {
                     met.clear();
                 }

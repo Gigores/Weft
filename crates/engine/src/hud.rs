@@ -1073,6 +1073,21 @@ pub fn item_tooltip(lang: &Lang, input: &crate::input::Input, stack: weft_abi::I
         let key = text::lang_key("tagged", &c.components.names[comp as usize]);
         group(&key, Some(comp), &mut out);
     }
+    // What it gives, worn or in hand, with each attribute's name (`attribute.<name>`).
+    for m in c
+        .source_mods
+        .items
+        .get(&stack.item)
+        .into_iter()
+        .flatten()
+        .filter(|m| m.op == weft_abi::attr_op::ADD)
+    {
+        let name = &c.game.attributes[m.attr as usize].name;
+        let key = text::lang_key("attribute", name);
+        let attr = if lang.has(&key) { text::Arg::Key(key) } else { text::Arg::Text(name.clone()) };
+        let template = lang.get(if m.worn { "tooltip.modifier.worn" } else { "tooltip.modifier" });
+        line(template, &[text::Arg::Text(format!("{:+}", m.amount)), attr], None, &mut out);
+    }
     let max = c.durability(&stack);
     if max > 0 {
         let damage = crate::stack::damage(&stack);

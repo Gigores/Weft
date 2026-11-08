@@ -100,11 +100,6 @@ impl GameMode {
         let n = crate::content::try_content().map_or(3, |c| c.game.game_modes.len());
         if (v as usize) < n { GameMode(v as u16) } else { GameMode::SURVIVAL }
     }
-
-    /// Takes no damage and needs no food.
-    pub fn invulnerable(self) -> bool {
-        self.has(crate::tag_bits::game_mode::INVULNERABLE)
-    }
 }
 
 #[inline]

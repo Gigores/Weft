@@ -281,9 +281,9 @@ impl World {
     pub fn creative(&self, id: u64) -> bool {
         self.game_mode(id) == abi::game_mode::CREATIVE
     }
-    /// A player whose mode spares it damage, hunger and air (creative, spectator).
+    /// What is spared damage, hunger and air (creative, spectator, `attribute::INVULNERABLE`).
     pub fn outside_survival(&self, id: u64) -> bool {
-        crate::comps::game_mode::INVULNERABLE.on_id(self.game_mode(id))
+        self.attribute(id, &crate::attribute::INVULNERABLE) >= 1.0
     }
     /// The id of its game mode (`game_modes::CREATIVE.id()`): survival for what isn't a player.
     pub fn game_mode(&self, id: u64) -> u32 {
@@ -351,7 +351,7 @@ impl World {
         unsafe { (host().weather_now)(self.raw()) }
     }
 
-    /// Shader effect `effect` on an entity for everyone who sees it, at `strength` (0..1) for
+    /// Effect `effect` on an entity for everyone who sees it, at `strength` (0..1) for
     /// `ticks` (0 ends it): `w.entity_effect(id, &entity_effects::GLOW, 1.0, 200)`, or one of
     /// your own (`Registry::entity_effect`). A new one replaces the last.
     pub fn entity_effect(&self, id: u64, effect: impl Into<crate::Id<crate::EntityEffect>>, strength: f32, ticks: u32) {
@@ -846,7 +846,7 @@ impl EntityBuilder<'_> {
     }
     /// Takes no damage (no hurt flash, health stays); `/clear` and the void still remove it.
     pub fn invulnerable(self) -> Self {
-        self.tag(abi::comp::entity::INVULNERABLE)
+        self.modifier(crate::Modifier::new(&crate::attribute::INVULNERABLE, abi::attr_op::SET, 1.0))
     }
     /// Neither pushes nor is pushed by other entities (ghosts, projectiles).
     pub fn unpushable(self) -> Self {
@@ -1496,7 +1496,7 @@ impl Registry {
         drop(f(b
             .no_egg()
             .tag(abi::comp::entity::NO_GRAVITY)
-            .tag(abi::comp::entity::INVULNERABLE)
+            .invulnerable()
             .set_text(&comps::entity::BLOCK, block.name())));
     }
 

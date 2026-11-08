@@ -649,7 +649,9 @@ fn engine_components() -> Vec<RawEntry> {
     let mut shape = vec![0u8; 12];
     shape.extend(u32::MAX.to_le_bytes());
     let energy = (<abi::Energy as abi::Schema>::SCHEMA, cf::SAVE | cf::SYNC_MENU, vec![0; size_of::<abi::Energy>()]);
-    let mut all = vec![decl(abi::comp::CONTENTS, "bytes"), decl(abi::comp::LAYERS, "bytes")];
+    // What items, entity kinds, poses and entity effects give (`content::SourceMods`).
+    let modifiers = <Vec<abi::Modifier> as abi::data::Data>::schema();
+    let mut all = vec![decl(abi::comp::CONTENTS, "bytes"), decl(abi::comp::LAYERS, "bytes"), decl(abi::comp::MODIFIERS, &modifiers)];
     // Variable length (no bytes): attribute modifiers, timers, a block entity's own name (a
     // renamed chest).
     for (name, schema, flags, default) in [
@@ -1179,6 +1181,7 @@ fn engine_game_modes() -> Vec<RawEntry> {
             .set(abi::comp::MODIFIERS, modifiers)
     };
     let flies = || modifier(abi::attribute::CAN_FLY, abi::attr_op::ADD, 1.0);
+    let spared = || modifier(abi::attribute::INVULNERABLE, abi::attr_op::SET, 1.0);
     use crate::tag_bits::game_mode as f;
     // Unseen by mobs outside survival; creative reaches further.
     let unseen = || modifier(abi::attribute::VISIBILITY, abi::attr_op::MULTIPLY_TOTAL, -1.0);
@@ -1186,18 +1189,19 @@ fn engine_game_modes() -> Vec<RawEntry> {
         mode("core:survival", &[], Vec::new()),
         mode(
             "core:creative",
-            &[f::INSTANT_BREAK, f::NO_COSTS, f::INVULNERABLE, f::CREATIVE_INVENTORY],
+            &[f::INSTANT_BREAK, f::NO_COSTS, f::CREATIVE_INVENTORY],
             vec![
                 modifier(abi::attribute::BLOCK_REACH, abi::attr_op::ADD, 0.5),
                 modifier(abi::attribute::ENTITY_REACH, abi::attr_op::ADD, 2.0),
                 unseen(),
                 flies(),
+                spared(),
             ],
         ),
         mode(
             "core:spectator",
-            &[f::INVULNERABLE, f::ALWAYS_FLY, f::NOCLIP, f::NO_INTERACT, f::HIDDEN, f::NO_HUD, f::NO_COSTS],
-            vec![unseen(), flies()],
+            &[f::ALWAYS_FLY, f::NOCLIP, f::NO_INTERACT, f::HIDDEN, f::NO_HUD, f::NO_COSTS],
+            vec![unseen(), flies(), spared()],
         ),
     ]
 }
@@ -1235,7 +1239,11 @@ fn bake_precipitation(e: &Entry) -> PrecipitationDef {
 #[derive(Clone, Debug)]
 pub struct EntityEffectDef {
     pub name: String,
+    /// Empty: none.
     pub shader: String,
+    /// As registered, then resolved at freeze.
+    pub raw_hazards: Vec<abi::Hazard>,
+    pub hazards: Vec<crate::content::Hazard>,
 }
 
 /// What natural spawning and despawning know of entities by category.
@@ -1302,6 +1310,7 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::MINING_SPEED, 1.0, 0.0, 1024.0),
         (a::FOV, 1.0, 0.05, 8.0),
         (a::CAN_FLY, 0.0, 0.0, 1.0),
+        (a::INVULNERABLE, 0.0, 0.0, 1.0),
     ]
     .iter()
     .map(|&(name, default, min, max)| {
@@ -1572,7 +1581,15 @@ fn engine_entities() -> Vec<RawEntry> {
     let thing = |name: &str, width: f32, height: f32| {
         kind(name, width, height)
             .set(k::TEXTURE, String::new())
-            .tag(k::INVULNERABLE)
+            .set(
+                abi::comp::MODIFIERS,
+                vec![abi::Modifier {
+                    attribute: abi::attribute::INVULNERABLE.into(),
+                    op: abi::attr_op::SET,
+                    amount: 1.0,
+                    ..Default::default()
+                }],
+            )
             .tag(k::NO_FALL_DAMAGE)
             .tag(k::UNPUSHABLE)
     };
@@ -1977,6 +1994,8 @@ pub fn freeze(
                 .text(abi::comp::ENTITY_EFFECT_SHADER)
                 .unwrap_or(&e.name)
                 .to_string(),
+            raw_hazards: e.or(abi::comp::ENTITY_EFFECT_HAZARDS, Vec::new()),
+            hazards: Vec::new(),
         });
     (g.conditions, g.condition_names) = tables.bake(kind(ek::CONDITION), ek::CONDITION, mod_name, errors, |e, _| ConditionDef {
         name: e.name.clone(),

@@ -2014,19 +2014,16 @@ unsafe extern "C" fn entity_effect(w: *mut abi::WorldCtx, id: u64, effect: u32, 
             return;
         }
         let comp = c.game.fields.effect;
-        let bytes: Vec<u8> = if ticks == 0 {
-            Vec::new()
-        } else {
-            let until = d.time + ticks as u64;
-            [effect.to_le_bytes(), strength.clamp(0.0, 1.0).to_le_bytes()]
-                .concat()
-                .into_iter()
-                .chain(until.to_le_bytes())
-                .collect()
-        };
+        let mut list: Vec<_> = crate::server::dim::effects_on(d.entities.comps.get(&(id, comp)), d.time)
+            .filter(|f| f.0 != effect)
+            .collect();
+        if ticks > 0 {
+            list.push((effect, strength.clamp(0.0, 1.0), d.time + ticks as u64));
+        }
         d.entities
             .comps
-            .insert((id, comp), bytes.into_boxed_slice());
+            .insert((id, comp), crate::server::dim::encode_effects(&list));
+        d.entities.dirty_comp.insert((id, comp));
     }
 }
 

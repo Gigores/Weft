@@ -466,7 +466,7 @@ r.edit(&poses::CROUCH).speed(0.4);
 ```
 
 ## Game mode
-A set of abilities. `r.game_mode(&M)`, the engine's in `game_modes::*`. `comps::game_mode::MODIFIERS` (`[Modifier]`, `.modifier` pushes; flight is `attribute::CAN_FLY`); tags `game_mode.instant_break`, `no_break`, `no_place`, `no_costs`, `invulnerable`, `always_fly`, `noclip`, `no_interact`, `hidden`, `no_hud`, `creative_inventory` (presets `.breaks`, `.flight`, `.no_placing`...).
+A set of abilities. `r.game_mode(&M)`, the engine's in `game_modes::*`. `comps::game_mode::MODIFIERS` (`[Modifier]`, `.modifier` pushes; flight is `attribute::CAN_FLY`, no damage, hunger or air `attribute::INVULNERABLE`, `.invulnerable()`); tags `game_mode.instant_break`, `no_break`, `no_place`, `no_costs`, `always_fly`, `noclip`, `no_interact`, `hidden`, `no_hud`, `creative_inventory` (presets `.breaks`, `.flight`, `.no_placing`...).
 
 ```rust
 r.edit(&game_modes::SURVIVAL).modifier(&attribute::MAX_HEALTH, abi::attr_op::ADD, 4.0);
@@ -480,10 +480,12 @@ r.edit(&damage_causes::FALL).death_message("death.mymod.fell");
 ```
 
 ## Entity effect
-A shader drawn over a mob for a while (`w.entity_effect`). `r.entity_effect(&E)`. `comps::entity_effect::SHADER` (`str`, its own name by default; `.shader`).
+What is on a mob for a while (`w.entity_effect(id, &E, strength, ticks)`), several at once: a shader drawn over it, what it does to it and what it gives it. `r.entity_effect(&E)`. `comps::entity_effect::SHADER` (`str`, its own name by default; `.shader`, `.unseen()` for none), `HAZARDS` (`.hazard(Hazard::own(..))`), `MODIFIERS` (`.modifier(..)`).
 
 ```rust
 r.edit(&entity_effects::HURT).shader(&Shader::named("mymod:hurt_blue"));
+r.entity_effect(&POISON).unseen().hazard(Hazard::own(1.0, &MAGIC).every(25));
+r.entity_effect(&SWIFTNESS).modifier(Modifier::new(&attribute::MOVEMENT_SPEED, attr_op::MULTIPLY_BASE, 0.2));
 ```
 
 ## Text place

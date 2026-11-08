@@ -274,12 +274,19 @@ impl Components {
         (comp as usize) < self.names.len() && self.tables[kind].has(entry, comp)
     }
 
-    /// Value bytes, if the entry has the component and it carries a value.
+    /// Value bytes, if the entry has the component and it carries a value; of a list, its packed
+    /// items (the table holds a `Slice` to them).
     pub fn bytes(&self, kind: usize, entry: u32, comp: u32) -> Option<&[u8]> {
         if comp as usize >= self.names.len() {
             return None;
         }
-        self.tables[kind].value(entry, comp)
+        let v = self.tables[kind].value(entry, comp)?;
+        let schema = &self.schemas[comp as usize];
+        if schema.starts_with('<') || abi::data::list_of(schema).is_some() {
+            let s = unsafe { std::ptr::read_unaligned(v.as_ptr() as *const abi::Slice<u8>) };
+            return Some(unsafe { s.as_slice() });
+        }
+        Some(v)
     }
 
     /// Typed read; the caller knows the schema (engine built-ins).

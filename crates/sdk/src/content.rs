@@ -423,6 +423,18 @@ impl EntityEffectBuilder<'_> {
         let name = shader.name().to_string();
         self.set_text(&crate::comps::entity_effect::SHADER, &name)
     }
+    /// Nothing drawn: an effect only of hazards and modifiers.
+    pub fn unseen(self) -> Self {
+        self.set_text(&crate::comps::entity_effect::SHADER, "")
+    }
+    /// What it does to its entity while on (`Hazard::own(1.0, &MAGIC).every(25)`: poison).
+    pub fn hazard(self, h: crate::Hazard) -> Self {
+        self.push(&crate::comps::entity_effect::HAZARDS, h.0)
+    }
+    /// A modifier its entity has while it is on (`Modifier::add(&attribute::MOVEMENT_SPEED, 0.2)`).
+    pub fn modifier(self, m: crate::Modifier) -> Self {
+        self.push(&crate::comps::entity_effect::MODIFIERS, m.0)
+    }
 }
 
 /// What falls from the sky, rain's numbers unless set.
@@ -684,9 +696,9 @@ impl GameModeBuilder<'_> {
     pub fn no_costs(self) -> Self {
         self.tag(abi::comp::game_mode::NO_COSTS)
     }
-    /// No damage, hunger or air.
+    /// No damage, hunger or air (`attribute::INVULNERABLE` 1).
     pub fn invulnerable(self) -> Self {
-        self.tag(abi::comp::game_mode::INVULNERABLE)
+        self.modifier(&crate::attribute::INVULNERABLE, abi::attr_op::SET, 1.0)
     }
     /// Through blocks.
     pub fn noclip(self) -> Self {

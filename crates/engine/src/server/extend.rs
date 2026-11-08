@@ -210,6 +210,7 @@ pub const ENTITY_REACH: u32 = 7;
 pub const MINING_SPEED: u32 = 8;
 pub const FOV: u32 = 9;
 pub const CAN_FLY: u32 = 10;
+pub const INVULNERABLE: u32 = 11;
 
 impl Dim {
     /// A player's base of an attribute that is a rule is the rule's (`comp::attribute::RULE`).
@@ -346,6 +347,19 @@ impl Dim {
         let Some(e) = self.entities.get(id) else { return };
         let (kind, pose, pos, mode, body) = (e.kind, e.pose, e.pos, e.mode, e.body());
         let mut from: Vec<SourceMod> = s.kinds.get(&kind).cloned().unwrap_or_default();
+        let comp = c.game.fields.effect;
+        let on: Vec<_> = super::dim::effects_on(self.entities.comps.get(&(id, comp)), self.time).collect();
+        if on.len() * 16 != self.entities.comps.get(&(id, comp)).map_or(0, |b| b.len()) {
+            if on.is_empty() {
+                self.entities.comps.remove(&(id, comp));
+            } else {
+                self.entities
+                    .comps
+                    .insert((id, comp), super::dim::encode_effects(&on));
+            }
+            self.entities.dirty_comp.insert((id, comp));
+        }
+        from.extend(on.iter().flat_map(|f| s.effects.get(&f.0)).flatten());
         from.extend(s.modes.get(&(mode.0 as u32)).into_iter().flatten());
         from.extend(s.poses.get(&(pose.0 as u32)).into_iter().flatten());
         let held = self.entities.held(id).item;

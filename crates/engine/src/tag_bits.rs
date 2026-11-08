@@ -20,12 +20,12 @@ tag_bits! {
     camera of camera { BODY, HAND, HUD, EFFECTS, CLIP, SOLID, CYCLE, DETACHED, AIM, NO_INTERACT }
     damage of damage_cause { BYPASSES_ARMOR, PIERCES_INVULNERABLE, IGNORES_COOLDOWN, BURNING, NO_KNOCKBACK, SILENT }
     game_mode of game_mode {
-        INSTANT_BREAK, NO_BREAK, NO_PLACE, NO_COSTS, INVULNERABLE, ALWAYS_FLY, NOCLIP, NO_INTERACT, HIDDEN, NO_HUD,
+        INSTANT_BREAK, NO_BREAK, NO_PLACE, NO_COSTS, ALWAYS_FLY, NOCLIP, NO_INTERACT, HIDDEN, NO_HUD,
         CREATIVE_INVENTORY,
     }
     particle of particle { COLLIDE, FULLBRIGHT, TRANSLUCENT, SHRINK }
     config of config { RESTART_REQUIRED }
-    entity of entity { NO_GRAVITY, INVULNERABLE, SWIMS, SOLID, KINEMATIC, RIDERS_FALL, WEARS } [
+    entity of entity { NO_GRAVITY, SWIMS, SOLID, KINEMATIC, RIDERS_FALL, WEARS } [
         /// What every kind does unless a tag in `OFF` takes it away.
         pub const FALL_DAMAGE: u32 = 1 << 20;
         pub const PUSHABLE: u32 = 1 << 21;

@@ -159,6 +159,8 @@ pub struct SourceMod {
 /// What game modes, items, entity kinds and poses give by their `MODIFIERS`, by id.
 #[derive(Default)]
 pub struct SourceMods {
+    /// Of entity effects, by id, while on.
+    pub effects: FxHashMap<u32, Vec<SourceMod>>,
     pub modes: FxHashMap<u32, Vec<SourceMod>>,
     pub items: FxHashMap<u32, Vec<SourceMod>>,
     pub kinds: FxHashMap<u32, Vec<SourceMod>>,
@@ -167,7 +169,7 @@ pub struct SourceMods {
 
 impl SourceMods {
     pub fn is_empty(&self) -> bool {
-        self.modes.is_empty() && self.items.is_empty() && self.kinds.is_empty() && self.poses.is_empty()
+        self.modes.is_empty() && self.items.is_empty() && self.kinds.is_empty() && self.poses.is_empty() && self.effects.is_empty()
     }
 }
 
@@ -1927,6 +1929,12 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
         &mod_name,
         &mut errors,
     );
+    // The kinds frozen with the game (poses, entity effects ...) get their tables before what
+    // reads them.
+    for (kind, entries) in &tables.0 {
+        let mut matcher = |text: &str, c: &Components| matchers.add(text, &block_names, &block_defs, c);
+        components.add_table(*kind as usize, entries, &mut matcher, &mut errors);
+    }
     resolve_hazards(&mut states, raw_hazards, &mut game, &mut dim_defs, &components, &mut conds, &mut errors);
     let source_mods = resolve_source_mods(&game, &components, item_defs.len(), &mut conds, &mut errors);
     let conds = crate::conditions::compile_all(
@@ -1934,10 +1942,6 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
         &crate::conditions::Look { game: &game, block_names: &block_names, blocks: &block_defs, components: &components },
         &mut errors,
     );
-    for (kind, entries) in &tables.0 {
-        let mut matcher = |text: &str, c: &Components| matchers.add(text, &block_names, &block_defs, c);
-        components.add_table(*kind as usize, entries, &mut matcher, &mut errors);
-    }
     let ref_lists = std::mem::take(&mut *ref_lists.borrow_mut());
     game.item_model_for_stack = item_looks;
     link_particles(&mut game, &mut textures);
@@ -3165,6 +3169,9 @@ fn resolve_hazards(
     for k in &mut game.entities {
         k.hazards = resolve(std::mem::take(&mut k.raw_hazards), conds);
     }
+    for f in &mut game.entity_effects {
+        f.hazards = resolve(std::mem::take(&mut f.raw_hazards), conds);
+    }
     for d in dims.iter_mut() {
         d.hazards = resolve(std::mem::take(&mut d.raw_hazards), conds);
         if d.min_cube_y != i32::MIN {
@@ -3232,6 +3239,7 @@ fn resolve_source_mods(
     of(comps::ITEM, items, &mut out.items);
     of(comps::ENTITY, game.entities.len(), &mut out.kinds);
     of(abi::entry_kind::POSE as usize, game.poses.len(), &mut out.poses);
+    of(abi::entry_kind::ENTITY_EFFECT as usize, game.entity_effects.len(), &mut out.effects);
     out
 }
 

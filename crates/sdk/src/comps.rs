@@ -59,7 +59,6 @@ pub mod game_mode {
     pub static NO_BREAK: Tag<GameMode> = Tag::named(g::NO_BREAK);
     pub static NO_PLACE: Tag<GameMode> = Tag::named(g::NO_PLACE);
     pub static NO_COSTS: Tag<GameMode> = Tag::named(g::NO_COSTS);
-    pub static INVULNERABLE: Tag<GameMode> = Tag::named(g::INVULNERABLE);
     pub static ALWAYS_FLY: Tag<GameMode> = Tag::named(g::ALWAYS_FLY);
     pub static NOCLIP: Tag<GameMode> = Tag::named(g::NOCLIP);
     pub static NO_INTERACT: Tag<GameMode> = Tag::named(g::NO_INTERACT);
@@ -103,6 +102,8 @@ pub mod entity_effect {
     use crate::kind::EntityEffect;
     use crate::{Component, Text};
     pub static SHADER: Component<Text, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_SHADER);
+    pub static HAZARDS: Component<Vec<crate::abi::Hazard>, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_HAZARDS);
+    pub static MODIFIERS: Component<Vec<crate::abi::Modifier>, EntityEffect> = Component::named(crate::abi::comp::MODIFIERS);
 }
 
 /// What a sound event is made of (`abi::comp::sound`).
