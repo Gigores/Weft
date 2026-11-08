@@ -155,7 +155,10 @@ pub fn register(r: &mut Registry) {
         )
         // Biomes shape the land through their climate, not their borders, so nothing seams:
         // the cold flattens hills into tundra, deserts get dunes.
-        .feature(preset::hills(16.0, 110.0).mask(Expr::temperature().ramp(-0.35, -0.6).not()))
+        .feature(
+            Feature::new(Expr::fbm(fixed::salt::HILLS, 110.0, 7) * Expr::blocks(16.0))
+                .mask(Expr::temperature().ramp(-0.35, -0.6).not()),
+        )
         .feature(
             preset::dunes(4.0, 26.0).mask(
                 Expr::temperature()
