@@ -141,34 +141,43 @@ pub fn write(c: &Content, out: &mut Vec<u8>, list: &[ToSave<'_>]) {
     }
 }
 
-/// Marks the trailer of a cube's saved data that holds its pending block ticks: (position in the
-/// cube, ticks left) pairs, their count, this. Older saves simply don't end in it.
-const TICKS_MAGIC: u32 = 0x4B43_4954;
+/// Marks the trailer of a cube's saved data that holds the timers on its blocks: each the block,
+/// then as `dim::push_timer` writes it; their length in bytes, this.
+const TIMERS_MAGIC: u32 = 0x5352_4D54;
 
-pub fn append_ticks(out: &mut Vec<u8>, ticks: &[(u16, u32)]) {
-    for (at, left) in ticks {
-        out.extend_from_slice(&at.to_le_bytes());
-        out.extend_from_slice(&left.to_le_bytes());
+pub fn append_timers(out: &mut Vec<u8>, c: &Content, timers: &[super::space::BlockTimer]) {
+    let start = out.len();
+    for (at, p, event, data) in timers {
+        p.iter()
+            .for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
+        super::dim::push_timer(out, *at, &c.game.events[*event as usize].name, data);
     }
-    out.extend_from_slice(&(ticks.len() as u32).to_le_bytes());
-    out.extend_from_slice(&TICKS_MAGIC.to_le_bytes());
+    out.extend_from_slice(&((out.len() - start) as u32).to_le_bytes());
+    out.extend_from_slice(&TIMERS_MAGIC.to_le_bytes());
 }
 
-pub fn read_ticks(data: &[u8]) -> Vec<(u16, u32)> {
+/// The timers `append_timers` wrote, but those of events no mod has now.
+pub fn read_timers(c: &Content, data: &[u8]) -> Vec<super::space::BlockTimer> {
     let word = |at: usize| {
         data.get(at..at + 4)
             .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
     };
     let Some(end) = data.len().checked_sub(8) else { return Vec::new() };
-    if word(end + 4) != Some(TICKS_MAGIC) {
+    if word(end + 4) != Some(TIMERS_MAGIC) {
         return Vec::new();
     }
-    let n = word(end).unwrap_or(0) as usize;
-    let Some(start) = end.checked_sub(n * 6) else { return Vec::new() };
-    data[start..end]
-        .chunks_exact(6)
-        .map(|p| (u16::from_le_bytes([p[0], p[1]]), u32::from_le_bytes([p[2], p[3], p[4], p[5]])))
-        .collect()
+    let Some(mut at) = end.checked_sub(word(end).unwrap_or(0) as usize) else { return Vec::new() };
+    let mut out = Vec::new();
+    while at + 12 < end {
+        let p = [0, 1, 2].map(|i| word(at + i * 4).unwrap_or(0) as i32);
+        let Some((len, (until, name, value))) = super::dim::read_timer(&data[at + 12..end]) else { break };
+        at += 12 + len;
+        match c.game.event_names.get(&name) {
+            Some(&e) => out.push((until, p, e, value.into())),
+            None => log::warn!("a timer at {p:?} for event {name}, which no mod has now"),
+        }
+    }
+    out
 }
 
 pub fn read(c: &Content, data: &[u8]) -> Vec<Saved> {

@@ -384,6 +384,8 @@ pub struct Game {
     pub modifiers_comp: u32,
     /// `TIMERS` as an entity component.
     pub timers_comp: u32,
+    /// `abi::event::BLOCK_TICK`.
+    pub block_tick: u32,
     /// (owner, callback) run once per tick in every region, in mod order.
     pub world_ticks: Vec<(ModId, Callback)>,
     /// `abi::comp::NAME` as an entity component.
@@ -1309,6 +1311,7 @@ fn engine_attributes() -> Vec<RawEntry> {
 pub const ENGINE_EVENTS: &[(&str, &str, u32)] = {
     use abi::Schema;
     &[
+        (abi::event::BLOCK_TICK, "[i32;3]", 12),
         (abi::action::BREAK_BLOCK, abi::BlockChange::SCHEMA, size_of::<abi::BlockChange>() as u32),
         (abi::action::PLACE_BLOCK, abi::BlockChange::SCHEMA, size_of::<abi::BlockChange>() as u32),
         (abi::action::DIE, abi::Death::SCHEMA, size_of::<abi::Death>() as u32),
@@ -2027,6 +2030,7 @@ pub fn freeze(
         .enumerate()
         .map(|(i, e)| (e.name.clone(), i as u32))
         .collect();
+    g.block_tick = g.event_names[abi::event::BLOCK_TICK];
     g.events = events;
     interceptors.sort_by_key(|h| order(h.0));
     for (owner, name, cb) in interceptors {

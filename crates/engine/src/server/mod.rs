@@ -397,6 +397,13 @@ impl Server {
                     d.weather_until = *until;
                 }
             }
+            for (name, at, event, data) in &s.meta.timers {
+                if let (Some(&i), Some(&e)) = (c.dim_names.get(name), c.game.event_names.get(event)) {
+                    dims[i as usize]
+                        .timers
+                        .push((*at, e, data.as_slice().into()));
+                }
+            }
             for (name, o) in &s.meta.day_offsets {
                 if let Some(&i) = c.dim_names.get(name) {
                     dims[i as usize].day_offset = *o;
@@ -560,6 +567,7 @@ impl Server {
                 r.gizmo_groups = groups.clone();
             }
             d.time += 1;
+            d.tick_timers(c);
             if c.dims[d.id as usize].has_weather() {
                 d.tick_weather(c);
             }
@@ -921,13 +929,13 @@ impl Server {
                 for pos in cubes {
                     if let Some(cube) = r.space.cubes.get(&pos) {
                         let mut bytes = entities_in(c, r, pos);
-                        let ticks = r.ticks_in(pos);
+                        let ticks = r.timers_in(pos);
                         let holds = r
                             .entities
                             .list
                             .iter()
                             .any(|e| e.saved_with_cube() && cube_of(e.pos.floor().as_ivec3()) == pos);
-                        persist::append_ticks(&mut bytes, &ticks);
+                        persist::append_timers(&mut bytes, c, &ticks);
                         s.save(c, r.id, pos, cube, &r.around(pos, |_| None), &bytes);
                         if holds || !ticks.is_empty() {
                             r.on_disk.insert(pos);
@@ -955,6 +963,15 @@ impl Server {
             .iter()
             .filter(|d| d.weather_until != 0)
             .map(|d| (c.dims[d.id as usize].name.clone(), c.game.weathers[d.weather as usize].name.clone(), d.weather_until))
+            .collect();
+        s.meta.timers = self
+            .dims
+            .iter()
+            .flat_map(|d| {
+                d.timers
+                    .iter()
+                    .map(|(at, e, data)| (c.dims[d.id as usize].name.clone(), *at, c.game.events[*e as usize].name.clone(), data.to_vec()))
+            })
             .collect();
         s.meta.edits = self
             .dims

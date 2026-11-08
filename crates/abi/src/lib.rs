@@ -3163,10 +3163,11 @@ pub struct Host {
     /// `cb` (`WorldTickArgs`) once per tick in every region of every dimension, for logic that
     /// isn't one entity's or block's (a dimension's loaded parts are regions run in parallel).
     pub reg_world_tick: unsafe extern "C" fn(reg: *mut Registrar, cb: Callback),
-    /// In `ticks` ticks, `event` fires with `data` (one value of its type), and the timer is
-    /// saved with `entity` until then. One per entity and event: a second call moves it. A
-    /// timer of a gone entity never fires.
-    pub emit_after: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, ticks: u32, event: u32, data: Slice<u8>),
+    /// In `ticks` ticks `event` fires with `data` (one value of its type). The timer is saved with
+    /// its holder: an entity (gone with it), a block (with its cube, `event::BLOCK_TICK` being the
+    /// block's own tick), or `NONE` for the dimension. Time an unloaded holder misses counts, so a
+    /// timer due while away fires when it loads. A stack (`HELD`) doesn't tick, so it can't hold one.
+    pub timer: unsafe extern "C" fn(world: *mut WorldCtx, holder: *const Holder, ticks: u32, event: u32, data: Slice<u8>),
     /// Chat command `/name`, arguments described by `usage` (see the engine's command syntax);
     /// `cb` gets `CommandArgs` with one value per named parameter.
     /// `client` non-zero: it runs on the client that types it, never sent to the server, `cb` getting
@@ -3223,7 +3224,6 @@ pub struct Host {
     pub part_add: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos, state: u32) -> u32,
     /// Replaces a part of a cell with another state, air taking it out; 0 if it isn't there.
     pub part_replace: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos, old: u32, new: u32) -> u32,
-    pub schedule_tick: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos, delay: u32),
     pub game_time: unsafe extern "C" fn(world: *mut WorldCtx) -> u64,
     /// Deterministic per-world random stream.
     pub random: unsafe extern "C" fn(world: *mut WorldCtx) -> u64,
@@ -4044,6 +4044,9 @@ pub struct SystemArgs {
 
 /// Engine events (`Host::reg_event_handler`); values are the structs named in each line.
 pub mod event {
+    /// `[i32; 3]`, the block: its tick (liquids flowing, block rules, `block.on_scheduled`), when a
+    /// timer on a block with this event is due (`Host::timer`).
+    pub const BLOCK_TICK: &str = "core:block_tick";
     /// `PlayerEvent`.
     pub const PLAYER_JOINED: &str = "core:player_joined";
     /// `PlayerEvent`: a dead player came back, at the spawn point with fresh components (but the

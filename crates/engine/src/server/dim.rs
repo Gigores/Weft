@@ -10,9 +10,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use weft_abi::{self as abi, ItemStack, block_flags as bf, damage_cause as damage};
 
 use super::entity::{Entities, Entity, Motion, Told, step};
-use super::space::Space;
+use super::space::{BlockTimer, Space};
 use crate::components as comps;
-use crate::content::{AIR, Content, Then, When};
+use crate::content::{AIR, Content, Then, When, content};
 use crate::host::{self, CallCtx};
 use crate::world::cube::VOLUME;
 use crate::world::light::{self, CubeMap, Lighter};
@@ -171,6 +171,8 @@ pub struct Dim {
     /// tick, so mods can skip drawing nobody sees).
     pub gizmos: Vec<crate::net::GizmoShape>,
     pub gizmo_groups: Arc<[String]>,
+    /// Timers set on the dimension this tick (`Host::timer` with no holder), for `DimSet` to keep.
+    pub dim_timers: Vec<DimTimer>,
 }
 
 fn physics_body<'a>(c: &Content, e: &Entity, built: Option<&'a Box<Space>>, delta: DVec3) -> Option<crate::physics::Body<'a>> {
@@ -600,6 +602,9 @@ fn place_structures(def: &crate::content::DimensionDef, seed: u64, pos: IVec3, b
     built
 }
 
+/// A timer on a dimension: when, the event and its value.
+pub type DimTimer = (u64, u32, Box<[u8]>);
+
 /// Appends a timer: fire time, event name and value, as the `TIMERS` component keeps them.
 pub fn push_timer(out: &mut Vec<u8>, until: u64, event: &str, data: &[u8]) {
     out.extend_from_slice(&until.to_le_bytes());
@@ -611,20 +616,22 @@ pub fn push_timer(out: &mut Vec<u8>, until: u64, event: &str, data: &[u8]) {
 
 pub fn read_timers(mut b: &[u8]) -> Vec<(u64, String, Vec<u8>)> {
     let mut out = Vec::new();
-    let take = |b: &mut &[u8], n: usize| -> Option<Vec<u8>> {
-        let (head, tail) = (b.get(..n)?.to_vec(), b.get(n..)?);
-        *b = tail;
-        Some(head)
-    };
-    loop {
-        let Some(until) = take(&mut b, 8).map(|v| u64::from_le_bytes(v.try_into().unwrap())) else { break };
-        let Some(n) = take(&mut b, 2).map(|v| u16::from_le_bytes([v[0], v[1]]) as usize) else { break };
-        let Some(name) = take(&mut b, n).map(|v| String::from_utf8_lossy(&v).into_owned()) else { break };
-        let Some(n) = take(&mut b, 2).map(|v| u16::from_le_bytes([v[0], v[1]]) as usize) else { break };
-        let Some(data) = take(&mut b, n) else { break };
-        out.push((until, name, data));
+    while let Some((len, t)) = read_timer(b) {
+        out.push(t);
+        b = &b[len..];
     }
     out
+}
+
+/// One timer off the front of `b`, with the bytes it took.
+pub fn read_timer(b: &[u8]) -> Option<(usize, (u64, String, Vec<u8>))> {
+    let until = u64::from_le_bytes(b.get(..8)?.try_into().ok()?);
+    let n = u16::from_le_bytes(b.get(8..10)?.try_into().ok()?) as usize;
+    let name = String::from_utf8_lossy(b.get(10..10 + n)?).into_owned();
+    let at = 10 + n;
+    let m = u16::from_le_bytes(b.get(at..at + 2)?.try_into().ok()?) as usize;
+    let data = b.get(at + 2..at + 2 + m)?.to_vec();
+    Some((at + 2 + m, (until, name, data)))
 }
 
 /// Face connectivity through blocks that do not hide what is behind them.
@@ -801,6 +808,7 @@ impl Dim {
             section_cubes: FxHashMap::default(),
             gizmos: Vec::new(),
             gizmo_groups: Arc::from([]),
+            dim_timers: Vec::new(),
         }
     }
 
@@ -1005,7 +1013,7 @@ impl Dim {
             grew |= grows;
             let modified = self.space.modified.remove(&pos);
             let on_disk = self.on_disk.remove(&pos);
-            if modified || on_disk || !inside.is_empty() || !self.ticks_in(pos).is_empty() {
+            if modified || on_disk || !inside.is_empty() || !self.timers_in(pos).is_empty() {
                 if grows {
                     Arc::make_mut(&mut cube).ticked = self.time;
                 }
@@ -1917,19 +1925,26 @@ impl Dim {
     fn tick_blocks_first(&mut self, c: &'static Content) {
         let updates = c.dims[self.id as usize].block_updates;
         if !updates {
-            self.space.scheduled.clear();
+            self.space.scheduled.retain(|t| t.0.2 != c.game.block_tick);
         }
 
-        while let Some(&Reverse((at, x, y, z))) = self.space.scheduled.peek() {
-            if at > self.time {
-                break;
-            }
-            self.space.scheduled.pop();
-            // The same block scheduled several times for one tick runs once.
-            while self.space.scheduled.peek() == Some(&Reverse((at, x, y, z))) {
+        while self
+            .space
+            .scheduled
+            .peek()
+            .is_some_and(|t| t.0.0 <= self.time)
+        {
+            let Some(Reverse(due)) = self.space.scheduled.pop() else { break };
+            // The same timer set several times for one tick fires once.
+            while self.space.scheduled.peek().is_some_and(|t| t.0 == due) {
                 self.space.scheduled.pop();
             }
-            let p = IVec3::new(x, y, z);
+            let (_, at, event, data) = due;
+            if event != c.game.block_tick {
+                self.emit(c, event, &data);
+                continue;
+            }
+            let p = IVec3::from_array(at);
             for state in self.parts(p) {
                 if !self.has_part(p, state) {
                     continue;
@@ -3511,35 +3526,34 @@ impl Dim {
         }
     }
 
-    /// Block ticks waiting in a cube: (position in the cube, ticks left).
-    pub fn ticks_in(&self, cube: IVec3) -> Vec<(u16, u32)> {
-        let base = cube * 16;
-        let mut out: Vec<(u16, u32)> = self
+    /// Timers on the blocks of a cube.
+    pub fn timers_in(&self, cube: IVec3) -> Vec<BlockTimer> {
+        let mut out: Vec<BlockTimer> = self
             .space
             .scheduled
             .iter()
-            .filter_map(|Reverse((at, x, y, z))| {
-                let l = IVec3::new(*x, *y, *z) - base;
-                ((0..16).contains(&l.x) && (0..16).contains(&l.y) && (0..16).contains(&l.z))
-                    .then(|| ((l.x | l.y << 4 | l.z << 8) as u16, at.saturating_sub(self.time).max(1) as u32))
-            })
+            .filter(|t| cube_of(IVec3::from_array(t.0.1)) == cube)
+            .map(|t| t.0.clone())
             .collect();
         out.sort_unstable();
         out.dedup();
         out
     }
 
-    /// The ticks a saved cube was still waiting for.
-    pub fn restore_ticks(&mut self, cube: IVec3, ticks: &[(u16, u32)]) {
-        for &(at, left) in ticks {
-            let at = at as i32;
-            self.schedule(cube * 16 + IVec3::new(at & 15, (at >> 4) & 15, (at >> 8) & 15), left);
-        }
+    pub fn restore_timers(&mut self, timers: Vec<BlockTimer>) {
+        self.space.scheduled.extend(timers.into_iter().map(Reverse));
     }
 
+    /// The block's own tick (`abi::event::BLOCK_TICK`) in `delay` ticks.
     pub fn schedule(&mut self, p: IVec3, delay: u32) {
+        self.timer_at(p, delay, content().game.block_tick, &[]);
+    }
+
+    pub fn timer_at(&mut self, p: IVec3, delay: u32, event: u32, data: &[u8]) {
         let at = self.time + delay.max(1) as u64;
-        self.space.scheduled.push(Reverse((at, p.x, p.y, p.z)));
+        self.space
+            .scheduled
+            .push(Reverse((at, p.to_array(), event, data.into())));
     }
 
     pub fn random(&mut self) -> u64 {
@@ -3642,7 +3656,7 @@ pub struct Parcel {
     body_light_changes: Vec<(IVec3, [u8; 3])>,
     entities: Vec<Taken>,
     bodies: Vec<(u64, Box<Space>)>,
-    scheduled: Vec<Reverse<(u64, i32, i32, i32)>>,
+    scheduled: Vec<Reverse<BlockTimer>>,
     growth: Vec<(IVec3, u64)>,
 }
 
@@ -3756,7 +3770,7 @@ impl Dim {
         }
         let (moved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.space.scheduled)
             .into_iter()
-            .partition(|Reverse((_, x, y, z))| take(section_of_cube(cube_of(IVec3::new(*x, *y, *z)))));
+            .partition(|t| take(section_of_cube(cube_of(IVec3::from_array(t.0.1)))));
         self.space.scheduled = kept.into_iter().collect();
         p.scheduled = moved;
         p.growth = self

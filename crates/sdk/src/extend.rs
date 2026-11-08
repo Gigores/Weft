@@ -153,6 +153,8 @@ schema_values!(
 );
 
 /// The engine's events with no question before them; the others are `actions`.
+/// A block's own tick, by a timer on it (`schedule_tick`).
+pub static BLOCK_TICK: Event<[i32; 3]> = Event::named(abi::event::BLOCK_TICK);
 pub static PLAYER_JOINED: Event<abi::PlayerEvent> = Event::named(abi::event::PLAYER_JOINED);
 /// A dead player came back at the spawn point, components reset but the `KEEP_ON_RESPAWN` ones;
 /// moving them on from here (a bed) happens before anyone saw them there.
@@ -813,16 +815,23 @@ impl Registry {
 }
 
 impl World {
-    /// In `ticks` ticks `event` fires with `value` (a calm-down, a hunger pulse). The timer is
-    /// saved with `entity` and goes with it when it is removed; one per entity and event, so
-    /// setting it again moves it.
-    pub fn emit_after<T: Value>(&self, entity: u64, ticks: u32, event: &Event<T>, value: T) {
+    /// In `ticks` ticks `event` fires with `value` (a calm-down, a fuse, a hunger pulse). The
+    /// timer is saved with `holder`: an entity (and goes with it), a block (`BLOCK_TICK` is its
+    /// own tick, `schedule_tick`), `Holder::NONE` for the dimension. Time away counts: a timer due
+    /// while its holder wasn't loaded fires when it is.
+    pub fn timer<T: Value>(&self, holder: impl Into<abi::Holder>, ticks: u32, event: &Event<T>, value: T) {
         let id = event.id();
         if id == u32::MAX {
             return;
         }
         let b = unsafe { std::slice::from_raw_parts(&value as *const T as *const u8, size_of::<T>()) };
-        unsafe { (host().emit_after)(self.raw(), entity, ticks, id, Slice::new(b)) }
+        unsafe { (host().timer)(self.raw(), &holder.into(), ticks, id, Slice::new(b)) }
+    }
+
+    /// The block's own tick (`block.on_scheduled`, a liquid's flow) in `ticks` ticks.
+    pub fn schedule_tick(&self, pos: impl Into<abi::BlockPos>, ticks: u32) {
+        let pos = pos.into();
+        self.timer(abi::Holder::block(pos), ticks, &BLOCK_TICK, [pos.x, pos.y, pos.z]);
     }
 
     pub fn emit<T: Value>(&self, event: &impl AsRef<Event<T>>, value: T) {

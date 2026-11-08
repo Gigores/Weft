@@ -76,7 +76,7 @@ pub async fn vetoes_and_timers(t: T) -> R {
     t.secs(0.5).await?;
     t.check_eq(t.op("rings").await?, before.to_string(), "not before it is due");
     t.secs(1.5).await?;
-    t.check_eq(t.op("rings").await?, (before + 1).to_string(), "one timer per entity and event: the second moved the first");
+    t.check_eq(t.op("rings").await?, (before + 2).to_string(), "both timers fired");
     Ok(())
 }
 

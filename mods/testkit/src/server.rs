@@ -799,9 +799,15 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(w.structure_near(word(cmd, "name")?, me, int(cmd, "r")?)
             .map_or("none".into(), |a| format!("{} {} {}", a.x, a.y, a.z)))
     }),
-    // A timer on the player: `after 60`, then `rings` counts the ones that fired.
-    ("after", "<ticks:int>", |w, cmd, player, _| {
-        w.emit_after(player, int(cmd, "ticks")?, &RANG, player);
+    // A timer on the player, `dim` or `block` under them: `after 60`, then `rings` counts the
+    // ones that fired.
+    ("after", "<ticks:int> [on:word]", |w, cmd, player, me| {
+        let on = match cmd.text("on") {
+            Some("dim") => Holder::NONE,
+            Some("block") => Holder::from([me[0], me[1] - 1, me[2]]),
+            _ => Holder::entity(player),
+        };
+        w.timer(on, int(cmd, "ticks")?, &RANG, player);
         Ok(String::new())
     }),
     ("rings", "", |_, _, _, _| Ok(RINGS.load(Ordering::Relaxed).to_string())),

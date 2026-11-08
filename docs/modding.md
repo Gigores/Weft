@@ -436,7 +436,7 @@ static MANA: Attribute = Attribute::named("mana");
 r.attribute(&MANA, 100.0, 0.0, 1000.0);
 ```
 
-Two helpers go with them. `w.emit_after(entity, ticks, &EVENT, value)` fires an event later, saved with the entity (base's animals calm down 3 seconds after being hurt, players' hunger pulses every 4); one per entity and event, so setting it again moves it, instead of counters in components. `r.world_tick(|w| ..)` runs once per tick in every region for logic that is nobody's own, `w.players()` being the players there.
+Two helpers go with them. `w.timer(holder, ticks, &EVENT, value)` fires an event later, kept with whatever holds it: an entity (a calm-down after being hurt) and gone with it, a block (a fuse), or `Holder::NONE` for the dimension (an invasion at dawn). Time away counts, so a timer due while its holder wasn't loaded fires as soon as it is. A block's own tick is the same timer with the engine's `BLOCK_TICK` event, which is all `w.schedule_tick(pos, ticks)` does. `r.world_tick(|w| ..)` runs once per tick in every region for logic that is nobody's own, `w.players()` being the players there.
 
 Keeping someone quiet is a question too: `r.before_event(&actions::CHAT, |q| if q.text().contains("spam") { Verdict::Deny } else { Verdict::Abstain })`. Reading what was said is `r.on_event(&actions::CHAT, ..)` (`e.text()`, `e.player`).
 

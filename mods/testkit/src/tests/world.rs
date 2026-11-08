@@ -858,6 +858,8 @@ pub async fn persistence(t: T) -> R {
     // A timer due after the reload is saved with the player and fires there.
     let rings: u32 = t.op("rings").await?.parse().unwrap_or(0);
     t.op("after 120").await?;
+    t.op("after 120 dim").await?;
+    t.op("after 120 block").await?;
     // A world's setting (a game rule) goes with the world.
     t.cmd("/rule testkit:count_marks 1").await?;
 
@@ -883,12 +885,12 @@ pub async fn persistence(t: T) -> R {
     let mut now = rings;
     for _ in 0..40 {
         now = t.op("rings").await?.parse().unwrap_or(0);
-        if now > rings {
+        if now >= rings + 3 {
             break;
         }
         t.secs(0.25).await?;
     }
-    t.check_eq(now, rings + 1, "the timer saved with the player fired after the reload");
+    t.check_eq(now, rings + 3, "the timers saved with the player, the dimension and a block fired after the reload");
     let rule = t.cmd("/rule testkit:count_marks").await?;
     t.check(rule.contains("true"), format!("the world's setting after reload: {rule}"));
     t.cmd("/rule testkit:count_marks 0").await?;

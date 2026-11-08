@@ -18,7 +18,7 @@ pub static HOST: Host = Host {
     log_at,
     log_enabled,
     reg_world_tick,
-    emit_after,
+    timer,
     reg_command,
     find,
     block_of,
@@ -42,7 +42,6 @@ pub static HOST: Host = Host {
     part_list,
     part_add,
     part_replace,
-    schedule_tick,
     game_time,
     random,
     light,
@@ -550,10 +549,6 @@ unsafe extern "C" fn body_move_to(w: *mut abi::WorldCtx, entity: u64, pos: *cons
 
 unsafe extern "C" fn signal_read_changed(w: *mut abi::WorldCtx, pos: *const abi::BlockPos) {
     unsafe { dim(w).space.signals.read_changed(content(), ip(pos)) }
-}
-
-unsafe extern "C" fn schedule_tick(w: *mut abi::WorldCtx, pos: *const abi::BlockPos, delay: u32) {
-    unsafe { dim(w).schedule(ip(pos), delay) }
 }
 
 unsafe extern "C" fn game_time(w: *mut abi::WorldCtx) -> u64 {
@@ -1664,32 +1659,31 @@ unsafe extern "C" fn reg_world_tick(r: *mut abi::Registrar, cb: Callback) {
     }
 }
 
-unsafe extern "C" fn emit_after(w: *mut abi::WorldCtx, entity: u64, ticks: u32, event: u32, data: abi::Slice<u8>) {
+unsafe extern "C" fn timer(w: *mut abi::WorldCtx, h: *const abi::Holder, ticks: u32, event: u32, data: abi::Slice<u8>) {
     unsafe {
         let c = content();
-        let Some(def) = c.game.events.get(event as usize) else {
-            misuse("after", || format!("no event {event}"));
-            return;
-        };
-        let d = dim(w);
-        if d.entities.get(entity).is_none() {
+        if c.game.events.get(event as usize).is_none() {
+            misuse("timer", || format!("no event {event}"));
             return;
         }
+        let (d, h, data) = (dim(w), &*h, data.as_slice());
         let until = d.time + ticks.max(1) as u64;
-        let list = d
-            .entities
-            .comps
-            .entry((entity, c.game.timers_comp))
-            .or_insert_with(|| Box::new([]));
-        // One timer per entity and event: setting it again moves it.
-        let mut v = Vec::new();
-        for (t, name, value) in crate::server::dim::read_timers(list) {
-            if name != def.name {
-                crate::server::dim::push_timer(&mut v, t, &name, &value);
+        match h.kind {
+            abi::holder::ENTITY if d.entities.get(h.entity).is_some() => {
+                let list = d
+                    .entities
+                    .comps
+                    .entry((h.entity, c.game.timers_comp))
+                    .or_insert_with(|| Box::new([]));
+                let mut v = list.to_vec();
+                crate::server::dim::push_timer(&mut v, until, &c.game.events[event as usize].name, data);
+                *list = v.into_boxed_slice();
             }
+            abi::holder::ENTITY => {}
+            abi::holder::BLOCK => d.timer_at(ip(&h.pos), ticks, event, data),
+            abi::holder::NONE => d.dim_timers.push((until, event, data.into())),
+            _ => misuse("timer", || "a stack doesn't tick, so it can't hold a timer".into()),
         }
-        crate::server::dim::push_timer(&mut v, until, &def.name, data.as_slice());
-        *list = v.into_boxed_slice();
     }
 }
 
