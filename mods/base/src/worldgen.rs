@@ -50,7 +50,7 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .tag("spawn_biome")
         .set(&TREES, 0.025)
-        .set(&GRASS_COVER, 0.25);
+        .set(&GRASS_COVER, 0.5);
     r.biome(&FOREST)
         .humidity(0.25..)
         .surface("grass", "dirt", 3)
