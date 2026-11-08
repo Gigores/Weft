@@ -146,6 +146,7 @@ item.base.egg = Яйцо
 item.base.feather = Перо
 item.base.gunpowder = Порох
 item.base.spider_eye = Паучий глаз
+item.base.paper = Бумага
 entity.base.zombie = Зомби
 entity.base.spider = Паук
 entity.base.pig = Свинья
