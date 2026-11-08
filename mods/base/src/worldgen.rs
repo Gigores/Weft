@@ -147,7 +147,7 @@ pub fn register(r: &mut Registry) {
         .feature(preset::continents(22.0))
         .field(
             "temperature",
-            Expr::fbm(0x22, 3300.0, 3) * Expr::value(1.4),
+            Expr::fbm(0x22, 2200.0, 3) * Expr::value(1.4),
         )
         .field(
             "humidity",
