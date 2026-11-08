@@ -41,6 +41,8 @@ pub struct Options {
     pub run_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub mod_dirs: Vec<PathBuf>,
+    /// Mods off for this run only (`--off a,b`, from a launcher).
+    pub mods_off: Vec<String>,
     pub gpu_debug: bool,
     /// Automation: skip the menu and play this world (created if missing).
     pub world: Option<String>,
@@ -323,7 +325,7 @@ impl App {
     fn start(&mut self, el: &ActiveEventLoop) -> Result<Running, String> {
         // Mods first: the engine's settings are `core:` configs like theirs.
         let off = modloader::off_file(&self.opts.run_dir, self.opts.automated);
-        let mods = modloader::load(&self.opts.mod_dirs, &self.opts.cache_dir, &off)?;
+        let mods = modloader::load(&self.opts.mod_dirs, &self.opts.cache_dir, &off, &self.opts.mods_off)?;
         crate::config::set_automated(self.opts.automated);
         crate::settings::migrate(&self.opts.run_dir);
         crate::config::load(&self.opts.run_dir);
