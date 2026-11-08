@@ -163,7 +163,7 @@ pub fn register(r: &mut Registry) {
                 .and(Expr::continent().ramp(0.0, 0.2)),
         )
         .feature(
-            preset::mountains(150.0, 260.0)
+            preset::mountains(150.0, 350.0)
                 .mask(Expr::field("base:mountains"))
                 .named("mountains"),
         )
@@ -176,7 +176,7 @@ pub fn register(r: &mut Registry) {
                 .continent(..0.1),
         )
         .rule(BiomeRule::new("beach").height(..=SEA + 1).continent(..0.3))
-        .rule(BiomeRule::new("mountains").field("base:mountains", 0.45..))
+        .rule(BiomeRule::new("mountains").field("base:mountains", 0.6..))
         .rule(BiomeRule::new("snowy_plains"))
         .rule(BiomeRule::new("taiga"))
         .rule(BiomeRule::new("desert"))
