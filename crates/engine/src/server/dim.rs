@@ -1981,6 +1981,8 @@ impl Dim {
         self.natural_spawns(c);
         self.tick_entities(c);
         self.tick_bodies(c);
+        // After entities have been ticked.
+        self.tick_entity_lights(c);
         self.tick_blocks_after(c);
         self.entities.compact();
         self.finish_tick(c);

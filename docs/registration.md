@@ -104,7 +104,9 @@ Something that goes in an inventory. `r.item(&ITEM)`; a block's item is named li
 | `ON_USE` | callback | none | `.on_use` |
 | `CONDITION` | callback | none | how a stack looks by its data (`.condition`) |
 
-Shared ones: `MAX_STACK` (64), `DURABILITY`, `TOOL_LEVEL` + `tools/<class>` (`.tool`), `MINING_SPEED` (1), `ATTACK_DAMAGE` (1), `ATTACK_SPEED`, `USE_TICKS`, `USE_PRIORITY`, `INVENTORY_SLOTS` (`.inventory(n)`, a backpack), `WORN`/`WORN_TEXTURE` (`.wearable`), `WORN_MODEL` (`.wearable_model`), `ANIMATIONS`, `REMAINDER`, `LIQUID`, plus what mods read (`FOOD`, `FUEL`). Tags: `handheld`, `tab/<tab>`, anything yours.
+Shared ones: `MAX_STACK` (64), `DURABILITY`, `TOOL_LEVEL` + `tools/<class>` (`.tool`), `MINING_SPEED` (1), `ATTACK_DAMAGE` (1), `ATTACK_SPEED`, `USE_TICKS`, `USE_PRIORITY`, `INVENTORY_SLOTS` (`.inventory(n)`, a backpack), `LIGHT` (`[u8;3]`; `.light`, `.light_rgb`), `WORN`/`WORN_TEXTURE` (`.wearable`), `WORN_MODEL` (`.wearable_model`), `ANIMATIONS`, `REMAINDER`, `LIQUID`, plus what mods read (`FOOD`, `FUEL`). Tags: `handheld`, `tab/<tab>`, anything yours.
+
+Light: `LIGHT` on an item lights the world from whoever holds or wears it, or from where it lies dropped. An item that places a block uses the block's light unless it sets its own.
 
 ```rust
 static COAL: Item = Item::named("base:coal");
@@ -135,7 +137,9 @@ A kind of entity: mobs, players, projectiles, moving platforms, block entities. 
 | `FRAMES` | `[callback]` | none | client frame hooks (`r.client_entity_frame`) |
 | `SLOT_GROUPS`, `INVENTORY_MENU` | `[SlotGroupDef]`, `str` | 9 + 27 | the player's inventory (`r.player_slots`, `r.player_menu`) |
 
-Shared ones: `MODEL`, `ANIMATIONS`, `SOUND`, `SHADER`, `SWIMS_IN`, `INVENTORY_SLOTS`, `HAZARDS` (`.hazard(..)`, `.burns_in_sun()`, `.crushing()`), attributes (`.max_health`, `.reach`). Tags (`abi::comp::entity`): `NO_GRAVITY`, `SWIMS`, `SOLID`, `KINEMATIC`, `RIDERS_FALL`, `WEARS` (`.equipment()`), and `NO_FALL_DAMAGE`, `UNPUSHABLE` turning off what every kind does; `immune/<cause>` against a damage cause.
+Shared ones: `MODEL`, `ANIMATIONS`, `SOUND`, `SHADER`, `SWIMS_IN`, `INVENTORY_SLOTS`, `LIGHT` (`[u8;3]`; `.light`, `.light_rgb`), `HAZARDS` (`.hazard(..)`, `.burns_in_sun()`, `.crushing()`), attributes (`.max_health`, `.reach`). Tags (`abi::comp::entity`): `NO_GRAVITY`, `SWIMS`, `SOLID`, `KINEMATIC`, `RIDERS_FALL`, `WEARS` (`.equipment()`), and `NO_FALL_DAMAGE`, `UNPUSHABLE` turning off what every kind does; `immune/<cause>` against a damage cause.
+
+Light: `LIGHT` lights the world from the middle of each entity of the kind. Everything an entity gives (its kind, both hands, worn items, a dropped stack, fire) is combined per channel by taking the brightest value, not the sum, and a moving entity relights at every block it crosses. Block entities, hidden entities (spectators) and entities in regions where only machines are simulated give no light.
 
 ```rust
 static ZOMBIE: EntityKind = EntityKind::named("base:zombie");

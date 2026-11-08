@@ -7,6 +7,7 @@ mod builtin;
 pub mod dim;
 pub mod energy;
 pub mod entity;
+mod entity_light;
 pub(crate) mod extend;
 pub mod forced;
 pub mod holder;
