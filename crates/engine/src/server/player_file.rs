@@ -45,7 +45,6 @@ impl Server {
                 (d, p, -1.0, None, Vec::new(), [0.0, 0.0], 0, false, 0)
             }
         };
-        let time = self.dims[dim as usize].day_time();
         let r = self.dims[dim as usize].ensure_region(c, pos);
         let id = r.new_id();
         let mut e = Entity::new(id, c.game.player_kind, pos, health);
@@ -76,7 +75,6 @@ impl Server {
         e.permission = permission;
         e.selected = selected.min(c.game.player_layout.hotbar.saturating_sub(1));
         let selected = e.selected;
-        let mode = e.mode;
         r.entities.insert_with(c, e, inv, comps);
         r.keep_sources(c, id);
         let worn = worn_of(c, &r.entities, id);
@@ -122,9 +120,6 @@ impl Server {
             all: true,
         });
         p.conn.send(ToClient::Configs(crate::config::synced()));
-        p.conn.send(ToClient::Time { dim, time });
-        p.conn.send(ToClient::GameMode(mode));
-        p.conn.send(ToClient::Permission(permission));
         // Left while dead: still dead, as in vanilla.
         if dead {
             p.conn.send(ToClient::Died);

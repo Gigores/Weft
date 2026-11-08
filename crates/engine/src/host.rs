@@ -96,10 +96,8 @@ pub static HOST: Host = Host {
     client_use_ticks_left: crate::client::modui::client_using,
     client_day_time: crate::client::modui::client_day_time,
     client_weather: crate::client::modui::client_weather,
-    client_permission: crate::client::modui::client_permission,
     client_component: crate::client::modui::client_component,
     client_entity: crate::client::modui::client_entity,
-    client_game_mode: crate::client::modui::client_game_mode,
     energy_move,
     component_get,
     component_set,
@@ -310,7 +308,7 @@ unsafe extern "C" fn action_override(w: *mut abi::WorldCtx, id: u64, from: Str, 
         if d.entities.get(id).is_none() {
             return;
         }
-        let comp = content().game.field_comps[7];
+        let comp = content().game.fields.swaps;
         let (from, to) = (from.as_str(), to.as_str());
         let now = d
             .entities
@@ -344,7 +342,7 @@ unsafe extern "C" fn action_play(w: *mut abi::WorldCtx, id: u64, name: Str, loop
     unsafe {
         let d = dim(w);
         // What loops goes on for whoever comes along later too, as anything else they should see.
-        let comp = content().game.field_comps[8];
+        let comp = content().game.fields.looping;
         let now = if looping != 0 { name.as_str().as_bytes() } else { &[] };
         if d.entities.get(id).is_some()
             && d.entities
@@ -2015,7 +2013,7 @@ unsafe extern "C" fn entity_effect(w: *mut abi::WorldCtx, id: u64, effect: u32, 
         if d.entities.get(id).is_none() {
             return;
         }
-        let comp = c.game.field_comps[9];
+        let comp = c.game.fields.effect;
         let bytes: Vec<u8> = if ticks == 0 {
             Vec::new()
         } else {
@@ -2036,7 +2034,7 @@ unsafe extern "C" fn entity_set_pose(w: *mut abi::WorldCtx, id: u64, pose: u32, 
     unsafe {
         let d = dim(w);
         let c = content();
-        let comp = c.game.field_comps[10];
+        let comp = c.game.fields.forced;
         let Some(e) = d.entities.get_mut(id) else { return };
         let held = (pose as usize) < c.game.poses.len();
         e.facing = (held && !yaw.is_nan()).then_some(yaw);

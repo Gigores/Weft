@@ -130,7 +130,7 @@ impl Dim {
     pub fn leave(&mut self, c: &Content, rider: u64) {
         let Some((mount, _)) = self.entities.get_mut(rider).and_then(|e| e.vehicle.take()) else { return };
         // What it is saved and moved between regions with says so too, at once.
-        self.entities.comps.remove(&(rider, c.game.field_comps[11]));
+        self.entities.comps.remove(&(rider, c.game.fields.riding));
         if let Some(m) = self
             .entities
             .get_mut(mount)

@@ -3334,12 +3334,9 @@ pub struct Host {
     /// Ticks left of the item being used, negative when none.
     pub client_use_ticks_left: unsafe extern "C" fn(client: *mut ClientCtx) -> f32,
     pub client_day_time: unsafe extern "C" fn(client: *mut ClientCtx) -> u64,
-    pub client_permission: unsafe extern "C" fn(client: *mut ClientCtx) -> u32,
     /// Synced component of an entity the client knows (own player always), null if unknown.
     pub client_component: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, comp: u32) -> *const u8,
     pub client_entity: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, out: *mut EntityState) -> u32,
-    /// `game_mode` of the local player (client side, for HUDs and screens).
-    pub client_game_mode: unsafe extern "C" fn(client: *mut ClientCtx) -> u32,
 
     /// Energy contract (`energy` component, on an entity or a stack): moves `amount` in (positive)
     /// or out (negative), respecting capacity and rate limits. Returns what moved (or would, when

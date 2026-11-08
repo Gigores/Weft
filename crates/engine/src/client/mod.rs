@@ -2121,7 +2121,23 @@ impl Client {
     /// Copies an engine field component into the entity (or the own player) that shows it.
     fn engine_field(&mut self, id: u64, comp: u32, bytes: &[u8]) {
         let c = content();
-        let [health, burning, worn, shape, held, off_held, using, swaps, looping, effect, forced, riding] = c.game.field_comps;
+        let crate::registry::FieldComps {
+            health,
+            burning,
+            worn,
+            shape,
+            held,
+            off_held,
+            using,
+            swaps,
+            looping,
+            effect,
+            forced,
+            riding,
+            game_mode,
+            permission,
+            attributes,
+        } = c.game.fields;
         let now = self.world.time;
         let f: Vec<f32> = words(bytes).map(f32::from_le_bytes).collect();
         let shaped = || {
@@ -2193,6 +2209,24 @@ impl Client {
             self.player.size = shaped()
                 .0
                 .unwrap_or(c.game.entities[c.game.player_kind as usize].size());
+        } else if comp == game_mode {
+            let mode = crate::world::GameMode(words(bytes).next().map_or(0, u32::from_le_bytes) as u16);
+            self.mode = mode;
+            self.player.flying = mode.has(crate::tag_bits::game_mode::ALWAYS_FLY) || (self.can_fly() && self.player.flying);
+            self.player.noclip = mode.has(crate::tag_bits::game_mode::NOCLIP);
+            self.player.fly_speed = 1.0;
+        } else if comp == permission {
+            self.permission = words(bytes).next().map_or(0, u32::from_le_bytes);
+        } else if comp == attributes {
+            use crate::server::extend as a;
+            for (dst, v) in self.attributes.iter_mut().zip(&f) {
+                *dst = *v;
+            }
+            self.player.speed_mul = self.attributes[a::MOVEMENT_SPEED as usize] as f64;
+            self.player.jump_mul = self.attributes[a::JUMP_STRENGTH as usize] as f64;
+            self.player.can_sprint = self.attributes[a::CAN_SPRINT as usize] >= 1.0;
+            // Flight goes with what allowed it (a mode, a ring), which comes a tick after the mode.
+            self.player.flying &= self.can_fly() || self.mode.has(crate::tag_bits::game_mode::ALWAYS_FLY);
         }
     }
 

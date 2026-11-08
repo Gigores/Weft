@@ -371,7 +371,7 @@ impl Entities {
         if let Some(inv) = inv {
             self.inventories.insert(id, inv);
         }
-        let riding = c.game.field_comps[11];
+        let riding = c.game.fields.riding;
         for (k, v) in comps {
             // A loaded rider sits where it sat.
             if k == riding && v.len() >= 12 {

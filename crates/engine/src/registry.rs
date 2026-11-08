@@ -394,9 +394,7 @@ pub struct Game {
     pub name_comp: u32,
     /// Components with `component_flags::CARRIED`: between a block's item and its block entity.
     pub carried: Vec<u32>,
-    /// `HEALTH`, `BURNING`, `WORN`, `SHAPE`, `HELD`, `OFF_HELD`, `USING`, `SWAPS`, `LOOPING_ACTION`,
-    /// `EFFECT`, `FORCED_POSE`, `RIDING`.
-    pub field_comps: [u32; 12],
+    pub fields: FieldComps,
     /// `SIMULATED`.
     pub simulated_comp: u32,
     /// Entity components with `SYNC_WATCHERS` / `SYNC_MENU`.
@@ -667,6 +665,9 @@ fn engine_components() -> Vec<RawEntry> {
         (EFFECT, "bytes", shown, Vec::new()),
         (FORCED_POSE, "bytes", own | shown, Vec::new()),
         (RIDING, "bytes", own | shown | cf::SAVE, Vec::new()),
+        (GAME_MODE, "u32", cf::SYNC_OWNER, vec![0; 4]),
+        (PERMISSION, "u32", cf::SYNC_OWNER, vec![0; 4]),
+        (ATTRIBUTES, "bytes", cf::SYNC_OWNER, Vec::new()),
         (SIMULATED, "u64", cf::SAVE, vec![0; 8]),
     ] {
         all.push(entity(name, schema, flags, default));
@@ -1664,9 +1665,34 @@ pub const EFFECT: &str = "core:effect";
 pub const FORCED_POSE: &str = "core:forced_pose";
 /// What it rides (`u64` id) and its seat (`u32`), empty: nothing. Saved, and seen by everyone.
 pub const RIDING: &str = "core:riding";
+/// A player's game mode (`u32` id), permission level (`u32`) and every attribute's value (`f32`
+/// by id), for its own client.
+pub const GAME_MODE: &str = "core:game_mode";
+pub const PERMISSION: &str = "core:permission";
+pub const ATTRIBUTES: &str = "core:attributes";
 /// Entity component (`u64`, saved): the world time a system last simulated it to, so it can
 /// catch up on what it missed (`Dim::run_systems`).
 pub const SIMULATED: &str = "core:simulated";
+
+/// The components of engine fields clients show (`HEALTH` ...), by id.
+#[derive(Default, Clone, Copy)]
+pub struct FieldComps {
+    pub health: u32,
+    pub burning: u32,
+    pub worn: u32,
+    pub shape: u32,
+    pub held: u32,
+    pub off_held: u32,
+    pub using: u32,
+    pub swaps: u32,
+    pub looping: u32,
+    pub effect: u32,
+    pub forced: u32,
+    pub riding: u32,
+    pub game_mode: u32,
+    pub permission: u32,
+    pub attributes: u32,
+}
 
 /// Entity kinds, frozen before components (which attach to them).
 #[derive(Default)]
@@ -2088,8 +2114,24 @@ pub fn freeze(
         .filter(|(_, d)| d.runtime && d.flags & weft_abi::component_flags::CARRIED != 0)
         .map(|(i, _)| i as u32)
         .collect();
-    g.field_comps = [HEALTH, BURNING, WORN, SHAPE, HELD, OFF_HELD, USING, SWAPS, LOOPING_ACTION, EFFECT, FORCED_POSE, RIDING]
-        .map(|n| g.component_names[n]);
+    let id = |n: &str| g.component_names[n];
+    g.fields = FieldComps {
+        health: id(HEALTH),
+        burning: id(BURNING),
+        worn: id(WORN),
+        shape: id(SHAPE),
+        held: id(HELD),
+        off_held: id(OFF_HELD),
+        using: id(USING),
+        swaps: id(SWAPS),
+        looping: id(LOOPING_ACTION),
+        effect: id(EFFECT),
+        forced: id(FORCED_POSE),
+        riding: id(RIDING),
+        game_mode: id(GAME_MODE),
+        permission: id(PERMISSION),
+        attributes: id(ATTRIBUTES),
+    };
     g.simulated_comp = g.component_names[SIMULATED];
     let with_flag = |f: u32| {
         g.components

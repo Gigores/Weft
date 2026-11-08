@@ -545,10 +545,6 @@ pub unsafe extern "C" fn client_weather(c: *mut abi::ClientCtx) -> u32 {
     unsafe { view(c).map_or(0, |cl| cl.weather_id as u32) }
 }
 
-pub unsafe extern "C" fn client_permission(c: *mut abi::ClientCtx) -> u32 {
-    unsafe { view(c).map_or(0, |cl| cl.permission) }
-}
-
 pub unsafe extern "C" fn client_component(c: *mut abi::ClientCtx, id: u64, comp: u32) -> *const u8 {
     unsafe {
         let own = view(c).is_some_and(|cl| id == cl.player_id || id == 0);
@@ -647,8 +643,4 @@ pub unsafe extern "C" fn client_entity(c: *mut abi::ClientCtx, id: u64, out: *mu
             None => 0,
         }
     }
-}
-
-pub unsafe extern "C" fn client_game_mode(c: *mut abi::ClientCtx) -> u32 {
-    unsafe { view(c).map_or(0, |cl| cl.mode.0 as u32) }
 }

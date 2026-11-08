@@ -730,7 +730,35 @@ impl Dim {
     /// Writes the fields clients show (`registry::HEALTH` ...) into their synced components when
     /// they differ, so they travel like mods' components. Absent ones stay absent while default.
     pub fn mirror_fields(&mut self, c: &Content) {
-        let [health, burning, worn, shape, held, off_held, using, .., riding] = c.game.field_comps;
+        let crate::registry::FieldComps {
+            health,
+            burning,
+            worn,
+            shape,
+            held,
+            off_held,
+            using,
+            riding,
+            game_mode,
+            permission,
+            attributes,
+            ..
+        } = c.game.fields;
+        let players: Vec<u64> = self
+            .entities
+            .list
+            .iter()
+            .filter(|e| e.player && !e.removed)
+            .map(|e| e.id)
+            .collect();
+        let attrs: Vec<Vec<u8>> = players
+            .iter()
+            .map(|&id| {
+                (0..c.game.attributes.len() as u32)
+                    .flat_map(|a| (self.attribute(c, id, a, false) as f32).to_le_bytes())
+                    .collect()
+            })
+            .collect();
         let maxes: Vec<(u64, f32)> = self
             .entities
             .list
@@ -774,6 +802,11 @@ impl Dim {
             });
             put(comps, riding, &rides);
             if e.player {
+                put(comps, game_mode, &(e.mode.0 as u32).to_le_bytes());
+                put(comps, permission, &e.permission.to_le_bytes());
+                if let Some(i) = players.iter().position(|&p| p == e.id) {
+                    put(comps, attributes, &attrs[i]);
+                }
                 let inv = inventories.get(&e.id).map_or(&[][..], |i| &i[..]);
                 let item = crate::content::in_main_hand(c, inv, e.selected);
                 let item = if item.is_empty() { 0 } else { item.item };

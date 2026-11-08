@@ -144,7 +144,6 @@ pub struct Player {
     /// Gizmo groups the client shows.
     gizmos: Vec<String>,
     /// Walking speed and jump multipliers the client has (attributes).
-    sent_attributes: Vec<f32>,
     /// The view distance the client has (`ToServer::View`).
     view_radius: i32,
 }
@@ -542,7 +541,6 @@ impl Server {
                 vis: None,
                 teleported: None,
                 gizmos: Vec::new(),
-                sent_attributes: Vec::new(),
                 view_radius: self.cfg.view_radius,
             });
         }
@@ -1022,7 +1020,6 @@ impl Server {
             }
             r.keep_sources(content(), entity);
         }
-        self.players[pi].conn.send(ToClient::GameMode(mode));
     }
 
     pub(crate) fn permission_of(&self, pi: usize) -> u32 {
@@ -1043,7 +1040,6 @@ impl Server {
         {
             e.permission = level;
         }
-        p.conn.send(ToClient::Permission(level));
         if let Some(st) = storage {
             let mut st = st.lock();
             st.meta.ops.retain(|o| o.0 != p.key);
@@ -1108,10 +1104,9 @@ impl Server {
         let p = &mut players[pi];
         p.conn
             .send(ToClient::Edits { dim: to, specs: dims[to as usize].edits.iter().map(|e| e.spec(c)).collect(), all: true });
+        let d = &dims[to as usize];
         p.conn
-            .send(ToClient::Time { dim: to, time: dims[to as usize].day_time() });
-        p.conn
-            .send(ToClient::Weather(dims[to as usize].weather as u32));
+            .send(ToClient::Clock { dim: to, time: d.day_time(), weather: d.weather as u32, rate: p.sent_rate });
         if to == c.void_dim && from != to as usize {
             p.conn
                 .send(ToClient::Show(crate::net::Shown::chat(void_note(c))));

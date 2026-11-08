@@ -220,16 +220,10 @@ fn send_mining(p: &mut Player, cracks: &[crate::net::Crack], tick: u64) {
 }
 
 fn send_clock(p: &mut Player, dim: &DimSet, tick: u64, rate: u32) {
-    if p.first_sync || p.sent_rate != rate {
+    if p.first_sync || p.sent_rate != rate || dim.weather_moved || dim.day_moved || tick % TPS as u64 == 0 {
         p.sent_rate = rate;
-        p.conn.send(ToClient::TickRate(rate));
-    }
-    if dim.weather_moved || p.first_sync {
-        p.conn.send(ToClient::Weather(dim.weather as u32));
-    }
-    if tick % TPS as u64 == 0 || dim.day_moved {
         p.conn
-            .send(ToClient::Time { dim: p.dim, time: dim.day_time() });
+            .send(ToClient::Clock { dim: p.dim, time: dim.day_time(), weather: dim.weather as u32, rate });
     }
 }
 
@@ -390,20 +384,6 @@ fn send_own_state(c: &'static Content, p: &mut Player, dim: &mut DimSet) {
             entity::Told::Flying(on) => ToClient::Flying(on),
             entity::Told::Selected(slot) => ToClient::Selected(slot),
         });
-    }
-    // The client moves its player and times its mining: it needs them all.
-    if p.sent_attributes.is_empty() {
-        p.sent_attributes = vec![f32::NAN; c.game.attributes.len()];
-    }
-    let attributes: Vec<(u32, f32)> = (0..c.game.attributes.len() as u32)
-        .map(|a| (a, reg.attribute(c, p.entity, a, false) as f32))
-        .filter(|&(a, v)| p.sent_attributes[a as usize] != v)
-        .collect();
-    if !attributes.is_empty() {
-        for &(a, v) in &attributes {
-            p.sent_attributes[a as usize] = v;
-        }
-        p.conn.send(ToClient::Attributes(attributes));
     }
     // Own inventory and synced components.
     if p.first_sync || reg.entities.dirty_inv.contains(&p.entity) {
