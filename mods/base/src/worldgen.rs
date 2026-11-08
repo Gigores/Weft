@@ -86,7 +86,7 @@ pub fn register(r: &mut Registry) {
         .set_text(&TREE_KINDS, "base:spruce_log");
     r.biome(&SNOWY)
         .snows()
-        .temperature(..-0.45)
+        .temperature(..-0.25)
         .surface("snowy_grass", "dirt", 3)
         .frozen("ice")
         .tint(grass, 0x80b497)
@@ -97,8 +97,8 @@ pub fn register(r: &mut Registry) {
         .set(&TREES, 0.03)
         .set_text(&TREE_KINDS, "base:spruce_log");
     r.biome(&DESERT)
-        .temperature(0.35..)
-        .humidity(..0.0)
+        .temperature(0.25..)
+        .humidity(..0.1)
         .surface("sand", "sand", 3)
         .under("sandstone", 1)
         .tint(grass, 0xbfb755)
