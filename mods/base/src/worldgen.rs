@@ -142,9 +142,9 @@ pub fn register(r: &mut Registry) {
     // The overworld's shape. Other mods add to it by these names (`base:desert`, `base:mountains`).
     r.terrain(&crate::OVERWORLD)
         .stone("stone")
-        .base_height(SEA as f64)
+        .base_height(SEA as f64 - 8.0)
         .sea(SEA, "water")
-        .feature(preset::continents(18.0))
+        .feature(preset::continents(22.0))
         // Biomes shape the land through their climate, not their borders, so nothing seams:
         // the cold flattens hills into tundra, deserts get dunes.
         .feature(preset::hills(16.0, 110.0).mask(Expr::temperature().ramp(-0.35, -0.6).not()))
@@ -168,14 +168,14 @@ pub fn register(r: &mut Registry) {
                 .named("mountains"),
         )
         // Biomes bring their climate and surface; rules only add where else they must hold.
-        .rule(BiomeRule::new("ocean").height(..=SEA - 2))
+        .rule(BiomeRule::new("ocean").height(..=SEA))
         .rule(
             BiomeRule::new("snowy_plains")
                 .named("snowy_coast")
                 .height(..=SEA + 1)
                 .continent(..0.1),
         )
-        .rule(BiomeRule::new("beach").height(..=SEA + 1).continent(..0.1))
+        .rule(BiomeRule::new("beach").height(..=SEA + 1).continent(..0.3))
         .rule(BiomeRule::new("mountains").field("base:mountains", 0.45..))
         .rule(BiomeRule::new("snowy_plains"))
         .rule(BiomeRule::new("taiga"))
