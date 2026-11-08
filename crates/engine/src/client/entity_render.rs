@@ -1346,7 +1346,7 @@ impl EntityRenderer {
             .draw(gpu, list, frame, super::models::Batch::World, self.model_pipe, vb);
 
         if let Some((hit, at)) = target {
-            outline_boxes(&mut boxes, c.states[hit.state as usize].outlined(), rel(hit.block.as_dvec3() + at));
+            outline_boxes(&mut boxes, c.states[hit.state as usize].outlined(), rel(hit.origin.as_dvec3() + at));
         }
         gizmo_line_boxes(&mut boxes, gizmo_lines, cam.pos);
         let overlay_start = boxes.len();

@@ -2,7 +2,7 @@ use crate::abi::BlockPos;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::abi::{self, BlockModel, RenderLayer, Slice, Str, block_flags as bf};
+use crate::abi::{self, BlockModel, RenderLayer, Slice, Str};
 use crate::component::{self as c, Component, Data, Value};
 use crate::comps::block as bc;
 use crate::{World, callback, host, qualify};
@@ -1559,6 +1559,13 @@ macro_rules! state_setters {
         pub fn piece(self, min: [f32; 3], max: [f32; 3], left: &str, alone: &str) -> Self {
             self.push(&bc::PIECES, abi::Piece { min, max, left: left.into(), alone: alone.into() })
         }
+        /// More cells than its own, as its model is written (facing north, its top up): a door
+        /// `&[[0, 1, 0]]`, a 3x3x3 machine every cell around. It is one block in all of them: what
+        /// is done to any is done to it, and it is placed and gone whole. Its model and boxes span
+        /// them from its own cell. The cells touch each other by faces.
+        pub fn cells(self, cells: &[[i32; 3]]) -> Self {
+            self.set(&bc::CELLS, cells.to_vec())
+        }
         /// The sides a liquid in its cell can't pass (`.shares_cell_with("#water")`): without
         /// this, the ones its hitbox covers whole (a stair's back holds water, a hollow log's open
         /// ends don't). `&[]` lets it out everywhere.
@@ -1989,47 +1996,6 @@ impl<'a> BlockBuilder<'a> {
         self.set(&bc::ON_SCHEDULED, block_event_cb(f))
     }
 
-    /// Two cells long, told apart by a property `prop` of it: it is placed as `parts[0]`, and
-    /// `parts[1]` goes where `way` says from there (given the state), which needs room. Breaking
-    /// one takes the other, whatever took the one (an explosion doesn't break it): `drops` and
-    /// the like are for the two together.
-    pub fn two_part(
-        self,
-        prop: &'static str,
-        parts: [&'static str; 2],
-        way: impl Fn(u32) -> crate::Dir + Copy + Send + Sync + 'static,
-    ) -> Self {
-        let block = self.handle;
-        let other = move |pos: BlockPos, state: u32| crate::other_part(pos, state, prop, parts[1], way);
-        self.reg
-            .before_event(&crate::actions::PLACE_BLOCK, move |q| {
-                if !block.is(q.state()) {
-                    return crate::Verdict::Abstain;
-                }
-                let there = q.world().block(other(q.pos(), q.state()));
-                if there == 0 || crate::state_flags(there) & bf::REPLACEABLE != 0 { crate::Verdict::Abstain } else { crate::Verdict::Deny }
-            });
-        self.prop(prop, parts)
-            .on_neighbor(|e| e.world().schedule_tick(e.pos(), 1))
-            .on_scheduled(move |e| {
-                let w = e.world();
-                if block.is(e.state()) && !block.is(w.block(other(e.pos(), e.state()))) {
-                    w.set_block(e.pos(), 0);
-                }
-            })
-            .on_place(move |w, c| {
-                if let Some(s) = crate::state_with(c.state, prop, parts[1]) {
-                    w.set_block(other(c.pos, c.state), s);
-                }
-            })
-            .on_break(move |w, c| {
-                let there = other(c.pos, c.state);
-                if block.is(w.block(there)) {
-                    w.set_block(there, 0);
-                }
-            })
-    }
-
     /// Falls like sand when nothing holds it up: a block next to it changing checks two ticks
     /// later whether below is free, and if so it drops as a moving block (`World::fall_block`).
     pub fn falling(self) -> Self {
@@ -2173,15 +2139,17 @@ impl<'a> BlockBuilder<'a> {
         self.signal = Some(SignalBuild { flags, ..SignalBuild::default() });
         self.signal_props(abi::signal_kind::FLOATER, 3, false, false)
     }
-    /// Pushes blocks at its `facing` with power from any other side, the `power` property saying
-    /// it is out (after `facing`). `head`: the block it pushes out, with a `facing` property.
-    /// `sticky` brings a block back.
+    /// Pushes blocks at its `facing` with power from any other side (after `facing`). Its `power`
+    /// property: `off` in, `moving` while its head is on the way, `on` out, the head being the
+    /// state's own cell in front (`.cells`). `head`: what the head looks like on the way, a block
+    /// with a `facing` property that is never in the world. `sticky` brings a block back.
     pub fn signal_piston(mut self, head: &'static str, sticky: bool) -> Self {
         let flags = if sticky { abi::signal_flags::STICKY } else { 0 };
         self.signal = Some(SignalBuild { head, flags, ..SignalBuild::default() });
-        self.signal_props(abi::signal_kind::PISTON, 2, false, false)
+        self.signal_props(abi::signal_kind::PISTON, 0, false, false)
+            .prop("power", ["off", "moving", "on"])
     }
-    /// The moving part of a piston (after `facing`): it goes when the piston does.
+    /// A piston's head on its way (after `facing`), drawn by the body moving it.
     pub fn signal_piston_head(self) -> Self {
         self.tag(abi::comp::block::NOT_STOOD_ON)
             .signal_props(abi::signal_kind::PISTON_HEAD, 0, false, false)

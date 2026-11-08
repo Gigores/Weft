@@ -6,6 +6,7 @@
 
 block/bedrock = block/bedrock
 block/bed_top_foot = block/red_bed_foot_up
+block/door_oak = stack block/oak_door_top block/oak_door_bottom
 block/bed_top_foot_90 = turned block/red_bed_foot_up 90
 block/bed_top_foot_180 = turned block/red_bed_foot_up 180
 block/bed_top_foot_270 = turned block/red_bed_foot_up 270

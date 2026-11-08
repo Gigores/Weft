@@ -144,8 +144,16 @@ impl Dim {
         let mut blocks: Vec<(IVec3, u32)> = also.to_vec();
         let mut arriving = FxHashMap::default();
         let mut extras: Vec<(IVec3, Vec<u32>)> = Vec::new();
-        for l in cells {
-            let whole = self.get(l.from);
+        // Read first: taking a big block's own cell takes its other cells along.
+        let cells: Vec<Lifted> = cells.into_iter().collect();
+        let wholes: Vec<Option<u32>> = cells.iter().map(|l| self.get(l.from)).collect();
+        for (l, whole) in cells.into_iter().zip(wholes) {
+            // A big block's other cells come as they were read.
+            if let Some(s) = whole.filter(|&s| c.covered_step(s).is_some()) {
+                blocks.push((l.local, s));
+                carried.push(Carried { local: l.local, to: l.to, state: s, entity: None });
+                continue;
+            }
             if !self.space.extras(l.from).is_empty() {
                 extras.push((l.local, self.space.extras(l.from).to_vec()));
             }

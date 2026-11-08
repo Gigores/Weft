@@ -191,6 +191,8 @@ pub(crate) struct Running {
     list: CommandList,
     /// What goes in the world's pass this frame, while it is being made.
     world_list: CommandList,
+    /// What is drawn over the world after its depth was taken (`Client::render`).
+    after_list: CommandList,
     input: Input,
     pub(crate) settings: Settings,
     lang: Lang,
@@ -421,6 +423,7 @@ impl App {
             depth,
             list: CommandList::default(),
             world_list: CommandList::default(),
+            after_list: CommandList::default(),
             input,
             settings,
             lang,
@@ -2262,23 +2265,31 @@ fn record_passes(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
         g.client.update_wires(&mut *r.gpu, &r.textures);
     }
     // What the world's draws go by has to be done before its pass, and is known only making them.
-    let mut world = std::mem::take(&mut r.world_list);
+    let (mut world, mut after) = (std::mem::take(&mut r.world_list), std::mem::take(&mut r.after_list));
     world.clear();
+    after.clear();
     if let Some(g) = &mut r.game {
         g.client
-            .render(&mut *r.gpu, &mut world, &mut r.list, info, &r.textures);
+            .render(&mut *r.gpu, &mut world, &mut after, &mut r.list, info, &r.textures);
     }
     r.list
         .push(Cmd::BeginPass { color: Some((world_target, Some(clear))), depth: Some((r.depth.0, Some(0.0))) });
     r.list.append(&mut world);
-    r.world_list = world;
     r.list.push(Cmd::EndPass);
+    // The solid world's depth: clouds and the hand would hide chunks behind them in the next frame.
     if let Some(g) = &mut r.game {
         g.client
             .render
             .occlusion
             .take_depth(&mut *r.gpu, &mut r.list, r.depth.0, [r.depth.1, r.depth.2]);
     }
+    if !after.cmds.is_empty() {
+        r.list
+            .push(Cmd::BeginPass { color: Some((world_target, None)), depth: Some((r.depth.0, None)) });
+        r.list.append(&mut after);
+        r.list.push(Cmd::EndPass);
+    }
+    (r.world_list, r.after_list) = (world, after);
     if post {
         r.post.apply(&mut *r.gpu, &mut r.list, info);
     } else {

@@ -140,6 +140,10 @@ pub struct StateInfo {
     pub signal: Signal,
     /// What a hit breaks off alone (`abi::comp::block::PIECES`), turned like the boxes.
     pub pieces: Vec<Piece>,
+    /// The other cells a big block takes (`abi::comp::block::CELLS`), turned, each with the
+    /// direction (`DIRS`) of its neighbor one step nearer the block's own cell: `core:covered`
+    /// in that cell points there.
+    pub cells: Vec<(IVec3, u8)>,
 }
 
 /// An attribute modifier something gives (`abi::Modifier`) resolved.
@@ -1027,6 +1031,8 @@ pub struct Content {
     pub fire_texture: u32,
     /// Engine commands first, then mods' in name order.
     pub commands: Vec<crate::commands::CommandDef>,
+    /// The first state of `core:covered`, a big block's other cell (`StateInfo::cells`).
+    pub covered: u32,
     pub block_names: FxHashMap<String, u32>,
     pub item_names: FxHashMap<String, u32>,
     pub dim_names: FxHashMap<String, u32>,
@@ -1080,7 +1086,50 @@ pub fn item_tint(tint: u8) -> u32 {
         .map_or(0xFFFFFF, |k| k.1)
 }
 
+/// A cell a big block takes besides its own: nothing of its own, it points (`to`, a face) one
+/// step nearer that block's cell, and stands for the block.
+pub const COVERED: &str = "core:covered";
+
+fn covered_entry() -> RawEntry {
+    use abi::comp::block as b;
+    let faces = abi::FACE_NAMES.iter().map(|f| f.to_string()).collect();
+    RawEntry::engine(abi::entry_kind::BLOCK, COVERED)
+        .set(b::PROPS, vec![abi::BlockProp { name: "to".into(), values: faces }])
+        .set(b::MODEL, BlockModel::None as u32)
+        .tag(b::NOT_SOLID)
+        .tag(b::NOT_TARGETABLE)
+}
+
 impl Content {
+    /// The way from a big block's other cell one step nearer its own, if `state` is one.
+    pub fn covered_step(&self, state: u32) -> Option<IVec3> {
+        let d = state.wrapping_sub(self.covered);
+        (d < 6).then(|| crate::world::DIRS[d as usize])
+    }
+
+    /// The cell whose block `p` is and that block: a big block's own cell for its others, `p`
+    /// itself otherwise. A covered cell no block takes any more is air. `None`: not loaded.
+    pub fn block_at(&self, get: impl Fn(IVec3) -> Option<u32>, p: IVec3) -> Option<(IVec3, u32)> {
+        let (mut at, mut s) = (p, get(p)?);
+        let mut steps = 0;
+        while let Some(d) = self.covered_step(s) {
+            (at, steps) = (at + d, steps + 1);
+            s = get(at)?;
+            if steps > 4096 {
+                return Some((p, AIR));
+            }
+        }
+        if at != p
+            && !self.states[s as usize]
+                .cells
+                .iter()
+                .any(|(o, _)| at + *o == p)
+        {
+            return Some((p, AIR));
+        }
+        Some((at, s))
+    }
+
     /// In creative this item doesn't break blocks.
     pub fn no_creative_break(&self, item: u32) -> bool {
         self.ids
@@ -1741,7 +1790,8 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
     let mut textures = TextureList::new();
     let crack_textures: [u32; 10] = std::array::from_fn(|i| textures.intern(&format!("core:block/destroy_{i}")));
     let fire_texture = textures.intern("core:block/fire");
-    let raw_blocks = entries_of(&mut games, abi::entry_kind::BLOCK);
+    let mut raw_blocks = entries_of(&mut games, abi::entry_kind::BLOCK);
+    raw_blocks.insert(0, covered_entry());
     let read_model = |name: &str| model_file(&mods, name);
     let liquid_names: Vec<String> = liquids.entries.iter().map(|e| e.name.clone()).collect();
     let mut block_tables = crate::blocks::freeze(
@@ -1966,6 +2016,9 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
         .iter()
         .map(|s| if s.liquid_walls == u8::MAX { covered_faces(s) } else { s.liquid_walls })
         .collect();
+    let covered = block_names
+        .get(COVERED)
+        .map_or(u32::MAX, |&b| block_defs[b as usize].first_state);
     Ok(Content {
         liquid_walls,
         spread_targets,
@@ -1995,6 +2048,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
         crack_textures,
         fire_texture,
         commands,
+        covered,
         block_names,
         item_names,
         creative_tabs,

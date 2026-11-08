@@ -10,7 +10,7 @@
 //!
 //! Build: `cargo build --release`. Then make `run/mods/<your id>/` with the library from
 //! `target/release/` and the `assets` folder next to it.
-//! To share it, run `weft --pack-mod run/mods/<your id>`,
+//! To share it, run `weft pack-mod run/mods/<your id>`,
 //! it packs that folder (library included) into a zip.
 //!
 //! This example adds one item, a setting, and a gift for joined players.

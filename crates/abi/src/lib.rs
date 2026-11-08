@@ -1110,7 +1110,8 @@ pub mod comp {
     /// whole block) and `OUTLINE` (likewise, what is outlined and cracked when it isn't the
     /// hitbox), `SIGNAL` (`SignalDesc`), `LIQUID_WALLS` (`u8`, a bit per `FACE_DIRS` side a liquid
     /// in its cell can't pass; none: the sides its hitbox covers whole), `PIECES` (`[Piece]`, what a
-    /// hit breaks off alone; none: all of it), `RULES` (`[BlockRule]`, what happens to it by
+    /// hit breaks off alone; none: all of it), `CELLS` (`[[i32;3]]`, the other cells it takes
+    /// besides its own, a door's upper half; joined by faces), `RULES` (`[BlockRule]`, what happens to it by
     /// itself), `HAZARDS` (`[Hazard]`, what it does to entities touching it), `TURN` (`u8`, `Turn::index`:
     /// all of the above written facing north, turned so; none: as written). It is opaque (hides its
     /// neighbors' faces, gets ambient occlusion) as a cube on the opaque layer. Any other component
@@ -1157,6 +1158,7 @@ pub mod comp {
         pub const STICKY: &str = "block.sticky";
         pub const NOT_STOOD_ON: &str = "block.not_stood_on";
         pub const PIECES: &str = "block.pieces";
+        pub const CELLS: &str = "block.cells";
         pub const RULES: &str = "block.rules";
         pub const HAZARDS: &str = "block.hazards";
     }

@@ -152,6 +152,32 @@ fn init(r: &mut Registry) {
         })
         .hardness(0.5)
         .tab(&BASE_TOOLS);
+    // Neutral as long as you keep your distance.
+    static SENTRY: EntityKind = EntityKind::named("sentry");
+    r.entity(&SENTRY)
+        .size(0.6, 1.95)
+        .max_health(20.0)
+        .walk_speed(2.6)
+        .hostile()
+        .texture("base:zombie")
+        .model(humanoid(true))
+        .attack_damage(1.0)
+        .goals(
+            ai::Goals::new()
+                .aggressive(5.0)
+                .then(ai::melee_within(1.3))
+                .then(ai::chase_target(20.0, 1.0)),
+        );
+    // One block in 2x2x2 cells, its model and boxes spanning them from its own.
+    static BIG: Block = Block::named("big");
+    let others = [[1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
+    r.block(&BIG)
+        .texture("base:mossy_cobblestone")
+        .model_box([0.0; 3], [32.0; 3])
+        .cells(&others);
+    // Edited by testkit (`max_stack` 8 there): an edit wins whichever mod loads first.
+    static EDITED: Item = Item::named("edited");
+    r.item(&EDITED).max_stack(16).attack_damage(3.0);
     // Faces the file leaves to the block (`#top`, `#side`) show these.
     r.block(&PEDESTAL)
         .textures("machine_top", "generator", "machine_top")

@@ -28,7 +28,8 @@ pub static HALF_DAMAGE: Config<bool> = Config::named("half_damage");
 pub static PEACE: Config<bool> = Config::named("peace");
 static DRILL: Block = Block::named("drill");
 /// Registered, then changed by `r.edit` (the `edits` test).
-static EDITED: Item = Item::named("edited");
+/// Testmod's, edited here: an edit wins whichever mod loads first.
+static EDITED: Item = Item::named("testmod:edited");
 static EDITED_BIOME: Biome = Biome::named("edited");
 static EDITED_LOOT: LootTable = LootTable::named("edited");
 static EDITED_KIND: EntityKind = EntityKind::named("edited");
@@ -103,22 +104,6 @@ fn count(i: usize, n: usize) {
 }
 
 pub fn register(r: &mut Registry) {
-    // Neutral as long as you keep your distance.
-    static SENTRY: EntityKind = EntityKind::named("sentry");
-    r.entity(&SENTRY)
-        .size(0.6, 1.95)
-        .max_health(20.0)
-        .walk_speed(2.6)
-        .hostile()
-        .texture("base:zombie")
-        .model(humanoid(true))
-        .attack_damage(1.0)
-        .goals(
-            ai::Goals::new()
-                .aggressive(5.0)
-                .then(ai::melee_within(1.3))
-                .then(ai::chase_target(20.0, 1.0)),
-        );
     // A random `.ctm` with tiles of two colors, on what isn't a cube.
     static VARIED_PLANT: Block = Block::named("varied_plant");
     static VARIED_BOX: Block = Block::named("varied_box");
@@ -143,7 +128,6 @@ pub fn register(r: &mut Registry) {
     r.storage(&STASH, 54);
     // What an edit sets wins, the rest stays; the testmod ones load after or before this mod
     // depending on order, which edits don't care about.
-    r.item(&EDITED).max_stack(16).attack_damage(3.0);
     r.edit(&EDITED).max_stack(8);
     r.biome(&EDITED_BIOME).set(&WARMTH, 1.0).tag("edited_a");
     r.edit(&EDITED_BIOME).set(&WARMTH, 2.0);
@@ -172,7 +156,7 @@ pub fn register(r: &mut Registry) {
     r.edit(&OAK_STAIRS).light(7);
     r.set("#testkit:lamp*", &WARMTH, 1.5);
     r.tag("testkit:lit", &["lamp[lit=true]"]);
-    r.shapeless(&base_api::SMELTING, "base:stick", 1, &["edited"], 200)
+    r.shapeless(&base_api::SMELTING, "base:stick", 1, &["testmod:edited"], 200)
         .named("smelt_edited");
     r.remove(&Recipe::named("smelt_edited"));
     r.loot(&EDITED_LOOT)
@@ -180,7 +164,7 @@ pub fn register(r: &mut Registry) {
         .pool(Pool::new().item("base:dirt"));
     r.edit(&EDITED_LOOT)
         .remove_item(&comps::loot::POOLS, "#1")
-        .replace_drop("base:stick", "edited")
+        .replace_drop("base:stick", "testmod:edited")
         .pool(Pool::new().items("base:cobblestone", 2, 2));
     r.edit(OIL.liquid())
         .flow_delay(12)
