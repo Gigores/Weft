@@ -267,9 +267,7 @@ pub fn finish_generated(
     }
     let uniform = varied == 0 && top < max;
     let ores = place_ores(c, def, seed, pos, &mut blocks, &biomes, uniform);
-    let built = place_structures(def, seed, pos, &mut blocks);
-    let mut cube =
-        if uniform && !ores && !built { Cube::uniform(blocks[0], 0) } else { Cube::from_states(blocks.as_slice().try_into().unwrap()) };
+    let mut cube = if uniform && !ores { Cube::uniform(blocks[0], 0) } else { Cube::from_states(blocks.as_slice().try_into().unwrap()) };
     if biomes.iter().any(|&b| b != 0) {
         cube.biomes = Some(Box::new(biomes));
     }
@@ -386,6 +384,25 @@ fn vein(ore: &crate::content::OreDef, start: IVec3, h: u64) -> Vec<IVec3> {
     };
     let mut out = Vec::new();
     match ore.shape {
+        v::STEPS => {
+            if let Some((lo, hi)) = ore.steps.as_ref().map(|s| s.bounds()) {
+                let (lo, hi) = (lo.floor().as_ivec3(), hi.ceil().as_ivec3());
+                for z in lo.z..=hi.z {
+                    for y in lo.y..=hi.y {
+                        for x in lo.x..=hi.x {
+                            let d = IVec3::new(x, y, z);
+                            if ore
+                                .steps
+                                .as_ref()
+                                .is_some_and(|s| s.contains(d.as_dvec3() + DVec3::splat(0.5)))
+                            {
+                                out.push(start + d);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         v::SPHERE => ball(start, ore.shape_size[0], &mut out),
         v::DISK => {
             let (r, t) = (ore.shape_size[0], ore.shape_size[1].max(1.0) as i32);
@@ -425,26 +442,6 @@ fn vein(ore: &crate::content::OreDef, start: IVec3, h: u64) -> Vec<IVec3> {
     out
 }
 
-/// Where structure `s` stands in its grid cell (`cell` x, z), if it does there: its lowest
-/// corner. Depends only on the seed and the dimension's columns, so every cube agrees.
-pub fn structure_in(def: &crate::content::DimensionDef, s: &crate::content::StructureDef, seed: u64, cell: (i32, i32)) -> Option<IVec3> {
-    let h = hash(seed ^ s.salt, cell.0 as i64, 7, cell.1 as i64);
-    if weft_noise::unit(h) >= s.chance as f64 {
-        return None;
-    }
-    let room = (s.spacing - s.extent.x.max(s.extent.z)).max(1) as u64;
-    let (x, z) = (cell.0 * s.spacing + ((h >> 3) % room) as i32, cell.1 * s.spacing + ((h >> 29) % room) as i32);
-    let col = def.column(seed, x + s.extent.x / 2, z + s.extent.z / 2)?;
-    if s.biome
-        .as_ref()
-        .is_some_and(|b| !crate::refs::has(b, col.biome))
-        || !(s.y[0]..=s.y[1]).contains(&col.height)
-    {
-        return None;
-    }
-    Some(IVec3::new(x, col.height + 1 - s.sink, z))
-}
-
 /// The site of scatter `s` in its grid cell, if it has one there: the block above the ground,
 /// the biome and the site's random bits. Depends only on the seed and the columns.
 pub fn scatter_site(
@@ -454,9 +451,15 @@ pub fn scatter_site(
     seed: u64,
     cell: (i32, i32),
 ) -> Option<(IVec3, u32, u64)> {
+    use crate::content::{Chance, SiteShape};
     let h = hash(seed ^ s.salt, cell.0 as i64, 0, cell.1 as i64);
-    let (x, z) = (cell.0 * s.cell + (h % s.cell as u64) as i32, cell.1 * s.cell + ((h >> 8) % s.cell as u64) as i32);
-    let col = def.column(seed, x, z)?;
+    // A template stands within the cell from its lowest corner, its ground the column in its middle.
+    let (room, mid, sink) = match &s.shape {
+        SiteShape::Template { extent, sink, .. } => ((s.cell - extent.x.max(extent.z)).max(1), (extent.x / 2, extent.z / 2), *sink),
+        SiteShape::Callback(..) => (s.cell, (0, 0), 0),
+    };
+    let (x, z) = (cell.0 * s.cell + (h % room as u64) as i32, cell.1 * s.cell + ((h >> 8) % room as u64) as i32);
+    let col = def.column(seed, x + mid.0, z + mid.1)?;
     if col.height == i32::MIN
         || def.sea_level().is_some_and(|l| col.height < l)
         || !(s.y[0]..=s.y[1]).contains(&(col.height + 1))
@@ -473,14 +476,33 @@ pub fn scatter_site(
             return None;
         }
     }
-    let density = s
-        .density
-        .and_then(|d| c.components.get::<f32>(comps::BIOME, col.biome, d))
-        .unwrap_or(0.0);
-    if weft_noise::unit(h.rotate_left(17)) >= density as f64 || def.carved(seed, x, z) {
+    let chance = match s.chance {
+        Chance::Fixed(f) => f,
+        Chance::Density(d) => d
+            .and_then(|d| c.components.get::<f32>(comps::BIOME, col.biome, d))
+            .unwrap_or(0.0),
+    };
+    if weft_noise::unit(h.rotate_left(17)) >= chance as f64 || def.carved(seed, x + mid.0, z + mid.1) {
         return None;
     }
-    Some((IVec3::new(x, col.height + 1, z), col.biome, hash(h, 1, 2, 3)))
+    Some((IVec3::new(x, col.height + 1 - sink, z), col.biome, hash(h, 1, 2, 3)))
+}
+
+/// A template's blocks at a site, from its lowest corner, turned a quarter `random` picks when
+/// it `turns` (its states with it), all put over what is there.
+fn template_blocks(c: &Content, blocks: &[(IVec3, u32)], turns: bool, random: u64) -> Vec<abi::ScatterBlock> {
+    // East to south, west, north: quarters about the vertical.
+    let turn = if turns { [1, 5, 0, 4][(random >> 40) as usize % 4] } else { 1 };
+    let t = abi::Turn { east: turn, up: 3 };
+    let moved: Vec<(IVec3, u32)> = blocks
+        .iter()
+        .map(|&(p, s)| (IVec3::from_array(t.vector(p.to_array())), c.turned_state(s, t)))
+        .collect();
+    let lo = moved.iter().fold(IVec3::MAX, |m, b| m.min(b.0));
+    moved
+        .into_iter()
+        .map(|(p, state)| abi::ScatterBlock { offset: (p - lo).to_array().into(), state, force: 1 })
+        .collect()
 }
 
 /// A scattered thing: where it stands and its blocks (the shape callback's, made once and
@@ -505,22 +527,27 @@ fn scatter_sites(c: &Content, def: &crate::content::DimensionDef, dim: u32, seed
             for cz in cells(o.z) {
                 for cx in cells(o.x) {
                     let Some((pos, biome, random)) = scatter_site(def, c, s, seed, (cx, cz)) else { continue };
-                    let mut args = abi::ScatterArgs {
-                        seed,
-                        dim,
-                        pos: pos.to_array().into(),
-                        biome,
-                        random,
-                        out: buf.as_mut_ptr(),
-                        cap: buf.len() as u32,
-                        len: 0,
+                    let blocks: Vec<abi::ScatterBlock> = match &s.shape {
+                        crate::content::SiteShape::Callback(owner, shape) => {
+                            let mut args = abi::ScatterArgs {
+                                seed,
+                                dim,
+                                pos: pos.to_array().into(),
+                                biome,
+                                random,
+                                out: buf.as_mut_ptr(),
+                                cap: buf.len() as u32,
+                                len: 0,
+                            };
+                            host::invoke(*owner, *shape, &mut args);
+                            buf[..(args.len as usize).min(buf.len())]
+                                .iter()
+                                .filter(|b| b.state < states && (-s.reach_y[0]..=s.reach_y[1]).contains(&b.offset.y))
+                                .copied()
+                                .collect()
+                        }
+                        crate::content::SiteShape::Template { blocks, turns, .. } => template_blocks(c, blocks, *turns, random),
                     };
-                    host::invoke(s.owner, s.shape, &mut args);
-                    let blocks: Vec<abi::ScatterBlock> = buf[..(args.len as usize).min(buf.len())]
-                        .iter()
-                        .filter(|b| b.state < states && (-s.reach_y[0]..=s.reach_y[1]).contains(&b.offset.y))
-                        .copied()
-                        .collect();
                     let (lo, hi) = blocks.iter().fold((IVec3::MAX, IVec3::MIN), |(lo, hi), b| {
                         (lo.min(pos + crate::world::ivec(b.offset)), hi.max(pos + crate::world::ivec(b.offset)))
                     });
@@ -578,32 +605,6 @@ pub fn scattered_near(def: &crate::content::DimensionDef, c: &Content, seed: u64
             cells(x).any(|cx| scatter_site(def, c, s, seed, (cx, cz)).is_some_and(|(p, ..)| (p.x - x).abs() <= r && (p.z - z).abs() <= r))
         })
     })
-}
-
-/// Structure blocks that fall into this cube.
-/// Returns whether it put anything in.
-fn place_structures(def: &crate::content::DimensionDef, seed: u64, pos: IVec3, blocks: &mut [u32]) -> bool {
-    let o = pos * 16;
-    let mut built = false;
-    for s in &def.structures {
-        let cells = |lo: i32, size: i32| (lo - size).div_euclid(s.spacing)..=(lo + 15).div_euclid(s.spacing);
-        for cz in cells(o.z, s.extent.z) {
-            for cx in cells(o.x, s.extent.x) {
-                let Some(a) = structure_in(def, s, seed, (cx, cz)) else { continue };
-                if a.y > o.y + 15 || a.y + s.extent.y <= o.y {
-                    continue;
-                }
-                for &(off, state) in &s.blocks {
-                    let l = a + off - o;
-                    if l.cmpge(IVec3::ZERO).all() && l.cmplt(IVec3::splat(16)).all() {
-                        blocks[local_index(l)] = state;
-                        built = true;
-                    }
-                }
-            }
-        }
-    }
-    built
 }
 
 /// The entity effects in an `EFFECT` component still on at `now` (`u64::MAX`: all): effect,

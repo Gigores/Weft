@@ -299,7 +299,7 @@ r.remove(&Decoration::named("base:decoration"));
 ```
 
 ## Structure
-A template placed now and then, named like the template. `r.structure(&TEMPLATE)`, another mod's `r.edit(TEMPLATE.structure())`, placement as for ores.
+A template placed now and then, named like the template: a scatter whose blocks are the template. `r.structure(&TEMPLATE)`, another mod's `r.edit(TEMPLATE.structure())`, placement as for ores; tag `structure.turns` (`.turns()`) turns each a random quarter.
 
 | component (`comps::structure`) | schema | default |
 |---|---|---|

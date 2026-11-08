@@ -634,7 +634,6 @@ pub struct DimensionDef {
     pub spawn_at: [i32; 3],
     /// Placed by the engine after `generator`, in name order.
     pub ores: Vec<OreDef>,
-    pub structures: Vec<StructureDef>,
     /// Its `entry_kind::TERRAIN`: fills cubes before `generator` runs.
     pub terrain: Option<Box<crate::server::terrain::Terrain>>,
     /// `comp::dimension::BARE`: only ores, scatters and decorations that name it.
@@ -644,7 +643,7 @@ pub struct DimensionDef {
     weather_names: Vec<String>,
     /// (turn, level) points sorted by turn, empty for vanilla's curve.
     pub daylight: Vec<[f32; 2]>,
-    /// In name order, placed after `generator`.
+    /// In name order, placed after `generator`: scatters, then structures.
     pub scatters: Vec<ScatterDef>,
     /// (mod, callback) run after the generator and scatters, in load order.
     pub decorations: Vec<(ModId, Callback)>,
@@ -655,22 +654,42 @@ pub struct DimensionDef {
     pub scatter_cache: crate::server::terrain::ColumnCache<Vec<crate::server::dim::Site>>,
 }
 
+/// What a scatter puts at a site: what a mod's callback says, or a template (a structure).
+#[derive(Clone)]
+pub enum SiteShape {
+    Callback(ModId, Callback),
+    /// Blocks from its lowest corner (the site), the box they fill, how far it sinks, whether it
+    /// turns a random quarter.
+    Template {
+        blocks: std::sync::Arc<[(IVec3, u32)]>,
+        extent: IVec3,
+        sink: i32,
+        turns: bool,
+    },
+}
+
+/// What has a site in a grid cell: the share of cells a biome's component says, or a fixed one.
+#[derive(Clone, Copy)]
+pub enum Chance {
+    Density(Option<u32>),
+    Fixed(f32),
+}
+
 #[derive(Clone)]
 pub struct ScatterDef {
-    pub owner: ModId,
+    pub name: String,
     pub cell: i32,
     pub reach: i32,
     /// How far below and above its site it may put blocks.
     pub reach_y: [i32; 2],
-    /// Biome component (f32) with the chance of a site per cell.
-    pub density: Option<u32>,
+    pub chance: Chance,
     /// Biomes and heights of the site (`abi::comp::common`).
     pub biome: Option<Box<[u64]>>,
     pub y: [i32; 2],
     /// Matcher of the surface block under the site (`None`: any).
     pub ground: Option<u32>,
     pub salt: u64,
-    pub shape: Callback,
+    pub shape: SiteShape,
 }
 
 impl DimensionDef {
@@ -786,6 +805,8 @@ pub struct OreDef {
     /// `abi::vein_shape`, and its sizes.
     pub shape: u32,
     pub shape_size: [f32; 2],
+    /// `vein_shape::STEPS`: the shape about its start.
+    pub steps: Option<crate::shape::Shape>,
     /// `abi::height_curve`.
     pub height: u32,
     pub plateau: i32,
@@ -815,6 +836,11 @@ impl OreDef {
         let r = match self.shape {
             abi::vein_shape::SPHERE | abi::vein_shape::DISK => self.shape_size[0].ceil() as i32,
             abi::vein_shape::BLOB => (self.size as f32).cbrt().ceil() as i32 + 2,
+            abi::vein_shape::STEPS => self
+                .steps
+                .as_ref()
+                .map(|s| s.bounds())
+                .map_or(0, |(lo, hi)| lo.abs().max(hi.abs()).max_element().ceil() as i32),
             _ => self.size as i32,
         };
         r.clamp(0, 16)
@@ -849,21 +875,6 @@ impl OreDef {
 pub struct TemplateDef {
     pub name: String,
     pub blocks: Vec<(glam::IVec3, u32)>,
-}
-
-#[derive(Clone)]
-pub struct StructureDef {
-    pub name: String,
-    /// (offset from the lowest corner, state).
-    pub blocks: Vec<(glam::IVec3, u32)>,
-    pub extent: glam::IVec3,
-    pub spacing: i32,
-    pub chance: f32,
-    pub biome: Option<Box<[u64]>>,
-    /// Heights its ground may be at.
-    pub y: [i32; 2],
-    pub sink: i32,
-    pub salt: u64,
 }
 
 pub struct ModMeta {
@@ -1488,7 +1499,6 @@ fn bake_dimension(e: &Entry) -> DimensionDef {
         builtin: None,
         spawn_at: [0, 64, 0],
         ores: Vec::new(),
-        structures: Vec::new(),
         terrain: None,
         bare: e.has(d::BARE),
         weathers: Vec::new(),
@@ -1529,7 +1539,6 @@ fn void_dimension() -> DimensionDef {
         builtin: None,
         spawn_at: [0, 64, 0],
         ores: Vec::new(),
-        structures: Vec::new(),
         terrain: None,
         bare: true,
         weathers: Vec::new(),
@@ -2760,6 +2769,9 @@ fn place_features(
             salt: crate::registry::name_hash(&e.name),
             biome,
             shape: shape.kind,
+            steps: e
+                .get::<Vec<abi::ShapeStep>>(o::STEPS)
+                .and_then(|v| crate::shape::Shape::from_abi(&v)),
             shape_size: [size(shape.radius), size(shape.thickness)],
             height: height.curve,
             plateau: height.plateau.max(0),
@@ -2790,16 +2802,16 @@ fn place_features(
         let biome = look.biomes(&what, e, errors).ok()?;
         let (owner, shape) = e.callback(s::SHAPE).unwrap_or((e.owner, Callback::NONE));
         let def = ScatterDef {
-            owner,
+            name: e.name.clone(),
             cell,
             reach,
             reach_y: [e.or(s::REACH_DOWN, 16).clamp(0, 256), e.or(s::REACH_UP, 32).clamp(0, 256)],
-            density,
+            chance: Chance::Density(density),
             biome,
             y: heights(e),
             ground,
             salt: crate::registry::name_hash(&e.name),
-            shape,
+            shape: SiteShape::Callback(owner, shape),
         };
         Some((look.targets(dim_defs, &what, e, errors), def))
     });
@@ -2881,21 +2893,23 @@ fn place_structures(
             let extent = blocks
                 .iter()
                 .fold(IVec3::ZERO, |m, (p, _)| m.max(*p + IVec3::ONE));
-            let def = StructureDef {
+            let sink = e.or(s::BURIED, 0);
+            let def = ScatterDef {
                 name: e.name.clone(),
-                blocks,
-                extent,
-                spacing: e.or(s::SPACING, 32u32).max(1) as i32,
-                chance: e.or(s::CHANCE, 0.5),
+                cell: e.or(s::SPACING, 32u32).max(1) as i32,
+                reach: extent.x.max(extent.z),
+                reach_y: [sink.max(0), extent.y],
+                chance: Chance::Fixed(e.or(s::CHANCE, 0.5)),
                 biome,
                 y: heights(e),
-                sink: e.or(s::BURIED, 0),
+                ground: None,
                 salt: crate::registry::name_hash(&e.name),
+                shape: SiteShape::Template { blocks: blocks.into(), extent, sink, turns: e.has(s::TURNS) },
             };
             Some((look.targets(dim_defs, &what, e, errors), def))
         },
     );
-    place(dim_defs, structures, |d| &mut d.structures);
+    place(dim_defs, structures, |d| &mut d.scatters);
 }
 
 /// Each dimension's terrain: its own mod's entries first, then other mods' in load order.

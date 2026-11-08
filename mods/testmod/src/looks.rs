@@ -91,7 +91,8 @@ pub fn register(r: &mut Registry) {
         .spacing(128)
         .chance(0.5)
         .biome("#dry")
-        .buried(1);
+        .buried(1)
+        .turns();
     // Glow crystals grow only in Mars' crystal caves (an underground biome).
     r.ore(&GLOW_CRYSTAL)
         .dimension(&crate::MARS)

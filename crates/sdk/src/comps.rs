@@ -338,6 +338,7 @@ pub mod ore {
     pub static VEINS: Component<u32, Ore> = Component::named(o::VEINS);
     pub static SIZE: Component<u32, Ore> = Component::named(o::SIZE);
     pub static SHAPE: Component<abi::VeinShape, Ore> = Component::named(o::SHAPE);
+    pub static STEPS: Component<Vec<abi::ShapeStep>, Ore> = Component::named(o::STEPS);
     pub static HEIGHT: Component<abi::OreHeight, Ore> = Component::named(o::HEIGHT);
     pub static REPLACES: Component<crate::Matcher, Ore> = Component::named(o::REPLACES);
     pub static REPLACES_WITH: Component<Vec<abi::OreVariant>, Ore> = Component::named(o::REPLACES_WITH);
@@ -400,6 +401,7 @@ pub mod structure {
     pub static SPACING: Component<u32, Structure> = Component::named(s::SPACING);
     pub static CHANCE: Component<f32, Structure> = Component::named(s::CHANCE);
     pub static BURIED: Component<i32, Structure> = Component::named(s::BURIED);
+    pub static TURNS: crate::Tag<Structure> = crate::Tag::named(s::TURNS);
 }
 
 /// A template's blocks.

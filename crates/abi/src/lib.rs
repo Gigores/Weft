@@ -948,7 +948,8 @@ pub mod comp {
     }
 
     /// An ore's (`entry_kind::ORE`), scattered after the dimension's generator: `VEINS` (`u32`,
-    /// started per cube, 4), `SIZE` (`u32`, blocks per vein, 8), `SHAPE` (`VeinShape`, a walk),
+    /// started per cube, 4), `SIZE` (`u32`, blocks per vein, 8), `SHAPE` (`VeinShape`, a walk;
+    /// `vein_shape::STEPS`: `STEPS`, `[ShapeStep]`, any shape about its start, a geode's shell),
     /// `HEIGHT` (`OreHeight`, how the starts spread over `common::Y`, evenly), `REPLACES`
     /// (`match`: what it may replace), `REPLACES_WITH` (`[OreVariant]`), `EXPOSED`
     /// (`f32`, share of its blocks left out where they would touch air, 0).
@@ -956,6 +957,7 @@ pub mod comp {
         pub const VEINS: &str = "ore.veins";
         pub const SIZE: &str = "ore.size";
         pub const SHAPE: &str = "ore.shape";
+        pub const STEPS: &str = "ore.steps";
         pub const HEIGHT: &str = "ore.height";
         pub const REPLACES: &str = "ore.replaces";
         pub const REPLACES_WITH: &str = "ore.replaces_with";
@@ -1017,13 +1019,15 @@ pub mod comp {
         pub const GENERATE: &str = "decoration.generate";
     }
 
-    /// A structure's (`entry_kind::STRUCTURE`, named like the template it places): a `CHANCE`
-    /// (`f32`, 0.5) per `SPACING` x `SPACING` cell (`u32`, 32) of the world, standing on the
-    /// surface sunk by `BURIED` (`i32`, 0) blocks.
+    /// A structure's (`entry_kind::STRUCTURE`, named like the template it places): a scatter
+    /// whose blocks are its template, a `CHANCE` (`f32`, 0.5) per `SPACING` x `SPACING` cell
+    /// (`u32`, 32) of the world, standing on the surface sunk by `BURIED` (`i32`, 0) blocks,
+    /// turned a random quarter about the vertical with tag `TURNS`.
     pub mod structure {
         pub const SPACING: &str = "structure.spacing";
         pub const CHANCE: &str = "structure.chance";
         pub const BURIED: &str = "structure.buried";
+        pub const TURNS: &str = "structure.turns";
     }
 
     /// A template's `BLOCKS` (`[TemplateBlock]`): a fixed shape for world structures, moving
@@ -2733,6 +2737,9 @@ pub struct ShapeStep {
     pub v: [f64; 8],
 }
 defaults!(ShapeStep { kind: 0, axis: 3, seed: 0, v: [0.0; 8] });
+impl Schema for ShapeStep {
+    const SCHEMA: &'static str = "{kind:u32,axis:u32,seed:u64,v:[f64;8]}";
+}
 
 pub mod shape_kind {
     /// Center x y z, radius.
@@ -4750,6 +4757,8 @@ pub mod vein_shape {
     pub const SPHERE: u32 = 2;
     /// Flat and round, like clay and gravel under water.
     pub const DISK: u32 = 3;
+    /// The ore's `comp::ore::STEPS`, a shape like a fill's, about its start.
+    pub const STEPS: u32 = 4;
 }
 
 pub mod height_curve {

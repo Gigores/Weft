@@ -1156,7 +1156,19 @@ pub async fn worldgen(t: T) -> R {
         .collect();
     t.check(n[0] + n[1] > 0, "trees grow in base's forest on Mars");
     t.check(n[2] > 0, "the forest brings its grass to Mars");
-    t.check(t.op("structure testmod:obelisk 3000").await? != "none", "obelisks on Mars");
+    // The nearest obelisk is where its site says, its crystal in the middle of its top.
+    let at = t.op("structure testmod:obelisk 3000").await?;
+    let corner: Vec<i32> = at
+        .split_whitespace()
+        .filter_map(|v| v.parse().ok())
+        .collect();
+    t.check(corner.len() == 3, format!("obelisks on Mars ({at})"));
+    if let [cx, cy, cz] = corner[..] {
+        t.cmd(&format!("/tp {cx} {} {cz}", cy + 8)).await?;
+        t.secs(0.5).await?;
+        t.loaded().await?;
+        t.check_eq(t.block([cx + 1, cy + 4, cz + 1]).await?, "testmod:glow_crystal".to_string(), "an obelisk stands at its site");
+    }
     let (mut caves, mut inside, mut outside) = (0, 0, 0);
     for (i, x) in [0, 200].into_iter().enumerate() {
         t.cmd(&format!("/tp {x} -40 {}", i * 150)).await?;

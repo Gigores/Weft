@@ -2769,6 +2769,10 @@ impl StructureBuilder<'_> {
     pub fn buried(self, blocks: i32) -> Self {
         self.set(&crate::comps::structure::BURIED, blocks)
     }
+    /// Each one turned a random quarter about the vertical, its blocks with it.
+    pub fn turns(self) -> Self {
+        self.tag(abi::comp::structure::TURNS)
+    }
 }
 
 /// Layers from the bottom up, each a list of rows along z, each character one block along x:
@@ -2871,29 +2875,34 @@ impl Height {
 
 /// What an ore vein looks like (`OreBuilder::shape`). Every shape stays within 16 blocks of
 /// where it starts.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Vein {
     kind: u32,
     radius: f32,
     thickness: f32,
     blocks: u32,
+    steps: Vec<abi::ShapeStep>,
 }
 
 impl Vein {
     /// A random walk of `blocks` steps, the default.
     pub fn walk(blocks: u32) -> Vein {
-        Vein { kind: abi::vein_shape::WALK, radius: 0.0, thickness: 0.0, blocks }
+        Vein { kind: abi::vein_shape::WALK, radius: 0.0, thickness: 0.0, blocks, steps: Vec::new() }
     }
     /// A lump of about `blocks`, like modern vanilla's.
     pub fn blob(blocks: u32) -> Vein {
-        Vein { kind: abi::vein_shape::BLOB, radius: 0.0, thickness: 0.0, blocks }
+        Vein { kind: abi::vein_shape::BLOB, radius: 0.0, thickness: 0.0, blocks, steps: Vec::new() }
     }
     pub fn sphere(radius: f32) -> Vein {
-        Vein { kind: abi::vein_shape::SPHERE, radius, thickness: 0.0, blocks: 0 }
+        Vein { kind: abi::vein_shape::SPHERE, radius, thickness: 0.0, blocks: 0, steps: Vec::new() }
     }
     /// Flat and round (clay, gravel and sand under water).
     pub fn disk(radius: f32, thickness: f32) -> Vein {
-        Vein { kind: abi::vein_shape::DISK, radius, thickness, blocks: 0 }
+        Vein { kind: abi::vein_shape::DISK, radius, thickness, blocks: 0, steps: Vec::new() }
+    }
+    /// Any shape about its start, as a fill takes (`Shape::ball(..).subtract(..)`: a geode's shell).
+    pub fn shape(shape: &crate::Shape) -> Vein {
+        Vein { kind: abi::vein_shape::STEPS, radius: 0.0, thickness: 0.0, blocks: 0, steps: shape.steps().to_vec() }
     }
 }
 
@@ -2914,6 +2923,7 @@ impl OreBuilder<'_> {
     /// What a vein looks like (a random walk of `size` blocks unless this says otherwise).
     pub fn shape(self, v: Vein) -> Self {
         let b = self.set(&crate::comps::ore::SHAPE, abi::VeinShape { kind: v.kind, radius: v.radius, thickness: v.thickness });
+        let b = if v.steps.is_empty() { b } else { b.set(&crate::comps::ore::STEPS, v.steps) };
         if v.blocks > 0 { b.vein_size(v.blocks) } else { b }
     }
     /// Veins started per cube (4 unless said).

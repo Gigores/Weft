@@ -1366,12 +1366,12 @@ impl Server {
 /// The nearest structure `name` of dimension `dim` within `radius` of `pos`: its lowest corner.
 pub fn structure_near(c: &Content, dim: u32, seed: u64, name: &str, pos: IVec3, radius: i32) -> Option<IVec3> {
     let def = &c.dims[dim as usize];
-    let s = def.structures.iter().find(|s| s.name == name)?;
-    let cells = |v: i32| (v - radius).div_euclid(s.spacing)..=(v + radius).div_euclid(s.spacing);
+    let s = def.scatters.iter().find(|s| s.name == name)?;
+    let cells = |v: i32| (v - radius).div_euclid(s.cell)..=(v + radius).div_euclid(s.cell);
     let mut best: Option<IVec3> = None;
     for cz in cells(pos.z) {
         for cx in cells(pos.x) {
-            if let Some(a) = dim::structure_in(def, s, seed, (cx, cz)) {
+            if let Some((a, ..)) = dim::scatter_site(def, c, s, seed, (cx, cz)) {
                 let d = |p: IVec3| (p - pos).with_y(0).as_vec3().length();
                 if d(a) <= radius as f32 && best.is_none_or(|b| d(a) < d(b)) {
                     best = Some(a);
