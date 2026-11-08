@@ -983,8 +983,9 @@ pub mod comp {
 
     /// What happens where two liquids meet (`entry_kind::REACTION`): when `LIQUID` (`match`) has
     /// `TOUCHING` (`match`) beside or above it, it turns into
-    /// `SOURCE` (`str`, a block) if it was a source, else `FLOWING` (`str`); when it flows down
-    /// into `TOUCHING`, that block becomes `FALLS_INTO` (`str`). What is not set stays as it is.
+    /// `SOURCE` (`str`, a block) if it was a source, else `FLOWING` (`str`); when it comes down
+    /// onto `TOUCHING`, that block becomes `FALLS_INTO` (`str`). What is not set stays as it is.
+    /// Each is block rules of the liquids' states at freeze (`comp::block::RULES`).
     pub mod reaction {
         pub const LIQUID: &str = "reaction.liquid";
         pub const TOUCHING: &str = "reaction.touching";

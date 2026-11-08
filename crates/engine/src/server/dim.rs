@@ -2925,7 +2925,9 @@ impl Dim {
     fn act(&mut self, c: &'static Content, p: IVec3, part: u32, then: Then) {
         match then {
             Then::Become(s) => {
-                self.replace_part(c, p, part, s);
+                // Something solid has no room beside the other things in the cell: it goes.
+                let crowded = !self.space.extras(p).is_empty() && c.states[s as usize].flags & bf::SOLID != 0;
+                self.replace_part(c, p, part, if crowded { AIR } else { s });
             }
             Then::Grow => match c.block_of(part).cb.on_grow {
                 Some(_) => {

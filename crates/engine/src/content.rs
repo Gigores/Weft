@@ -588,14 +588,6 @@ impl LiquidDef {
 }
 
 /// Its two sides are matchers.
-pub struct ReactionDef {
-    pub liquid: u32,
-    pub touching: u32,
-    pub source: Option<u32>,
-    pub flowing: Option<u32>,
-    pub falls_into: Option<u32>,
-}
-
 pub struct CreativeTab {
     pub name: String,
     pub icon: u32,
@@ -1049,7 +1041,6 @@ pub struct Content {
     pub creative_tabs: Vec<CreativeTab>,
     pub game: crate::registry::Game,
     pub liquids: Vec<LiquidDef>,
-    pub reactions: Vec<ReactionDef>,
     /// Item -> (liquid it holds, the empty container left after pouring).
     pub item_liquid: FxHashMap<u32, (u16, u32)>,
     /// (empty container, liquid) -> filled item.
@@ -1902,7 +1893,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
     build_terrains(&mut games, &mut dim_defs, &biome_names, &biome_rules, look, &mut tables, &mod_name, &mut errors);
     let commands = freeze_commands(&mods, &mut games, &mut errors);
     let mut word_sets = collect_word_sets(&mut games, &mod_name, &mut errors);
-    let (liquids, reactions) = freeze_liquids(liquids, &mut games, &mut states, look, &mut matchers, &mut tables, &mod_name, &mut errors);
+    let liquids = freeze_liquids(liquids, &mut games, &mut states, look, &mut matchers, &mut tables, &mut conds, &mod_name, &mut errors);
     let mut shares_cell: FxHashMap<u32, u32> = FxHashMap::default();
     for (name, text) in &shares_specs {
         let Some(&block) = block_names.get(name) else { continue };
@@ -2074,7 +2065,6 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
         biome_names,
         game,
         liquids,
-        reactions,
         item_liquid,
         fluid_items,
         item_fluid,
@@ -3494,9 +3484,10 @@ fn freeze_liquids(
     look: Lookups,
     matchers: &mut crate::refs::Matchers,
     tables: &mut crate::entries::Tables,
+    conds: &mut crate::conditions::Texts,
     mod_name: &dyn Fn(ModId) -> String,
     errors: &mut Vec<String>,
-) -> (Vec<LiquidDef>, Vec<ReactionDef>) {
+) -> Vec<LiquidDef> {
     use abi::comp::{liquid as l, reaction as r};
     let blocks = look.block_defs;
     let (liquids, _) = tables.finish(
@@ -3546,7 +3537,7 @@ fn freeze_liquids(
         }
     }
     let kind = abi::entry_kind::REACTION;
-    let (reactions, _) = tables.bake(entries_of(games, kind), kind, mod_name, errors, |e, errors| {
+    let (reactions, _) = tables.bake(entries_of(games, kind), kind, mod_name, errors, |e, errors| -> Option<_> {
         let what = format!("liquid reaction {}", e.name);
         let mut matcher = |name: &str, errors: &mut Vec<String>| look.matcher(matchers, e.text(name).unwrap_or_default(), &what, errors);
         let result = |name: &str, errors: &mut Vec<String>| -> Option<u32> {
@@ -3557,16 +3548,44 @@ fn freeze_liquids(
             }
             b
         };
-        let (liquid, touching) = (matcher(r::LIQUID, errors), matcher(r::TOUCHING, errors));
-        Some(ReactionDef {
-            liquid: liquid?,
-            touching: touching?,
-            source: result(r::SOURCE, errors),
-            flowing: result(r::FLOWING, errors),
-            falls_into: result(r::FALLS_INTO, errors),
-        })
+        let (liquid, touching) = (matcher(r::LIQUID, errors)?, matcher(r::TOUCHING, errors)?);
+        let text = |name: &str| e.text(name).unwrap_or_default().to_string();
+        Some((
+            liquid,
+            touching,
+            text(r::LIQUID),
+            text(r::TOUCHING),
+            result(r::SOURCE, errors),
+            result(r::FLOWING, errors),
+            result(r::FALLS_INTO, errors),
+        ))
     });
-    (liquids, reactions.into_iter().flatten().collect())
+    // Rules of the liquids' states: what reacts turns, what is fallen onto becomes the result.
+    // What lies the way a liquid flows does not react with it (lava over water).
+    let rule = |cond: String, into: u32, conds: &mut crate::conditions::Texts| Rule {
+        when: When::Neighbor(0),
+        cond: conds.all(&[cond]),
+        then: Then::Become(into),
+    };
+    for (liquid, touching, liquid_text, touching_text, source, flowing, falls_into) in reactions.into_iter().flatten() {
+        // The side it comes from, against the way it flows.
+        let from = |rises: bool| if rises { "down" } else { "up" };
+        let falling = liquids.iter().find(|l| matchers.has(liquid, l.first_state));
+        for (i, s) in states.iter_mut().enumerate() {
+            let Some(l) = s.liquid.map(|l| &liquids[l as usize]) else { continue };
+            let made = if i as u32 == l.first_state { source } else { flowing };
+            if let Some(into) = made.filter(|_| matchers.has(liquid, i as u32)) {
+                let up = from(l.rises);
+                s.rules
+                    .push(rule(format!("beside({touching_text}) | side({up}, {touching_text})"), into, conds));
+            }
+            if let (Some(into), Some(f)) = (falls_into.filter(|_| matchers.has(touching, i as u32)), falling) {
+                s.rules
+                    .push(rule(format!("side({}, {liquid_text})", from(f.rises)), into, conds));
+            }
+        }
+    }
+    liquids
 }
 
 #[cfg(test)]
