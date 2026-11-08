@@ -211,7 +211,7 @@ pub fn register(r: &mut Registry) {
             // Its mod may be gone by now.
             let Some(dim) = dimension_from_key(spawn.dim_key).map(|d| name_of(abi::entry_kind::DIMENSION, d)) else {
                 spawn.set = 0;
-                w.hint(e.player, MISSING, &[]);
+                w.hint(MISSING, &[]).to(e.player);
                 continue;
             };
             *arriving = Arriving { from: st.pos.to_array(), dim: w.dimension(), on_way: 1 };
@@ -240,7 +240,7 @@ fn use_bed(u: &mut Use) -> bool {
             && w.component(o, &SLEEP)
                 .is_some_and(|s| s.asleep != 0 && s.bed == foot)
     }) {
-        w.hint(player, OCCUPIED, &[]);
+        w.hint(OCCUPIED, &[]).to(player);
         return true;
     }
     // A player stays standing in bed, so as much room as that takes.
@@ -248,7 +248,7 @@ fn use_bed(u: &mut Use) -> bool {
         .iter()
         .any(|dy| w.block_flags([foot[0], foot[1] + dy, foot[2]]) & abi::block_flags::SOLID != 0)
     {
-        w.hint(player, OBSTRUCTED, &[]);
+        w.hint(OBSTRUCTED, &[]).to(player);
         return true;
     }
     let dim = w.dimension();
@@ -256,13 +256,13 @@ fn use_bed(u: &mut Use) -> bool {
     if let Some(spawn) = w.component_mut(player, &BED_SPAWN) {
         if spawn.set == 0 || spawn.bed != foot || spawn.dim_key != dim_key {
             *spawn = BedSpawn { bed: foot, set: 1, dim_key };
-            w.hint(player, SPAWN_SET, &[]);
+            w.hint(SPAWN_SET, &[]).to(player);
         }
     }
     if w.daylight() >= NIGHT {
-        w.hint(player, NOT_NIGHT, &[]);
+        w.hint(NOT_NIGHT, &[]).to(player);
     } else if monsters_near(&w, foot) {
-        w.hint(player, MONSTERS_NEAR, &[]);
+        w.hint(MONSTERS_NEAR, &[]).to(player);
     } else if let Some(s) = w.component_mut(player, &SLEEP) {
         let night = NIGHTS.lock().unwrap().get(&dim).map_or(0, |n| n.skipped);
         *s = Sleep { bed: foot, since: w.game_time(), night, asleep: 1 };
@@ -300,7 +300,7 @@ fn arrive(w: &World, id: u64) {
     a.on_way = 0;
     if !BED.is(state) {
         spawn.set = 0;
-        w.hint(id, MISSING, &[]);
+        w.hint(MISSING, &[]).to(id);
         w.teleport(id, Some(Dimension::generated(name_of(abi::entry_kind::DIMENSION, a.dim).to_string())), a.from);
     }
 }

@@ -387,7 +387,7 @@ messages! {
         /// The server's values of `SYNCED` settings: (config id, value).
         Configs(Vec<(u32, f64)>),
         /// Sound events: (event, position, volume, pitch or 0).
-        Sounds(Vec<(u32, DVec3, f32, f32)>),
+        Sounds(Vec<(u32, Option<DVec3>, f32, f32)>),
         /// Keyframe animations started on entities: (entity, name, looping); empty name = none.
         PlayAction(Vec<(u64, String, bool)>),
         /// A player's own skin (PNG), for their entity.

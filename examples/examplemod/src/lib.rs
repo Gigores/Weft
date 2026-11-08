@@ -190,8 +190,8 @@ fn events(r: &mut Registry) {
 fn commands(_r: &mut Registry) {
     // Text on a player's screen, all one call with different defaults (docs: Text on the screen).
     // r.on_event(&PLAYER_JOINED, |b| for e in b.iter() {
-    //     b.world().hint(e.player, "examplemod.hello", &[]);
-    //     b.world().show(e.player, "examplemod.hello", &[]).at(0.5, 0.1).scale(2.0).times(0.5, 2.0, 0.5);
+    //     b.world().hint("examplemod.hello", &[]).to(e.player);
+    //     b.world().show("examplemod.hello", &[]).to(e.player).at(0.5, 0.1).scale(2.0).times(0.5, 2.0, 0.5);
     // });
     // r.command("example", "[times:int]", |cmd| {
     //     let n = cmd.int("times").unwrap_or(1);

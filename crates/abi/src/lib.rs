@@ -3363,13 +3363,15 @@ pub struct Host {
     pub chat_format_set: unsafe extern "C" fn(args: *mut ChatFormatArgs, key: Str, list: Slice<UiArg>),
     /// Non-zero when a player in this world shows gizmo group `group` (`/gizmo <group>`).
     pub gizmo_shown: unsafe extern "C" fn(world: *mut WorldCtx, group: Str) -> u32,
-    /// Debug shape (`gizmo_kind`) for players showing `group`, from `a` to `b`; `color` is
-    /// 0xRRGGBBAA, kept for `ticks`.
-    pub gizmo: unsafe extern "C" fn(world: *mut WorldCtx, group: Str, kind: u32, a: *const Vec3, b: *const Vec3, color: u32, ticks: u32),
-    /// The translation `key` with `args` at `pos` for players showing `group`, `size` times as
-    /// big as menu text (0 counts as 1), in each viewer's language.
+    /// Debug shape (`gizmo_kind`) for `who` of the players showing `group` (empty: all of them),
+    /// from `a` to `b`; `color` is 0xRRGGBBAA, kept for `ticks`.
+    pub gizmo:
+        unsafe extern "C" fn(world: *mut WorldCtx, who: Who, group: Str, kind: u32, a: *const Vec3, b: *const Vec3, color: u32, ticks: u32),
+    /// The translation `key` with `args` at `pos` as `gizmo` shows a shape, `size` times as big as
+    /// menu text (0 counts as 1), in each viewer's language.
     pub gizmo_text: unsafe extern "C" fn(
         world: *mut WorldCtx,
+        who: Who,
         group: Str,
         pos: *const Vec3,
         size: f32,
@@ -3404,8 +3406,8 @@ pub struct Host {
     /// Value of `--name value` on the command line, empty if not given.
     pub launch_option: unsafe extern "C" fn(name: Str) -> Str,
 
-    /// Server: sends `data` on channel `name` to `player`'s client (after this tick's changes).
-    pub send_packet: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, name: Str, schema: Str, data: Slice<u8>),
+    /// Server: sends `data` on channel `name` to the clients of `who` (after this tick's changes).
+    pub send_packet: unsafe extern "C" fn(world: *mut WorldCtx, who: Who, name: Str, schema: Str, data: Slice<u8>),
     /// Moves an entity (players too, their client follows) at the end of the tick; `dim` is a
     /// dimension id, `u32::MAX` = the same one.
     pub entity_teleport: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, dim: u32, pos: *const Vec3),
@@ -3568,8 +3570,8 @@ pub struct Host {
     pub reg_command_branch: unsafe extern "C" fn(reg: *mut Registrar, command: Str, usage: Str, client: u32, cb: Callback),
 
     // ------------------------------------------------ text, shaders, particles
-    /// Server: particles for every player that sees `burst.pos`.
-    pub particle_burst: unsafe extern "C" fn(world: *mut WorldCtx, burst: *const ParticleBurst),
+    /// Server: particles for `who`.
+    pub particle_burst: unsafe extern "C" fn(world: *mut WorldCtx, who: Who, burst: *const ParticleBurst),
     /// The strongest redstone power coming into a cell.
     pub signal_at: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos) -> u32,
     /// Client: particles only this client shows.
@@ -3589,9 +3591,10 @@ pub struct Host {
     pub action_play: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, name: Str, looping: u32),
     /// Entity `id` plays action `to` wherever it would play `from`; `to` empty ends that.
     pub action_override: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, from: Str, to: Str),
-    /// Server: sound event `sound` (`find` with `entry_kind::SOUND`) at `pos` for every player in
-    /// its range; `pitch` 0 picks one from the event's range.
-    pub play_sound: unsafe extern "C" fn(world: *mut WorldCtx, sound: u32, pos: *const Vec3, volume: f32, pitch: f32),
+    /// Server: sound event `sound` (`find` with `entry_kind::SOUND`) at `pos` for `who` (`Around`:
+    /// the players in its range); `pos` null = not positioned (a UI sound); `pitch` 0 picks one
+    /// from the event's range.
+    pub play_sound: unsafe extern "C" fn(world: *mut WorldCtx, who: Who, sound: u32, pos: *const Vec3, volume: f32, pitch: f32),
     /// Client: only this client hears it; `pos` null = not positioned (UI).
     pub client_play_sound: unsafe extern "C" fn(client: *mut ClientCtx, sound: u32, pos: *const Vec3, volume: f32, pitch: f32),
     /// Biome id at a block (underground biomes included); 0 where nothing is loaded.
@@ -4937,10 +4940,14 @@ pub mod show_place {
     pub const NAMES: [&str; 5] = ["core:free", "core:chat", "core:hint", "core:title", "core:subtitle"];
 }
 
-/// Who sees text: one player (an entity id works as it is), or a group.
+/// Who gets what the server puts out (text, sounds, particles, gizmo shapes, packets): one player
+/// (an entity id works as it is), or a group.
 #[repr(C, u32)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Who {
+    /// Whoever it reaches by itself, from where it is: a sound's range, the players near
+    /// particles, the players showing a gizmo group, everyone in the dimension for text and packets.
+    Around,
     Player(u64),
     /// Everyone on the server, in any dimension.
     All,

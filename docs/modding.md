@@ -457,22 +457,25 @@ Networks balance once per tick.
 There is one way to put text on someone's screen, `show`. The other three are the same call with different defaults:
 
 ```rust
-w.hint(player, "mymod.no_mana", &[]);                              // a short line above the hotbar
-w.chat(Who::All, "mymod.boss_up", &[Arg::Text(name)]);             // a line in the chat
-w.title(Who::Dimension(w.dimension()), "mymod.round", &[Arg::Int(3)]); // big, over the crosshair
-w.subtitle(Who::Near(w.dimension(), pos, 32.0), "mymod.get_ready", &[]); // under the crosshair
-w.show(player, "mymod.timer", &[Arg::Int(left)])                   // by itself, anywhere
+w.hint("mymod.no_mana", &[]).to(player);                          // a short line above the hotbar
+w.chat("mymod.boss_up", &[Arg::Text(name)]).to(Who::All);           // a line in the chat
+w.title("mymod.round", &[Arg::Int(3)]);                             // big, over the crosshair
+w.subtitle("mymod.get_ready", &[]).to(Who::Near(w.dimension(), pos, 32.0)); // under the crosshair
+w.show("mymod.timer", &[Arg::Int(left)])                            // by itself, anywhere
+    .to(player)
     .id("mymod:timer")
     .at(0.98, 0.02)
     .scale(2.0);
 ```
 
-The first argument is a player's id or a `Who`. The text is sent at the end of the statement, and everything can be changed on any of them:
+`.to(..)` takes a player's id or a `Who`; without it the text goes to everyone in the dimension. It is sent at the end of the statement, and everything can be changed on any of them:
 - `.at(x, y)` in fractions of the window. That point of the text lies at the same point of the window, so `.at(1.0, 0.0)` is exactly the top right corner. A hint with `.at` is no longer in the HUD's flow.
 - `.scale(s)`: 1 is menu text, a subtitle is 2, a title 4.
 - `.times(fade_in, stay, fade_out)` in seconds.
 - `.color(0xRRGGBB)` for what doesn't color itself with `{#color}`.
 - `.id("mymod:timer")`: new text with the same place and id replaces the old one, so a timer counts down in one chat line instead of filling the chat. An empty key with no args takes it away.
+
+Text, sounds, particles and gizmo shapes are one `Output` that the server's `World` and a `Client` both have, with the same calls. On the server each goes to whoever it reaches by itself unless `.to(..)` says otherwise: a sound to the players in its range, particles to those near them, a gizmo to those showing its group, text to the dimension. On a client it goes to that client alone, and only if its `.to(..)` takes that player in, so code both sides run writes it once: `out.play_sound(&CHIME, None, 1.0).to(player)` dings for that player whichever side calls it.
 
 Players move or hide hints and titles in the HUD editor (`core:hint`, `core:title`, `core:subtitle`), so use those for anything a player might want elsewhere, and `.at` when the position is the point. A place of your own works the same: `r.text_place(&QUEST).hud(hud_anchor::TOP_RIGHT, 0).stacks()` makes one more element of the HUD, and `w.show_at(player, &QUEST, key, args)` puts text there; the engine's are in `text_places`, and `hint`, `title` and the rest are `show_at` with one of them. The client has the same calls for its own screen: `c.show`, `c.show_at`, `c.hint`, `c.title`, `c.subtitle`, `c.chat` (`c.say` sends a line as if typed). A check that reads the world can serve both sides: written over `&impl View` (`raining`, `day_time`, `block`, `light`, `entity`, `component_of`), it takes the server's `w` and the client's `c.view()` alike. `c.draw_screen_text` is different: it draws for one frame, for what you animate yourself.
 
@@ -486,8 +489,7 @@ Commands: `/title <who> title|subtitle|hint <text>`, `/title <who> show <x> <y> 
 `r.command("heal", "[amount:int] [who:targets]", |cmd| ..)`\
 The usage string is the whole spec: the engine parses it, checks types, completes it with Tab and shows it in `/help`.\
 Reading values by name: `cmd.int("amount")`, `cmd.targets("who")`.\
-Answering: `cmd.reply("mymod.healed", &[Arg::Int(amount)])` with `mymod.healed = healed by {0}` in your lang files. The reply travels as the key and its arguments and each player's client formats it in its own language, so a server never sends English text. The same goes for gizmo labels (`w.draw_text(&GROUP, pos, key, &args, ..)`) and the client's `draw_text`/`draw_screen_text`.\
-The client draws the same shapes for one frame: `c.draw_line/box/fill/text(None, ..)`, or `Some(&GROUP)` to show them only while that group is on.\
+Answering: `cmd.reply("mymod.healed", &[Arg::Int(amount)])` with `mymod.healed = healed by {0}` in your lang files. The reply travels as the key and its arguments and each player's client formats it in its own language, so a server never sends English text. The same goes for gizmo labels (`w.draw_text(Some(&GROUP), pos, key, &args, ..)`) and the client's `draw_screen_text`.\
 Who may run it goes by permission levels, the same for the engine's commands and yours: 0 everyone, 1 moderator, 2 game master, 3 admin, 4 the host. A command asks for level 2 unless you say otherwise, `r.command(..).permission(permission::EVERYONE)`, and players below it are refused and not offered it. `/op <who> [level]` hands them out, and for anything else your mod does, `w.permission(player)` tells a player's level and `w.set_permission(player, level)` changes it.
 
 The callback gets a `ServerCommand`: `cmd.world()` is where it runs, and what it changes settles when it returns (neighbors updated, events delivered), like `/setblock`.`r.client_command` is the same for commands that run on the client that typed them: a `ClientCommand` with `cmd.client()` and no world.`r.command_branch("time", "dawn", ..)` adds a branch to someone else's command (`r.client_command_branch` for client ones like `/gizmo`), and a `r.command` named like one of the engine's (`/give`, `/tp`...) replaces it.
@@ -510,7 +512,7 @@ Inside any callback you get a `World` (`w`):
 - particles (`w.spawn_particles(&SPARK, pos).count(20).speed(2.0).color(0xFF4020)`, from the client too). Particles live on the GPU, so what happens to one is data on its kind, not code: `on_land`, `on_wall`, `on_ceiling`, `on_enter_liquid`, `on_leave_liquid` and `on_expire` each take `When::any()`, `When::liquid()` or `When::tag("water")` and `Then::die()`, `stop()`, `slide()`, `bounce(0.4)` or `turn_into(&OTHER)` / `turn_into_still(&OTHER)`; the first rule that holds wins. Rain that rings on water and is gone elsewhere is `.on_enter_liquid(When::tag("water"), Then::turn_into_still(&RIPPLE)).on_land(When::any(), Then::die())`, an ember that bounces and dies into smoke `.on_land(When::any(), Then::bounce(0.4)).on_expire(When::any(), Then::turn_into(&SMOKE))`. At most 5 different tags over all particle rules of the game
 - sounds (`w.play_sound(&S, pos, volume)`, `.pitch(2.0)` on it for an exact playback speed; `r.sound(&S).falloff(4.0, Falloff::Late(2))` when a sound should stay loud further out)
 - game rules: settings of the world, `r.config(&HARD_MODE).bool(false).world()`, read with `HARD_MODE.get()`, changed with `/rule hard_mode 1` or in World Rules (when the world is made, and in game for whoever may `/rule`). What is the same for every player is a rule, what one player has apart is an attribute: `r.attribute(&THIRST_RATE, 1.0, 0.0, 10.0).rule()` makes the rule `mymod:thirst_rate` players' base of it, and `/attribute mymod:thirst_rate 2` (an `attr_op::SET` modifier, which wins over everything else) sets one player's. The engine's are `core:max_health`, `core:keep_inventory`, `core:mob_spawning`, `core:lives` (deaths before going on as a spectator, 1 for hardcore), `core:rules_locked`, and a `core:damage.<cause>` for every damage cause, yours too (`core:damage.mymod.radiation`), to turn it off
-- gizmos for debugging (`w.draw_line/box/text/fill(&GROUP, ..)`)
+- gizmos for debugging (`w.draw_line/box/fill/shape/text(Some(&GROUP), ..)`, seen while a player shows the group, or `None` for always; `.ticks(n)` keeps the server's longer, a client's last a frame)
 - and a few plain helpers: `block_center(p)`, `block_floor(p)`, `block_pos_of(pos)`, `st.eye()`, `yaw_toward(from, to)`, `yaw_dir(yaw)`, `look_dir(yaw, pitch)`, `ratio(a, b)`. `EntityState`'s yaw and pitch are radians; what you pass to the API (`ModelPart::rotation`, `set_pose` facing, `Client::set_look`) is in degrees
 
 ## Client side
@@ -524,7 +526,7 @@ Inside any callback you get a `World` (`w`):
 
 Also:
 - key bindings, one declaration each: `r.key(&DASH, "R").on_client(|c| ..)` on the client (a chord works too: `"ctrl+R"`, `"shift+alt+F6"`, and any other key held as a modifier, `"F3+KeyK"` the way the engine's debug keys are; the wheel is `wheel_up` and `wheel_down`; up to two bindings, each held, `toggle`, a `double` tap or a `tap`, let go with no other key pressed meanwhile, which is how F3 alone opens the overlay: `"ctrl+R, double KeyR"`; the player rebinds them the same way in Controls). Tagged with contexts (`abi::comp::key::MOVEMENT`, `HANDS`, `RIDING`, `DEBUG`, `SCREEN`) a key conflicts only with those where both act, and a camera that takes the moves or the hands mutes those; without any it acts wherever the world has the input, or `.on_server(|p| ..)` and the engine carries the press to the server for you. They only act while the world has the input, typing in the chat doesn't trigger them. `c.key_pressed(&DASH)` / `c.key_held(&DASH)` / `c.key(&DASH)` read them in a frame hook; the engine's keys are `keys::*`
-- messages both ways on a typed channel: `static BOOST: Channel<Boost> = Channel::named("boost")` with a `value!` struct (or `String`, `Vec<u8>`, `()`), `r.packet(&BOOST, |p, b| ..)` on the server (`p.reply(&OTHER, &v)` answers), `r.client_packet` on the client, `w.send` / `client.send`. Both ends must declare the same type, the engine checks it like event values
+- messages both ways on a typed channel: `static BOOST: Channel<Boost> = Channel::named("boost")` with a `value!` struct (or `String`, `Vec<u8>`, `()`), `r.packet(&BOOST, |p, b| ..)` on the server (`p.reply(&OTHER, &v)` answers), `r.client_packet` on the client, `w.send(who, ..)` (a player's id or any `Who`) / `client.send`. Both ends must declare the same type, the engine checks it like event values
 - `client.run_command("/tp ~ ~5 ~")` runs a command as the player and `client.command_reply(id)` gives its answer to your code instead of the chat (testkit drives its server half like this)
 - frame hooks (`r.client_frame`)
 - cosmetics of your mobs: `r.client_entity_frame(&MOB, |c, e| ..)` every frame, with its position, distance walked, age and death; `.own_effects()` on the kind turns off the engine's steps, idle noises and death smoke

@@ -334,24 +334,6 @@ impl World {
     pub fn gizmo_shown(&self, group: &GizmoGroup) -> bool {
         unsafe { (host().gizmo_shown)(self.raw(), Str::new(group.name())) != 0 }
     }
-    /// A line seen by players showing `group`, color `0xRRGGBBAA`, for `ticks`.
-    pub fn draw_line(&self, group: &GizmoGroup, a: impl Into<Vec3>, b: impl Into<Vec3>, color: u32, ticks: u32) {
-        let a = a.into();
-        let b = b.into();
-        self.draw(group, abi::gizmo_kind::LINE, a, b, color, ticks);
-    }
-    pub fn draw_box(&self, group: &GizmoGroup, min: impl Into<Vec3>, max: impl Into<Vec3>, color: u32, ticks: u32) {
-        let min = min.into();
-        let max = max.into();
-        self.draw(group, abi::gizmo_kind::BOX, min, max, color, ticks);
-    }
-    /// See-through by `color`'s alpha.
-    pub fn draw_fill(&self, group: &GizmoGroup, min: impl Into<Vec3>, max: impl Into<Vec3>, color: u32, ticks: u32) {
-        let min = min.into();
-        let max = max.into();
-        self.draw(group, abi::gizmo_kind::FILL, min, max, color, ticks);
-    }
-
     /// Moves an entity (players included) at the end of the tick, to `dim` or the same dimension.
     pub fn teleport(&self, id: u64, dim: Option<&crate::Dimension>, pos: impl Into<Vec3>) {
         let pos = pos.into();
@@ -411,23 +393,6 @@ impl World {
     /// `w.set_game_mode(player, &game_modes::CREATIVE)`, or a mod's own mode.
     pub fn set_game_mode(&self, player: u64, mode: impl Into<crate::Id<crate::GameMode>>) {
         unsafe { (host().set_game_mode)(self.raw(), player, mode.into().raw()) }
-    }
-
-    /// The outline of a shape: where a fill or a search will reach, before it does.
-    pub fn draw_shape(&self, group: &GizmoGroup, shape: &crate::Shape, color: u32, ticks: u32) {
-        for (a, b) in shape.outline() {
-            self.draw_line(group, a, b, color, ticks);
-        }
-    }
-    /// The translation `key` with `args` at `pos`, in each viewer's language, `size` times as
-    /// big as menu text.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_text(&self, group: &GizmoGroup, pos: impl Into<Vec3>, key: &str, args: &[crate::Arg], color: u32, size: f32, ticks: u32) {
-        let (pos, raw) = (pos.into(), crate::ui::raw_args(args));
-        unsafe { (host().gizmo_text)(self.raw(), Str::new(group.name()), &pos, size, color, ticks, Str::new(key), abi::Slice::new(&raw)) }
-    }
-    fn draw(&self, group: &GizmoGroup, kind: u32, a: Vec3, b: Vec3, color: u32, ticks: u32) {
-        unsafe { (host().gizmo)(self.raw(), Str::new(group.name()), kind, &a, &b, color, ticks) }
     }
 }
 

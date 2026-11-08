@@ -28,11 +28,9 @@ impl Server {
                 .map_or((DVec3::ZERO, GameMode::SURVIVAL), |e| (e.pos, e.mode));
             send_entities(c, p, dim, &moved[d], *tick, view.radius, viewer);
             send_own_state(c, p, dim);
-            if !p.gizmos.is_empty() {
-                let shapes = gizmos_for(p, dim, *tick, viewer.0);
-                if !shapes.is_empty() {
-                    p.conn.send(ToClient::Gizmos(shapes));
-                }
+            let shapes = gizmos_for(p, dim, *tick, viewer.0);
+            if !shapes.is_empty() {
+                p.conn.send(ToClient::Gizmos(shapes));
             }
             unsent += send_cubes(p, dim, &c.dims[d], view, full, &settled[d]);
         }
@@ -542,8 +540,11 @@ pub(super) fn gizmos_for(p: &Player, dim: &DimSet, tick: u64, me: DVec3) -> Vec<
         out.extend(
             r.gizmos
                 .iter()
-                .filter(|g| p.gizmos.contains(&g.group))
-                .cloned(),
+                .filter(|(who, g)| {
+                    (g.group.is_empty() || p.gizmos.contains(&g.group))
+                        && super::reaches(*who, p.entity, p.dim, || Some(me), dim.id, |_| true)
+                })
+                .map(|(_, g)| g.clone()),
         );
     }
     if tick % TPS as u64 != 0 {

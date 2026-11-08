@@ -262,7 +262,7 @@ impl Client {
             ToClient::Sounds(list) => {
                 self.sounds.extend(
                     list.into_iter()
-                        .map(|(sound, pos, volume, pitch)| crate::audio::Play { sound, pos: Some(pos), volume, pitch }),
+                        .map(|(sound, pos, volume, pitch)| crate::audio::Play { sound, pos, volume, pitch }),
                 );
             }
             ToClient::Particles(list) => {

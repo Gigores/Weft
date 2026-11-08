@@ -410,11 +410,11 @@ const OPS: &[(&str, &str, Run)] = &[
         };
         let text = word(cmd, "text")?;
         match word(cmd, "place")? {
-            "chat" => drop(w.chat(who, text, &[])),
-            "hint" => drop(w.hint(who, text, &[])),
-            "title" => drop(w.title(who, text, &[])),
-            "subtitle" => drop(w.subtitle(who, text, &[])),
-            "corner" => drop(w.show(who, text, &[]).at(1.0, 0.0).scale(2.0)),
+            "chat" => drop(w.chat(text, &[]).to(who)),
+            "hint" => drop(w.hint(text, &[]).to(who)),
+            "title" => drop(w.title(text, &[]).to(who)),
+            "subtitle" => drop(w.subtitle(text, &[]).to(who)),
+            "corner" => drop(w.show(text, &[]).to(who).at(1.0, 0.0).scale(2.0)),
             p => return Err(format!("no place {p}")),
         }
         Ok(String::new())

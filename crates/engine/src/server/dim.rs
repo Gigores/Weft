@@ -75,7 +75,8 @@ pub enum DimEvent {
         easing: u32,
     },
     Packet {
-        player: u64,
+        dim: u32,
+        who: abi::Who,
         channel: u32,
         data: Vec<u8>,
     },
@@ -105,12 +106,14 @@ pub enum DimEvent {
     },
     Particles {
         dim: u32,
+        who: abi::Who,
         burst: abi::ParticleBurst,
     },
     Sound {
         dim: u32,
+        who: abi::Who,
         sound: u32,
-        pos: DVec3,
+        pos: Option<DVec3>,
         volume: f32,
         pitch: f32,
     },
@@ -120,6 +123,7 @@ pub enum DimEvent {
         looping: bool,
     },
     Show {
+        dim: u32,
         who: abi::Who,
         shown: crate::net::Shown,
     },
@@ -169,7 +173,7 @@ pub struct Dim {
     section_cubes: FxHashMap<IVec3, u32>,
     /// Gizmo shapes mods drew this tick, and the groups some player here shows (set before the
     /// tick, so mods can skip drawing nobody sees).
-    pub gizmos: Vec<crate::net::GizmoShape>,
+    pub gizmos: Vec<(abi::Who, crate::net::GizmoShape)>,
     pub gizmo_groups: Arc<[String]>,
     /// Timers set on the dimension this tick (`Host::timer` with no holder), for `DimSet` to keep.
     pub dim_timers: Vec<DimTimer>,
@@ -1607,6 +1611,7 @@ impl Dim {
                 let (pos, id) = (t.pos + DVec3::Y * (t.dims(c).height * 0.5), self.id);
                 self.events.push(DimEvent::Particles {
                     dim: id,
+                    who: abi::Who::Around,
                     burst: abi::ParticleBurst {
                         kind: c
                             .game
@@ -1723,7 +1728,7 @@ impl Dim {
         self.events.extend(
             bursts
                 .into_iter()
-                .map(|burst| DimEvent::Particles { dim, burst }),
+                .map(|burst| DimEvent::Particles { dim, who: abi::Who::Around, burst }),
         );
     }
 
@@ -3556,6 +3561,11 @@ impl Dim {
             .push(Reverse((at, p.to_array(), event, data.into())));
     }
 
+    /// Someone here would see a gizmo of `group` (empty: anyone).
+    pub fn gizmo_seen(&self, group: &str) -> bool {
+        group.is_empty() || self.gizmo_groups.iter().any(|g| g == group)
+    }
+
     pub fn random(&mut self) -> u64 {
         self.rng.next()
     }
@@ -3568,8 +3578,14 @@ impl Dim {
     /// Sound event `sound` (`u32::MAX`: nothing) for players in its range.
     pub fn sound(&mut self, sound: u32, pos: DVec3, volume: f32, pitch: f32) {
         if sound != u32::MAX {
-            self.events
-                .push(DimEvent::Sound { dim: self.id, sound, pos: self.place.to_world(pos), volume, pitch });
+            self.events.push(DimEvent::Sound {
+                dim: self.id,
+                who: abi::Who::Around,
+                sound,
+                pos: Some(self.place.to_world(pos)),
+                volume,
+                pitch,
+            });
         }
     }
 
@@ -3601,7 +3617,7 @@ impl Dim {
                 ..abi::ParticleBurst::DEFAULT
             };
             self.events
-                .push(DimEvent::Particles { dim: self.id, burst });
+                .push(DimEvent::Particles { dim: self.id, who: abi::Who::Around, burst });
         }
     }
 

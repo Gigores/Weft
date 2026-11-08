@@ -62,6 +62,26 @@ const ENTITY_SLACK: f64 = 3.0;
 /// Players further away than vanilla's particle distance get no particles.
 const PARTICLE_RANGE: f64 = 32.0;
 
+/// Whether output for `who` from dimension `dim` reaches the player `entity` in dimension `at`,
+/// standing at `pos`; `around` as in `Server::reached`.
+pub fn reaches(
+    who: weft_abi::Who,
+    entity: u64,
+    at: u32,
+    pos: impl Fn() -> Option<DVec3>,
+    dim: u32,
+    around: impl Fn(DVec3) -> bool,
+) -> bool {
+    use weft_abi::Who;
+    match who {
+        Who::Around => at == dim && pos().is_some_and(around),
+        Who::Player(id) => entity == id,
+        Who::All => true,
+        Who::Dimension(d) => at == d,
+        Who::Near(d, c, r) => at == d && pos().is_some_and(|p| (p - crate::world::dvec(c)).length_squared() < r * r),
+    }
+}
+
 #[derive(Clone)]
 pub struct ServerConfig {
     pub seed: u64,
@@ -682,10 +702,14 @@ impl Server {
         }
         // Particles and sounds of the whole tick go out as one message of each per player.
         let mut bursts: Vec<Vec<abi::ParticleBurst>> = vec![Vec::new(); self.players.len()];
-        let mut sounds: Vec<Vec<(u32, DVec3, f32, f32)>> = vec![Vec::new(); self.players.len()];
+        let mut sounds: Vec<Vec<(u32, Option<DVec3>, f32, f32)>> = vec![Vec::new(); self.players.len()];
         for ev in events {
             match ev {
-                DimEvent::Show { who, shown } => self.show(who, shown),
+                DimEvent::Show { dim, who, shown } => {
+                    for pi in self.reached(dim, who, |_| true) {
+                        self.players[pi].conn.send(ToClient::Show(shown.clone()));
+                    }
+                }
                 DimEvent::PlayAction { id, name, looping } => {
                     for p in self
                         .players
@@ -696,27 +720,21 @@ impl Server {
                             .send(ToClient::PlayAction(vec![(id, name.clone(), looping)]));
                     }
                 }
-                DimEvent::Sound { dim, sound, pos: at, volume, pitch } => {
+                DimEvent::Sound { dim, who, sound, pos: at, volume, pitch } => {
                     let range = c
                         .game
                         .sounds
                         .get(sound as usize)
                         .map_or(16.0, |d| d.range * volume.max(1.0)) as f64;
-                    for (pi, p) in self.players.iter().enumerate() {
-                        let pos = self.dims[p.dim as usize].entity(p.entity).map(|e| e.pos);
-                        if p.joined && p.dim == dim && pos.is_some_and(|pos| (pos - at).length_squared() < range * range) {
-                            sounds[pi].push((sound, at, volume, pitch));
-                        }
+                    let heard = |pos: DVec3| at.is_none_or(|at| (pos - at).length_squared() < range * range);
+                    for pi in self.reached(dim, who, heard) {
+                        sounds[pi].push((sound, at, volume, pitch));
                     }
                 }
-                DimEvent::Particles { dim, burst } => {
+                DimEvent::Particles { dim, who, burst } => {
                     let at = crate::world::dvec(burst.pos);
-                    for (pi, p) in self.players.iter().enumerate() {
-                        let pos = self.dims[p.dim as usize].entity(p.entity).map(|e| e.pos);
-                        if p.joined && p.dim == dim && pos.is_some_and(|pos| (pos - at).length_squared() < PARTICLE_RANGE * PARTICLE_RANGE)
-                        {
-                            bursts[pi].push(burst);
-                        }
+                    for pi in self.reached(dim, who, |pos| (pos - at).length_squared() < PARTICLE_RANGE * PARTICLE_RANGE) {
+                        bursts[pi].push(burst);
                     }
                 }
                 DimEvent::OpenMenu { player, menu, on, block } => {
@@ -791,13 +809,11 @@ impl Server {
                         p.conn.send(ToClient::StopSprint);
                     }
                 }
-                DimEvent::Packet { player, channel, data } => {
-                    if let Some(p) = self
-                        .players
-                        .iter_mut()
-                        .find(|p| p.joined && p.entity == player)
-                    {
-                        p.conn.send(ToClient::Packet { channel, data });
+                DimEvent::Packet { dim, who, channel, data } => {
+                    for pi in self.reached(dim, who, |_| true) {
+                        self.players[pi]
+                            .conn
+                            .send(ToClient::Packet { channel, data: data.clone() });
                     }
                 }
                 DimEvent::Teleport { from, id, dim, pos } => {
@@ -1236,26 +1252,23 @@ impl Server {
     }
 
     /// Puts text on the screens of `who`.
+    /// Text for `who`, from no dimension (`Who::Around` reaches nobody).
     pub fn show(&mut self, who: weft_abi::Who, shown: crate::net::Shown) {
-        use weft_abi::Who;
-        for pi in 0..self.players.len() {
-            let p = &self.players[pi];
-            let to_them = p.joined
-                && match who {
-                    Who::Player(id) => p.entity == id,
-                    Who::All => true,
-                    Who::Dimension(d) => p.dim == d,
-                    Who::Near(d, at, radius) => {
-                        p.dim == d
-                            && self.dims[d as usize]
-                                .entity(p.entity)
-                                .is_some_and(|e| (e.pos - crate::world::dvec(at)).length_squared() < radius * radius)
-                    }
-                };
-            if to_them {
-                self.players[pi].conn.send(ToClient::Show(shown.clone()));
-            }
+        for pi in self.reached(u32::MAX, who, |_| true) {
+            self.players[pi].conn.send(ToClient::Show(shown.clone()));
         }
+    }
+
+    /// The players output for `who` from dimension `dim` reaches; `around` says whom it reaches by
+    /// itself there, by where they stand (`Who::Around`).
+    pub fn reached(&self, dim: u32, who: weft_abi::Who, around: impl Fn(DVec3) -> bool) -> Vec<usize> {
+        (0..self.players.len())
+            .filter(|&pi| {
+                let p = &self.players[pi];
+                let pos = || self.dims[p.dim as usize].entity(p.entity).map(|e| e.pos);
+                p.joined && reaches(who, p.entity, p.dim, pos, dim, &around)
+            })
+            .collect()
     }
 
     fn player_index(&self, entity: u64) -> Option<usize> {

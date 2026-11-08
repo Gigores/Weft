@@ -362,10 +362,15 @@ unsafe extern "C" fn action_play(w: *mut abi::WorldCtx, id: u64, name: Str, loop
     }
 }
 
-unsafe extern "C" fn play_sound(w: *mut abi::WorldCtx, sound: u32, pos: *const abi::Vec3, volume: f32, pitch: f32) {
+unsafe extern "C" fn play_sound(w: *mut abi::WorldCtx, who: abi::Who, sound: u32, pos: *const abi::Vec3, volume: f32, pitch: f32) {
     unsafe {
         if (sound as usize) < content().game.sounds.len() {
-            dim(w).sound(sound, crate::world::dvec(*pos), volume, pitch);
+            let d = dim(w);
+            let pos = pos
+                .as_ref()
+                .map(|p| d.place.to_world(crate::world::dvec(*p)));
+            d.events
+                .push(crate::server::DimEvent::Sound { dim: d.id, who, sound, pos, volume, pitch });
         } else {
             misuse("play_sound", || format!("no sound {sound}"));
         }
@@ -1087,12 +1092,12 @@ unsafe extern "C" fn set_game_mode(w: *mut abi::WorldCtx, player: u64, mode: u32
     }
 }
 
-unsafe extern "C" fn send_packet(w: *mut abi::WorldCtx, player: u64, name: Str, schema: Str, data: abi::Slice<u8>) {
+unsafe extern "C" fn send_packet(w: *mut abi::WorldCtx, who: abi::Who, name: Str, schema: Str, data: abi::Slice<u8>) {
     unsafe {
         if let Some(channel) = channel_for(name.as_str(), schema.as_str()) {
-            dim(w)
-                .events
-                .push(crate::server::DimEvent::Packet { player, channel, data: data.as_slice().to_vec() });
+            let d = dim(w);
+            d.events
+                .push(crate::server::DimEvent::Packet { dim: d.id, who, channel, data: data.as_slice().to_vec() });
         }
     }
 }
@@ -1257,22 +1262,32 @@ unsafe extern "C" fn gizmo_shown(w: *mut abi::WorldCtx, group: Str) -> u32 {
     unsafe { dim(w).gizmo_groups.iter().any(|g| g == group.as_str()) as u32 }
 }
 
-unsafe extern "C" fn gizmo(w: *mut abi::WorldCtx, group: Str, kind: u32, a: *const abi::Vec3, b: *const abi::Vec3, color: u32, ticks: u32) {
+unsafe extern "C" fn gizmo(
+    w: *mut abi::WorldCtx,
+    who: abi::Who,
+    group: Str,
+    kind: u32,
+    a: *const abi::Vec3,
+    b: *const abi::Vec3,
+    color: u32,
+    ticks: u32,
+) {
     unsafe {
         let d = dim(w);
         let group = group.as_str();
-        if kind > abi::gizmo_kind::FILL || !d.gizmo_groups.iter().any(|g| g == group) {
+        if kind > abi::gizmo_kind::FILL || !d.gizmo_seen(group) {
             return;
         }
         let (a, b) = (d.place.to_world(crate::world::dvec(*a)), d.place.to_world(crate::world::dvec(*b)));
         d.gizmos
-            .push(crate::net::GizmoShape::shape(group, kind as u8, a, b, color, ticks.max(1)));
+            .push((who, crate::net::GizmoShape::shape(group, kind as u8, a, b, color, ticks.max(1))));
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 unsafe extern "C" fn gizmo_text(
     w: *mut abi::WorldCtx,
+    who: abi::Who,
     group: Str,
     pos: *const abi::Vec3,
     size: f32,
@@ -1284,13 +1299,13 @@ unsafe extern "C" fn gizmo_text(
     unsafe {
         let d = dim(w);
         let group = group.as_str();
-        if !d.gizmo_groups.iter().any(|g| g == group) {
+        if !d.gizmo_seen(group) {
             return;
         }
         let at = d.place.to_world(crate::world::dvec(*pos));
         let text = crate::ui::text::Msg::new(key.as_str(), crate::client::modui::args(args));
         d.gizmos
-            .push(crate::net::GizmoShape::text(group, at, size, color, ticks.max(1), text));
+            .push((who, crate::net::GizmoShape::text(group, at, size, color, ticks.max(1), text)));
     }
 }
 
@@ -1757,9 +1772,9 @@ pub(crate) unsafe fn shown(d: &abi::ShowDesc) -> crate::net::Shown {
 
 unsafe extern "C" fn show(w: *mut abi::WorldCtx, who: abi::Who, d: *const abi::ShowDesc) {
     unsafe {
-        dim(w)
-            .events
-            .push(crate::server::DimEvent::Show { who, shown: shown(&*d) })
+        let r = dim(w);
+        r.events
+            .push(crate::server::DimEvent::Show { dim: r.id, who, shown: shown(&*d) })
     }
 }
 
@@ -2106,7 +2121,7 @@ unsafe extern "C" fn reg_mistake(r: *mut abi::Registrar, message: Str) {
     unsafe { reg(r).errors.push(message.as_str().to_string()) }
 }
 
-unsafe extern "C" fn particle_burst(w: *mut abi::WorldCtx, b: *const abi::ParticleBurst) {
+unsafe extern "C" fn particle_burst(w: *mut abi::WorldCtx, who: abi::Who, b: *const abi::ParticleBurst) {
     unsafe {
         let mut b = *b;
         if (b.kind as usize) < content().game.particles.len() {
@@ -2117,7 +2132,7 @@ unsafe extern "C" fn particle_burst(w: *mut abi::WorldCtx, b: *const abi::Partic
                 .to_array()
                 .into();
             d.events
-                .push(crate::server::DimEvent::Particles { dim: d.id, burst: b });
+                .push(crate::server::DimEvent::Particles { dim: d.id, who, burst: b });
         } else {
             misuse("particles", || format!("no particle {}", b.kind));
         }
