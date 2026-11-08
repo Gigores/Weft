@@ -724,7 +724,12 @@ pub mod comp {
     /// A setting's, shown as `config.<ns>.<key>` (and `.tooltip`) from the language files: `KIND`
     /// (`u32`, `config_kind`, `BOOL`), `DEFAULT` (`f64`, 0), `RANGE` (`[f64;2]`, 0..1) and `STEP`
     /// (`f64`, 0 any) of numbers, `CHOICES` (`[str]`), `SCOPE` (`u32`, `config_scope`, `CLIENT`),
-    /// `TEXT` (`str`, the default of a text setting), tag `RESTART_REQUIRED`.
+    /// `TEXT` (`str`, the default of a text setting), `PAGE` (`str`, the settings page it is on:
+    /// `core:settings`, `core:chat_settings`, `core:sound` or a mod's own, titled `page.<ns>.<name>`;
+    /// none: its mod's page), `ORDER` (`i32`, lower first, then by name, 0), tags
+    /// `RESTART_REQUIRED`, `PERCENT` (shown times 100). Its value shows as `config.<ns>.<key>.<value>`
+    /// where there is one (a choice, a number with a name of its own), else through
+    /// `config.<ns>.<key>.value` (`{0} cubes`).
     pub mod config {
         pub const KIND: &str = "config.kind";
         pub const DEFAULT: &str = "config.default";
@@ -735,6 +740,9 @@ pub mod comp {
         pub const TEXT: &str = "config.text";
         /// Takes effect after a restart; the settings screen says so.
         pub const RESTART_REQUIRED: &str = "config.restart_required";
+        pub const PERCENT: &str = "config.percent";
+        pub const PAGE: &str = "config.page";
+        pub const ORDER: &str = "config.order";
     }
 
     /// An equipment slot's: `COVERS` (`[str]`, bones what is worn there covers; a name with a role,

@@ -520,27 +520,21 @@ impl Hud {
         let ui = &mut self.ui;
         ui.clear();
         ui.root_style(Style::default().stretch());
+        // The elements of an anchor stacked in a column of `style`, from the bottom when `upwards`.
+        let stack = |ui: &mut Ui, anchors: &[&str], upwards: bool, style: Style, align: Align| {
+            ui.container(style.gap(1.0).align(align), |ui| {
+                for e in anchors.iter().flat_map(|a| at(a, upwards)) {
+                    emit(ui, e, Style::default(), align);
+                }
+            });
+        };
         // Both halves start at zero height and split the rest evenly, so the crosshair sits at the
         // exact screen center whatever they contain.
         ui.container(Style::row().h(0.0).grow().pad(4.0).align(Align::Start), |ui| {
             // Half the screen each, so wide text on one side never pushes the other off screen
             // (the two may overlap on narrow screens, like vanilla's).
-            ui.container(Style::default().w(0.0).grow().gap(1.0).align(Align::Start), |ui| {
-                for e in at(a::DEBUG_LEFT, false)
-                    .into_iter()
-                    .chain(at(a::TOP_LEFT, false))
-                {
-                    emit(ui, e, Style::default(), Align::Start);
-                }
-            });
-            ui.container(Style::default().w(0.0).grow().gap(1.0).align(Align::End), |ui| {
-                for e in at(a::DEBUG_RIGHT, false)
-                    .into_iter()
-                    .chain(at(a::TOP_RIGHT, false))
-                {
-                    emit(ui, e, Style::default(), Align::End);
-                }
-            });
+            stack(ui, &[a::DEBUG_LEFT, a::TOP_LEFT], false, Style::default().w(0.0).grow(), Align::Start);
+            stack(ui, &[a::DEBUG_RIGHT, a::TOP_RIGHT], false, Style::default().w(0.0).grow(), Align::End);
         });
         for e in at(CENTER, false) {
             emit(ui, e, Style::default().self_align(Align::Center), Align::Start);
@@ -554,9 +548,7 @@ impl Hud {
                 .align(Align::Center),
             |ui| {
                 ui.container(Style::default().h(3.0), |_| {});
-                for e in at(a::UNDER_CROSSHAIR, false) {
-                    emit(ui, e, Style::default(), Align::Center);
-                }
+                stack(ui, &[a::UNDER_CROSSHAIR], false, Style::default(), Align::Center);
             },
         );
         ui.container(
@@ -572,39 +564,23 @@ impl Hud {
                     emit(ui, e, Style::default().self_align(Align::Start), Align::Start);
                 }
                 ui.container(Style::row().align(Align::End), |ui| {
-                    ui.container(Style::default().w(0.0).gap(1.0).align(Align::Start), |ui| {
-                        for e in at(a::BOTTOM_LEFT, true) {
-                            emit(ui, e, Style::default(), Align::Start);
-                        }
-                    });
+                    stack(ui, &[a::BOTTOM_LEFT], true, Style::default().w(0.0), Align::Start);
                     ui.container(Style::default().grow(), |_| {});
                     ui.container(Style::default().gap(1.0).align(Align::Center), |ui| {
                         for e in at(a::ABOVE_HOTBAR, true) {
                             emit(ui, e, Style::default(), Align::Center);
                         }
                         ui.container(Style::row().w(182.0).gap(2.0).align(Align::End), |ui| {
-                            ui.container(Style::default().gap(1.0).align(Align::Start), |ui| {
-                                for e in at(a::HOTBAR_LEFT, true) {
-                                    emit(ui, e, Style::default(), Align::Start);
-                                }
-                            });
+                            stack(ui, &[a::HOTBAR_LEFT], true, Style::default(), Align::Start);
                             ui.container(Style::default().grow(), |_| {});
-                            ui.container(Style::default().gap(1.0).align(Align::End), |ui| {
-                                for e in at(a::HOTBAR_RIGHT, true) {
-                                    emit(ui, e, Style::default(), Align::End);
-                                }
-                            });
+                            stack(ui, &[a::HOTBAR_RIGHT], true, Style::default(), Align::End);
                         });
                         for e in at(a::HOTBAR, true) {
                             emit(ui, e, Style::default(), Align::Center);
                         }
                     });
                     ui.container(Style::default().grow(), |_| {});
-                    ui.container(Style::default().w(0.0).gap(1.0).align(Align::End), |ui| {
-                        for e in at(a::BOTTOM_RIGHT, true) {
-                            emit(ui, e, Style::default(), Align::End);
-                        }
-                    });
+                    stack(ui, &[a::BOTTOM_RIGHT], true, Style::default().w(0.0), Align::End);
                 });
             },
         );
