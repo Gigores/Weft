@@ -220,6 +220,10 @@ pub struct Piece {
 }
 
 impl StateInfo {
+    pub fn solid(&self) -> bool {
+        self.flags & abi::block_flags::SOLID != 0
+    }
+
     /// What is outlined and cracked.
     pub fn outlined(&self) -> &[[f32; 6]] {
         if self.outline.is_empty() { &self.selection } else { &self.outline }
@@ -648,10 +652,10 @@ pub struct DimensionDef {
     /// (mod, callback) run after the generator and scatters, in load order.
     pub decorations: Vec<(ModId, Callback)>,
     /// Columns from `column`, for a dimension without a terrain.
-    pub column_cache: crate::server::terrain::ColumnCache<[abi::TerrainColumn; 256]>,
+    pub column_cache: weft_noise::cache::ColumnCache<[abi::TerrainColumn; 256]>,
     /// Per cube column, the scattered things that may reach into it (`dim::scatter_sites`):
     /// worked out once for the whole column instead of once per cube.
-    pub scatter_cache: crate::server::terrain::ColumnCache<Vec<crate::server::dim::Site>>,
+    pub scatter_cache: weft_noise::cache::ColumnCache<Vec<crate::server::dim::Site>>,
 }
 
 /// What a scatter puts at a site: what a mod's callback says, or a template (a structure).
@@ -1108,6 +1112,10 @@ fn covered_entry() -> RawEntry {
 }
 
 impl Content {
+    pub fn solid(&self, state: u32) -> bool {
+        self.states[state as usize].solid()
+    }
+
     /// The way from a big block's other cell one step nearer its own, if `state` is one.
     pub fn covered_step(&self, state: u32) -> Option<IVec3> {
         let d = state.wrapping_sub(self.covered);
@@ -1302,11 +1310,6 @@ impl Content {
                     .map(|e| e.item)
                     .find(|&i| i != 0)
             })
-    }
-
-    #[inline]
-    pub fn block_has(&self, state: u32, comp: Option<u32>) -> bool {
-        comp.is_some_and(|c| self.components.has(comps::BLOCK, state, c))
     }
 
     #[inline]
@@ -1506,8 +1509,8 @@ fn bake_dimension(e: &Entry) -> DimensionDef {
         daylight,
         scatters: Vec::new(),
         decorations: Vec::new(),
-        column_cache: crate::server::terrain::ColumnCache::new(4096),
-        scatter_cache: crate::server::terrain::ColumnCache::new(32768),
+        column_cache: weft_noise::cache::ColumnCache::new(4096),
+        scatter_cache: weft_noise::cache::ColumnCache::new(32768),
     }
 }
 
@@ -1546,8 +1549,8 @@ fn void_dimension() -> DimensionDef {
         daylight: Vec::new(),
         scatters: Vec::new(),
         decorations: Vec::new(),
-        column_cache: crate::server::terrain::ColumnCache::new(1),
-        scatter_cache: crate::server::terrain::ColumnCache::new(1),
+        column_cache: weft_noise::cache::ColumnCache::new(1),
+        scatter_cache: weft_noise::cache::ColumnCache::new(1),
     }
 }
 
@@ -3208,7 +3211,7 @@ fn resolve_hazards(
             s.hazards
                 .push(Hazard { at: at::INSIDE, damage: 4.0, cause: lava, fire: 300, every: 0, when: None });
         }
-        if s.flags & abi::block_flags::SOLID != 0 && s.opacity >= 15 {
+        if s.solid() && s.opacity >= 15 {
             let choke = Some(abi::damage_cause::SUFFOCATE);
             s.hazards
                 .push(Hazard { at: at::HEAD, damage: 1.0, cause: choke, fire: 0, every: 10, when: not_flying });

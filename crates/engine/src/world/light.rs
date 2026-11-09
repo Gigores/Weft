@@ -55,6 +55,12 @@ pub fn reach(v: u8, down_sky: bool) -> u8 {
     step(v, 0, down_sky)
 }
 
+/// Whether a spot lit `light` is out of the sky's sight: a cave or under a roof. Never in a
+/// dimension without a sky.
+pub fn enclosed(def: &crate::content::DimensionDef, light: u32) -> bool {
+    def.sky_light && weft_abi::light::sky(light) < 6
+}
+
 /// Nothing above cube height `y` can shade it: open sky (`sky_above`) or the dimension's top.
 #[inline]
 pub fn open_above(def: &crate::content::DimensionDef, y: i32) -> bool {
@@ -89,12 +95,6 @@ pub fn sky_below(above: Option<&Cube>, open: bool) -> SkyBelow {
 }
 /// Channel index: 0 sky, 1..4 red, green, blue.
 const SKY: usize = 0;
-
-#[inline]
-/// The sky's level in a light value as cubes store it.
-pub fn sky_of(v: u32) -> u8 {
-    weft_abi::light::sky(v) as u8
-}
 
 /// What a block changing at `p` from `old` does to the light around it, what bodies' lights give
 /// included, on the server and in a client's guess alike. Returns the cubes that changed.

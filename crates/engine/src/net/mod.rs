@@ -30,10 +30,6 @@ pub fn host(server: &crate::server::ServerHandle, settings: &crate::settings::Se
     p2p::host(server.connect.clone(), settings);
 }
 
-pub fn join(ticket: &str, settings: &crate::settings::Settings) -> Result<ClientConn, String> {
-    p2p::join(ticket, settings)
-}
-
 /// A struct that travels in messages, written field by field.
 macro_rules! wire_struct {
     ($(#[$m:meta])* pub struct $name:ident { $(pub $f:ident: $t:ty),* $(,)? }) => {

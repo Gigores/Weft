@@ -272,7 +272,7 @@ pub(super) fn rider_meets(c: &Content, there: u32) -> RiderMeets {
     let s = &c.states[there as usize];
     if there == AIR || s.liquid.is_some() || s.flags & bf::REPLACEABLE != 0 || s.signal.kind == sk::WIRE {
         RiderMeets::Nothing
-    } else if s.flags & bf::SOLID != 0 {
+    } else if s.solid() {
         RiderMeets::Wall
     } else {
         RiderMeets::Breaks
@@ -331,20 +331,12 @@ impl Signals {
                 .is_some_and(|n| n.as_ref().is_some_and(|n| n.cut))
     }
 
-    fn outside_gives(&self, n: IVec3, dir: u8) -> u8 {
+    /// The most other spaces give at `n` toward `dir`, `which` picking what reads it.
+    fn outside_gives(&self, n: IVec3, dir: u8, which: fn(&Gives) -> &[u8; 6]) -> u8 {
         self.outside
             .values()
             .filter_map(|m| m.get(&n))
-            .map(|g| g.all[dir as usize])
-            .max()
-            .unwrap_or(0)
-    }
-
-    fn outside_gives_wire(&self, n: IVec3, dir: u8) -> u8 {
-        self.outside
-            .values()
-            .filter_map(|m| m.get(&n))
-            .map(|g| g.to_wire[dir as usize])
+            .map(|g| which(g)[dir as usize])
             .max()
             .unwrap_or(0)
     }
@@ -364,7 +356,7 @@ impl Signals {
 
     /// Power coming into `p` from direction `dir`; `None`: that can't be told, it is cut off.
     fn read(&self, c: &Content, cubes: View, p: IVec3, dir: u8) -> Option<u8> {
-        let from_outside = self.outside_gives(p + DIRS[dir as usize], dir ^ 1);
+        let from_outside = self.outside_gives(p + DIRS[dir as usize], dir ^ 1, |g| &g.all);
         self.read_here(c, cubes, p, dir)
             .map(|v| v.max(from_outside))
     }
@@ -1001,7 +993,7 @@ impl Signals {
             let v = match port {
                 Port::Direct(at, dir) => self.device_signal(c, at).map_or(0, |s| direct(s, dir)),
                 Port::Strong(at) => self.strong_in(c, at),
-                Port::Outside(at, dir) => self.outside_gives_wire(at, dir),
+                Port::Outside(at, dir) => self.outside_gives(at, dir, |g| &g.to_wire),
             };
             if v > net.next[i as usize] {
                 net.next[i as usize] = v;
@@ -1631,7 +1623,7 @@ impl Dim {
                 log::debug!("in the way of a piston: {} at {at}", c.state_name(here));
                 return None;
             }
-            if info.flags & bf::SOLID == 0 {
+            if !info.solid() {
                 broken.push(at);
                 continue;
             }
@@ -1649,7 +1641,7 @@ impl Dim {
                     }
                     // What can't come along stays behind, unlike what is in the way.
                     let s = self.get(n)?;
-                    if s != AIR && c.states[s as usize].flags & bf::SOLID != 0 && self.movable(c, s) {
+                    if s != AIR && c.solid(s) && self.movable(c, s) {
                         todo.push(n);
                     }
                 }
@@ -1700,7 +1692,7 @@ impl Dim {
             if s.flags as u32 & abi::signal_flags::STICKY != 0 && held_on {
                 let beyond = head + step;
                 let here = self.get(beyond)?;
-                if here != AIR && c.states[here as usize].flags & bf::SOLID != 0 && self.movable(c, here) {
+                if here != AIR && c.solid(here) && self.movable(c, here) {
                     if let Some((moved, broken)) = self.gather_move(c, p, Some(head), beyond, -step) {
                         (plan.moved, plan.broken) = (moved, broken);
                     }
@@ -1728,7 +1720,7 @@ impl Dim {
         let mut seen: FxHashSet<IVec3> = [p, grip].into_iter().collect();
         let mut todo = Vec::new();
         let held = self.get(grip)?;
-        if held != AIR && c.states[held as usize].flags & bf::SOLID != 0 {
+        if held != AIR && c.solid(held) {
             if !self.movable(c, held) {
                 log::debug!("a floater at {p} has in front of it what can't be moved");
                 return None;
@@ -1747,7 +1739,7 @@ impl Dim {
                     continue;
                 }
                 let s = self.get(n)?;
-                if s != AIR && c.states[s as usize].flags & bf::SOLID != 0 && self.movable(c, s) {
+                if s != AIR && c.solid(s) && self.movable(c, s) {
                     if moved.len() == BODY_LIMIT {
                         log::debug!("too much for a floater at {p}");
                         return None;
@@ -1786,7 +1778,7 @@ impl Dim {
                 }
                 let Some(state) = self.get(n) else { continue };
                 let info = &c.states[state as usize];
-                if state == AIR || info.flags & bf::SOLID != 0 || info.liquid.is_some() {
+                if state == AIR || info.solid() || info.liquid.is_some() {
                     continue;
                 }
                 let held_by = |f: u8| moved.contains(&(n + DIRS[f as usize]));

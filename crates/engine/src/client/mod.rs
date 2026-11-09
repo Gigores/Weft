@@ -1867,7 +1867,7 @@ impl Client {
             if let Some(st) = self
                 .world
                 .block_or_air(head)
-                .filter(|&s| c.states[s as usize].flags & weft_abi::block_flags::SOLID != 0 && c.tight[s as usize].opacity >= 15)
+                .filter(|&s| c.solid(s) && c.tight[s as usize].opacity >= 15)
             {
                 if let Some(picture) = looks.texture_name(c, looks.drawn(st, &c.states[st as usize]).textures[1]) {
                     out.push(sky::Overlay {
@@ -1940,7 +1940,7 @@ impl Client {
             // Through a ceiling: a solid block under the liquid, air under that.
             if let Some(kind) = drip.filter(|_| (r >> 24) % 8 == 0) {
                 let (below, air) = (self.world.block(p - IVec3::Y), self.world.block(p - IVec3::Y * 2));
-                if c.states[below as usize].flags & weft_abi::block_flags::SOLID != 0 && air == 0 {
+                if c.solid(below) && air == 0 {
                     let pos = [p.x as f64 + 0.5, p.y as f64 - 1.05, p.z as f64 + 0.5];
                     bursts.push(weft_abi::ParticleBurst {
                         kind,
@@ -2079,7 +2079,7 @@ impl Client {
             underwater: self
                 .eye_liquid()
                 .is_some_and(|l| !c.liquids[l as usize].burns()),
-            enclosed: weft_abi::light::sky(self.world.light(eye)) < 6 && c.dims[self.world.dim as usize].sky_light,
+            enclosed: crate::world::light::enclosed(&c.dims[self.world.dim as usize], self.world.light(eye)),
             dim: self.world.dim,
             holds: c
                 .game
@@ -2097,7 +2097,7 @@ impl Client {
     pub fn enclosed(&self) -> bool {
         let c = content();
         let eye = self.camera().pos.floor().as_ivec3();
-        weft_abi::light::sky(self.world.light(eye)) < 6 && c.dims[self.world.dim as usize].sky_light
+        crate::world::light::enclosed(&c.dims[self.world.dim as usize], self.world.light(eye))
     }
 
     fn pick_entity(&self, eye: DVec3, dir: DVec3, max: f64) -> Option<u64> {

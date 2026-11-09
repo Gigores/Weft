@@ -592,10 +592,6 @@ impl Ctm {
     }
 }
 
-fn hash(x: i32, y: i32, z: i32, f: u32) -> u64 {
-    weft_noise::hash(f as u64, x as i64, y as i64, z as i64)
-}
-
 impl Ctm {
     #[inline]
     pub fn has_overlay(&self, tex: u32) -> bool {
@@ -752,7 +748,7 @@ impl Ctm {
                 }
                 Method::Random => {
                     let group = (dir as u32) / rule.symmetry as u32;
-                    rule.pick[(hash(world[0], world[1], world[2], group) >> 56) as usize] as usize
+                    rule.pick[(weft_noise::hash(group as u64, world[0] as i64, world[1] as i64, world[2] as i64) >> 56) as usize] as usize
                 }
                 Method::Repeat => {
                     let dot = |a: [i32; 3]| world[0] * a[0] + world[1] * a[1] + world[2] * a[2];

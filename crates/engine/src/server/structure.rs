@@ -346,7 +346,7 @@ impl Dim {
             if s == AIR || info.liquid.is_some() {
                 continue;
             }
-            if info.flags & abi::block_flags::SOLID != 0 && (!breaks || info.hardness < 0.0) {
+            if info.solid() && (!breaks || info.hardness < 0.0) {
                 return None;
             }
             out.push(n);
@@ -423,10 +423,7 @@ impl Dim {
         let sign = IVec3::from_array([0, 1, 2].map(|a| if v[a].abs() > 1e-9 { v[a].signum() as i32 } else { 0 }));
         // What it has that can't be moved now, with more of it pushing that along: it stops as it
         // would have stayed. What nothing pushes rides on, a body doesn't come apart on its way.
-        let solid = |p: IVec3| {
-            b.get(p)
-                .is_some_and(|s| c.states[s as usize].flags & abi::block_flags::SOLID != 0)
-        };
+        let solid = |p: IVec3| b.get(p).is_some_and(|s| c.solid(s));
         if b.signals
             .fixed(c)
             .any(|p| ways(sign).any(|step| solid(p - step)))
@@ -438,10 +435,9 @@ impl Dim {
         if b.looked_from != Some((cell, sign)) {
             let all = b.all_blocks();
             let own: FxHashSet<IVec3> = all.iter().map(|(p, _)| *p + cell).collect();
-            let solid = |s: u32| c.states[s as usize].flags & abi::block_flags::SOLID != 0;
             let at: Vec<IVec3> = all
                 .iter()
-                .filter(|(_, s)| solid(*s))
+                .filter(|(_, s)| c.solid(*s))
                 .map(|(p, _)| *p + cell)
                 .collect();
             let Some(mut broken) = self.ahead_every_way(c, at.iter().copied(), &own, sign, breaks) else {
@@ -451,7 +447,7 @@ impl Dim {
             };
             // What it carries that isn't solid doesn't hold it up.
             let mut off = Vec::new();
-            for (p, _) in all.iter().filter(|(_, s)| !solid(*s)) {
+            for (p, _) in all.iter().filter(|(_, s)| !c.solid(*s)) {
                 for to in ways(sign)
                     .map(|step| *p + cell + step)
                     .filter(|to| !own.contains(to))

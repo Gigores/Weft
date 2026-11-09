@@ -70,8 +70,7 @@ impl Dim {
     }
 
     fn solid(&self, c: &Content, p: IVec3) -> bool {
-        let solid = |s: u32| c.states[s as usize].flags & bf::SOLID != 0;
-        self.get(p).is_none_or(solid) || self.space.extras(p).iter().any(|&s| solid(s))
+        self.get(p).is_none_or(|s| c.solid(s)) || self.space.extras(p).iter().any(|&s| c.solid(s))
     }
 
     /// What liquid `l` would make of `p` from its neighbors: a state, or `None` for nothing.

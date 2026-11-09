@@ -433,7 +433,7 @@ fn server(d: &mut Dim, c: &'static Content, e: &Expr, a: &Ask) -> Option<bool> {
         if a.could && changes {
             return None;
         }
-        let sky = || abi::light::sky(d.light(p)) >= 6 || !c.dims[d.id as usize].sky_light;
+        let sky = || !crate::world::light::enclosed(&c.dims[d.id as usize], d.light(p));
         // The cell on a side named, the cell itself for 6.
         let toward = |f: u8| {
             let f = if a.own_frame && f < 6 { c.states[a.state as usize].turn.face(f as usize) } else { f as usize };
@@ -464,8 +464,7 @@ fn server(d: &mut Dim, c: &'static Content, e: &Expr, a: &Ask) -> Option<bool> {
                 (k::HEIGHT, _) => in_range(arg, a.pos.y as f32),
                 (k::ATTRIBUTE, _) => in_range(arg, d.attribute(c, a.entity, attr(arg), false) as f32),
                 (k::SIDE, Arg::Side(f, m)) => {
-                    let solid = |s: u32| c.states[s as usize].flags & abi::block_flags::SOLID != 0;
-                    return side(d, *f, &|s| m.as_ref().map_or(solid(s), |m| crate::refs::has(m, s)));
+                    return side(d, *f, &|s| m.as_ref().map_or(c.solid(s), |m| crate::refs::has(m, s)));
                 }
                 (k::OPEN, Arg::Side(f, _)) => {
                     return d

@@ -180,10 +180,6 @@ pub struct EntityRenderer {
     instances: Vec<(u64, GpuBox)>,
 }
 
-fn shader(assets: &Assets) -> Result<Shader, ShaderError> {
-    crate::packs::shader(assets, "entity.wgsl")
-}
-
 pub const HOOK: crate::shaders::Hook = crate::shaders::Hook {
     kind: "entity",
     entry: "shade",
@@ -282,7 +278,7 @@ impl EntityRenderer {
 
     /// Item models instanced in the world and in the hand.
     fn item_pipelines(gpu: &mut dyn Backend, assets: &Assets) -> Result<(PipelineId, PipelineId), String> {
-        let s = shader(assets).map_err(|e| e.0)?;
+        let s = crate::packs::shader(assets, "entity.wgsl").map_err(|e| e.0)?;
         let mut pipe = |label, vertex| {
             gpu.create_pipeline(&PipelineDesc {
                 label,
@@ -301,7 +297,7 @@ impl EntityRenderer {
     }
 
     fn pipelines(gpu: &mut dyn Backend, assets: &Assets) -> Result<(PipelineId, PipelineId), String> {
-        let s = shader(assets).map_err(|e| e.0)?;
+        let s = crate::packs::shader(assets, "entity.wgsl").map_err(|e| e.0)?;
         let main = gpu
             .create_pipeline(&PipelineDesc {
                 label: "entities",

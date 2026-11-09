@@ -2242,7 +2242,7 @@ impl Dim {
                 // Per rule, the first spot of its kind with room for its mob, scanning down from
                 // above the player. Unloaded counts as solid; liquids are not solid.
                 let state = |y: i32| self.get(IVec3::new(x, y, z)).map(|s| &c.states[s as usize]);
-                let solid = |y: i32| state(y).is_none_or(|s| s.flags & bf::SOLID != 0);
+                let solid = |y: i32| state(y).is_none_or(|s| s.solid());
                 let air = |y: i32| !solid(y) && state(y).is_some_and(|s| s.liquid.is_none());
                 let wet = |y: i32| state(y).is_some_and(|s| s.liquid.is_some());
                 let top = p.y.floor() as i32 + 16;
@@ -2950,7 +2950,7 @@ impl Dim {
         match then {
             Then::Become(s) => {
                 // Something solid has no room beside the other things in the cell: it goes.
-                let crowded = !self.space.extras(p).is_empty() && c.states[s as usize].flags & bf::SOLID != 0;
+                let crowded = !self.space.extras(p).is_empty() && c.solid(s);
                 self.replace_part(c, p, part, if crowded { AIR } else { s });
             }
             Then::Grow => match c.block_of(part).cb.on_grow {

@@ -810,7 +810,7 @@ impl Running {
                         }
                     }
                 }
-                Request::Join(ticket) => match net::join(&ticket, &self.settings) {
+                Request::Join(ticket) => match net::p2p::join(&ticket, &self.settings) {
                     Ok(conn) => {
                         self.leave_world_silent();
                         let key = net::p2p::player_key(&self.settings.run_dir);
@@ -1757,12 +1757,6 @@ fn escape(r: &mut Running, requests: &mut Vec<Request>) {
     }
 }
 
-fn toggle_gizmo(r: &mut Running, group: &str) {
-    if let Some(g) = &mut r.game {
-        g.client.toggle_gizmo(group);
-    }
-}
-
 /// The debug overlay and what goes with it (F3 and F3 plus a key by default).
 fn debug_keys(r: &mut Running) {
     if r.input.pressed("core:debug") {
@@ -1781,11 +1775,10 @@ fn debug_keys(r: &mut Running) {
     if r.input.pressed("core:debug_options") && r.screens.is_empty() {
         r.open(screens::engine("core:debug_options"));
     }
-    if r.input.pressed("core:show_cubes") {
-        toggle_gizmo(r, "cubes");
-    }
-    if r.input.pressed("core:show_hitboxes") {
-        toggle_gizmo(r, "hitboxes");
+    for (key, group) in [("core:show_cubes", "cubes"), ("core:show_hitboxes", "hitboxes")] {
+        if let Some(g) = r.game.as_mut().filter(|_| r.input.pressed(key)) {
+            g.client.toggle_gizmo(group);
+        }
     }
     let groups = crate::hud::DEBUG_GROUPS.len() + crate::hud::mod_debug_groups().len();
     for i in 0..groups.min(9) {

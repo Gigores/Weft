@@ -607,10 +607,6 @@ impl VulkanBackend {
         }
     }
 
-    pub fn device_name(&self) -> &str {
-        &self.device_name
-    }
-
     unsafe fn recreate_swapchain(&mut self) -> Result<(), Error> {
         unsafe {
             let caps = self
