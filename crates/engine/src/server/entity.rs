@@ -41,6 +41,8 @@ pub struct Entity {
     pub selected: u32,
     /// Using what it holds: the ticks that takes, and whether in the other hand. Others see it.
     pub using: (u32, bool),
+    /// The item it is using, the tick that takes effect and the slot it is in.
+    pub use_done: Option<(u32, u64, u32)>,
     pub anchor: Option<IVec3>,
     pub sent: Option<(DVec3, f32, f32, crate::world::Pose, bool)>,
     /// Worn items as last sent to clients.
@@ -151,6 +153,7 @@ impl Entity {
             fire: 0,
             selected: 0,
             using: (0, false),
+            use_done: None,
             anchor: None,
             sent: None,
             worn: Vec::new(),

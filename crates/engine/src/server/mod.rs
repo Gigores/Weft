@@ -112,8 +112,6 @@ pub struct Player {
     to_send_far: Vec<IVec3>,
     known: FxHashSet<u64>,
     joined: bool,
-    /// The item it holds the use button on, the server tick that takes effect, the slot it is in.
-    using: Option<(u32, u64, u32)>,
     mining: Option<Mining>,
     sent_cracks: Vec<crate::net::Crack>,
     /// The tick rate its client has.
@@ -524,7 +522,6 @@ impl Server {
                 to_send_far: Vec::new(),
                 known: FxHashSet::default(),
                 joined: false,
-                using: None,
                 mining: None,
                 sent_rate: 0,
                 glow_sent: false,
@@ -609,7 +606,6 @@ impl Server {
             }
         }
 
-        self.finish_uses(c);
         self.dim_events(c);
         for pi in 0..self.players.len() {
             let Server { players, dims, .. } = self;
@@ -779,6 +775,18 @@ impl Server {
                 }
                 DimEvent::SetWeather { dim, weather, ticks } => self.dims[dim as usize].set_weather(weather, ticks as u64),
 
+                // What the entity's own client hears of its uses: everyone else sees the swing.
+                DimEvent::Using { entity, using } => {
+                    if let Some(p) = self.players.iter_mut().find(|p| p.entity == entity) {
+                        p.conn.send(ToClient::Using(using));
+                    }
+                }
+                DimEvent::Used { entity, off } => {
+                    if let Some(p) = self.players.iter_mut().find(|p| p.entity == entity) {
+                        p.conn
+                            .send(ToClient::Swing { used_item: true, off_hand: off });
+                    }
+                }
                 DimEvent::EntitySwing { id, off } => {
                     for p in self
                         .players

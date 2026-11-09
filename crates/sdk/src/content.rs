@@ -2545,7 +2545,7 @@ impl ItemBuilder<'_> {
             let Some((p, face)) = u.target_block() else { return false };
             let (w, side) = (u.world(), crate::Dir::from_face(face).offset());
             w.spawn(entity, [(p.x + side.x) as f64 + 0.5, (p.y + side.y) as f64, (p.z + side.z) as f64 + 0.5]);
-            if !w.creative(u.player()) {
+            if !w.creative(u.entity()) {
                 u.set_stack(crate::StackData::shrink(u.stack(), 1));
             }
             true
@@ -3318,8 +3318,9 @@ impl ItemUse {
     pub fn world(&self) -> World {
         World::from_raw(self.args.world)
     }
-    pub fn player(&self) -> u64 {
-        self.args.player
+    /// Who uses it: a player, or a mob (`World::use_item`).
+    pub fn entity(&self) -> u64 {
+        self.args.entity
     }
     pub fn target_block(&self) -> Option<(BlockPos, u32)> {
         (self.args.has_target != 0).then_some((self.args.pos, self.args.face))
@@ -3327,13 +3328,13 @@ impl ItemUse {
     pub fn stack(&self) -> crate::ItemStack {
         self.args.stack
     }
-    /// The slot of the player's inventory the stack is in.
+    /// The slot of its inventory the stack is in.
     pub fn slot(&self) -> u32 {
         self.args.slot
     }
     /// The used stack as a holder: what a backpack opens its menu on.
     pub fn holder(&self) -> crate::Holder {
-        crate::Holder::held(self.args.player, self.args.slot)
+        crate::Holder::held(self.args.entity, self.args.slot)
     }
     /// Replaces the held stack (use count 0 to consume it entirely).
     pub fn set_stack(&mut self, s: crate::ItemStack) {

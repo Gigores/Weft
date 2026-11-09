@@ -2096,10 +2096,11 @@ pub struct PlaceArgs {
 #[repr(C)]
 pub struct ItemUseArgs {
     pub world: *mut WorldCtx,
-    pub player: u64,
+    /// Who uses it: a player, or a mob (`World::use_item`).
+    pub entity: u64,
     /// In/out: the held stack; change it to consume (eating, placing).
     pub stack: ItemStack,
-    /// The slot of the player's inventory it is in.
+    /// The slot of its inventory it is in.
     pub slot: u32,
     /// Target block if any (`has_target`).
     pub pos: BlockPos,
@@ -3308,6 +3309,10 @@ pub struct Host {
     /// chain from the held item's (players) or the kind's `attack_damage`, and the attacker's
     /// cooldown (mobs: once a second). Non-zero if the hit landed.
     pub entity_attack: unsafe extern "C" fn(world: *mut WorldCtx, attacker: u64, target: u64) -> u32,
+    /// `id` uses what is in its main hand, or its other one (`off`), on the block at `target`
+    /// (null: on nothing) from `face`, as a player's right click does. 1 if it did something
+    /// or started to (eating takes time; it goes on while the hand holds the item).
+    pub entity_use_item: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, off: u32, target: *const BlockPos, face: u32) -> u32,
     /// Whether `target` is within `id`'s `ENTITY_REACH` attribute, from its eyes to the nearest
     /// point of the target's box. Non-zero if so.
     pub entity_in_reach: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, target: u64) -> u32,
@@ -4157,7 +4162,7 @@ impl Schema for DimensionChange {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ItemUsed {
-    pub player: u64,
+    pub entity: u64,
     /// As it was before the use.
     pub stack: ItemStack,
     pub pos: BlockPos,
@@ -4165,7 +4170,7 @@ pub struct ItemUsed {
     pub has_target: u32,
 }
 impl Schema for ItemUsed {
-    const SCHEMA: &'static str = "{player:u64,stack:{item:u32,count:u32,data:u32},pos:[i32;3],has_target:u32}";
+    const SCHEMA: &'static str = "{entity:u64,stack:{item:u32,count:u32,data:u32},pos:[i32;3],has_target:u32}";
 }
 
 #[repr(C)]

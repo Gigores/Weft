@@ -63,6 +63,7 @@ pub static HOST: Host = Host {
     entities_in,
     in_liquid,
     entity_swing_strength,
+    entity_use_item,
     component,
     player_count,
     player_at,
@@ -811,6 +812,16 @@ unsafe extern "C" fn in_liquid(w: *mut abi::WorldCtx, pos: *const abi::Vec3) -> 
     unsafe {
         let d = dim(w);
         crate::physics::liquid_at(content(), &*d.space, crate::world::dvec(*pos)).is_some() as u32
+    }
+}
+
+unsafe extern "C" fn entity_use_item(w: *mut abi::WorldCtx, id: u64, off: u32, target: *const abi::BlockPos, face: u32) -> u32 {
+    unsafe {
+        let (d, c) = (dim(w), content());
+        let Some(e) = d.entities.get(id) else { return 0 };
+        let slot = if off != 0 { c.game.entities[e.kind as usize].off } else { Some(e.selected) };
+        let target = (!target.is_null()).then(|| (ip(target), face.min(5) as u8));
+        slot.is_some_and(|slot| d.use_in_hand(c, id, slot, target, false)) as u32
     }
 }
 

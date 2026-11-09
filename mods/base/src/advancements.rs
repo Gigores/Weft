@@ -131,7 +131,7 @@ pub fn register(r: &mut Registry) {
     r.on_event(&actions::USE_ITEM, |b| {
         let w = b.world();
         for u in b.iter() {
-            grant_where(&w, u.player, |rule| matches!(rule, Rule::Eat(t) if t.on_item(u.stack.item)));
+            grant_where(&w, u.entity, |rule| matches!(rule, Rule::Eat(t) if t.on_item(u.stack.item)));
         }
     });
 

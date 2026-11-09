@@ -245,8 +245,8 @@ pub fn register(r: &mut Registry) {
     r.item(&BLASTER).max_stack(1).handheld();
     r.item(&RUNE).max_stack(1).on_use(|u| {
         let w = u.world();
-        w.action_play(u.player(), "wave", false);
-        if let Some(st) = w.entity(u.player()) {
+        w.action_play(u.entity(), "wave", false);
+        if let Some(st) = w.entity(u.entity()) {
             w.spawn_particles(&SPARK, [st.pos.x, st.pos.y + 1.2, st.pos.z])
                 .count(40)
                 .spread(0.2)

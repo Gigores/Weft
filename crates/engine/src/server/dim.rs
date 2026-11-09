@@ -24,6 +24,16 @@ const CATCH_UP_PARTS: u64 = 20;
 const ITEM_LIFETIME: u64 = crate::world::TPS as u64 * 60 * 5;
 
 pub enum DimEvent {
+    /// An entity started using an item that takes time (ticks, off hand), or stopped.
+    Using {
+        entity: u64,
+        using: Option<(u32, bool)>,
+    },
+    /// An entity's use of an item did something.
+    Used {
+        entity: u64,
+        off: bool,
+    },
     /// `on`: the inventory it opened on, `None` for a menu of its own (a crafting table).
     /// `block`: the state it was opened on, 0 when opened from code.
     OpenMenu {
@@ -2391,6 +2401,7 @@ impl Dim {
             self.call(owner, cb, |w| abi::WorldTickArgs { world: w });
         }
         self.fire_timers(c);
+        self.finish_uses(c);
         self.navigation(c);
         self.steer_mounts(c);
         self.choose_poses(c);

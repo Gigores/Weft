@@ -251,6 +251,17 @@ impl World {
         let pos = pos.into();
         unsafe { (host().in_liquid)(self.raw(), &pos) != 0 }
     }
+    /// `id` uses what is in its main hand (or the other one, `off_hand`), on nothing, as a
+    /// player's right click in the air does: a witch drinking, a skeleton drawing its bow. True if
+    /// it did something or started to; what takes time goes on while it holds the item.
+    pub fn use_item(&self, id: u64, off_hand: bool) -> bool {
+        unsafe { (host().entity_use_item)(self.raw(), id, off_hand as u32, std::ptr::null(), 0) != 0 }
+    }
+    /// `use_item` on the block at `pos`, from `face` (-X, +X, -Y, +Y, -Z, +Z): a bucket filled.
+    pub fn use_item_on(&self, id: u64, off_hand: bool, pos: impl Into<BlockPos>, face: u32) -> bool {
+        let pos = pos.into();
+        unsafe { (host().entity_use_item)(self.raw(), id, off_hand as u32, &pos, face) != 0 }
+    }
     /// How charged `id`'s next swing is, 0..1, with what it holds now.
     pub fn swing_strength(&self, id: u64) -> f32 {
         unsafe { (host().entity_swing_strength)(self.raw(), id) }

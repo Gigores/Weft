@@ -52,7 +52,7 @@ pub fn eat(u: &mut ItemUse) -> bool {
     let stack = u.stack();
     let Some(food) = FOOD.on_stack(&stack) else { return false };
     let w = u.world();
-    let Some(h) = w.component_mut(u.player(), &HUNGER) else { return false };
+    let Some(h) = w.component_mut(u.entity(), &HUNGER) else { return false };
     if h.food >= 20.0 {
         return false;
     }

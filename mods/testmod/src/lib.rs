@@ -351,7 +351,7 @@ fn init(r: &mut Registry) {
         .max_stack(1)
         .tab(&BASE_TOOLS)
         .on_use(|u| {
-            u.world().open_menu(u.player(), &POUCH_MENU, u.holder());
+            u.world().open_menu(u.entity(), &POUCH_MENU, u.holder());
             true
         });
     r.menu(&POUCH_MENU)
@@ -493,7 +493,7 @@ fn init(r: &mut Registry) {
         let w = b.world();
         for e in b.iter() {
             if let Some(heal) = FOOD_HEAL.on_stack(&e.stack) {
-                w.heal(e.player, heal);
+                w.heal(e.entity, heal);
             }
         }
     });
