@@ -744,7 +744,7 @@ pub mod comp {
     /// `TEXT` (`str`, the default of a text setting), `PAGE` (`str`, the settings page it is on:
     /// `core:settings`, `core:chat_settings`, `core:sound` or a mod's own, titled `page.<ns>.<name>`;
     /// none: its mod's page), `ORDER` (`i32`, lower first, then by name, 0), tags
-    /// `RESTART_REQUIRED`, `PERCENT` (shown times 100). Its value shows as `config.<ns>.<key>.<value>`
+    /// `RESTART_REQUIRED`, `PERCENT` (shown times 100), `ON_RELEASE`. Its value shows as `config.<ns>.<key>.<value>`
     /// where there is one (a choice, a number with a name of its own), else through
     /// `config.<ns>.<key>.value` (`{0} cubes`).
     pub mod config {
@@ -758,6 +758,8 @@ pub mod comp {
         /// Takes effect after a restart; the settings screen says so.
         pub const RESTART_REQUIRED: &str = "config.restart_required";
         pub const PERCENT: &str = "config.percent";
+        /// A slider that takes its value when let go, not on its way there (the GUI scale).
+        pub const ON_RELEASE: &str = "config.on_release";
         pub const PAGE: &str = "config.page";
         pub const ORDER: &str = "config.order";
     }
@@ -3132,6 +3134,8 @@ pub struct UiNode {
     /// `UiBindArgs`: fills `value` (and text via `Host::ui_text`) every frame.
     pub bind: Callback,
     pub on_click: Callback,
+    /// BUTTON: clicked twice in a row, after `on_click` (a world in a list played).
+    pub on_double_click: Callback,
     pub tooltip: Str,
     /// `ui_dir` for progress bars.
     pub dir: u32,
@@ -3199,6 +3203,7 @@ defaults!(UiNode {
     count: 0,
     bind: Callback::NONE,
     on_click: Callback::NONE,
+    on_double_click: Callback::NONE,
     tooltip: Str::EMPTY,
     dir: 0,
     effects: Slice::EMPTY,

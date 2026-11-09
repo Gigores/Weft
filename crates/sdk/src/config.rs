@@ -164,6 +164,11 @@ impl ConfigBuilder<'_> {
     pub fn restart_required(self) -> Self {
         self.tag(abi::comp::config::RESTART_REQUIRED)
     }
+    /// Its slider takes the value when let go, not on its way there (a value that changes what
+    /// the slider is drawn by, as the GUI scale).
+    pub fn on_release(self) -> Self {
+        self.tag(abi::comp::config::ON_RELEASE)
+    }
 }
 
 impl Registry {

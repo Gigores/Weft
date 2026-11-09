@@ -748,6 +748,8 @@ impl Screen for WorldSelect {
                         if let Kind::Button { selected: s, .. } = &mut ui.nodes[b].kind {
                             *s = selected == Some(i);
                         }
+                        let world = w.clone();
+                        ui.on_double_click(b, Rc::new(move |c: &mut Ctx| c.requests.push(Request::StartWorld(world.clone()))));
                         ui.set_id(b, &format!("world:{i}"));
                     }
                 },

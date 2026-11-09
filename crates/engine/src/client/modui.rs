@@ -261,7 +261,7 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
                 let bind = float_bind(owner, n.bind);
                 let on_change: Rc<dyn Fn(&mut Ctx, f32)> = Rc::new(move |ctx: &mut Ctx, v: f32| on_change(ctx, String::new(), v));
                 let steps = if n.count == 0 { 100 } else { n.count };
-                b.ui.open(Kind::Slider { value: 0.0, bind, on_change, steps }, style)
+                b.ui.open(Kind::Slider { value: 0.0, bind, on_change, on_release: None, steps }, style)
             }
             uk::ITEM => {
                 let (item, count) = (n.data, n.count);
@@ -282,7 +282,14 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
                     style.pad = [6.0, 4.0, 6.0, 4.0];
                 }
                 // Labels sit in the middle, like on the engine's buttons.
-                b.ui.open(Kind::Button { class: class_or("button"), action: Some(action), enabled, selected }, style.center())
+                let double = n.on_double_click;
+                let on_double: Option<crate::ui::Action> = double.is_some().then(|| {
+                    Rc::new(move |ctx: &mut Ctx| {
+                        ctx.requests
+                            .push(crate::app::Request::ModCall(owner, double))
+                    }) as crate::ui::Action
+                });
+                b.ui.open(Kind::Button { class: class_or("button"), action: Some(action), on_double, enabled, selected }, style.center())
             }
             uk::TITLE => {
                 let c = crate::content::content();

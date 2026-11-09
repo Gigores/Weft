@@ -222,6 +222,9 @@ pub struct TextNode {
     pub line: Option<f32>,
 }
 
+/// Two clicks on one button closer than this are a double click.
+pub const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
+
 pub enum Kind {
     Container {
         class: Option<String>,
@@ -230,6 +233,8 @@ pub enum Kind {
     Button {
         class: String,
         action: Option<Action>,
+        /// Clicked twice in a row (`DOUBLE_CLICK`), after `action`.
+        on_double: Option<Action>,
         enabled: bool,
         selected: bool,
     },
@@ -273,6 +278,9 @@ pub enum Kind {
         value: f32,
         bind: FloatBind,
         on_change: Rc<dyn Fn(&mut Ctx, f32)>,
+        /// With one, dragging only shows (`on_change`) and this takes the value when let go: a
+        /// GUI scale that would change under the cursor on its way.
+        on_release: Option<Rc<dyn Fn(&mut Ctx, f32)>>,
         steps: u32,
     },
     /// Engine-drawn content (slots, 3D previews) identified by a tag.
@@ -567,7 +575,18 @@ impl Ui {
     }
 
     pub fn button(&mut self, class: &str, style: Style, action: Action, f: impl FnOnce(&mut Ui)) -> NodeId {
-        self.with(Kind::Button { class: class.to_string(), action: Some(action), enabled: true, selected: false }, style.center(), f)
+        self.with(
+            Kind::Button { class: class.to_string(), action: Some(action), on_double: None, enabled: true, selected: false },
+            style.center(),
+            f,
+        )
+    }
+
+    /// What clicking button `node` twice in a row does too.
+    pub fn on_double_click(&mut self, node: NodeId, action: Action) {
+        if let Kind::Button { on_double, .. } = &mut self.nodes[node].kind {
+            *on_double = Some(action);
+        }
     }
 
     pub fn text_mut(&mut self, id: NodeId) -> Option<&mut TextNode> {

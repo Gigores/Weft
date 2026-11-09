@@ -601,6 +601,24 @@ impl Ui {
         self.button_args(key, &[], s, f)
     }
 
+    /// A button that does something more when clicked twice in a row (a world in a list: once
+    /// selects, twice plays).
+    pub fn button_double(
+        &mut self,
+        key: &str,
+        s: S,
+        f: impl Fn(&ClientView) + Send + Sync + 'static,
+        double: impl Fn(&ClientView) + Send + Sync + 'static,
+    ) {
+        let mut n = node(k::BUTTON, s);
+        n.on_click = callback(move |a: &mut abi::UiArgs| f(&ClientView { raw: a.client }));
+        n.on_double_click = callback(move |a: &mut abi::UiArgs| double(&ClientView { raw: a.client }));
+        if n.class.len == 0 {
+            n.class = Str::new("button");
+        }
+        self.with(n, |ui| ui.text_styled(S::column().class("button").no_wrap(), key, &[]));
+    }
+
     /// A button whose label has arguments (`settings.gui_scale` with the scale).
     pub fn button_args(&mut self, key: &str, args: &[Arg], s: S, f: impl Fn(&ClientView) + Send + Sync + 'static) {
         let mut n = node(k::BUTTON, s);

@@ -189,6 +189,8 @@ pub(crate) struct Running {
     window: Arc<Window>,
     depth: (TextureId, u32, u32),
     list: CommandList,
+    /// The button clicked last and when, for double clicks.
+    last_button: Option<(String, Instant)>,
     /// What goes in the world's pass this frame, while it is being made.
     world_list: CommandList,
     /// What is drawn over the world after its depth was taken (`Client::render`).
@@ -428,6 +430,7 @@ impl App {
             window,
             depth,
             list: CommandList::default(),
+            last_button: None,
             world_list: CommandList::default(),
             after_list: CommandList::default(),
             input,
@@ -1095,7 +1098,7 @@ impl Running {
     /// Buttons, sliders and text fields under the mouse. What they do runs once `ui` is let go.
     fn widgets_input(&mut self, hovered: Option<usize>, cursor: Vec2) -> UiCallbacks {
         let mut actions: Vec<crate::ui::Action> = Vec::new();
-        let mut slider: Option<(std::rc::Rc<dyn Fn(&mut Ctx, f32)>, f32)> = None;
+        let mut slider: Vec<(std::rc::Rc<dyn Fn(&mut Ctx, f32)>, f32)> = Vec::new();
         let mut text_changed: Option<(std::rc::Rc<dyn Fn(&mut Ctx, &str)>, String)> = None;
         let Some((_, ui)) = self.screens.last_mut() else { return UiCallbacks::default() };
         if self.input.pressed_button(0) {
@@ -1134,15 +1137,31 @@ impl Running {
                     let v = ((cursor.x - r.x) / r.w).clamp(0.0, 1.0);
                     if (v - *value).abs() > 1e-4 {
                         *value = v;
-                        slider = Some((on_change.clone(), v));
+                        slider.push((on_change.clone(), v));
                         self.quads_dirty = true;
                     }
                 }
             }
         } else if let Some(p) = ui.pressed.take() {
+            if let Kind::Slider { value, on_release: Some(f), .. } = &ui.nodes[p].kind {
+                slider.push((f.clone(), *value));
+            }
             if Some(p) == hovered {
-                if let Kind::Button { action: Some(a), enabled: true, .. } = &ui.nodes[p].kind {
-                    actions.push(a.clone());
+                if let Kind::Button { action, on_double, enabled: true, .. } = &ui.nodes[p].kind {
+                    actions.extend(action.clone());
+                    // The same button again soon, built anew between or not (a list that
+                    // shows what is selected): its id, or its place.
+                    let which = ui.nodes[p].id.clone().unwrap_or_else(|| format!("#{p}"));
+                    let again = self
+                        .last_button
+                        .as_ref()
+                        .is_some_and(|(w, t)| *w == which && t.elapsed() < crate::ui::DOUBLE_CLICK);
+                    if again {
+                        actions.extend(on_double.clone());
+                        self.last_button = None;
+                    } else {
+                        self.last_button = Some((which, Instant::now()));
+                    }
                 }
             }
             self.quads_dirty = true;
@@ -1161,7 +1180,7 @@ impl Running {
                         text_changed = Some((cb.clone(), value.clone()));
                     }
                 }
-            } else if let Kind::Slider { value, on_change, steps, .. } = &mut ui.nodes[f].kind {
+            } else if let Kind::Slider { value, on_change, on_release, steps, .. } = &mut ui.nodes[f].kind {
                 let by: f32 = [(KeyCode::ArrowLeft, -1.0), (KeyCode::ArrowRight, 1.0)]
                     .into_iter()
                     .filter(|(k, _)| self.input.pressed_or_repeated(Key::Code(*k)))
@@ -1171,7 +1190,8 @@ impl Running {
                     let n = (*steps).max(1) as f32;
                     let v = (((*value * n).round() + by) / n).clamp(0.0, 1.0);
                     *value = v;
-                    slider = Some((on_change.clone(), v));
+                    slider.push((on_change.clone(), v));
+                    slider.extend(on_release.clone().map(|f| (f, v)));
                     self.quads_dirty = true;
                 }
             }
@@ -1196,7 +1216,7 @@ impl Running {
 
     fn run_callbacks(&mut self, callbacks: UiCallbacks, requests: &mut Vec<Request>) {
         let UiCallbacks { actions, slider, text_changed } = callbacks;
-        let ran = !actions.is_empty() || slider.is_some() || text_changed.is_some();
+        let ran = !actions.is_empty() || !slider.is_empty() || text_changed.is_some();
         let mut ctx = Ctx {
             settings: &mut self.settings,
             client: self.game.as_mut().map(|g| &mut g.client),
@@ -1218,7 +1238,7 @@ impl Running {
         for a in actions {
             a(&mut ctx);
         }
-        if let Some((f, v)) = slider {
+        for (f, v) in slider {
             f(&mut ctx, v);
         }
         if let Some((f, v)) = text_changed {
@@ -1457,7 +1477,8 @@ impl Running {
         for ui in uis {
             let mut relayout = false;
             let mut redraw = false;
-            for n in &mut ui.nodes {
+            let held = ui.pressed;
+            for (i, n) in ui.nodes.iter_mut().enumerate() {
                 if let Some(tip) = &mut n.tooltip {
                     redraw |= text::refresh(tip, &test);
                 }
@@ -1497,6 +1518,8 @@ impl Running {
                             redraw = true;
                         }
                     }
+                    // One that applies when let go stays where it is dragged meanwhile.
+                    Kind::Slider { on_release: Some(_), .. } if held == Some(i) => {}
                     Kind::Slider { bind, value, .. } => {
                         let v = bind(&ctx);
                         if v.is_finite() && (v - *value).abs() > 1e-4 {
@@ -1650,7 +1673,7 @@ impl ApplicationHandler for App {
 #[derive(Default)]
 struct UiCallbacks {
     actions: Vec<crate::ui::Action>,
-    slider: Option<(std::rc::Rc<dyn Fn(&mut Ctx, f32)>, f32)>,
+    slider: Vec<(std::rc::Rc<dyn Fn(&mut Ctx, f32)>, f32)>,
     text_changed: Option<(std::rc::Rc<dyn Fn(&mut Ctx, &str)>, String)>,
 }
 
