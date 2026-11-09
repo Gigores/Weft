@@ -18,20 +18,25 @@ use std::sync::{Arc, Mutex};
 use crate::{EntityKind, EntityState, EntityTick, World};
 
 /// What a mob feels about whom: per mob, (who, until which tick) for anger and for fear. Kept
-/// by this mod while it runs, not saved with the world.
+/// by this mod while its world is open, not saved with it.
 #[derive(Default)]
 struct Moods {
     anger: Vec<(u64, u64)>,
     fear: Vec<(u64, u64)>,
 }
 
-static MOODS: Mutex<Option<HashMap<u64, Moods>>> = Mutex::new(None);
+/// By mob, for one opening of a world (`World::session`): another starts its ids over.
+static MOODS: Mutex<Option<(u64, HashMap<u64, Moods>)>> = Mutex::new(None);
 
 /// `f` on mob `id`'s moods, what has run out already dropped.
 fn moods<T>(w: &World, id: u64, f: impl FnOnce(&mut Moods) -> T) -> T {
     let now = w.game_time();
+    let session = w.session();
     let mut all = MOODS.lock().unwrap();
-    let all = all.get_or_insert_with(HashMap::new);
+    let (of, all) = all.get_or_insert_with(|| (session, HashMap::new()));
+    if *of != session {
+        (*of, *all) = (session, HashMap::new());
+    }
     // Now and then everything run out, so mobs gone leave nothing behind.
     if now % 200 == 0 && all.len() > 64 {
         all.retain(|_, m| m.anger.iter().chain(&m.fear).any(|e| e.1 > now));

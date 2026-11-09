@@ -46,6 +46,7 @@ pub static HOST: Host = Host {
     random,
     light,
     daylight,
+    world_session,
     entity_spawn,
     entity_despawn,
     entity_mount,
@@ -573,6 +574,10 @@ unsafe extern "C" fn random(w: *mut abi::WorldCtx) -> u64 {
 
 unsafe extern "C" fn light(w: *mut abi::WorldCtx, pos: *const abi::BlockPos) -> u32 {
     unsafe { dim(w).light(ip(pos)) }
+}
+
+extern "C" fn world_session(_: *mut abi::WorldCtx) -> u64 {
+    crate::server::SESSION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 unsafe extern "C" fn daylight(w: *mut abi::WorldCtx) -> f32 {

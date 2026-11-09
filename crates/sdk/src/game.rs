@@ -168,6 +168,11 @@ impl World {
         let target = target.into();
         unsafe { (host().navigate)(self.raw(), id, &target, speed) != 0 }
     }
+    /// A number of its own for each time a world is opened. Entity ids and time start over in
+    /// another world: state a mod keeps by them in its own memory goes by this too.
+    pub fn session(&self) -> u64 {
+        unsafe { (host().world_session)(self.raw()) }
+    }
     /// The world's seed, the one its terrain comes from. The same in every dimension.
     pub fn seed(&self) -> u64 {
         unsafe { (host().world_seed)(self.raw()) }

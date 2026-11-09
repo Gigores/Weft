@@ -47,7 +47,17 @@ struct Nights {
     skipped: u64,
     skipped_at: u64,
 }
-static NIGHTS: Mutex<BTreeMap<u32, Nights>> = Mutex::new(BTreeMap::new());
+/// By dimension, for one opening of a world (`World::session`): another starts over.
+static NIGHTS: Mutex<(u64, BTreeMap<u32, Nights>)> = Mutex::new((0, BTreeMap::new()));
+
+/// `f` on this world's nights.
+fn nights<T>(w: &World, f: impl FnOnce(&mut BTreeMap<u32, Nights>) -> T) -> T {
+    let mut all = NIGHTS.lock().unwrap();
+    if all.0 != w.session() {
+        *all = (w.session(), BTreeMap::new());
+    }
+    f(&mut all.1)
+}
 
 /// Server to client: lying down in bed (1) or getting up (0), for the sleeping screen.
 static LYING: Channel<u32> = Channel::named("bed_lying");
@@ -264,7 +274,7 @@ fn use_bed(u: &mut Use) -> bool {
     } else if monsters_near(&w, foot) {
         w.hint(MONSTERS_NEAR, &[]).to(player);
     } else if let Some(s) = w.component_mut(player, &SLEEP) {
-        let night = NIGHTS.lock().unwrap().get(&dim).map_or(0, |n| n.skipped);
+        let night = nights(&w, |n| n.get(&dim).map_or(0, |n| n.skipped));
         *s = Sleep { bed: foot, since: w.game_time(), night, asleep: 1 };
         let state = w.block(foot);
         w.teleport(player, None, lying_on_bed(foot, state));
@@ -320,7 +330,7 @@ fn get_up(w: &World, player: u64) {
 /// the night once everybody has been asleep a while. Spectators and the dead aren't asked.
 fn watch_sleepers(w: &World) {
     let (now, dim) = (w.game_time(), w.dimension());
-    let night = NIGHTS.lock().unwrap().get(&dim).map_or(0, |n| n.skipped);
+    let night = nights(w, |n| n.get(&dim).map_or(0, |n| n.skipped));
     let mut here_asleep = false;
     let mut seen = Vec::new();
     for id in w.players() {
@@ -345,18 +355,23 @@ fn watch_sleepers(w: &World) {
             seen.push((id, ready));
         }
     }
-    let mut all = NIGHTS.lock().unwrap();
-    let nights = all.entry(dim).or_default();
-    for (id, ready) in seen {
-        nights.players.insert(id, (now, ready));
-    }
-    // Not seen by any region for a couple of ticks (either way: another world's ticks): not here.
-    nights.players.retain(|_, (at, _)| at.abs_diff(now) <= 2);
-    if !here_asleep || !nights.players.values().all(|&(_, ready)| ready) || nights.skipped_at.abs_diff(now) < FALL_ASLEEP {
+    let skips = nights(w, |all| {
+        let nights = all.entry(dim).or_default();
+        for (id, ready) in seen {
+            nights.players.insert(id, (now, ready));
+        }
+        // Not seen by any region for a couple of ticks: not here.
+        nights.players.retain(|_, (at, _)| at.abs_diff(now) <= 2);
+        let skips = here_asleep && nights.players.values().all(|&(_, ready)| ready) && nights.skipped_at.abs_diff(now) >= FALL_ASLEEP;
+        if skips {
+            nights.skipped_at = now;
+            nights.skipped += 1;
+        }
+        skips
+    });
+    if !skips {
         return;
     }
-    nights.skipped_at = now;
-    nights.skipped += 1;
     // To the next morning; ticks run on as before.
     w.set_day_time((w.day_time() / 24000 + 1) * 24000);
 }

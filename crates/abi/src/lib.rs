@@ -3284,6 +3284,9 @@ pub struct Host {
     pub light: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos) -> u32,
     /// 0..1 sun strength for the world's time of day.
     pub daylight: unsafe extern "C" fn(world: *mut WorldCtx) -> f32,
+    /// A number of its own for each time a world is opened: entity ids and time start over in
+    /// another world, so what a mod keeps by them goes by this too.
+    pub world_session: unsafe extern "C" fn(world: *mut WorldCtx) -> u64,
 
     /// An entity as `desc` says; 0 if it can't be (an unknown kind, one that belongs to a
     /// block, an item kind without a stack).

@@ -93,6 +93,9 @@ pub struct ServerConfig {
     pub whitelist: Option<std::path::PathBuf>,
 }
 
+/// Which opening of a world this is (`World::session`): one more for each server started.
+pub static SESSION: AtomicU64 = AtomicU64::new(0);
+
 pub struct Player {
     /// What `/title times` set for the next ones.
     title_times: Option<[f32; 3]>,
@@ -384,6 +387,7 @@ impl Server {
     }
 
     pub fn new(cfg: ServerConfig, incoming: Receiver<ServerConn>, storage: Option<Storage>, shared: Arc<Shared>) -> Server {
+        SESSION.fetch_add(1, Ordering::Relaxed);
         let c = content();
         let next_id = Arc::new(AtomicU64::new(storage.as_ref().map_or(1, |s| s.meta.next_entity.max(1))));
         let mut dims: Vec<DimSet> = (0..c.dims.len() as u32)
