@@ -1407,8 +1407,9 @@ pub mod comp {
     pub const FRICTION: &str = "friction";
     /// Block: movement speed multiplier inside it (`f32`, 1 by default; cobweb, liquids).
     pub const DRAG: &str = "drag";
-    /// Block: emitted light per color channel (`[u8;3]`). 15 is a full-strength source (torch
-    /// 14); higher values reach further.
+    /// Emitted light per color channel (`[u8;3]`). 15 is a full-strength source (torch 14);
+    /// higher values reach further. On an item (held, worn or dropped) or an entity kind it moves
+    /// with the entity, drawn by clients alone: it lights what players see, not the world.
     pub const LIGHT: &str = "light";
     /// Block: a tint kind by name (`tint`: `core:grass`, `core:foliage`, `core:water` or a mod's
     /// own), colored by the biome.

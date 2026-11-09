@@ -14,6 +14,9 @@ const EVENT_NAMES: [&str; 8] =
 
 use base_api::SMELTED;
 static GOLD: Block = Block::named("base:gold_block");
+static GOLD_HELMET: Item = Item::named("base:gold_helmet");
+static RED_LAMP: Item = Item::named("base:red_lamp");
+static BLUE_LAMP: Item = Item::named("base:blue_lamp");
 /// Shared with everyone who sees the entity, for the sync test.
 pub static MARK: Component<u32> = Component::named("testkit:mark");
 /// Server-side stack data that is not saved either.
@@ -630,6 +633,19 @@ const OPS: &[(&str, &str, Run)] = &[
         let p = pos(cmd, "pos")?;
         Ok(w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5])
             .to_string())
+    }),
+    ("spawnlit", "<kind:entity> <pos:pos>", |w, cmd, _, _| {
+        let p = pos(cmd, "pos")?;
+        let e = w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5]);
+        let inv = w.inventory(e);
+        inv.set(w.selected_slot(e), RED_LAMP.stack(1));
+        if let Some(offhand) = inv.find_group(OFF_HAND.name()) {
+            offhand.set(0, BLUE_LAMP.stack(1));
+        }
+        if let Some(worn) = w.inventory(e).find_group(EQUIPMENT_GROUP) {
+            worn.set(0, GOLD_HELMET.stack(1));
+        }
+        Ok(e.to_string())
     }),
     ("entity", "@entity", |w, cmd, _, _| {
         let e = w.entity(owner(w, cmd)?).ok_or("no such entity")?;
