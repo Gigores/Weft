@@ -1109,6 +1109,7 @@ impl EntityRenderer {
         list: &mut CommandList,
         frame: &FrameInfo,
         cam: &Camera,
+        now: u64,
         entities: &FxHashMap<u64, ClientEntity>,
         me: Option<&ClientEntity>,
         hand: Option<Hand>,
@@ -1185,8 +1186,9 @@ impl EntityRenderer {
             let lit = shade(e.pos + DVec3::Y * 0.5);
             // The effect a mod put on it, else the red of a recent hit; boxes only show the red.
             let hurt = (e.hurt / 0.5).clamp(0.0, 1.0);
-            let effect = match e.effect {
-                Some((id, s, _)) => (self.effect_slots.get(id as usize).copied().unwrap_or(0), s),
+            let shader_effect = e.shader_effect(now);
+            let effect = match shader_effect {
+                Some((id, s)) => (self.effect_slots.get(id as usize).copied().unwrap_or(0), s),
                 None if hurt > 0.0 => (self.effect_slots[weft_abi::entity_effect::HURT as usize], hurt),
                 None => (0, 0.0),
             };
@@ -1243,7 +1245,7 @@ impl EntityRenderer {
             };
             // Far away a pose lasts a few frames, each entity at its own turn. Who is dying or was
             // just hit still shows it.
-            let every = if id == self.local || e.dying.is_some() || e.effect.is_some() || e.hurt > 0.0 {
+            let every = if id == self.local || e.dying.is_some() || shader_effect.is_some() || e.hurt > 0.0 {
                 1
             } else if far2 < 32.0 * 32.0 {
                 1

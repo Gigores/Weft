@@ -2279,7 +2279,7 @@ fn freeze_entity_storage(
     }
     for (k, list) in attach.into_iter().enumerate() {
         let kind = &mut g.entities[k];
-        for a in list {
+        for mut a in list {
             let Some(&cid) = g.component_names.get(&a.name) else {
                 errors.push(format!("entity {}: attaches {}, which is no entity component", kind.name, a.name));
                 continue;
@@ -2288,7 +2288,10 @@ fn freeze_entity_storage(
             let own = c
                 .bytes(comps::ENTITY, k as u32, cid)
                 .filter(|b| b.len() == size);
-            let a = abi::Attach { start: if a.start.is_empty() { own.map_or(Vec::new(), <[u8]>::to_vec) } else { a.start }, ..a };
+            // Without a start of its own it starts as the kind has it.
+            if a.start.is_empty() {
+                a.start = own.map_or(Vec::new(), <[u8]>::to_vec);
+            }
             if !a.start.is_empty() && a.start.len() != size {
                 errors.push(format!("entity {}: attaches {} with {} bytes, the component has {size}", kind.name, a.name, a.start.len()));
                 continue;

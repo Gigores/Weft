@@ -136,8 +136,6 @@ pub struct ClientEntity {
     pub body_yaw: f32,
     /// Arm swing progress 0..1 while swinging.
     pub arm_swing: Option<f32>,
-    /// The shader effect on it (`abi::entity_effect`), its strength and seconds left.
-    pub effect: Option<(u32, f32, f32)>,
     /// Every effect on it, its strength and the tick it ends (`ClientWorld::ticks`).
     pub effects: Vec<(u32, f32, u64)>,
     /// The items its kind shows (`registry::SHOWN`), 0 empty.
@@ -284,6 +282,23 @@ fn fade_pose(now: f32, on: bool, dt: f32) -> f32 {
 }
 
 impl ClientEntity {
+    /// The shader effect drawn on it at tick `now` (of several, the latest with a shader) and
+    /// its strength.
+    pub fn shader_effect(&self, now: u64) -> Option<(u32, f32)> {
+        let c = content();
+        self.effects
+            .iter()
+            .filter(|f| {
+                f.2 > now
+                    && c.game
+                        .entity_effects
+                        .get(f.0 as usize)
+                        .is_some_and(|d| !d.shader.is_empty())
+            })
+            .last()
+            .map(|f| (f.0, f.1))
+    }
+
     pub fn new(kind: u32, pos: DVec3, yaw: f32, pitch: f32, item: ItemStack) -> ClientEntity {
         ClientEntity {
             kind,
@@ -293,7 +308,6 @@ impl ClientEntity {
             target_yaw: yaw,
             body_yaw: yaw,
             arm_swing: None,
-            effect: None,
             effects: Vec::new(),
             shown: Vec::new(),
             pitch,
@@ -1608,10 +1622,6 @@ impl Client {
             e.yaw += dyaw * k as f32;
             e.body_yaw = turn_body(e.body_yaw, e.yaw, walked.unwrap_or(e.pos - before), dt as f32);
             advance_swing(&mut e.arm_swing, dt as f32);
-            if let Some(fx) = &mut e.effect {
-                fx.2 -= dt as f32;
-            }
-            e.effect = e.effect.filter(|fx| fx.2 > 0.0);
             let speed = (walked.unwrap_or(e.pos - before).with_y(0.0).length() / dt.max(1e-4)) as f32;
             e.walked += speed * dt as f32;
             crate::model::walk_limbs(&mut e.walk, &mut e.swing, speed, dt as f32);
@@ -2201,21 +2211,7 @@ impl Client {
         } else if comp == shape {
             (e.size, e.look) = shaped();
         } else if comp == effect {
-            e.effects = crate::server::dim::effects_on(Some(bytes), now).collect();
-            // Of several, the latest drawn one shows.
-            let shown = |f: &&(u32, f32, u64)| {
-                c.game
-                    .entity_effects
-                    .get(f.0 as usize)
-                    .is_some_and(|d| !d.shader.is_empty())
-            };
-            e.effect = crate::world::effects_on(Some(bytes), now)
-            e.effect = e
-                .effects
-                .iter()
-                .filter(shown)
-                .last()
-                .map(|&(id, strength, until)| (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32));
+            e.effects = crate::world::effects_on(Some(bytes), now).collect();
         }
         if !mine {
             return;
@@ -2678,6 +2674,7 @@ impl Client {
             list,
             frame,
             &cam,
+            self.ticks(),
             &self.entities,
             me,
             hand,

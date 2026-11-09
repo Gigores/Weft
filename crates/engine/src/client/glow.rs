@@ -58,7 +58,7 @@ pub fn entity_glow(
                 .map(|s| c.stack_light(s)),
         )
         .fold(own, brightest);
-    (pos + crate::server::riding::turned(kind.light_at, yaw), light)
+    (pos + crate::world::turned(kind.light_at, yaw), light)
 }
 
 /// The light sources, and what they light, cell by cell.
