@@ -742,6 +742,7 @@ impl Dim {
             game_mode,
             permission,
             attributes,
+            shown,
             ..
         } = c.game.fields;
         let players: Vec<u64> = self
@@ -771,7 +772,7 @@ impl Dim {
             .map(|id| (id, self.max_health(c, id)))
             .collect();
         let Entities { list, comps, inventories, .. } = &mut self.entities;
-        for e in list.iter().filter(|e| e.in_world()) {
+        for e in list.iter().filter(|e| e.seen(c)) {
             let put = |comps: &mut FxHashMap<(u64, u32), Box<[u8]>>, comp: u32, bytes: &[u8]| match comps.get_mut(&(e.id, comp)) {
                 Some(v) if **v != *bytes => *v = bytes.into(),
                 Some(_) => {}
@@ -780,6 +781,23 @@ impl Dim {
                 }
                 None => {}
             };
+            let slots = &c.game.entities[e.kind as usize].shown_slots;
+            if !slots.is_empty() {
+                let inv = inventories.get(&e.id);
+                let items: Vec<u8> = slots
+                    .iter()
+                    .flat_map(|&s| {
+                        inv.and_then(|i| i.get(s as usize))
+                            .map_or(0, |s| s.item)
+                            .to_le_bytes()
+                    })
+                    .collect();
+                put(comps, shown, &items);
+            }
+            // A block entity is heard of only for what it shows.
+            if e.anchor.is_some() {
+                continue;
+            }
             let max = maxes.iter().find(|m| m.0 == e.id).map_or(0.0, |m| m.1);
             let mut hp = [0u8; 8];
             hp[..4].copy_from_slice(&e.health.max(0.0).to_le_bytes());

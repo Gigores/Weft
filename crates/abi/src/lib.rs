@@ -656,8 +656,9 @@ pub mod comp {
     }
 
     /// An entity effect's `SHADER` (`str`, `shaders/entity_effect/<name>.wgsl`, its own name by
-    /// default; empty: none), `HAZARDS` (`[Hazard]`, `hazard_at::SELF`: poison) and `MODIFIERS`
-    /// (`[Modifier]`: speed) while it is on; a condition's `CALL` (`callback`, `ConditionArgs`).
+    /// default; empty: none), `HAZARDS` (`[Hazard]`, `hazard_at::SELF`: poison), `MODIFIERS`
+    /// (`[Modifier]`: speed) and `LIGHT` while it is on; a condition's `CALL` (`callback`,
+    /// `ConditionArgs`).
     pub const ENTITY_EFFECT_SHADER: &str = "entity_effect.shader";
     pub const ENTITY_EFFECT_HAZARDS: &str = "entity_effect.hazards";
     pub const CONDITION_CALL: &str = "condition.call";
@@ -1280,7 +1281,11 @@ pub mod comp {
     /// of that template, block (0, 0, 0) centered on it), `BLOCK` (`str`, the block it is the block
     /// entity of: made with its inventory where one is placed, gone with its items when it breaks),
     /// `SEATS` (`[Seat]`, where riders sit, numbered in this order), `ATTACH` (`[Attach]`, components
-    /// each one carries). Callbacks: `ON_TICK` (`EntityTickArgs`, every one of the kind in one
+    /// each one carries, starting as the kind's own value of each), `LIGHT_AT` (`[f32;3]`, where the
+    /// light it gives comes from: blocks from its feet, +Z ahead, turned with it; none: its middle, a
+    /// block entity's block),
+    /// `SHOWN_SLOTS` (`[u32]`, slots of its inventory everyone around sees, their items in
+    /// `core:shown`: what a pedestal holds; they give their light too). Callbacks: `ON_TICK` (`EntityTickArgs`, every one of the kind in one
     /// call), `ON_INTERACT` (`EntityEventArgs`, a player right clicked one and
     /// `action::INTERACT_ENTITY` let it; `handled = 1` swings the player's arm), `STEER`
     /// (`SteerArgs`, on the client of the player in a seat that steers: what the mount does with
@@ -1305,6 +1310,8 @@ pub mod comp {
         pub const TEMPLATE: &str = "entity.template";
         pub const BLOCK: &str = "entity.block";
         pub const SEATS: &str = "entity.seats";
+        pub const LIGHT_AT: &str = "entity.light_at";
+        pub const SHOWN_SLOTS: &str = "entity.shown_slots";
         pub const ATTACH: &str = "entity.attach";
         pub const ON_TICK: &str = "entity.on_tick";
         pub const ON_INTERACT: &str = "entity.on_interact";
@@ -1407,8 +1414,10 @@ pub mod comp {
     pub const FRICTION: &str = "friction";
     /// Block: movement speed multiplier inside it (`f32`, 1 by default; cobweb, liquids).
     pub const DRAG: &str = "drag";
-    /// Block: emitted light per color channel (`[u8;3]`). 15 is a full-strength source (torch
-    /// 14); higher values reach further.
+    /// Emitted light per color channel (`[u8;3]`). 15 is a full-strength source (torch 14);
+    /// higher values reach further. On an item (held, worn, shown or dropped), an entity kind, an
+    /// entity effect or an entity itself (attached, set while it lives) it moves with the entity,
+    /// drawn by clients alone: it lights what players see, not the world.
     pub const LIGHT: &str = "light";
     /// Block: a tint kind by name (`tint`: `core:grass`, `core:foliage`, `core:water` or a mod's
     /// own), colored by the biome.
@@ -2559,7 +2568,9 @@ pub mod entity_effect {
     pub const HURT: u32 = 1;
     /// Lit up whatever the light around.
     pub const GLOW: u32 = 2;
-    pub const NAMES: [&str; 3] = ["core:flash", "core:hurt", "core:glow"];
+    /// Not drawn: the light every burning entity gives.
+    pub const BURNING: u32 = 3;
+    pub const NAMES: [&str; 4] = ["core:flash", "core:hurt", "core:glow", "core:burning"];
 }
 
 /// What a damage cause does besides the damage itself.

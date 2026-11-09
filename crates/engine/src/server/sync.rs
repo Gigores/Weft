@@ -223,7 +223,7 @@ fn send_clock(p: &mut Player, dim: &DimSet, tick: u64, rate: u32) {
     if p.first_sync || p.sent_rate != rate || dim.weather_moved || dim.day_moved || tick % TPS as u64 == 0 {
         p.sent_rate = rate;
         p.conn
-            .send(ToClient::Clock { dim: p.dim, time: dim.day_time(), weather: dim.weather as u32, rate });
+            .send(ToClient::Clock { dim: p.dim, time: dim.day_time(), ticks: dim.time, weather: dim.weather as u32, rate });
     }
 }
 
@@ -250,7 +250,7 @@ fn send_entities(
             .entities
             .list
             .iter()
-            .filter(|e| e.in_world() && e.id != p.entity && (!e.player || e.alive()))
+            .filter(|e| e.seen(c) && e.id != p.entity && (!e.player || e.alive()))
             .filter(shown)
         {
             if (e.pos - me).length_squared() > range2 {

@@ -304,9 +304,10 @@ messages! {
         BodyLight { frame: u64, lights: Vec<(IVec3, u32)> },
         /// Power of pieces of wire: (cell, face, level), of the world or of body `frame`.
         Signals { dim: u32, frame: u64, changes: Vec<(IVec3, u8, u8)> },
-        /// The dimension's time of day, its weather (`registry::WeatherDef` by id) and the ticks a
-        /// second the server runs at.
-        Clock { dim: u32, time: u64, weather: u32, rate: u32 },
+        /// The dimension's time of day, the ticks it ran (what entity effects end by, unlike the time
+        /// `/time set` moves), its weather (`registry::WeatherDef` by id) and the ticks a second the
+        /// server runs at.
+        Clock { dim: u32, time: u64, ticks: u64, weather: u32, rate: u32 },
         /// `frame`: the solid body it was put on and the position relative to that body (clients
         /// draw bodies ahead of the server, so only the relative position is right for them).
         Teleport { dim: u32, pos: DVec3, frame: Option<(u64, DVec3)> },

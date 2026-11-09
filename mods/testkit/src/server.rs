@@ -14,6 +14,9 @@ const EVENT_NAMES: [&str; 8] =
 
 use base_api::SMELTED;
 static GOLD: Block = Block::named("base:gold_block");
+static GOLD_HELMET: Item = Item::named("base:gold_helmet");
+static RED_LAMP: Item = Item::named("base:red_lamp");
+static BLUE_LAMP: Item = Item::named("base:blue_lamp");
 /// Shared with everyone who sees the entity, for the sync test.
 pub static MARK: Component<u32> = Component::named("testkit:mark");
 /// Server-side stack data that is not saved either.
@@ -21,6 +24,10 @@ pub static SECRET: Component<u32> = Component::named("testkit:secret");
 /// A stash every player carries, for menus on an inventory that is no block's or entity's own.
 static STASH: Storage = Storage::named("testkit:stash");
 static PIG: EntityKind = EntityKind::named("base:pig");
+/// Green light and nothing drawn, for the dynamic light test.
+static LIT: EntityEffect = EntityEffect::named("lit");
+/// Shows what is in its one slot.
+static PEDESTAL: Block = Block::named("pedestal");
 pub static COUNT_MARKS: Config<bool> = Config::named("count_marks");
 pub static PROTECT_GOLD: Config<bool> = Config::named("protect_gold");
 pub static HALF_DAMAGE: Config<bool> = Config::named("half_damage");
@@ -124,7 +131,16 @@ pub fn register(r: &mut Registry) {
     // A suit to swim in lava with (`swimming`).
     r.edit(Item::generated("base:diamond_chestplate".into()))
         .set_text(&SWIMS_IN, "#lava");
-    r.edit(&PIG).attach(&MARK);
+    r.edit(&PIG)
+        .attach(&MARK)
+        .attach(&LIGHT)
+        .light_at(0.0, 0.5, 1.0);
+    r.edit(&PLAYER).attach(&LIGHT);
+    r.entity_effect(&LIT).unseen().light_rgb(0, 15, 0);
+    r.block(&PEDESTAL)
+        .texture("varied")
+        .entity(|e| e.inventory(1).shown_slots(&[0]))
+        .no_item();
     r.storage(&STASH, 54);
     // What an edit sets wins, the rest stays; the testmod ones load after or before this mod
     // depending on order, which edits don't care about.
@@ -631,6 +647,19 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5])
             .to_string())
     }),
+    ("spawnlit", "<kind:entity> <pos:pos>", |w, cmd, _, _| {
+        let p = pos(cmd, "pos")?;
+        let e = w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5]);
+        let inv = w.inventory(e);
+        inv.set(w.selected_slot(e), RED_LAMP.stack(1));
+        if let Some(offhand) = inv.find_group(OFF_HAND.name()) {
+            offhand.set(0, BLUE_LAMP.stack(1));
+        }
+        if let Some(worn) = w.inventory(e).find_group(EQUIPMENT_GROUP) {
+            worn.set(0, GOLD_HELMET.stack(1));
+        }
+        Ok(e.to_string())
+    }),
     ("entity", "@entity", |w, cmd, _, _| {
         let e = w.entity(owner(w, cmd)?).ok_or("no such entity")?;
         Ok(format!("{} {:.2} {:.2} {:.2} {}", name_of(ek::ENTITY, e.kind), e.pos.x, e.pos.y, e.pos.z, e.health))
@@ -998,6 +1027,14 @@ const OPS: &[(&str, &str, Run)] = &[
     ("stashed", "<index:int>", |w, cmd, player, _| Ok(stack_text(w.inventory(STASH.of(player)).get(int(cmd, "index")?)))),
     ("remove", "<id:int>", |w, cmd, _, _| {
         w.despawn(int(cmd, "id")?);
+        Ok(String::new())
+    }),
+    ("glow", "@entity <r:int> <g:int> <b:int>", |w, cmd, _, _| {
+        let rgb = [int(cmd, "r")?, int(cmd, "g")?, int(cmd, "b")?];
+        Ok(w.set_component(owner(w, cmd)?, &LIGHT, rgb).to_string())
+    }),
+    ("lit", "@entity <ticks:int>", |w, cmd, _, _| {
+        w.entity_effect(owner(w, cmd)?, &LIT, 1.0, int(cmd, "ticks")?);
         Ok(String::new())
     }),
     ("mark", "<id:int> <value:int>", |w, cmd, _, _| {

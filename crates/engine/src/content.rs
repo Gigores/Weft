@@ -901,6 +901,7 @@ pub struct Ids {
     pub mining_speed: Option<u32>,
     pub tool_level: Option<u32>,
     pub use_priority: Option<u32>,
+    pub light: Option<u32>,
     pub two_handed: Option<u32>,
     pub one_handed: Option<u32>,
     pub harvest_level: Option<u32>,
@@ -1415,6 +1416,22 @@ impl Content {
             .filter(|b| b.len() >= size_of::<T>())
             .map(|b| unsafe { std::ptr::read_unaligned(b.as_ptr() as *const T) })
             .or_else(|| self.item_value(stack.item, Some(comp)))
+    }
+
+    /// Light of a stack: its own `LIGHT` (on the stack or its item), else that of the block it places.
+    pub fn stack_light(&self, stack: &abi::ItemStack) -> [u8; 3] {
+        self.stack_value(stack, self.ids.light).unwrap_or_else(|| {
+            let block = self.items.get(stack.item as usize).and_then(|i| i.block);
+            block.map_or([0; 3], |state| self.states[state as usize].light)
+        })
+    }
+
+    /// Light given by entities of this kind.
+    pub fn entity_light(&self, kind: u32) -> [u8; 3] {
+        let light = self.ids.light;
+        light
+            .and_then(|id| self.components.get(comps::ENTITY, kind, id))
+            .unwrap_or([0; 3])
     }
 
     /// The stack or its item has the tag or component.
@@ -2574,6 +2591,7 @@ fn component_ids(components: &Components) -> Ids {
         mining_speed: id(abi::comp::MINING_SPEED),
         tool_level: id(abi::comp::TOOL_LEVEL),
         use_priority: id(abi::comp::USE_PRIORITY),
+        light: id(abi::comp::LIGHT),
         two_handed: id(abi::comp::TWO_HANDED),
         one_handed: id(abi::comp::ONE_HANDED),
         harvest_level: id(abi::comp::HARVEST_LEVEL),

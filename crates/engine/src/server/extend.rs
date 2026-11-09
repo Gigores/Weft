@@ -379,13 +379,10 @@ impl Dim {
         let comp = c.game.fields.effect;
         let on: Vec<_> = crate::world::effects_on(self.entities.comps.get(&(id, comp)).map(|b| &b[..]), self.time).collect();
         if on.len() * 16 != self.entities.comps.get(&(id, comp)).map_or(0, |b| b.len()) {
-            if on.is_empty() {
-                self.entities.comps.remove(&(id, comp));
-            } else {
-                self.entities
-                    .comps
-                    .insert((id, comp), super::dim::encode_effects(&on));
-            }
+            // Emptied, not removed: a removed component never reaches clients.
+            self.entities
+                .comps
+                .insert((id, comp), super::dim::encode_effects(&on));
             self.entities.dirty_comp.insert((id, comp));
         }
         from.extend(on.iter().flat_map(|f| s.effects.get(&f.0)).flatten());

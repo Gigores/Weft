@@ -205,6 +205,12 @@ impl Entity {
         !self.removed && self.anchor.is_none()
     }
 
+    /// What clients hear of: what is in the world, and block entities that show items
+    /// (`EntityKind::shown_slots`), only for the light those give.
+    pub fn seen(&self, c: &Content) -> bool {
+        self.in_world() || !self.removed && !c.game.entities[self.kind as usize].shown_slots.is_empty()
+    }
+
     /// Something that stands in the world and can be hit: not a dropped item or a spectator either.
     pub fn is_body(&self) -> bool {
         self.in_world() && self.item.is_empty() && !self.mode.has(crate::tag_bits::game_mode::HIDDEN)

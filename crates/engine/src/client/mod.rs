@@ -2,6 +2,7 @@ pub mod camera;
 pub mod ctm;
 pub mod entity_render;
 pub mod gizmo;
+pub mod glow;
 pub mod lod;
 pub mod looks;
 pub mod mesher;
@@ -137,6 +138,10 @@ pub struct ClientEntity {
     pub arm_swing: Option<f32>,
     /// The shader effect on it (`abi::entity_effect`), its strength and seconds left.
     pub effect: Option<(u32, f32, f32)>,
+    /// Every effect on it, its strength and the tick it ends (`ClientWorld::ticks`).
+    pub effects: Vec<(u32, f32, u64)>,
+    /// The items its kind shows (`registry::SHOWN`), 0 empty.
+    pub shown: Vec<u32>,
     /// Solid bodies: where the server had them at its last ticks (tick, position), oldest
     /// first; they are shown `INTERP_TICKS` behind the server (`pose`).
     pub track: std::collections::VecDeque<(f64, DVec3)>,
@@ -289,6 +294,8 @@ impl ClientEntity {
             body_yaw: yaw,
             arm_swing: None,
             effect: None,
+            effects: Vec::new(),
+            shown: Vec::new(),
             pitch,
             item,
             // Arrives as a component right after: no hurt flash for the first.
@@ -499,6 +506,8 @@ pub struct Client {
     /// Brightness setting, 0 moody .. 1 bright.
     pub brightness: f32,
     pub entities: FxHashMap<u64, ClientEntity>,
+    /// Block entities that show items (`registry::SHOWN`): not drawn or hit, only lit by.
+    pub showing_blocks: FxHashMap<u64, ClientEntity>,
     pub inventory: Vec<ItemStack>,
     pub max_health: f32,
     pub mode: GameMode,
@@ -816,6 +825,7 @@ impl Client {
             fov_effects: 1.0,
             brightness: 0.5,
             entities: FxHashMap::default(),
+            showing_blocks: FxHashMap::default(),
             inventory: vec![ItemStack::EMPTY; content().game.player_layout.slots as usize],
             max_health: 20.0,
             particles,
@@ -1706,6 +1716,7 @@ impl Client {
                 .tx
                 .send(terrain::In::View { center, radius: self.view_radius });
         }
+        self.update_glow(crate::content::content());
         // Enough jobs that meshing keeps up at 50 frames per second too (results are taken once
         // a frame), not only at hundreds.
         self.world
@@ -2136,8 +2147,9 @@ impl Client {
             game_mode,
             permission,
             attributes,
+            shown,
         } = c.game.fields;
-        let now = self.world.time;
+        let now = self.ticks();
         let f: Vec<f32> = words(bytes).map(f32::from_le_bytes).collect();
         let shaped = || {
             let size = (f.len() == 4 && f[0] > 0.0).then(|| weft_abi::EntitySize { width: f[0], height: f[1], eye: f[2] });
@@ -2148,7 +2160,11 @@ impl Client {
             (size, look)
         };
         let mine = id == self.player_id;
-        let Some(e) = (if mine { Some(&mut self.me) } else { self.entities.get_mut(&id) }) else { return };
+        let other = self
+            .entities
+            .get_mut(&id)
+            .or(self.showing_blocks.get_mut(&id));
+        let Some(e) = (if mine { Some(&mut self.me) } else { other }) else { return };
         if comp == health && f.len() == 2 {
             // Lower health out of a lower maximum, or on joining, isn't a hit.
             if f[0] < e.health && (!mine || (f[1] >= self.max_health && e.health > 0.0)) {
@@ -2164,6 +2180,8 @@ impl Client {
             e.burning = bytes.first().is_some_and(|&b| b != 0);
         } else if comp == worn {
             e.worn = words(bytes).map(u32::from_le_bytes).collect();
+        } else if comp == shown {
+            e.shown = words(bytes).map(u32::from_le_bytes).collect();
         } else if comp == held {
             e.held = words(bytes).next().map_or(0, u32::from_le_bytes);
         } else if comp == swaps {
@@ -2183,17 +2201,21 @@ impl Client {
         } else if comp == shape {
             (e.size, e.look) = shaped();
         } else if comp == effect {
+            e.effects = crate::server::dim::effects_on(Some(bytes), now).collect();
             // Of several, the latest drawn one shows.
-            let shown = |f: &(u32, f32, u64)| {
+            let shown = |f: &&(u32, f32, u64)| {
                 c.game
                     .entity_effects
                     .get(f.0 as usize)
                     .is_some_and(|d| !d.shader.is_empty())
             };
             e.effect = crate::world::effects_on(Some(bytes), now)
+            e.effect = e
+                .effects
+                .iter()
                 .filter(shown)
                 .last()
-                .map(|(id, strength, until)| (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32));
+                .map(|&(id, strength, until)| (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32));
         }
         if !mine {
             return;
@@ -2236,6 +2258,39 @@ impl Client {
                 self.player.flying = false;
             }
         }
+    }
+
+    /// The light every entity gives off (`glow`): the player's from what it holds and wears,
+    /// others' from what they show.
+    fn update_glow(&mut self, c: &crate::content::Content) {
+        let (now, light) = (self.ticks(), c.ids.light.unwrap_or(u32::MAX));
+        let mut sources = Vec::new();
+        if !self.mode.has(crate::tag_bits::game_mode::HIDDEN) && !self.dead {
+            let mut own = vec![self.held(), crate::content::in_off_hand(c, &self.inventory)];
+            let w = &c.game.player_layout.worn;
+            own.extend_from_slice(
+                self.inventory
+                    .get(w.start as usize..w.end as usize)
+                    .unwrap_or_default(),
+            );
+            let stored = self.components.get(&light).map(Vec::as_slice);
+            sources.push(glow::entity_glow(c, &self.me, now, self.player.pos, self.me.body_yaw, stored, &own));
+        }
+        let all = self.entities.iter().chain(&self.showing_blocks);
+        for (id, e) in all.filter(|e| e.1.dying.is_none()) {
+            let shown: Vec<ItemStack> = [e.held, e.off_held]
+                .iter()
+                .chain(&e.worn)
+                .chain(&e.shown)
+                .filter(|&&i| i != 0)
+                .map(|&i| ItemStack::new(i, 1))
+                .chain([e.item])
+                .collect();
+            let stored = self.entity_components.get(&(*id, light)).map(Vec::as_slice);
+            sources.push(glow::entity_glow(c, e, now, e.pos, e.body_yaw, stored, &shown));
+        }
+        let eye = self.player.pos;
+        self.world.set_glow(c, eye, sources);
     }
 
     /// Items the local player wears.
@@ -2450,6 +2505,11 @@ impl Client {
         }
     }
 
+    /// Ticks the dimension ran by now, what entity effects end by.
+    fn ticks(&self) -> u64 {
+        self.world.ticks + self.since_time as u64
+    }
+
     /// Game ticks now, with the fraction of the current one.
     fn smooth_time(&self) -> f64 {
         let fraction = if self.since_time < crate::world::TPS as f64 { self.accum.clamp(0.0, STEP) * self.tick_rate } else { 0.0 };
@@ -2596,7 +2656,7 @@ impl Client {
         });
         let me = (alive && (self.camera_has(crate::tag_bits::camera::BODY) || hand.is_some())).then_some(&self.me);
         let world = &self.world;
-        let light = |p: IVec3| world.light(p);
+        let light = |p: IVec3| world.light_shown(p);
         let mut hand_late = std::mem::take(&mut self.hand_late);
         hand_late.clear();
         let mut cracks: Vec<entity_render::Crack> = self
