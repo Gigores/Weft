@@ -41,6 +41,34 @@ impl Pose {
         if (v as usize) < n { Pose(v as u16) } else { Pose::STAND }
     }
 
+    /// The pose a body takes, a player's and any other's alike: the one held for it (`forced`),
+    /// else the first of `pose_order` it `wants` (asked `true`: with its keys); where that doesn't
+    /// `fit`, the first of its fallbacks it wants without the keys and that fits, else the last.
+    pub fn choose(
+        forced: Option<Pose>,
+        mut wants: impl FnMut(&crate::registry::PoseDef, bool) -> bool,
+        fits: impl Fn(Pose) -> bool,
+    ) -> Pose {
+        let c = crate::content::content();
+        let want = forced.unwrap_or_else(|| {
+            c.game
+                .pose_order
+                .iter()
+                .copied()
+                .find(|q| wants(q.def(), true))
+                .unwrap_or(Pose::STAND)
+        });
+        if fits(want) {
+            return want;
+        }
+        let back = &want.def().fallback;
+        back.iter()
+            .copied()
+            .find(|&q| wants(q.def(), false) && fits(q))
+            .or(back.last().copied())
+            .unwrap_or(want)
+    }
+
     /// Before content is frozen (unit tests) only the engine's poses are there.
     pub fn def(self) -> &'static crate::registry::PoseDef {
         let all = match crate::content::try_content() {

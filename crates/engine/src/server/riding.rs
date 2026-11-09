@@ -194,7 +194,7 @@ impl Dim {
 
     /// Before physics: a mob in a seat that steers walks its mount the way its AI walks it.
     pub fn steer_mounts(&mut self, c: &Content) {
-        let mut steered: Vec<(u64, ([f32; 2], f32, bool))> = Vec::new();
+        let mut steered: Vec<(u64, super::entity::Walk)> = Vec::new();
         for e in self
             .entities
             .list

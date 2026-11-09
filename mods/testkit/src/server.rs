@@ -273,7 +273,7 @@ pub fn register(r: &mut Registry) {
         let mut driven = DRIVEN.lock().unwrap();
         for (id, dir, left) in driven.iter_mut() {
             if w.entity(*id).is_some() && *left > 0 {
-                w.walk(*id, *dir, 1.0, false);
+                w.walk(*id, weft_sdk::Walk::toward(*dir, 1.0));
                 *left -= 1;
             }
         }

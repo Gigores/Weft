@@ -984,6 +984,59 @@ pub fn walk(
     Walked { hit: r.hit, on_ground: r.on_ground, jumped, started_in }
 }
 
+/// What flying is told: horizontal `wish` (length up to 1), going up or down, and how fast.
+pub struct Flight {
+    pub wish: DVec3,
+    pub up: bool,
+    pub down: bool,
+    /// The flight speed (1: vanilla's creative), doubled while sprinting.
+    pub speed: f64,
+}
+
+/// One tick of flight, the same for players and anything else that may fly: vanilla's creative
+/// numbers. `vel` is blocks per tick; `noclip` goes through everything. True when it came down
+/// onto the ground, which ends a player's flight.
+#[allow(clippy::too_many_arguments)]
+pub fn fly(
+    c: &Content,
+    block: &impl Cells,
+    bodies: &[Body<'_>],
+    skip: u64,
+    pos: &mut DVec3,
+    vel: &mut DVec3,
+    on_ground: &mut bool,
+    half_width: f64,
+    height: f64,
+    f: &Flight,
+    noclip: bool,
+) -> bool {
+    let push = 0.05 * f.speed;
+    vel.y += push * 3.0 * (f.up as i32 - f.down as i32) as f64;
+    let len2 = f.wish.length_squared();
+    if len2 > 1e-7 {
+        *vel += f.wish * (push / len2.sqrt().max(1.0));
+    }
+    let mut landed = false;
+    if noclip {
+        *pos += *vel;
+        *on_ground = false;
+    } else {
+        let r = move_box_with(c, block, bodies, skip, *pos, half_width, height, *vel, 0.0);
+        *pos = r.pos;
+        for i in 0..3 {
+            if r.hit[i] {
+                vel[i] = 0.0;
+            }
+        }
+        *on_ground = r.on_ground;
+        landed = r.on_ground && r.hit[1];
+    }
+    vel.y *= 0.6;
+    vel.x *= 0.91;
+    vel.z *= 0.91;
+    landed
+}
+
 /// The push two overlapping soft bodies give each other per tick (vanilla's
 /// applyEntityCollision), for an offset `d` from the other one: along the larger axis, 0.05.
 pub fn nudge(d: DVec3) -> DVec3 {

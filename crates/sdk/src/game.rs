@@ -202,8 +202,9 @@ impl World {
     pub fn navigating(&self, id: u64) -> bool {
         unsafe { (host().navigating)(self.raw(), id) != 0 }
     }
-    pub fn walk(&self, id: u64, dir: [f32; 2], speed: f32, jump: bool) {
-        unsafe { (host().entity_walk)(self.raw(), id, &dir, speed, jump as u32) }
+    /// Moves `id` this tick as a player's keys would (`Walk`): the same physics and poses.
+    pub fn walk(&self, id: u64, w: Walk) {
+        unsafe { (host().entity_walk)(self.raw(), id, &w.dir, w.speed, w.keys) }
     }
     /// The first block a ray from `from` along `dir` hits within `max` blocks (liquids count if
     /// `liquids`): position, face hit (-X, +X, -Y, +Y, -Z, +Z) and state. A turret's line, a
@@ -2040,4 +2041,35 @@ pub struct LookAt {
     pub face: u32,
     pub state: u32,
     pub body: u64,
+}
+
+/// One tick of a mob's walking for `World::walk`: a direction and the keys a player would hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Walk {
+    dir: [f32; 2],
+    speed: f32,
+    keys: u32,
+}
+
+impl Walk {
+    /// Toward `dir` (x, z, length up to 1) at `speed` times its kind's walking speed.
+    pub fn toward(dir: [f32; 2], speed: f32) -> Walk {
+        Walk { dir, speed, keys: 0 }
+    }
+    /// Jumps; swims and flies up.
+    pub fn jump(self) -> Self {
+        Walk { keys: self.keys | abi::walk::JUMP, ..self }
+    }
+    /// Never steps off an edge, holds on to ladders, crouches; flies down.
+    pub fn sneak(self) -> Self {
+        Walk { keys: self.keys | abi::walk::SNEAK, ..self }
+    }
+    /// Faster, a longer jump, swims lying down in a liquid it swims in.
+    pub fn sprint(self) -> Self {
+        Walk { keys: self.keys | abi::walk::SPRINT, ..self }
+    }
+    /// Flies, if its `attribute::CAN_FLY` is 1 or more (`.attribute(..)` on its kind, a modifier).
+    pub fn fly(self) -> Self {
+        Walk { keys: self.keys | abi::walk::FLY, ..self }
+    }
 }

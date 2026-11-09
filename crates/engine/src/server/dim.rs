@@ -2171,7 +2171,7 @@ impl Dim {
                 _ if close || nav.stuck > 40 => e.nav = None,
                 Some((dir, jump)) => {
                     e.yaw = (-dir[0]).atan2(-dir[1]);
-                    e.walk = Some((dir, nav.speed, jump));
+                    e.walk = Some(super::entity::Walk { dir, speed: nav.speed, keys: if jump { abi::walk::JUMP } else { 0 } });
                 }
                 // The end of a path that stopped short: look again.
                 None => nav.found_for = None,
@@ -2393,6 +2393,7 @@ impl Dim {
         self.fire_timers(c);
         self.navigation(c);
         self.steer_mounts(c);
+        self.choose_poses(c);
 
         let (here, now, gravity) = (self.id, self.time, c.dims[self.id as usize].gravity as f64);
         let players: Vec<DVec3> = self
@@ -2708,6 +2709,56 @@ impl Dim {
                         old.copy_from_slice(&bytes[i * size..(i + 1) * size]);
                     }
                 }
+            }
+        }
+    }
+
+    /// Every body but a player (whose client does it) takes its pose by the rules a player's
+    /// does: the keys its walk holds, the poses' conditions, room for it, a mod's held pose.
+    fn choose_poses(&mut self, c: &'static Content) {
+        let forced_comp = c.game.fields.forced;
+        let todo: Vec<u64> = self
+            .entities
+            .list
+            .iter()
+            .filter(|e| !e.player && e.is_body() && e.anchor.is_none() && e.alive())
+            .map(|e| e.id)
+            .collect();
+        for id in todo {
+            let Some(e) = self.entities.get(id) else { continue };
+            let k = &c.game.entities[e.kind as usize];
+            let forced = self
+                .entities
+                .comps
+                .get(&(id, forced_comp))
+                .filter(|b| b.len() >= 4)
+                .map(|b| crate::world::Pose::from_id(u32::from_le_bytes(b[..4].try_into().unwrap())));
+            let size = e.size.unwrap_or(k.size());
+            let (pos, walk, hw) = (e.pos, e.walk, size.width as f64 / 2.0);
+            let low = e.pose.def().tilt != abi::pose_tilt::UPRIGHT;
+            let swims = crate::content::swims_in(c, e.kind, &e.worn);
+            let block = super::space::CubeCells(&self.space.cubes);
+            let swim_at = pos + DVec3::Y * if low { 0.1 } else { e.dims(c).eye };
+            let in_liquid = crate::physics::liquid_at(c, &block, swim_at).is_some_and(|l| swims.get(l as usize) == Some(&true));
+            let body = crate::conditions::Body { in_liquid, flying: e.flying, sprinting: e.sprinting };
+            let fit: Vec<bool> = (0..c.game.poses.len() as u16)
+                .map(|p| {
+                    let h = crate::physics::posed(size, crate::world::Pose(p)).height;
+                    !crate::physics::collides(c, &block, crate::physics::Aabb::around(pos, hw - 1e-3, h))
+                })
+                .collect();
+            let ask = crate::conditions::Ask { pos, entity: id, body: Some(body), ..Default::default() };
+            let pose = crate::world::Pose::choose(
+                forced,
+                |d, keys_too| {
+                    (!keys_too || d.key.is_empty() || walk.is_some_and(|w| w.holds(&d.key)))
+                        && d.when
+                            .is_none_or(|w| crate::conditions::on_server(self, c, w, &ask))
+                },
+                |p| fit[p.0 as usize],
+            );
+            if let Some(e) = self.entities.get_mut(id) {
+                e.pose = pose;
             }
         }
     }

@@ -2439,7 +2439,7 @@ impl Client {
         (me.arm_swing, me.swing_off, me.pose, me.walked) = (self.hand_swing, self.hand_swing_off, self.player.pose, me.walk);
         me.sprinting = self.player.sprinting && self.player.on_ground;
         me.age = self.start.elapsed().as_secs_f32();
-        self.player.swims_in = swims_in(content(), self.me.kind, &self.worn());
+        self.player.swims_in = crate::content::swims_in(content(), self.me.kind, &self.worn());
     }
 
     /// Columns distant terrain takes from saved cubes.
@@ -2749,25 +2749,6 @@ fn angle_diff(a: f32, b: f32) -> f32 {
 /// One 20 Hz tick of player movement with vanilla's numbers (blocks per tick): acceleration
 /// scaled by ground slipperiness, 0.91 air drag, 0.98 vertical drag, 0.08 gravity, 0.42 jump,
 /// so jumps, sprint-jumps and parkur distances match.
-/// By liquid, whether `kind` wearing `worn` swims in it: what its `comp::SWIMS_IN` and theirs take.
-fn swims_in(c: &crate::content::Content, kind: u32, worn: &[u32]) -> Vec<bool> {
-    use crate::components as comps;
-    let id = c.components.id(weft_abi::comp::SWIMS_IN);
-    let matchers: Vec<u32> = id
-        .into_iter()
-        .flat_map(|id| {
-            c.components.get(comps::ENTITY, kind, id).into_iter().chain(
-                worn.iter()
-                    .filter_map(move |&i| c.components.get(comps::ITEM, i, id)),
-            )
-        })
-        .collect();
-    c.liquids
-        .iter()
-        .map(|l| matchers.iter().any(|&m| c.matchers.has(m, l.first_state)))
-        .collect()
-}
-
 fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, gravity: f64, bodies: &[physics::Body]) {
     let c = content();
     // Held facing one way it stays put: in a bed.
@@ -2820,28 +2801,9 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
             && d.when
                 .is_none_or(|w| crate::conditions::on_client(None, w, &ask))
     };
-    let want = match p.forced {
-        Some((held, _)) => held,
-        None => c
-            .game
-            .pose_order
-            .iter()
-            .copied()
-            .find(|q| holds(q.def(), true))
-            .unwrap_or(Pose::STAND),
-    };
     let fits =
         |pose: Pose| p.noclip || !physics::collides(c, block, physics::Aabb::around(p.pos, hw - 1e-3, physics::posed(p.size, pose).height));
-    p.pose = if fits(want) {
-        want
-    } else {
-        let back = &want.def().fallback;
-        back.iter()
-            .copied()
-            .find(|&q| holds(q.def(), false) && fits(q))
-            .or(back.last().copied())
-            .unwrap_or(want)
-    };
+    p.pose = Pose::choose(p.forced.map(|f| f.0), holds, fits);
     // Sprinting swims in a pose for it, lying down; in a liquid it is no use otherwise.
     let swimming = sprint && in_swim_liquid && p.pose.def().tilt != weft_abi::pose_tilt::UPRIGHT;
     let sprint = sprint && (swimming || !feet_wet);
@@ -2868,40 +2830,14 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
     let before = p.pos;
 
     if p.flying || p.noclip {
-        let fly = 0.05 * p.fly_speed as f64 * if sprint { 2.0 } else { 1.0 };
-        if jump {
-            p.vel.y += fly * 3.0;
+        let f = physics::Flight { wish, up: jump, down: sneak, speed: p.fly_speed as f64 * if sprint { 2.0 } else { 1.0 } };
+        // Flying creative players stop flying when they come down onto the ground.
+        if physics::fly(c, block, bodies, 0, &mut p.pos, &mut p.vel, &mut p.on_ground, hw, height, &f, p.noclip) {
+            p.flying = false;
         }
-        if sneak {
-            p.vel.y -= fly * 3.0;
-        }
-        let len2 = wish.length_squared();
-        if len2 > 1e-7 {
-            p.vel += wish * (fly / len2.sqrt().max(1.0));
-        }
-        if p.noclip {
-            p.pos += p.vel;
-            p.on_ground = false;
-        } else {
-            let r = physics::move_box_with(c, block, bodies, 0, p.pos, hw, height, p.vel, 0.0);
-            p.pos = r.pos;
-            for i in 0..3 {
-                if r.hit[i] {
-                    p.vel[i] = 0.0;
-                }
-            }
-            p.on_ground = r.on_ground;
-            p.landed |= p.on_ground;
-            // Flying creative players stop flying when they come down onto the ground.
-            if r.on_ground && r.hit[1] {
-                p.flying = false;
-            }
-        }
+        p.landed |= p.on_ground;
         let here = physics::around(c, block, p.pos, height);
         (p.in_liquid, p.climbing) = (here.in_liquid, here.climbing);
-        p.vel.y *= 0.6;
-        p.vel.x *= 0.91;
-        p.vel.z *= 0.91;
         return;
     }
 

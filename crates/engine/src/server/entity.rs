@@ -26,8 +26,8 @@ pub struct Entity {
     pub health: f32,
     pub age: u64,
     pub hurt_cooldown: u32,
-    /// AI steering requested this tick: direction, speed factor, jump.
-    pub walk: Option<([f32; 2], f32, bool)>,
+    /// AI steering requested this tick.
+    pub walk: Option<Walk>,
     /// Jump strength attribute when its walk was set (1 = vanilla's).
     pub jump_mul: f32,
     pub removed: bool,
@@ -79,6 +79,31 @@ pub struct Entity {
     pub vehicle: Option<(u64, u8)>,
     /// The player whose client moves it, sitting in a seat that steers.
     pub driver: Option<u64>,
+}
+
+/// One tick of walking an entity was told (`World::walk`, its path, its rider).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Walk {
+    /// Horizontal, length up to 1.
+    pub dir: [f32; 2],
+    /// Times its kind's speed.
+    pub speed: f32,
+    /// `abi::walk`: the keys a player would hold.
+    pub keys: u32,
+}
+
+impl Walk {
+    pub fn has(&self, key: u32) -> bool {
+        self.keys & key != 0
+    }
+
+    /// Whether it holds the action a pose is held by (`PoseDef::key`), as a player's keys would.
+    pub fn holds(&self, action: &str) -> bool {
+        use weft_abi::walk as w;
+        [("core:jump", w::JUMP), ("core:sneak", w::SNEAK), ("core:sprint", w::SPRINT)]
+            .iter()
+            .any(|&(a, k)| a == action && self.has(k))
+    }
 }
 
 /// How a body goes, besides its speed, which is what `Free` goes by.
@@ -694,18 +719,40 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     out.crushed = moved_by.crushed;
     // After riding: falls and walking are measured relative to the body.
     let start = e.pos;
+    let walk = e.walk.take();
+    let has = |key: u32| walk.is_some_and(|w| w.has(key));
+    let (sprint, sneak) = (has(weft_abi::walk::SPRINT), has(weft_abi::walk::SNEAK));
+    let dir = walk.map_or(DVec3::ZERO, |w| DVec3::new(w.dir[0] as f64, 0.0, w.dir[1] as f64));
+    e.sprinting = sprint && !sneak && dir != DVec3::ZERO;
+    if e.flying {
+        let speed = walk.map_or(1.0, |w| w.speed as f64) * if sprint { 2.0 } else { 1.0 };
+        let f = physics::Flight { wish: dir, up: has(weft_abi::walk::JUMP), down: sneak, speed };
+        let mut v = e.vel * DT;
+        physics::fly(c, block, bodies, e.id, &mut e.pos, &mut v, &mut e.on_ground, hw, h, &f, false);
+        e.vel = v / DT;
+        e.moved = (e.pos - start).with_y(0.0).length() as f32;
+        e.in_liquid = physics::around(c, block, e.pos, h).in_liquid;
+        e.fall = 0.0;
+        return out;
+    }
     // The step players take, in blocks per tick: a mob walks at its target speed on plain
-    // ground, faster on ice, slower in lava, and climbs ladders it walks into.
+    // ground, faster on ice, slower in lava, and climbs ladders it walks into. Its keys do what a
+    // player's do.
     let mut ctl = physics::Control { swim: k.is(ef::SWIMS), ..Default::default() };
-    if let Some((dir, speed, jump)) = e.walk.take() {
-        let target = k.speed as f64 * speed as f64 * DT;
-        ctl.wish = DVec3::new(dir[0] as f64, 0.0, dir[1] as f64);
+    if let Some(w) = walk {
+        let target = k.speed as f64 * w.speed as f64 * DT * e.pose.def().speed as f64 * if sprint { 1.3 } else { 1.0 };
+        ctl.wish = dir;
         // Vanilla's ground friction keeps 0.546 of the speed a tick; this much a tick holds it.
         ctl.ground = target * (1.0 - 0.6 * 0.91);
-        ctl.air = 0.02;
-        if jump {
+        ctl.air = if sprint { 0.026 } else { 0.02 };
+        ctl.careful = sneak;
+        if w.has(weft_abi::walk::JUMP) {
             ctl.jump = physics::JUMP * e.jump_mul as f64;
             ctl.swim = true;
+        }
+        if e.sprinting {
+            ctl.jump_boost = dir.normalize_or_zero() * 0.2;
+            ctl.sprint = e.in_liquid;
         }
     }
     let frame = physics::Frame {

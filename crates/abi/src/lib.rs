@@ -2204,6 +2204,18 @@ impl From<BlockPos> for Holder {
     }
 }
 
+/// The movement keys `entity_walk` holds, as a player's are: the same physics and poses answer.
+pub mod walk {
+    /// Jumps; swims and flies up.
+    pub const JUMP: u32 = 1;
+    /// Never steps off an edge, holds on to ladders, crouches (the `core:sneak` poses); flies down.
+    pub const SNEAK: u32 = 2;
+    /// Faster, a longer jump, swims lying down in a liquid it swims in.
+    pub const SPRINT: u32 = 4;
+    /// Flies, if its `core:can_fly` attribute is 1 or more.
+    pub const FLY: u32 = 8;
+}
+
 /// `EntityState::flags`: what happened to the entity, not what its kind is (its tags,
 /// `comp::entity`).
 pub mod entity_state {
@@ -3288,8 +3300,9 @@ pub struct Host {
     /// Writes the fields of `state` that `set` names (`entity_set::*`), players' on their client
     /// too. Health only comes back by respawning: 0 or less is a death by `damage_cause::VOID`.
     pub entity_set: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, set: u32, state: *const EntityState),
-    /// AI steering: horizontal direction and speed factor applied by the physics, optional jump.
-    pub entity_walk: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, jump: u32),
+    /// AI steering for this tick: horizontal direction, speed factor, and the movement keys a
+    /// player would hold (`walk::*`), which the same physics and poses answer.
+    pub entity_walk: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, keys: u32),
     pub entity_damage: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, amount: f32, source: u64, cause: u32) -> u32,
     /// `attacker` hits `target` like a player does: the `ATTACK` question, the `ATTACK_DAMAGE`
     /// chain from the held item's (players) or the kind's `attack_damage`, and the attacker's

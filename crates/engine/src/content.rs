@@ -476,6 +476,25 @@ pub fn in_off_hand(c: &Content, kind: u32, inventory: &[weft_abi::ItemStack]) ->
         .unwrap_or_default()
 }
 
+/// By liquid, whether `kind` wearing `worn` swims in it: what its `comp::SWIMS_IN` and theirs take.
+pub fn swims_in(c: &Content, kind: u32, worn: &[u32]) -> Vec<bool> {
+    use crate::components as comps;
+    let id = c.components.id(weft_abi::comp::SWIMS_IN);
+    let matchers: Vec<u32> = id
+        .into_iter()
+        .flat_map(|id| {
+            c.components.get(comps::ENTITY, kind, id).into_iter().chain(
+                worn.iter()
+                    .filter_map(move |&i| c.components.get(comps::ITEM, i, id)),
+            )
+        })
+        .collect();
+    c.liquids
+        .iter()
+        .map(|l| matchers.iter().any(|&m| c.matchers.has(m, l.first_state)))
+        .collect()
+}
+
 /// What the main hand really holds: an item that needs both hands does nothing while the other
 /// holds something, and shows as an empty hand. It stays in the hotbar.
 pub fn in_main_hand(c: &Content, kind: u32, inventory: &[weft_abi::ItemStack], selected: u32) -> weft_abi::ItemStack {

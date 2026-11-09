@@ -295,7 +295,7 @@ fn wisps(t: &EntityTick) {
         }
         st.vel.y = ((time as f64 + phase as f64) * 0.1).sin() * 0.8;
         w.entity_modify(id).yaw(st.yaw).velocity(st.vel);
-        w.walk(id, yaw_dir(st.yaw), 1.0, false);
+        w.walk(id, weft_sdk::Walk::toward(yaw_dir(st.yaw), 1.0));
         if (time + phase) % 20 == 0 {
             w.spawn_particles(&SPARK, [st.pos.x, st.pos.y + 0.2, st.pos.z])
                 .count(WISP_SPARKS.get().max(0) as u32)

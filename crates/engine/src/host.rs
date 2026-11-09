@@ -751,14 +751,16 @@ unsafe extern "C" fn entity_push(w: *mut abi::WorldCtx, id: u64, v: *const abi::
     }
 }
 
-unsafe extern "C" fn entity_walk(w: *mut abi::WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, jump: u32) {
+unsafe extern "C" fn entity_walk(w: *mut abi::WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, keys: u32) {
     unsafe {
-        let d = dim(w);
-        let mul = d.attribute(content(), id, crate::registry::attr::MOVEMENT_SPEED, false) as f32;
-        let jump_mul = d.attribute(content(), id, crate::registry::attr::JUMP_STRENGTH, false) as f32;
-        if let Some(e) = d.entities.get_mut(id) {
-            e.walk = Some((*dir, speed * mul, jump != 0));
+        let (d, c) = (dim(w), content());
+        let attr = |a| d.attribute(c, id, a, false) as f32;
+        let (mul, jump_mul, can_fly) =
+            (attr(crate::registry::attr::MOVEMENT_SPEED), attr(crate::registry::attr::JUMP_STRENGTH), attr(crate::registry::attr::CAN_FLY));
+        if let Some(e) = d.entities.get_mut(id).filter(|e| !e.player) {
+            e.walk = Some(crate::server::entity::Walk { dir: *dir, speed: speed * mul, keys });
             e.jump_mul = jump_mul;
+            e.flying = keys & abi::walk::FLY != 0 && can_fly >= 1.0;
         }
     }
 }
