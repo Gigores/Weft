@@ -180,8 +180,15 @@ pub async fn armor(t: T) -> R {
         .op(&format!("spawn zombie {}", at(add(f, [3, 0, -2]))))
         .await?;
     t.check_eq(t.op(&format!("group {z} core:equipment")).await?, "4 0".to_string(), "a zombie's equipment");
-    t.op(&format!("put {z} 0 diamond_helmet 1")).await?;
+    // Slot 0 is its hand, its equipment after it.
+    t.op(&format!("put {z} 1 diamond_helmet 1")).await?;
     t.check_eq(t.op(&format!("group {z} base:head")).await?, "1 1".to_string(), "the zombie's head slot");
+    // What is in its hand shows there, as a player's does.
+    t.op(&format!("put {z} 0 iron_sword 1")).await?;
+    let id: u64 = z.trim().parse().map_err(|_| format!("spawn zombie: {z}"))?;
+    let sword = Item::named("base:iron_sword").id();
+    t.until("the zombie holds the sword", Duration::from_secs(3), |t| t.c().view().component_of(id, &HELD) == Some(sword))
+        .await?;
     t.c().set_look((-3f32).atan2(2.0).to_degrees(), -10.0);
     t.secs(0.5).await?;
     t.shot("zombie_helmet").await?;
@@ -1700,6 +1707,7 @@ pub async fn burning(t: T) -> R {
 }
 
 static ON_FIRE: Component<u8> = Component::named("core:burning");
+static HELD: Component<u32> = Component::named("core:held");
 
 /// Fields the engine keeps on entities reach clients like any synced component: a pig in lava
 /// shows on fire and losing health, and stays for its death animation once the server drops it.
