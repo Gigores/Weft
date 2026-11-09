@@ -20,7 +20,8 @@ pub static TREES: Component<f32> = Component::named("trees");
 pub static GRASS_COVER: Component<f32> = Component::named("grass");
 pub static TALL_GRASS_COVER: Component<f32> = Component::named("tall_grass");
 pub static BOULDER_COVER: Component<f32> = Component::named("boulder");
-pub static BUSH_COVER: Component<f32> = Component::named("bush");
+pub static RASPBERRY_COVER: Component<f32> = Component::named("raspberry");
+pub static SNOWBERRY_COVER: Component<f32> = Component::named("snowberry");
 /// The logs of the trees a biome grows, with weights: `"base:birch_log:1 base:oak_log:4"`
 /// (oaks where unset).
 pub static TREE_KINDS: Component<BlockList> = Component::named("tree_kinds");
@@ -56,7 +57,8 @@ pub fn register(r: &mut Registry) {
         .set(&GRASS_COVER, 0.7)
         .set(&TALL_GRASS_COVER, 0.2)
         .set(&BOULDER_COVER, 0.01)
-        .set(&BUSH_COVER, 0.05);
+        .set(&RASPBERRY_COVER, 0.05)
+        .set(&SNOWBERRY_COVER, 0.025);
     r.biome(&FOREST)
         .humidity(0.25..)
         .surface("grass", "dirt", 3)
@@ -241,10 +243,10 @@ pub fn register(r: &mut Registry) {
                 place_ball(&mut rng, dx, dy, dz);
             }
         });
-    r.scatter(&BUSH_SITES)
+    r.scatter(&RASPBERRY_SITES)
         .cell(5)
         .reach(3)
-        .density(&BUSH_COVER)
+        .density(&RASPBERRY_COVER)
         .shape(|s| place_bush(
             s,
             |r| if r.float() < 0.5 {
@@ -254,8 +256,23 @@ pub fn register(r: &mut Registry) {
             },
             BUSH_STEM.id())
         );
+    r.scatter(&SNOWBERRY_SITES)
+        .cell(5)
+        .reach(3)
+        .density(&SNOWBERRY_COVER)
+        .shape(|s| place_bush(
+            s,
+            |r| if r.float() < 0.5 {
+                SNOWBERRY_LEAVES.id()
+            } else {
+                SNOWBERRY_LEAVES.with(&[("berried", "true")])
+            },
+            BUSH_STEM.id())
+        );
     r.decoration(decorate);
 }
+
+static SNOWBERRY_SITES: Scatter = Scatter::named("snowberries");
 
 pub fn place_bush(s: &mut Site, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
     let BlockPos { x, y, z } = s.pos();
@@ -278,7 +295,7 @@ pub fn place_bush(s: &mut Site, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
     place_ball(&mut rng, dx, y, dz, bush_size - 0.5);
 }
 
-static BUSH_SITES: Scatter = Scatter::named("bushes");
+static RASPBERRY_SITES: Scatter = Scatter::named("raspberries");
 
 pub fn sphere(radius: f32) -> impl Iterator<Item = (i32, i32, i32)> {
     let extent = radius.floor() as i32;

@@ -58,6 +58,7 @@ pub static WOOL: Block = Block::named("wool");
 pub static TALL_TALL_GRASS: Block = Block::named("tall_tallgrass");
 pub static BUSH_STEM: Block = Block::named("bush_stem");
 pub static RASPBERRY_LEAVES: Block = Block::named("raspberry_leaves");
+pub static SNOWBERRY_LEAVES: Block = Block::named("snowberry_leaves");
 
 static HOE_TAG: Tag = Tag::named("tools/hoe");
 
@@ -432,6 +433,17 @@ pub fn register(r: &mut Registry) {
         .mined_by("shears", tool_tier::HAND)
         .tab(&crate::tabs::NATURAL)
         .states(|p, s| s.texture(if p.is("berried", "true") { "raspberry_leaves_berried" } else { "raspberry_leaves" }));
+    r.block(&SNOWBERRY_LEAVES)
+        .sound_group("grass")
+        .prop("berried", ["false", "true"])
+        .hardness(0.2)
+        .cutout()
+        .light_opacity(1)
+        .tag("leaves")
+        .signal_blocker()
+        .mined_by("shears", tool_tier::HAND)
+        .tab(&crate::tabs::NATURAL)
+        .states(|p, s| s.texture(if p.is("berried", "true") { "snowberry_leaves_berried" } else { "raspberry_leaves" }));
 
     for (name, col) in [("red", [0u8, 12, 12]), ("green", [12, 0, 12]), ("blue", [12, 12, 0])] {
         r.block(Block::generated(format!("{name}_stained_glass")))
