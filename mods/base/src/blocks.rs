@@ -62,6 +62,16 @@ pub static SNOWBERRY_LEAVES: Block = Block::named("snowberry_leaves");
 
 static TILLABLE: Tag = Tag::named("tillable");
 
+fn panel(texture: &'static str, along_x: bool) -> [(&'static str, [f32; 4]); 6] {
+    let face = (texture, [0.0, 0.0, 16.0, 16.0]);
+    let none = (texture, UV_NO_FACE);
+
+    if along_x {
+        [none, none, none, none, face, face]
+    } else {
+        [face, face, none, none, none, none]
+    }
+}
 /// A log that grows into a tree of `leaves` (a cone, like a spruce, when `cone`).
 fn log(r: &mut Registry, handle: &'static Block, wood: &str, leaves: &str, cone: bool) {
     let side = format!("log_{wood}");
@@ -342,9 +352,15 @@ pub fn register(r: &mut Registry) {
         .plant()
         .replaceable()
         .tint(&tints::GRASS)
-        .two_part("half", ["lower", "upper"], |_| Dir::Up)
-        .state_where("half=upper", |s| s.texture("tall_tallgrass_top"))
-        .state_where("half=lower", |s| s.needs_below("#plant_soil"))
+        // .two_part("half", ["lower", "upper"], |_| Dir::Up)
+        // .state_where("half=upper", |s| s.texture("tall_tallgrass_top"))
+        // .state_where("half=lower", |s| s.needs_below("#plant_soil"))
+        .cells(&[[0, 1, 0]])
+        .hitbox([2.0, 0.0, 2.0], [14.0, 32.0, 14.0])
+        .model_box_faces([7.9, 0.0, 0.0], [8.1, 16.0, 16.0], panel("tall_tallgrass_bottom", false))
+        .model_box_faces([0.0, 0.0, 7.9], [16.0, 16.0, 8.1], panel("tall_tallgrass_bottom", true))
+        .model_box_faces([7.9, 16.0, 0.0], [8.1, 32.0, 16.0], panel("tall_tallgrass_top", false))
+        .model_box_faces([0.0, 16.0, 7.9], [16.0, 32.0, 8.1], panel("tall_tallgrass_top", true))
         .tab(&crate::tabs::NATURAL);
     r.loot(&TALL_TALL_GRASS)
         .pool(Pool::new().when(Cond::chance(0.25)).item("wheat_seeds"));

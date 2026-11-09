@@ -387,6 +387,7 @@ pub fn grow_tree(w: World, p: [i32; 3]) {
         }
     });
 }
+static COVERED: Block = Block::named("core:covered");
 
 /// Plants and Clay after the terrain and trees filled the cube.
 fn decorate(g: &mut Gen) {
@@ -438,7 +439,7 @@ fn decorate(g: &mut Gen) {
                     }
                 // roll ∈ [0.012; tall_grass_chance)
                 } else if roll < tall_grass_chance {
-                    let upper = TALL_TALL_GRASS.with(&[("half", "upper")]);
+                    let upper = COVERED.with(&[("to", "down")]);
                     if y + 1 < 16 && g.get(x, y + 1, z) == 0 && upper != u32::MAX {
                         g.set(x, y, z, TALL_TALL_GRASS.id());
                         g.set(x, y + 1, z, upper);

@@ -67,10 +67,6 @@ pub fn register(r: &mut Registry) {
     r.item(&WHEAT)
         .tag("crops/wheat")
         .tab(&crate::tabs::INGREDIENTS);
-    r.item(&SNOWBERRY)
-            .set(&FOOD, Food { hunger: 2, saturation: 3.2 })
-            .use_ticks(16)
-            .tab(&crate::tabs::FOOD);
     // What gravel and clay drop.
     r.item(&FLINT).tab(&crate::tabs::INGREDIENTS);
     r.item(&CLAY_BALL).tab(&crate::tabs::INGREDIENTS);
@@ -106,6 +102,13 @@ pub fn register(r: &mut Registry) {
             i.tag(tag);
         }
     }
+    r.item(&SNOWBERRY)
+            .set(&FOOD, Food { hunger: 2, saturation: 3.2 })
+            .use_ticks(16)
+            .on_use(base_api::eat)
+            .gives_effect(&crate::effects::NAUSEA, 1, 10.0)
+            .gives_effect(&crate::effects::POISON, 1, 15.0)
+            .tab(&crate::tabs::FOOD);
     r.item(Item::generated("leather".into()))
         .tag("materials/leather")
         .tab(&crate::tabs::INGREDIENTS);
