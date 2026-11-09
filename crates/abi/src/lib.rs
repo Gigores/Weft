@@ -4883,6 +4883,10 @@ pub mod client_op {
     /// Runs command `text` (`/tp ~ ~5 ~`) as the player, here if it is a client command, else
     /// on the server; returns an id for `Host::client_command_reply`. The chat stays out of it.
     pub const RUN_COMMAND: u32 = 16;
+    /// Sorts the group of slot `num` of the open menu, items of a kind together and stacked;
+    /// `num` below 0: what the menu is opened on (a chest), else the player's main inventory.
+    /// Only storage is sorted, never inputs, outputs or slots for some items only.
+    pub const MENU_SORT: u32 = 17;
 }
 
 /// `Host::client_text` sources.

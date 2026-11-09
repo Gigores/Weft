@@ -106,6 +106,9 @@ fn creative_panel(ui: &mut Ui, cx: &BuildCx, search: &Rc<RefCell<String>>, tab: 
     });
 }
 
+/// The place name of every menu's screen (`Registry::screen_part`), its area `side`.
+pub const MENUS: &str = "core:menus";
+
 /// The status effects shown and their levels.
 fn effects_now(client: &crate::client::Client) -> Vec<(u32, u32)> {
     crate::hud::shown_effects(client)
@@ -212,6 +215,20 @@ impl Screen for MenuScreen {
                                 }
                             }
                         }
+                    }
+                    // What mods add beside a menu: this one's place, then every menu's.
+                    let places = [(def.name.as_str(), "side"), (MENUS, "side")];
+                    if places.iter().any(|(s, a)| {
+                        c.game
+                            .screen_parts
+                            .iter()
+                            .any(|p| p.screen == *s && p.area == *a)
+                    }) {
+                        ui.container(Style::default().gap(4.0), |ui| {
+                            for (screen, area) in places {
+                                crate::screens::parts(ui, cx, screen, area);
+                            }
+                        });
                     }
                 }
             });

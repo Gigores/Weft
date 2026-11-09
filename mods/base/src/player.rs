@@ -189,8 +189,18 @@ pub fn register(r: &mut Registry) {
         .group("result", Slots::single().output().large())
         .equipment()
         .player_inventory()
+        // Last, so the slots before keep their numbers.
+        .group(
+            "trash",
+            Slots::single()
+                .background("slot_trash")
+                .tooltip("storage.base.trash"),
+        )
         .recipes(&crate::recipes::CRAFTING)
-        .on_change(craft_result)
+        .on_change(|m| {
+            craft_result(m);
+            crate::storage::empty_trash(m);
+        })
         .on_take(consume_grid)
         .screen(|ui| {
             ui.panel("panel", S::column().pad(7.0).gap(5.0), |ui| {
@@ -206,7 +216,10 @@ pub fn register(r: &mut Registry) {
                             ui.group("result");
                         });
                         ui.spacer();
-                        ui.group(OFF_HAND.name());
+                        ui.row(S::row().gap(2.0), |ui| {
+                            ui.group(OFF_HAND.name());
+                            ui.group("trash");
+                        });
                     });
                 });
                 ui.player_inventory(false);

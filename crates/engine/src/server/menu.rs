@@ -334,6 +334,65 @@ pub const THROW_ALL: u8 = 14;
 /// same item joins the cursor, up to a full stack (Mouse Tweaks').
 pub const PICK_SAME: u8 = 15;
 
+/// Storage sorted (`SORT`): the slots like `slot` (the same inventory, the same rules), or with
+/// `u32::MAX` those of what the menu is opened on, else the player's main inventory. Stacks of a
+/// kind join, kinds come in the order they were registered, empty slots last.
+fn sort(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, slot: u32) {
+    let layout = &c.game.player_layout;
+    let plain = |s: &SlotRef| s.accepts.is_none() && s.flags & (sf::OUTPUT | sf::INPUT | sf::LIQUID | sf::LOCKED | sf::OFF_HAND) == 0;
+    let main =
+        |s: &SlotRef| s.owner == Owner::Player && s.index >= layout.hotbar && s.index < layout.slots && !layout.worn.contains(&s.index);
+    let picked: Vec<u32> = match m.slots.get(slot as usize).copied() {
+        Some(r) if plain(&r) => (0..m.slots.len() as u32)
+            .filter(|&i| {
+                let s = m.slots[i as usize];
+                s.owner == r.owner && s.flags == r.flags && plain(&s) && (s.owner != Owner::Player || main(&s) == main(&r))
+            })
+            .collect(),
+        Some(_) => return,
+        None => {
+            let on: Vec<u32> = (0..m.slots.len() as u32)
+                .filter(|&i| matches!(m.slots[i as usize].owner, Owner::On(_)) && plain(&m.slots[i as usize]))
+                .collect();
+            if on.is_empty() {
+                (0..m.slots.len() as u32)
+                    .filter(|&i| main(&m.slots[i as usize]))
+                    .collect()
+            } else {
+                on
+            }
+        }
+    };
+    let mut stacks: Vec<ItemStack> = Vec::new();
+    for &i in &picked {
+        let s = get(m, dim, player, i);
+        if s.is_empty() {
+            continue;
+        }
+        let max = c.max_stack(s.item);
+        let mut left = s.count;
+        for t in stacks
+            .iter_mut()
+            .filter(|t| t.item == s.item && t.data == s.data && t.count < max)
+        {
+            let n = left.min(max - t.count);
+            t.count += n;
+            left -= n;
+        }
+        if left > 0 {
+            stacks.push(ItemStack { count: left, ..s });
+        }
+    }
+    stacks.sort_by_key(|s| (s.item, s.data, std::cmp::Reverse(s.count)));
+    for (k, &i) in picked.iter().enumerate() {
+        let s = stacks.get(k).copied().unwrap_or(ItemStack::EMPTY);
+        if get(m, dim, player, i) != s {
+            set(m, dim, player, i, s);
+            call(m, dim, c, player, i, |d| d.on_change);
+        }
+    }
+}
+
 /// A creative player's number key over an entry: a full stack of `item` in that hotbar slot,
 /// whatever was there gone (vanilla's).
 pub fn creative_to_hotbar(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, hot: u32, item: u32) {
@@ -352,8 +411,12 @@ pub fn creative_to_hotbar(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, 
     call(m, dim, c, player, h, |d| d.on_change);
 }
 
+/// Sorts the storage slot `slot` is in (`client_op::MENU_SORT`); `u32::MAX`: what the menu is
+/// opened on, else the player's main inventory.
+pub const SORT: u8 = 16;
+
 /// `button`: 0 left, 1 right, or `HOTBAR_SWAP + n`, `GATHER`, `CLONE`, `THROW`, `THROW_ALL`,
-/// `PICK_SAME`. `slot == u32::MAX` means outside the window (drop the cursor).
+/// `PICK_SAME`, `SORT`. `slot == u32::MAX` means outside the window (drop the cursor).
 pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, slot: u32, button: u8, shift: bool) {
     if m.slots
         .get(slot as usize)
@@ -441,6 +504,10 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
                 call(m, dim, c, player, i, |d| d.on_change);
             }
         }
+        return;
+    }
+    if button == SORT {
+        sort(m, dim, c, player, slot);
         return;
     }
     if button == THROW || button == THROW_ALL || button == PICK_SAME {

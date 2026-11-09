@@ -353,3 +353,6 @@ effect.core.glow = Glowing
 item.base.glass_bottle = Glass Bottle
 death.base.magic = {0} was killed by magic
 death.base.wither = {0} withered away
+storage.base.sort = Sort
+storage.base.deposit = Put Away Nearby
+storage.base.trash = Trash: what goes in is gone

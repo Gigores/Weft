@@ -324,3 +324,6 @@ effect.core.glow = Свечение
 item.base.glass_bottle = Стеклянный пузырёк
 death.base.magic = {0} убит магией
 death.base.wither = {0} иссох
+storage.base.sort = Сортировать
+storage.base.deposit = Сложить рядом
+storage.base.trash = Урна: что положено, исчезнет

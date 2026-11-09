@@ -1805,6 +1805,50 @@ pub async fn placing_ahead(t: T) -> R {
     Ok(())
 }
 
+/// Base's tools beside a menu: sorting a chest joins its stacks and orders them, putting away
+/// moves what the player carries into storage around that already holds it.
+pub async fn inventory_tools(t: T) -> R {
+    t.flat().await?;
+    let p = add(t.feet(), [2, 0, 0]);
+    t.set(p, "chest").await?;
+    let at = format!("{} {} {}", p[0], p[1], p[2]);
+    t.op(&format!("put {at} 3 dirt 5")).await?;
+    t.op(&format!("put {at} 1 cobblestone 4")).await?;
+    t.op(&format!("put {at} 10 dirt 7")).await?;
+    t.op("put me 9 dirt 3").await?;
+    t.op("put me 10 stick 2").await?;
+    t.op(&format!("menu base:chest {at}")).await?;
+    t.screen("core:menu").await?;
+    t.frames(3).await?;
+    t.check(t.click_ui("text:Sort", 0), "a sort button beside the chest");
+    t.secs(0.4).await?;
+    let mut held = Vec::new();
+    for i in 0..27 {
+        held.push(t.slot(&at, i).await?);
+    }
+    let filled: Vec<_> = held.iter().filter(|s| s.1 > 0).collect();
+    t.check_eq(filled.len(), 2, "two stacks left of three");
+    t.check(held[0].1 > 0 && held[1].1 > 0, format!("at the front: {held:?}"));
+    t.check(held.iter().any(|s| s.0 == "base:dirt" && s.1 == 12), format!("the dirt joined: {held:?}"));
+    t.check(t.click_ui("text:Put Away Nearby", 0), "a put away button");
+    t.secs(0.4).await?;
+    t.check_eq(t.slot("me", 9).await?.1, 0, "the dirt went into the chest");
+    t.check_eq(t.slot("me", 10).await?.1, 2, "the sticks stay: the chest has none");
+    let dirt: u32 = {
+        let mut n = 0;
+        for i in 0..27 {
+            let s = t.slot(&at, i).await?;
+            if s.0 == "base:dirt" {
+                n += s.1;
+            }
+        }
+        n
+    };
+    t.check_eq(dirt, 15, "all the dirt in the chest");
+    t.c().menu_close();
+    Ok(())
+}
+
 /// A hoe tills what is tillable (any mod's hoe: it is the hoe's use), and nothing else.
 pub async fn hoe_tills(t: T) -> R {
     t.flat().await?;
