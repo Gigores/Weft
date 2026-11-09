@@ -2,7 +2,8 @@
 //! nowhere else:
 //! - `base:stone`: that thing (a block with all its states),
 //! - `base:furnace[lit=true]`: the block's states with those property values,
-//! - `#logs`: everything carrying the tag,
+//! - `#logs`: everything carrying the tag, or the component (`#fuel`: whatever burns): tags and
+//!   components share one namespace,
 //! - `#ingots/*`: everything carrying any tag the pattern matches (`*` is any text).
 //!
 //! A name nothing has and a tag pattern no tag matches are errors at load, said with the mod and
@@ -41,16 +42,16 @@ impl<'a> Ref<'a> {
     }
 }
 
-/// Ids of the tags `pattern` matches (`*` any text), an error when there is none.
+/// Ids of the tags and components `pattern` matches (`*` any text), an error when there is none.
 pub fn tags(c: &Components, pattern: &str) -> Result<Vec<u32>, String> {
     let found: Vec<u32> = c
         .names
         .iter()
         .enumerate()
-        .filter(|(i, n)| c.is_tag(*i as u32) && comps::matches(pattern, n))
+        .filter(|(_, n)| comps::matches(pattern, n))
         .map(|(i, _)| i as u32)
         .collect();
-    if found.is_empty() { Err(format!("no tag matches #{pattern}")) } else { Ok(found) }
+    if found.is_empty() { Err(format!("no tag or component matches #{pattern}")) } else { Ok(found) }
 }
 
 /// One tag (no pattern): conditions and filters that test a single tag.
@@ -252,17 +253,6 @@ impl Matchers {
             .get(m as usize * self.words + state as usize / 64)
             .is_some_and(|w| w >> (state % 64) & 1 != 0)
     }
-}
-
-/// The blocks (definition index) a reference stands for.
-pub fn blocks(text: &str, names: &FxHashMap<String, u32>, blocks: &[BlockDef], c: &Components) -> Result<Vec<u32>, String> {
-    let set = compile(text, names, blocks, c)?;
-    Ok(blocks
-        .iter()
-        .enumerate()
-        .filter(|(_, b)| (b.first_state..b.first_state + b.states).any(|s| has(&set, s)))
-        .map(|(i, _)| i as u32)
-        .collect())
 }
 
 /// One block state: a name with properties picks that state, the rest at their defaults.

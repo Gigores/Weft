@@ -1039,8 +1039,9 @@ impl WorldRenderer {
         let lods = lod.len() as u32;
         let n = opaque + lods + trans.len() as u32;
         let (gpu_draws, gpu_faces) = self.table.drawn_last(gpu, frame.slot);
-        self.drawn = n + gpu_draws;
-        self.faces_drawn = faces_drawn + gpu_faces;
+        // Read back from the GPU: garbage before it has written them.
+        self.drawn = n.saturating_add(gpu_draws);
+        self.faces_drawn = faces_drawn.saturating_add(gpu_faces);
         let mut runs = std::mem::take(&mut self.runs);
         runs.clear();
         let obuf = crate::gpu_layout::frame_buffer(gpu, &mut self.origins, frame.slot, n, 16, usage::STORAGE, "origins");

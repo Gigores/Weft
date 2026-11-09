@@ -1,0 +1,25 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "bones": [
+        {
+          "cubes": [
+            {
+              "origin": [-0.5, 1.5, -8.0],
+              "size": [1.0, 1.0, 16.0],
+              "uv": [0.0, 0.0]
+            }
+          ],
+          "name": "body",
+          "pivot": [0.0, 2.0, 0.0]
+        }
+      ],
+      "description": {
+        "identifier": "geometry.arrow",
+        "texture_height": 32,
+        "texture_width": 32
+      }
+    }
+  ]
+}

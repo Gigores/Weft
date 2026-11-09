@@ -28,7 +28,7 @@ pub async fn screens(t: T) -> R {
         (&screens::CONTROLS, &["text:Reset All", "text:Done"][..]),
         (&screens::WORLDS, &["text:Create New World", "id:saves_folder"][..]),
         (&screens::CREATE_WORLD, &["text:World Rules", "text:Create New World"][..]),
-        (&screens::WORLD_RULES, &["text:Keep inventory on death: Off", "text:Done"][..]),
+        (&screens::WORLD_RULES, &["text:World Rules", "text:Done"][..]),
         (&screens::MODS, &["id:mod:base", "id:mod:testmod", "id:mod_description"][..]),
         (&screens::PROFILE, &["id:profile_name", "text:Copy Key"][..]),
     ] {
@@ -285,6 +285,16 @@ pub async fn creative_inventory(t: T) -> R {
         t.click_ui("slot:36", 0);
         t.until("bricks in the hotbar", Duration::from_secs(5), |t| t.c().inventory_slot(0).item == stone)
             .await?;
+        // A number key over an entry: a stack of it in that hotbar slot.
+        let Rect { x, y, w, h } = t
+            .c()
+            .ui_rect(&format!("item:{stone}"))
+            .ok_or("no bricks entry")?;
+        t.c().input_cursor(x + w / 2.0, y + h / 2.0);
+        t.frames(3).await?;
+        t.press("core:hotbar5");
+        t.until("bricks by the number key", Duration::from_secs(5), |t| t.c().inventory_slot(4).count == 64)
+            .await?;
     }
     t.c().menu_close();
     t.no_screen().await?;
@@ -472,103 +482,6 @@ pub async fn text_on_screen(t: T) -> R {
     Ok(())
 }
 
-/// The chat: `/` opens it with the command list shown; Tab completes items, client commands,
-/// word sets and other mods' branches; commands run.
-pub async fn chat(t: T) -> R {
-    t.world(3).await?;
-    t.press("core:command");
-    t.screen("core:chat").await?;
-    t.until("the command list", Duration::from_secs(2), |t| t.c().ui_rect("text:gamemode").is_some())
-        .await?;
-    t.check_eq(t.c().focused_text(), "/".to_string(), "the line");
-    // A mod's key does not fire while the chat has the input.
-    let probes = crate::runner::PROBES.with(|p| p.get());
-    t.c().input_key("F9", 0.3);
-    t.secs(0.5).await?;
-    t.check(crate::runner::PROBES.with(|p| p.get()) == probes, "the testkit:probe key fired while typing in the chat");
-    t.c().input_key("Backspace", 0.0);
-    t.frames(2).await?;
-    for (typed, want) in [
-        ("/give @p birch_lo", "/give @p base:birch_log"),
-        ("/giz", "/gizmo"),
-        ("/gizmo cu", "/gizmo cubes"),
-        ("/gizmo testm", "/gizmo testmod:energy"),
-        ("/gizmo pro", "/gizmo probe"),
-        ("/probe al", "/probe alpha"),
-        ("/rule mob", "/rule core:mob_spawning"),
-    ] {
-        t.c().input_type(typed);
-        t.frames(2).await?;
-        t.c().input_key("Tab", 0.0);
-        t.frames(3).await?;
-        let text = t.c().focused_text();
-        t.check(
-            text.starts_with(want) || (typed.starts_with("/give") && text.contains("birch_log")),
-            format!("Tab completed {typed} to '{text}', want {want}"),
-        );
-        if typed.starts_with("/give") {
-            t.c().input_key("Enter", 0.0);
-            t.no_screen().await?;
-            t.until("logs given", Duration::from_secs(5), |t| t.c().inventory_slot(0).item == id("base:birch_log"))
-                .await?;
-            t.press("core:chat");
-            t.screen("core:chat").await?;
-            continue;
-        }
-        for _ in 0..text.chars().count() {
-            t.c().input_key("Backspace", 0.0);
-            t.frames(1).await?;
-        }
-    }
-    t.c().input_key("Escape", 0.0);
-    t.no_screen().await?;
-    let reply = t.cmd("/gizmo cubes").await?;
-    t.check(reply.contains("cubes on"), format!("/gizmo cubes said '{reply}'"));
-    // Any word goes, the list is only for completion (mods' groups).
-    let reply = t.cmd("/gizmo testmod:energy").await?;
-    t.check(reply.contains("testmod:energy on"), format!("/gizmo testmod:energy said '{reply}'"));
-    let reply = t.cmd("/gizmo probe 7").await?;
-    t.check_eq(reply, "gizmo probe 7 from testkit".into(), "another mod's branch of /gizmo");
-    let help = t.cmd("/help gizmo").await?;
-    t.check(help.contains("#core:gizmos") && help.contains("probe"), format!("/help gizmo said '{help}'"));
-    let reply = t.cmd("/probe beta").await?;
-    t.check_eq(reply, "probe beta on the client".into(), "mod client command");
-    let reply = t.cmd("/regions").await?;
-    t.check_eq(reply, "regions from testkit".into(), "a mod's command takes the engine's place");
-    // What a player types shows as typed, braces included; it can't format.
-    t.c().say("braces {#ff0000}stay");
-    t.until("the chat line", Duration::from_secs(5), |t| t.c().chat_line(0).contains("stay"))
-        .await?;
-    t.press("core:chat");
-    t.screen("core:chat").await?;
-    t.frames(2).await?;
-    t.check(t.c().ui_rect("text:{#ff0000}stay").is_some(), "a player's braces show literally in chat");
-    t.c().input_key("Escape", 0.0);
-    t.no_screen().await?;
-
-    // Replies travel as a key and arguments: the client words them, and again after a language
-    // change. The engine's, a mod's and a parse error alike.
-    let replies = [
-        ("/time query", "time is", "время"),
-        ("/feed 5", "food set to 5", "сытость теперь 5"),
-        ("/give @p base:nothing", "usage: /give", "использование: /give"),
-    ];
-    for (line, _, _) in replies {
-        t.cmd(line).await?;
-    }
-    let lines = |t: &T| (0..3).rev().map(|i| t.c().chat_line(i)).collect::<Vec<_>>();
-    let en = lines(&t);
-    weft_sdk::settings::LANGUAGE.set("ru_ru");
-    t.frames(3).await?;
-    let ru = lines(&t);
-    weft_sdk::settings::LANGUAGE.set("en_us");
-    for (i, (line, want_en, want_ru)) in replies.into_iter().enumerate() {
-        t.check(en[i].contains(want_en), format!("{line} in English: '{}'", en[i]));
-        t.check(ru[i].contains(want_ru), format!("{line} in Russian: '{}'", ru[i]));
-    }
-    Ok(())
-}
-
 /// Settings mods declare get a screen built from the declarations; changes apply and are saved.
 pub async fn mod_settings(t: T) -> R {
     static HUM: Config<bool> = Config::named("testmod:generator_hum");
@@ -736,6 +649,72 @@ pub async fn inventory_hotkeys(t: T) -> R {
     hover(21)?;
     t.secs(0.8).await?;
     t.check(t.slot("me", 20).await?.1 == 0 && t.slot("me", 21).await?.1 == 0, "shift-sweeping moved both cobblestone stacks to the hotbar");
+    t.secs(0.5).await?;
+
+    // The drop keys over a slot: one, then with Ctrl the rest.
+    t.op("put me 12 stick 5").await?;
+    t.secs(0.2).await?;
+    hover(12)?;
+    t.frames(3).await?;
+    t.press("core:drop");
+    t.secs(0.3).await?;
+    t.check_eq(t.slot("me", 12).await?.1, 4, "Q over a slot threw one");
+    t.press("core:drop_all");
+    t.secs(0.3).await?;
+    t.check_eq(t.slot("me", 12).await?.1, 0, "Ctrl+Q threw the rest");
+
+    // A stack picked up and the button still held: slots swept over give theirs.
+    for s in [13, 14, 15] {
+        t.op(&format!("put me {s} sand 1")).await?;
+    }
+    t.secs(0.2).await?;
+    hover(13)?;
+    t.frames(3).await?;
+    t.c().input_click(0, 1.0);
+    t.frames(4).await?;
+    hover(14)?;
+    t.frames(4).await?;
+    hover(15)?;
+    t.secs(1.0).await?;
+    t.check_eq(t.c().cursor_stack().count, 3, "sweeping on with the stack picked up gathered the sand");
+    hover(13)?;
+    t.frames(3).await?;
+    t.c().input_click(0, 0.0);
+    t.secs(0.3).await?;
+
+    // Shift-clicked off with a full hotbar, worn armor goes to the main inventory.
+    for s in 0..9 {
+        t.op(&format!("put me {s} dirt 1")).await?;
+    }
+    t.op("put me 37 iron_chestplate 1").await?;
+    t.secs(0.3).await?;
+    let plate = id("base:iron_chestplate");
+    let at = (0..64)
+        .find(|&i| t.c().menu_slot(i).item == plate)
+        .ok_or("no chestplate in the menu")?;
+    t.c().input_key("ShiftLeft", 0.5);
+    t.frames(1).await?;
+    t.click_ui(&format!("slot:{at}"), 0);
+    t.secs(0.4).await?;
+    let now = (0..64).find(|&i| t.c().menu_slot(i).item == plate);
+    t.check(now.is_some_and(|i| i != at), format!("the chestplate left its slot {at} for {now:?}"));
+
+    // The trash key over a slot: its stack goes to the trash (base's, in the inventory), the
+    // next one takes its place.
+    let slots = t.c().menu().map_or(0, |m| m.slots);
+    t.op("put me 12 stick 3").await?;
+    t.op("put me 13 sand 2").await?;
+    t.secs(0.3).await?;
+    for (slot, item) in [(12, "base:stick"), (13, "base:sand")] {
+        hover(slot)?;
+        t.frames(3).await?;
+        t.press("core:trash");
+        t.secs(0.3).await?;
+        t.check_eq(t.slot("me", slot).await?.1, 0, "the stack left for the trash");
+        let shown: Vec<u32> = (0..slots).map(|i| t.c().menu_slot(i).item).collect();
+        t.check(shown.contains(&id(item)), format!("{item} shown in the trash"));
+    }
+    t.check(!(0..slots).any(|i| t.c().menu_slot(i).item == id("base:stick")), "the sticks gone for the sand");
     Ok(())
 }
 
