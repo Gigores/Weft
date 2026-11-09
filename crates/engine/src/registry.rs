@@ -121,6 +121,11 @@ pub struct EntityKind {
     pub effects: [crate::content::Fx; 4],
     /// Solid bodies: riders up to this high above it move with it.
     pub carry_height: f32,
+    /// Where its light comes from, from its position turned with it (a block entity's is its
+    /// block's middle); none: its middle.
+    pub light_at: Option<glam::DVec3>,
+    /// Inventory slots everyone around sees (`SHOWN`).
+    pub shown_slots: Vec<u32>,
     /// What it does to entities, itself among them (`abi::comp::entity::HAZARDS`): as
     /// registered, then resolved at freeze.
     pub raw_hazards: Vec<abi::Hazard>,
@@ -661,6 +666,8 @@ fn engine_components() -> Vec<RawEntry> {
         (abi::comp::NAME, "bytes", cf::SAVE | cf::CARRIED, Vec::new()),
         (HEALTH, "[f32;2]", own, vec![0; 8]),
         (BURNING, "u8", shown, vec![0]),
+        (abi::comp::LIGHT, "[u8;3]", own, vec![0; 3]),
+        (SHOWN, "bytes", shown, Vec::new()),
         (WORN, "bytes", shown, Vec::new()),
         (SHAPE, "bytes", own, shape),
         (HELD, "u32", shown, vec![0; 4]),
@@ -668,7 +675,7 @@ fn engine_components() -> Vec<RawEntry> {
         (USING, "u32", shown, vec![0; 4]),
         (SWAPS, "bytes", own | shown, Vec::new()),
         (LOOPING_ACTION, "bytes", shown, Vec::new()),
-        (EFFECT, "bytes", shown, Vec::new()),
+        (EFFECT, "bytes", own, Vec::new()),
         (FORCED_POSE, "bytes", own | shown, Vec::new()),
         (RIDING, "bytes", own | shown | cf::SAVE, Vec::new()),
         (GAME_MODE, "u32", cf::SYNC_OWNER, vec![0; 4]),
@@ -1244,6 +1251,8 @@ pub struct EntityEffectDef {
     /// As registered, then resolved at freeze.
     pub raw_hazards: Vec<abi::Hazard>,
     pub hazards: Vec<crate::content::Hazard>,
+    /// Given off while it is on.
+    pub light: [u8; 3],
 }
 
 /// What natural spawning and despawning know of entities by category.
@@ -1363,9 +1372,16 @@ pub fn engine_entries(kind: u32) -> Vec<RawEntry> {
         ek::PRECIPITATION => engine_precipitations(),
         ek::TEXT_PLACE => crate::hud::engine_places(),
         ek::WEATHER => engine_weathers(),
+        // Fire's light, without a look of its own.
         ek::ENTITY_EFFECT => abi::entity_effect::NAMES
             .iter()
-            .map(|n| RawEntry::engine(kind, n))
+            .enumerate()
+            .map(|(i, n)| match RawEntry::engine(kind, n) {
+                e if i as u32 == abi::entity_effect::BURNING => e
+                    .set(abi::comp::ENTITY_EFFECT_SHADER, String::new())
+                    .set(abi::comp::LIGHT, [15u8, 12, 6]),
+                e => e,
+            })
             .collect(),
         ek::CONDITION => abi::condition::NAMES
             .iter()
@@ -1503,6 +1519,11 @@ fn bake_entity(e: &Entry) -> EntityKind {
         worn: 0..0,
         effects: [crate::content::Fx::NONE; 4],
         carry_height: e.or(k::CARRY_HEIGHT, 0.0),
+        light_at: e
+            .get::<[f32; 3]>(k::LIGHT_AT)
+            .map(|v| glam::Vec3::from(v).as_dvec3())
+            .or_else(|| e.text(k::BLOCK).map(|_| glam::DVec3::ZERO)),
+        shown_slots: e.or(k::SHOWN_SLOTS, Vec::new()),
         raw_hazards: e.or(k::HAZARDS, Vec::new()),
         hazards: Vec::new(),
         template_name: text(k::TEMPLATE),
@@ -1688,6 +1709,8 @@ pub const EFFECT: &str = "core:effect";
 pub const FORCED_POSE: &str = "core:forced_pose";
 /// What it rides (`u64` id) and its seat (`u32`), empty: nothing. Saved, and seen by everyone.
 pub const RIDING: &str = "core:riding";
+/// Entity component (`[u32]`, synced to watchers): the items in its kind's `SHOWN_SLOTS`, 0 empty.
+pub const SHOWN: &str = "core:shown";
 use abi::comp::{ATTRIBUTES, GAME_MODE, PERMISSION};
 /// Entity component (`u64`, saved): the world time a system last simulated it to, so it can
 /// catch up on what it missed (`Dim::run_systems`).
@@ -1711,6 +1734,7 @@ pub struct FieldComps {
     pub game_mode: u32,
     pub permission: u32,
     pub attributes: u32,
+    pub shown: u32,
 }
 
 /// Entity kinds, frozen before components (which attach to them).
@@ -1992,6 +2016,7 @@ pub fn freeze(
                 .to_string(),
             raw_hazards: e.or(abi::comp::ENTITY_EFFECT_HAZARDS, Vec::new()),
             hazards: Vec::new(),
+            light: e.or(abi::comp::LIGHT, [0; 3]),
         });
     (g.conditions, g.condition_names) = tables.bake(kind(ek::CONDITION), ek::CONDITION, mod_name, errors, |e, _| ConditionDef {
         name: e.name.clone(),
@@ -2152,6 +2177,7 @@ pub fn freeze(
         game_mode: id(GAME_MODE),
         permission: id(PERMISSION),
         attributes: id(ATTRIBUTES),
+        shown: id(SHOWN),
     };
     g.simulated_comp = g.component_names[SIMULATED];
     let with_flag = |f: u32| {
@@ -2186,6 +2212,10 @@ pub fn freeze(
                 continue;
             };
             let size = g.components[cid as usize].size as usize;
+            let own = c
+                .bytes(comps::ENTITY, k as u32, cid)
+                .filter(|b| b.len() == size);
+            let a = abi::Attach { start: if a.start.is_empty() { own.map_or(Vec::new(), <[u8]>::to_vec) } else { a.start }, ..a };
             if !a.start.is_empty() && a.start.len() != size {
                 errors.push(format!("entity {}: attaches {} with {} bytes, the component has {size}", kind.name, a.name, a.start.len()));
                 continue;

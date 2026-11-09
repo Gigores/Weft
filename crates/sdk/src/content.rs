@@ -395,6 +395,8 @@ pub mod entity_effects {
     pub static HURT: EntityEffect = EntityEffect::named("core:hurt");
     /// Lit up whatever the light around it.
     pub static GLOW: EntityEffect = EntityEffect::named("core:glow");
+    /// Not drawn: the light every burning entity gives (`r.edit(&BURNING).light_rgb(..)`).
+    pub static BURNING: EntityEffect = EntityEffect::named("core:burning");
 }
 
 /// An entity effect being registered: drawn by `shaders/entity_effect/<its name>.wgsl` unless
@@ -935,8 +937,10 @@ pub trait Holds: WithComponents {
 impl Holds for ItemBuilder<'_> {}
 impl Holds for crate::EntityBuilder<'_> {}
 
-/// Light that moves with an entity: an item's (held, worn or dropped) or an entity kind's, drawn by
-/// clients alone. Blocks set `light` per state; an item that places a block gives that block's light.
+/// Light that moves with an entity: an item's (held, worn, shown or dropped), an entity kind's or an
+/// entity effect's, drawn by clients alone. Blocks set `light` per state; an item that places a
+/// block gives that block's light. One entity's own changes while it lives: its kind attaches
+/// `LIGHT` (starting as the kind's) and `w.set_component(e, &LIGHT, [r, g, b])` sets it.
 pub trait Glows: WithComponents {
     /// White light. 15 is full strength; more is allowed and reaches further.
     fn light(self, level: u8) -> Self {
@@ -949,6 +953,7 @@ pub trait Glows: WithComponents {
 }
 impl Glows for ItemBuilder<'_> {}
 impl Glows for crate::EntityBuilder<'_> {}
+impl Glows for EntityEffectBuilder<'_> {}
 
 /// On some states only, on top of the block's.
 impl WithComponents for State<'_> {

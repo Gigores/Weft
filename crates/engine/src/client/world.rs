@@ -56,6 +56,8 @@ pub struct ClientWorld {
     pub dim: u32,
     cubes: FxHashMap<IVec3, Slot>,
     pub time: u64,
+    /// Ticks the dimension ran, what entity effects end by (`net::ToClient::Clock`).
+    pub ticks: u64,
     /// Dirty cubes whose six neighbors are all known: meshable now. Kept up to date as cubes
     /// come and go, so a frame never walks every dirty cube (tens of thousands while loading).
     ready: FxHashSet<IVec3>,
@@ -188,6 +190,7 @@ impl ClientWorld {
             dim,
             cubes: FxHashMap::default(),
             time: 0,
+            ticks: 0,
             ready: FxHashSet::default(),
             order: Vec::new(),
             order_center: IVec3::ZERO,

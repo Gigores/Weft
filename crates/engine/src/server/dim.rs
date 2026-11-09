@@ -778,6 +778,7 @@ impl Dim {
             game_mode,
             permission,
             attributes,
+            shown,
             ..
         } = c.game.fields;
         let players: Vec<u64> = self
@@ -807,7 +808,7 @@ impl Dim {
             .map(|id| (id, self.max_health(c, id)))
             .collect();
         let Entities { list, comps, inventories, .. } = &mut self.entities;
-        for e in list.iter().filter(|e| e.in_world()) {
+        for e in list.iter().filter(|e| e.seen(c)) {
             let put = |comps: &mut FxHashMap<(u64, u32), Box<[u8]>>, comp: u32, bytes: &[u8]| match comps.get_mut(&(e.id, comp)) {
                 Some(v) if **v != *bytes => *v = bytes.into(),
                 Some(_) => {}
@@ -838,6 +839,19 @@ impl Dim {
                     .collect()
             });
             put(comps, riding, &rides);
+            let slots = &c.game.entities[e.kind as usize].shown_slots;
+            if !slots.is_empty() {
+                let inv = inventories.get(&e.id);
+                let items: Vec<u8> = slots
+                    .iter()
+                    .flat_map(|&s| {
+                        inv.and_then(|i| i.get(s as usize))
+                            .map_or(0, |s| s.item)
+                            .to_le_bytes()
+                    })
+                    .collect();
+                put(comps, shown, &items);
+            }
             if e.player {
                 put(comps, game_mode, &(e.mode.0 as u32).to_le_bytes());
                 put(comps, permission, &e.permission.to_le_bytes());

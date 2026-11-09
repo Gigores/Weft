@@ -6,12 +6,12 @@
 use glam::{DVec3, IVec3};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use super::ClientEntity;
 use super::world::ClientWorld;
 use crate::content::Content;
 use crate::world::{DIRS, cube_of};
+use weft_abi::ItemStack;
 
-/// What a burning entity gives off, a fire's warm light.
-const BURNING: [u8; 3] = [15, 12, 6];
 /// Sources nearest the camera that are drawn; far ones hardly show.
 const MAX_SOURCES: usize = 64;
 
@@ -26,14 +26,42 @@ pub fn with_glow(l: u32, g: [u8; 3]) -> u32 {
     (l & 0xFF) | (1..4).fold(0, |m, k| m | ((l >> (8 * k)) & 0xFF).max(g[k - 1] as u32) << (8 * k))
 }
 
-/// What an entity gives off: its kind's `LIGHT`, fire, and every stack it shows (in hand, worn, a
-/// dropped one), the brightest of each channel.
-pub fn entity_light(c: &Content, kind: u32, burning: bool, stacks: &[weft_abi::ItemStack]) -> [u8; 3] {
-    let fire = if burning { BURNING } else { [0; 3] };
-    stacks
+/// Where an entity's light comes from and what it gives off: its own `LIGHT` (`stored`, else its
+/// kind's), its effects' (fire's while it burns) and every stack it shows (in hand, worn, a dropped
+/// one), the brightest of each channel.
+pub fn entity_glow(
+    c: &Content,
+    e: &ClientEntity,
+    now: u64,
+    pos: DVec3,
+    yaw: f32,
+    stored: Option<&[u8]>,
+    stacks: &[ItemStack],
+) -> (DVec3, [u8; 3]) {
+    let kind = &c.game.entities[e.kind as usize];
+    let at = kind
+        .light_at
+        .unwrap_or(DVec3::Y * (kind.size().height as f64 * 0.5));
+    let own = stored
+        .and_then(|b| b.try_into().ok())
+        .unwrap_or(c.entity_light(e.kind));
+    let effects = e
+        .effects
         .iter()
-        .filter(|s| !s.is_empty())
-        .fold(brightest(c.entity_light(kind), fire), |l, s| brightest(l, c.stack_light(s)))
+        .filter(|f| f.1 > now)
+        .map(|f| f.0)
+        .chain(e.burning.then_some(weft_abi::entity_effect::BURNING));
+    let light = effects
+        .filter_map(|f| c.game.entity_effects.get(f as usize))
+        .map(|d| d.light)
+        .chain(
+            stacks
+                .iter()
+                .filter(|s| !s.is_empty())
+                .map(|s| c.stack_light(s)),
+        )
+        .fold(own, brightest);
+    (pos + crate::server::riding::turned(at, yaw), light)
 }
 
 /// The light sources, and what they light, cell by cell.
@@ -115,6 +143,8 @@ impl ClientWorld {
             if best.get(&p) != Some(&v) || from == u32::MAX {
                 continue;
             }
+            // Light leaves the cell it starts in whatever is there: a block entity's own block.
+            let from = if p == at { crate::content::AIR } else { from };
             for (dir, d) in DIRS.iter().enumerate() {
                 let q = p + *d;
                 let to = self.block(q);
