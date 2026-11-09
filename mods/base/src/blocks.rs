@@ -124,6 +124,22 @@ fn plant(r: &mut Registry, handle: &'static Block, tex: &str) {
         .tab(&crate::tabs::NATURAL);
 }
 
+fn pick_berries(u: &mut Use, berry: &'static Item) -> bool {
+    let w = u.world();
+    let p = u.pos();
+    if w.prop(p, "berried") != Some("true") {
+        return false;
+    }
+    if !w.prop_set(p, "berried", "false") {
+        return false;
+    }
+    let count = 1 + w.random_below(2);
+    for _ in 0..count {
+        w.spawn_item(block_center(p), berry.stack(2));
+    }
+    true
+}
+
 /// Sand and gravel: with nothing under them they fall as an entity and land as a block.
 pub fn register(r: &mut Registry) {
     // Any block of any mod tagged so comes in these too.
@@ -449,7 +465,8 @@ pub fn register(r: &mut Registry) {
         .signal_blocker()
         .mined_by("shears", tool_tier::HAND)
         .tab(&crate::tabs::NATURAL)
-        .states(|p, s| s.texture(if p.is("berried", "true") { "raspberry_leaves_berried" } else { "raspberry_leaves" }));
+        .states(|p, s| s.texture(if p.is("berried", "true") { "raspberry_leaves_berried" } else { "raspberry_leaves" }))
+        .on_use(|u| pick_berries(u, &crate::items::RASPBERRY));
     r.block(&SNOWBERRY_LEAVES)
         .sound_group("grass")
         .prop("berried", ["false", "true"])
@@ -460,7 +477,8 @@ pub fn register(r: &mut Registry) {
         .signal_blocker()
         .mined_by("shears", tool_tier::HAND)
         .tab(&crate::tabs::NATURAL)
-        .states(|p, s| s.texture(if p.is("berried", "true") { "snowberry_leaves_berried" } else { "raspberry_leaves" }));
+        .states(|p, s| s.texture(if p.is("berried", "true") { "snowberry_leaves_berried" } else { "raspberry_leaves" }))
+        .on_use(|u| pick_berries(u, &crate::items::SNOWBERRY));
 
     for (name, col) in [("red", [0u8, 12, 12]), ("green", [12, 0, 12]), ("blue", [12, 12, 0])] {
         r.block(Block::generated(format!("{name}_stained_glass")))

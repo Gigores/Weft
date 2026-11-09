@@ -11,6 +11,7 @@ pub static BUCKET: Item = Item::named("bucket");
 pub static FLINT: Item = Item::named("flint");
 pub static CLAY_BALL: Item = Item::named("clay_ball");
 pub static SNOWBERRY: Item = Item::named("snowberry");
+pub static RASPBERRY: Item = Item::named("raspberry");
 
 pub use base_api::{ARMOR, ARMOR_PIECE, ARMOR_TOUGHNESS, FLAMMABLE, FOOD, FUEL, Food};
 /// Tags of armor pieces, head to feet; `<tag>/<material>` picks the recipe (see recipes.rs).
@@ -89,7 +90,6 @@ pub fn register(r: &mut Registry) {
         ("mutton", 2, 1.2, "raw_meat/mutton"),
         ("cooked_mutton", 6, 9.6, "cooked_meat/mutton"),
         ("spider_eye", 2, 3.2, ""),
-        ("raspberry", 2, 3.2, "berries"),
     ] {
         let i = r
             .item(Item::generated(name.into()))
@@ -103,12 +103,17 @@ pub fn register(r: &mut Registry) {
         }
     }
     r.item(&SNOWBERRY)
-            .set(&FOOD, Food { hunger: 2, saturation: 3.2 })
-            .use_ticks(16)
-            .on_use(base_api::eat)
-            .gives_effect(&crate::effects::NAUSEA, 1, 10.0)
-            .gives_effect(&crate::effects::POISON, 1, 15.0)
-            .tab(&crate::tabs::FOOD);
+        .set(&FOOD, Food { hunger: 2, saturation: 3.2 })
+        .use_ticks(16)
+        .on_use(base_api::eat)
+        .gives_effect(&crate::effects::NAUSEA, 1, 10.0)
+        .gives_effect(&crate::effects::POISON, 1, 15.0)
+        .tab(&crate::tabs::FOOD);
+    r.item(&RASPBERRY)
+        .set(&FOOD, Food { hunger: 2, saturation: 3.2 })
+        .use_ticks(16)
+        .on_use(base_api::eat)
+        .tab(&crate::tabs::FOOD);
     r.item(Item::generated("leather".into()))
         .tag("materials/leather")
         .tab(&crate::tabs::INGREDIENTS);
