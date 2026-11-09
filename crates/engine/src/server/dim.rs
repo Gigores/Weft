@@ -617,19 +617,6 @@ pub fn scattered_near(def: &crate::content::DimensionDef, c: &Content, seed: u64
     })
 }
 
-/// The entity effects in an `EFFECT` component still on at `now` (`u64::MAX`: all): effect,
-/// strength, the tick it ends.
-pub fn effects_on(bytes: Option<&[u8]>, now: u64) -> impl Iterator<Item = (u32, f32, u64)> + '_ {
-    bytes
-        .unwrap_or_default()
-        .chunks_exact(16)
-        .map(|b| {
-            let word = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
-            (word(0), f32::from_bits(word(4)), u64::from_le_bytes(b[8..16].try_into().unwrap()))
-        })
-        .filter(move |f| now == u64::MAX || f.2 > now)
-}
-
 pub fn encode_effects(list: &[(u32, f32, u64)]) -> Box<[u8]> {
     list.iter()
         .flat_map(|(f, s, until)| {
@@ -676,29 +663,6 @@ pub fn read_timer(b: &[u8]) -> Option<(usize, (u64, String, Vec<u8>))> {
 /// Face connectivity through blocks that do not hide what is behind them.
 pub fn see_through(c: &Content, cube: &Cube) -> u16 {
     cube.connectivity(|s| c.states[s as usize].flags & bf::OPAQUE == 0)
-}
-
-/// The share of a block a player's mining does in a tick, which client and server each add up as it
-/// goes: vanilla's five times as slow with the head in a liquid, and again off the ground, and its
-/// slower rate without a tool that harvests it. All at once in creative or at 1 and up, nothing for
-/// what can't be broken.
-pub fn mining_rate(c: &Content, state: u32, tool: &ItemStack, head_wet: bool, on_ground: bool, speed: f32, creative: bool) -> f32 {
-    let s = &c.states[state as usize];
-    if s.hardness < 0.0 {
-        return 0.0;
-    }
-    if creative || s.hardness == 0.0 {
-        return 1.0;
-    }
-    let tool_speed = if c.tool_fits(state, tool) {
-        c.stack_value::<f32>(tool, c.ids.mining_speed)
-            .unwrap_or(1.0)
-    } else {
-        1.0
-    };
-    let secs = s.hardness * if c.harvests(state, tool) { 1.5 } else { 5.0 } / tool_speed;
-    let secs = secs * if head_wet { 5.0 } else { 1.0 } * if on_ground { 1.0 } else { 5.0 } / speed;
-    crate::world::TICK as f32 / secs
 }
 
 /// What an entity's move brought on it, applied after the parallel part.
@@ -1136,17 +1100,16 @@ impl Dim {
     /// Writes a block, relights, records the change for clients, queues neighbor updates and keeps
     /// block entities in sync with their block.
     pub fn set(&mut self, c: &'static Content, p: IVec3, state: u32) -> Option<u32> {
-        self.write_block(c, p, state, false)
+        self.write_cell(c, p, state, None, false)
     }
 
-    /// `carried`: the block is coming or going with what it has, so nothing of that is made or
-    /// broken. What else is in the cell stays with the same block, a property changing; it goes
-    /// with another block.
-    pub(super) fn write_block(&mut self, c: &'static Content, p: IVec3, state: u32, carried: bool) -> Option<u32> {
-        self.write_cell(c, p, state, None, carried)
+    /// `set` for a block coming or going with what it has, so nothing of that is made or broken.
+    pub(super) fn carry_block(&mut self, c: &'static Content, p: IVec3, state: u32) -> Option<u32> {
+        self.write_cell(c, p, state, None, true)
     }
 
-    /// The cell at `p` holds `state` and `extras` (`None`: as `write_block` says).
+    /// The cell at `p` holds `state` and `extras`; `None`: what else is in the cell stays with the
+    /// same block, a property changing, and goes with another block. `carried`: as `carry_block`.
     pub(super) fn write_cell(&mut self, c: &'static Content, p: IVec3, state: u32, extras: Option<Vec<u32>>, carried: bool) -> Option<u32> {
         if !c.dims[self.id as usize].editable {
             return None;
@@ -1190,7 +1153,7 @@ impl Dim {
         } else {
             let def = &c.dims[self.id as usize];
             let Space { cubes, body_light, .. } = &mut *self.space;
-            let changed = light::block_changed(&mut Cubes(cubes), c, def.sky_light, body_light, p, old);
+            let changed = light::relight(&mut Cubes(cubes), c, def.sky_light, body_light, |l| l.block_changed(p, old));
             self.space.light_dirty.extend(changed);
         }
         // The new block hears about itself too (like vanilla's onBlockAdded): a liquid starts
@@ -1298,7 +1261,7 @@ impl Dim {
             } else {
                 let sky = c.dims[self.id as usize].sky_light;
                 let Space { cubes, body_light, .. } = &mut *self.space;
-                let changed = light::parts_changed(&mut Cubes(cubes), c, sky, body_light, p);
+                let changed = light::relight(&mut Cubes(cubes), c, sky, body_light, |l| l.source_changed(p));
                 self.space.light_dirty.extend(changed);
             }
         }
@@ -1576,7 +1539,7 @@ impl Dim {
 
     /// How far a player's actions on blocks reach, with room for what the client saw last.
     pub fn block_reach(&self, c: &Content, player: u64) -> f64 {
-        self.attribute(c, player, super::extend::BLOCK_REACH, false) + super::BLOCK_SLACK
+        self.attribute(c, player, crate::registry::attr::BLOCK_REACH, false) + super::BLOCK_SLACK
     }
 
     /// `stack` thrown by `player`: from just below its eyes where it looks, not to be picked up
@@ -1658,7 +1621,7 @@ impl Dim {
                 .attack_speed
                 .and_then(|id| c.components.get::<f32>(crate::components::ENTITY, kind, id))
                 .unwrap_or(1.0);
-            let per_second = own * self.attribute(c, attacker, super::extend::ATTACK_SPEED, false) as f32;
+            let per_second = own * self.attribute(c, attacker, crate::registry::attr::ATTACK_SPEED, false) as f32;
             if let Some(e) = self.entities.get_mut(attacker) {
                 e.attack_cooldown = (crate::world::TPS as f32 / per_second.max(0.05)) as _;
             }
@@ -1748,7 +1711,12 @@ impl Dim {
     /// How charged a player's next swing is, 0..1.
     pub fn swing_strength(&self, c: &Content, player: u64, held: ItemStack) -> f32 {
         let Some(e) = self.entities.get(player) else { return 1.0 };
-        crate::content::swing_charge(c, &held, e.swing_ticks as f32, self.attribute(c, player, super::extend::ATTACK_SPEED, false) as f32)
+        crate::content::swing_charge(
+            c,
+            &held,
+            e.swing_ticks as f32,
+            self.attribute(c, player, crate::registry::attr::ATTACK_SPEED, false) as f32,
+        )
     }
 
     /// What everyone near sees of a fall: dust where entity `id` landed from `fell` blocks up
@@ -1813,7 +1781,7 @@ impl Dim {
     /// Damage to an entity, or with a negative `amount` healing: one entry for every change of
     /// health that mods may watch or change.
     pub fn damage(&mut self, c: &'static Content, id: u64, amount: f32, source: u64, cause: u32) -> bool {
-        let spared = self.attribute(c, id, super::extend::INVULNERABLE, false) >= 1.0;
+        let spared = self.attribute(c, id, crate::registry::attr::INVULNERABLE, false) >= 1.0;
         let Some(e) = self.entities.get(id) else { return false };
         let k = &c.game.entities[e.kind as usize];
         if !e.alive() || amount.is_nan() {
@@ -2519,7 +2487,7 @@ impl Dim {
                         .map(|h| (0, *h)),
                 );
                 met.extend(crushed.drain(..).map(|h| (0, h)));
-                for (f, ..) in effects_on(comps.get(&(e.id, c.game.fields.effect)).map(|b| &b[..]), now) {
+                for (f, ..) in crate::world::effects_on(comps.get(&(e.id, c.game.fields.effect)).map(|b| &b[..]), now) {
                     let of = c
                         .game
                         .entity_effects
@@ -3066,11 +3034,11 @@ impl Dim {
         let Some(e) = self.entities.get(player) else { return 0.0 };
         let (wet, on_ground, creative) = (self.head_in_liquid(c, e), e.on_ground, e.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK));
         let tool = self.entities.held(player);
-        let speed = self.attribute(c, player, super::extend::MINING_SPEED, false) as f32;
+        let speed = self.attribute(c, player, crate::registry::attr::MINING_SPEED, false) as f32;
         let state = self
             .in_frame(frame, |d| d.aimed_part(c, pos, part))
             .unwrap_or(AIR);
-        mining_rate(c, state, &tool, wet, on_ground, speed, creative)
+        c.mining_rate(state, &tool, wet, on_ground, speed, creative)
     }
 
     /// Pushes an entity, by blocks per second. Its client moves a player, so the push goes there.

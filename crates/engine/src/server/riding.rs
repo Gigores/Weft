@@ -11,20 +11,12 @@ use crate::content::Content;
 /// How deep a chain of riders goes at most; deeper ones are taken off.
 const MOST_RIDING: usize = 32;
 
-/// `v` in a mount's frame (+Z ahead, +X right) turned into the world's by its yaw.
-pub fn turned(v: DVec3, yaw: f32) -> DVec3 {
-    let (sy, cy) = (yaw as f64).sin_cos();
-    let ahead = DVec3::new(-sy, 0.0, -cy);
-    let right = DVec3::new(cy, 0.0, -sy);
-    right * v.x + DVec3::Y * v.y + ahead * v.z
-}
-
 impl Dim {
     /// Where a rider's feet go in seat `seat` of `mount`, if it has that seat.
     pub fn seat_pos(&self, c: &Content, mount: u64, seat: u8) -> Option<DVec3> {
         let m = self.entities.get(mount)?;
         let s = c.game.entities[m.kind as usize].seats.get(seat as usize)?;
-        Some(m.pos + turned(s.pos, m.yaw))
+        Some(m.pos + crate::world::turned(s.pos, m.yaw))
     }
 
     /// Who sits in `seat` of `mount`.
@@ -155,7 +147,7 @@ impl Dim {
                 .unwrap_or(sat)
         };
         match s.exit {
-            abi::seat_exit::OFFSET => mpos + turned(s.exit_at, myaw),
+            abi::seat_exit::OFFSET => mpos + crate::world::turned(s.exit_at, myaw),
             abi::seat_exit::STAY => sat,
             abi::seat_exit::CALL => {
                 let first = nearest(self, 2.0);

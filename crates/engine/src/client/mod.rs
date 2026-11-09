@@ -213,7 +213,7 @@ fn ride_step(
         let yaw = if s.yaw.is_finite() { s.yaw } else { m.yaw };
         let tick = crate::world::TICK;
         let target = k.speed as f64 * s.speed.max(0.0) as f64 * tick;
-        let wish = crate::server::riding::turned(DVec3::new(s.strafe as f64, 0.0, s.forward as f64), yaw);
+        let wish = crate::world::turned(DVec3::new(s.strafe as f64, 0.0, s.forward as f64), yaw);
         let ctl = physics::Control {
             wish,
             // As a mob walks: this much a tick keeps it at its speed on plain ground.
@@ -257,7 +257,7 @@ struct Drive {
 /// Where a rider's feet go in seat `seat` of a mount of `kind` at `pos` facing `yaw`.
 fn seat_at(c: &crate::content::Content, kind: u32, pos: DVec3, yaw: f32, seat: u8) -> Option<DVec3> {
     let s = c.game.entities[kind as usize].seats.get(seat as usize)?;
-    Some(pos + crate::server::riding::turned(s.pos, yaw))
+    Some(pos + crate::world::turned(s.pos, yaw))
 }
 
 /// `u32` and `f32` values of an engine field component (`registry::HEALTH` ...).
@@ -909,7 +909,7 @@ impl Client {
     /// The attribute says it may fly.
     pub fn can_fly(&self) -> bool {
         self.attributes
-            .get(crate::server::extend::CAN_FLY as usize)
+            .get(crate::registry::attr::CAN_FLY as usize)
             .is_some_and(|&v| v >= 1.0)
     }
 
@@ -924,7 +924,7 @@ impl Client {
             content(),
             &self.swing_held,
             self.swing_since * self.tick_rate as f32,
-            self.attribute(crate::server::extend::ATTACK_SPEED),
+            self.attribute(crate::registry::attr::ATTACK_SPEED),
         )
     }
 
@@ -1329,7 +1329,7 @@ impl Client {
         // structure the player rides stays the one aimed at.
         let from = if self.camera_has(crate::tag_bits::camera::AIM) { self.cameras.shown } else { self.camera() };
         let (eye, look) = (from.pos, from.forward().as_dvec3());
-        use crate::server::extend::{BLOCK_REACH, ENTITY_REACH};
+        use crate::registry::attr::{BLOCK_REACH, ENTITY_REACH};
         let reach = self.attribute(BLOCK_REACH) as f64;
         self.target = if spectator { None } else { self.raycast(eye, look, reach) };
         // Vanilla's: whichever comes first along the look is all that is aimed at.
@@ -1423,13 +1423,12 @@ impl Client {
             } else if refused {
                 self.breaking = None;
             } else if let Some(hit) = self.target {
-                let rate = crate::server::mining_rate(
-                    c,
+                let rate = c.mining_rate(
                     hit.state,
                     &self.held(),
                     self.eye_liquid().is_some(),
                     self.player.on_ground,
-                    self.attribute(crate::server::extend::MINING_SPEED),
+                    self.attribute(crate::registry::attr::MINING_SPEED),
                     self.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK),
                 );
                 let done = match self.breaking {
@@ -2191,7 +2190,7 @@ impl Client {
                     .get(f.0 as usize)
                     .is_some_and(|d| !d.shader.is_empty())
             };
-            e.effect = crate::server::dim::effects_on(Some(bytes), now)
+            e.effect = crate::world::effects_on(Some(bytes), now)
                 .filter(shown)
                 .last()
                 .map(|(id, strength, until)| (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32));
@@ -2223,7 +2222,7 @@ impl Client {
         } else if comp == permission {
             self.permission = words(bytes).next().map_or(0, u32::from_le_bytes);
         } else if comp == attributes {
-            use crate::server::extend as a;
+            use crate::registry::attr as a;
             let could = self.can_fly();
             for (dst, v) in self.attributes.iter_mut().zip(&f) {
                 *dst = *v;
@@ -2328,7 +2327,7 @@ impl Client {
             pos: self.smooth_pos() + DVec3::Y * self.player.eye + pillow,
             yaw: self.player.yaw,
             pitch: self.player.pitch,
-            fov: self.fov * self.player.fov_mul * self.attribute(crate::server::extend::FOV) * inside,
+            fov: self.fov * self.player.fov_mul * self.attribute(crate::registry::attr::FOV) * inside,
             bob: (Vec3::ZERO, 0.0, 0.0),
         }
     }

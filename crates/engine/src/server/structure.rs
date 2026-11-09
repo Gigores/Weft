@@ -114,7 +114,7 @@ impl Dim {
             self.entities.unanchor((self.frame, p), id);
         }
         let signal = self.space.signals.carry_out(p);
-        self.write_block(c, p, AIR, true);
+        self.carry_block(c, p, AIR);
         Some((state, entity, signal))
     }
 
@@ -123,7 +123,7 @@ impl Dim {
         if !signal.is_empty() {
             self.space.signals.arriving.insert(p, signal);
         }
-        self.write_block(c, p, state, true);
+        self.carry_block(c, p, state);
         if let Some(id) = entity {
             self.entities
                 .attach(id, self.frame, p, self.place.to_world(p.as_dvec3() + DVec3::splat(0.5)));
@@ -163,7 +163,7 @@ impl Dim {
             if let (Some(part), Some(whole)) = (l.part, whole) {
                 if part != whole {
                     let first = c.block_of(whole).first_state;
-                    self.write_block(c, l.from, first + ((whole - first) & !(part - first)), true);
+                    self.carry_block(c, l.from, first + ((whole - first) & !(part - first)));
                 }
             }
             blocks.push((l.local, state));
@@ -618,7 +618,7 @@ impl Dim {
             // Sides join the sides there, each holding on by itself.
             Some(there) if c.states[there as usize].block == c.states[state as usize].block && c.states[state as usize].sides != 0 => {
                 let sides = c.states[there as usize].sides | c.states[state as usize].sides;
-                self.write_block(c, at, c.block_of(state).with_sides(state, sides), true);
+                self.carry_block(c, at, c.block_of(state).with_sides(state, sides));
             }
             Some(there) if there == AIR || c.states[there as usize].flags & abi::block_flags::REPLACEABLE != 0 => {
                 if c.states[state as usize].signal.kind == abi::signal_kind::OBSERVER {
@@ -931,7 +931,7 @@ impl Dim {
 
     pub(super) fn set_in_body(&mut self, c: &'static Content, body: u64, at: IVec3, state: u32) {
         self.in_frame(body, |d| {
-            d.write_block(c, at, state, true);
+            d.carry_block(c, at, state);
             d.space.relight();
         });
     }
@@ -953,7 +953,7 @@ impl Dim {
         if !gone.is_empty() {
             self.in_frame(s.body, |d| {
                 for at in gone {
-                    d.write_block(c, at, AIR, true);
+                    d.carry_block(c, at, AIR);
                 }
                 d.space.relight();
             });

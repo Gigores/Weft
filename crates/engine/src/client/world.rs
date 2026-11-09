@@ -583,7 +583,8 @@ impl ClientWorld {
         // structure's light is its own.
         if !self.bounded {
             let sky = c.dims[self.dim as usize].sky_light;
-            let changed = crate::world::light::block_changed(&mut LitCubes(&mut self.cubes), c, sky, &self.body_glow, p, was);
+            let changed =
+                crate::world::light::relight(&mut LitCubes(&mut self.cubes), c, sky, &self.body_glow, |l| l.block_changed(p, was));
             self.relit(changed);
         }
     }
@@ -623,7 +624,7 @@ impl ClientWorld {
         self.touch(cp, around_mask(l.x, l.y, l.z));
         if relight && !self.bounded {
             let sky = c.dims[self.dim as usize].sky_light;
-            let changed = crate::world::light::parts_changed(&mut LitCubes(&mut self.cubes), c, sky, &self.body_glow, p);
+            let changed = crate::world::light::relight(&mut LitCubes(&mut self.cubes), c, sky, &self.body_glow, |l| l.source_changed(p));
             self.relit(changed);
         }
     }

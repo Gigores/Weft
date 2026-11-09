@@ -198,20 +198,6 @@ impl Dim {
     }
 }
 
-/// The engine's attributes come first in the registry (`registry::freeze`).
-pub const MAX_HEALTH: u32 = 0;
-pub const MOVEMENT_SPEED: u32 = 1;
-
-pub const JUMP_STRENGTH: u32 = 3;
-pub const ATTACK_SPEED: u32 = 4;
-pub const CAN_SPRINT: u32 = 5;
-pub const BLOCK_REACH: u32 = 6;
-pub const ENTITY_REACH: u32 = 7;
-pub const MINING_SPEED: u32 = 8;
-pub const FOV: u32 = 9;
-pub const CAN_FLY: u32 = 10;
-pub const INVULNERABLE: u32 = 11;
-
 impl Dim {
     /// A player's base of an attribute that is a rule is the rule's (`comp::attribute::RULE`).
     fn base_attribute(&self, c: &Content, entity: u64, attr: u32) -> Option<f64> {
@@ -391,7 +377,7 @@ impl Dim {
             .cloned()
             .collect();
         let comp = c.game.fields.effect;
-        let on: Vec<_> = super::dim::effects_on(self.entities.comps.get(&(id, comp)).map(|b| &b[..]), self.time).collect();
+        let on: Vec<_> = crate::world::effects_on(self.entities.comps.get(&(id, comp)).map(|b| &b[..]), self.time).collect();
         if on.len() * 16 != self.entities.comps.get(&(id, comp)).map_or(0, |b| b.len()) {
             if on.is_empty() {
                 self.entities.comps.remove(&(id, comp));
@@ -475,7 +461,7 @@ impl Dim {
 
     /// The only maximum health there is: the attribute (the kind's value plus modifiers).
     pub fn max_health(&self, c: &Content, entity: u64) -> f32 {
-        self.attribute(c, entity, MAX_HEALTH, false) as f32
+        self.attribute(c, entity, crate::registry::attr::MAX_HEALTH, false) as f32
     }
 
     /// Attribute by name, the default for unknown entities, NaN for unknown names.

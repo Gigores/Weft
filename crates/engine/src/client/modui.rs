@@ -608,7 +608,7 @@ pub unsafe extern "C" fn client_entity(c: *mut abi::ClientCtx, id: u64, out: *mu
                     health: e.health,
                     // The kind's own value: clients do not see attribute modifiers of others.
                     max_health: {
-                        let attr = &content.game.attributes[crate::server::MAX_HEALTH as usize];
+                        let attr = &content.game.attributes[crate::registry::attr::MAX_HEALTH as usize];
                         attr.comp
                             .and_then(|id| {
                                 content

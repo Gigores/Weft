@@ -72,20 +72,12 @@ pub struct Body {
 /// Condition texts met while freezing, by id, compiled at its end.
 #[derive(Default)]
 pub struct Texts {
-    pub texts: Vec<String>,
-    ids: FxHashMap<String, u32>,
+    pub texts: crate::content::Interner,
 }
 
 impl Texts {
     pub fn id(&mut self, text: &str) -> u32 {
-        let text = text.trim();
-        if let Some(&id) = self.ids.get(text) {
-            return id;
-        }
-        let id = self.texts.len() as u32;
-        self.texts.push(text.to_string());
-        self.ids.insert(text.to_string(), id);
-        id
+        self.texts.id(text.trim())
     }
 
     /// The conditions of a `[str]` component, all of them; `None` for none.
@@ -146,19 +138,20 @@ impl Parser<'_, '_> {
     }
 
     fn any(&mut self) -> Result<Expr, String> {
-        let mut v = vec![self.all()?];
-        while self.eat(b'|') {
-            v.push(self.all()?);
-        }
-        Ok(if v.len() == 1 { v.pop().unwrap() } else { Expr::Any(v) })
+        self.joined(b'|', Self::all, Expr::Any)
     }
 
     fn all(&mut self) -> Result<Expr, String> {
-        let mut v = vec![self.one()?];
-        while self.eat(b'&') {
-            v.push(self.one()?);
+        self.joined(b'&', Self::one, Expr::All)
+    }
+
+    /// `part`s with `sep` between them, `join`ed when there are several.
+    fn joined(&mut self, sep: u8, part: fn(&mut Self) -> Result<Expr, String>, join: fn(Vec<Expr>) -> Expr) -> Result<Expr, String> {
+        let mut v = vec![part(self)?];
+        while self.eat(sep) {
+            v.push(part(self)?);
         }
-        Ok(if v.len() == 1 { v.pop().unwrap() } else { Expr::All(v) })
+        Ok(if v.len() == 1 { v.pop().unwrap() } else { join(v) })
     }
 
     fn one(&mut self) -> Result<Expr, String> {
@@ -393,6 +386,7 @@ fn attr(arg: &Arg) -> u32 {
 pub fn compile_all(texts: &Texts, look: &Look, errors: &mut Vec<String>) -> Vec<Expr> {
     texts
         .texts
+        .list
         .iter()
         .map(|t| {
             compile(t, look).unwrap_or_else(|e| {

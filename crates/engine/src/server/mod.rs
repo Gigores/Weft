@@ -19,7 +19,7 @@ pub mod signal;
 pub mod space;
 mod sync;
 pub use builtin::COMMANDS as BUILTIN_COMMANDS;
-pub use extend::{JUMP_STRENGTH, MAX_HEALTH, MOVEMENT_SPEED, explanation};
+pub use extend::explanation;
 use load::send_far;
 use player_file::save_player;
 pub mod menu;
@@ -41,7 +41,7 @@ use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 use weft_abi::{self as abi, ItemStack, component_flags as cf};
 
-pub use dim::{Dim, DimEvent, mining_rate};
+pub use dim::{Dim, DimEvent};
 
 use crate::commands::{Origin, Selector};
 use crate::content::{Content, content};

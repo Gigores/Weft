@@ -2,7 +2,7 @@ pub mod cube;
 pub mod light;
 pub mod view;
 
-use glam::IVec3;
+use glam::{DVec3, IVec3};
 
 pub use cube::Cube;
 pub use view::View;
@@ -13,8 +13,8 @@ pub const TPS: u32 = 20;
 pub const TICK: f64 = 1.0 / TPS as f64;
 
 /// A point or vector from the ABI (or an array) as the engine works with it.
-pub fn dvec(v: impl Into<[f64; 3]>) -> glam::DVec3 {
-    glam::DVec3::from_array(v.into())
+pub fn dvec(v: impl Into<[f64; 3]>) -> DVec3 {
+    DVec3::from_array(v.into())
 }
 
 /// A block position from the ABI (or an array) as the engine works with it.
@@ -100,6 +100,27 @@ impl GameMode {
         let n = crate::content::try_content().map_or(3, |c| c.game.game_modes.len());
         if (v as usize) < n { GameMode(v as u16) } else { GameMode::SURVIVAL }
     }
+}
+
+/// `v` in a mount's frame (+Z ahead, +X right) turned into the world's by its yaw.
+pub fn turned(v: DVec3, yaw: f32) -> DVec3 {
+    let (sy, cy) = (yaw as f64).sin_cos();
+    let ahead = DVec3::new(-sy, 0.0, -cy);
+    let right = DVec3::new(cy, 0.0, -sy);
+    right * v.x + DVec3::Y * v.y + ahead * v.z
+}
+
+/// The entity effects in an `EFFECT` component still on at `now` (`u64::MAX`: all): effect,
+/// strength, the tick it ends.
+pub fn effects_on(bytes: Option<&[u8]>, now: u64) -> impl Iterator<Item = (u32, f32, u64)> + '_ {
+    bytes
+        .unwrap_or_default()
+        .chunks_exact(16)
+        .map(|b| {
+            let word = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+            (word(0), f32::from_bits(word(4)), u64::from_le_bytes(b[8..16].try_into().unwrap()))
+        })
+        .filter(move |f| now == u64::MAX || f.2 > now)
 }
 
 #[inline]

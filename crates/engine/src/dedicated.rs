@@ -39,7 +39,7 @@ pub fn run(opts: Options) -> Result<(), String> {
     let storage = saves::Storage::open(meta.clone(), content());
     let whitelist = crate::paths::config(&opts.run_dir).join("whitelist.txt");
     let mut server = server::spawn(
-        ServerConfig { seed: meta.seed, view_radius: settings.view_distance(), dedicated: true, whitelist: Some(whitelist) },
+        ServerConfig { seed: meta.seed, view_radius: crate::settings::view_distance(), dedicated: true, whitelist: Some(whitelist) },
         Some(storage),
     );
     net::host(&server, &settings);

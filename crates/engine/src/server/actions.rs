@@ -703,7 +703,7 @@ pub(crate) fn in_reach(c: &Content, d: &Dim, me: &Entity, target: &Entity) -> bo
     let eye = me.pos + DVec3::Y * me.eye(c);
     let b = target.aabb(c);
     let slack = if me.player { ENTITY_SLACK } else { 0.0 };
-    let reach = d.attribute(c, me.id, extend::ENTITY_REACH, false) + slack;
+    let reach = d.attribute(c, me.id, crate::registry::attr::ENTITY_REACH, false) + slack;
     (eye.clamp(b.min, b.max) - eye).length_squared() <= reach * reach
 }
 

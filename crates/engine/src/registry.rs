@@ -1296,8 +1296,25 @@ pub struct AttrDef {
     pub rule: bool,
 }
 
+/// The engine's attributes by id, first in the registry in `engine_attributes`' order.
+pub mod attr {
+    pub const MAX_HEALTH: u32 = 0;
+    pub const MOVEMENT_SPEED: u32 = 1;
+    pub const VISIBILITY: u32 = 2;
+    pub const JUMP_STRENGTH: u32 = 3;
+    pub const ATTACK_SPEED: u32 = 4;
+    pub const CAN_SPRINT: u32 = 5;
+    pub const BLOCK_REACH: u32 = 6;
+    pub const ENTITY_REACH: u32 = 7;
+    pub const MINING_SPEED: u32 = 8;
+    pub const FOV: u32 = 9;
+    pub const CAN_FLY: u32 = 10;
+    pub const INVULNERABLE: u32 = 11;
+}
+
 fn engine_attributes() -> Vec<RawEntry> {
     use abi::attribute as a;
+    // In `attr`'s order.
     [
         (a::MAX_HEALTH, 20.0, 0.5, 1024.0),
         (a::MOVEMENT_SPEED, 1.0, 0.0, 16.0),

@@ -96,18 +96,18 @@ pub fn sky_below(above: Option<&Cube>, open: bool) -> SkyBelow {
 /// Channel index: 0 sky, 1..4 red, green, blue.
 const SKY: usize = 0;
 
-/// What a block changing at `p` from `old` does to the light around it, what bodies' lights give
-/// included, on the server and in a client's guess alike. Returns the cubes that changed.
-pub fn block_changed(
-    map: &mut impl CubeMap,
+/// What a change `change` tells the lighter about (`Lighter::block_changed`, `source_changed`)
+/// does to the light around it, what bodies' lights give included, on the server and in a
+/// client's guess alike. Returns the cubes that changed.
+pub fn relight<M: CubeMap>(
+    map: &mut M,
     c: &crate::content::Content,
     sky: bool,
     glow: &rustc_hash::FxHashMap<IVec3, [u8; 3]>,
-    p: IVec3,
-    old: u32,
+    change: impl FnOnce(&mut Lighter<M>),
 ) -> Vec<IVec3> {
     let mut lighter = Lighter::new(map, c, sky).with_extra(glow);
-    lighter.block_changed(p, old);
+    change(&mut lighter);
     std::mem::take(&mut lighter.changed).into_iter().collect()
 }
 
@@ -595,20 +595,6 @@ fn parts_glow(t: &[Tight], parts: &[u32]) -> [u8; 3] {
     parts
         .iter()
         .fold([0; 3], |m, &s| std::array::from_fn(|i| m[i].max(t[s as usize].light[i])))
-}
-
-/// What changing the other blocks of the cell at `p` does to the light around it, as
-/// `block_changed`.
-pub fn parts_changed(
-    map: &mut impl CubeMap,
-    c: &crate::content::Content,
-    sky: bool,
-    glow: &rustc_hash::FxHashMap<IVec3, [u8; 3]>,
-    p: IVec3,
-) -> Vec<IVec3> {
-    let mut lighter = Lighter::new(map, c, sky).with_extra(glow);
-    lighter.source_changed(p);
-    std::mem::take(&mut lighter.changed).into_iter().collect()
 }
 
 /// Lights a cube alone, as if open sky were above it and nothing beside it: the expensive

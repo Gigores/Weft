@@ -278,8 +278,8 @@ unsafe extern "C" fn navigate(w: *mut abi::WorldCtx, id: u64, target: *const abi
         let c = content();
         let d = dim(w);
         let target = d.place.to_world(crate::world::dvec(*target));
-        let mul = d.attribute(c, id, crate::server::MOVEMENT_SPEED, false) as f32;
-        let jump_mul = d.attribute(c, id, crate::server::JUMP_STRENGTH, false) as f32;
+        let mul = d.attribute(c, id, crate::registry::attr::MOVEMENT_SPEED, false) as f32;
+        let jump_mul = d.attribute(c, id, crate::registry::attr::JUMP_STRENGTH, false) as f32;
         if let Some(e) = d.entities.get_mut(id) {
             e.jump_mul = jump_mul;
         }
@@ -455,16 +455,14 @@ unsafe extern "C" fn part_list(w: *mut abi::WorldCtx, pos: *const abi::BlockPos,
 }
 
 unsafe extern "C" fn part_add(w: *mut abi::WorldCtx, pos: *const abi::BlockPos, state: u32) -> u32 {
-    if state as usize >= content().states.len() {
-        misuse("part_add", || format!("no state {state}"));
+    if !known_state("part_add", state) {
         return 0;
     }
     unsafe { dim(w).add_part(content(), ip(pos), state) as u32 }
 }
 
 unsafe extern "C" fn part_replace(w: *mut abi::WorldCtx, pos: *const abi::BlockPos, old: u32, new: u32) -> u32 {
-    if new as usize >= content().states.len() {
-        misuse("part_replace", || format!("no state {new}"));
+    if !known_state("part_replace", new) {
         return 0;
     }
     unsafe { dim(w).replace_part(content(), ip(pos), old, new) as u32 }
@@ -472,6 +470,15 @@ unsafe extern "C" fn part_replace(w: *mut abi::WorldCtx, pos: *const abi::BlockP
 
 unsafe extern "C" fn world_dimension(w: *mut abi::WorldCtx) -> u32 {
     unsafe { dim(w).id }
+}
+
+/// Whether block state `state` exists, a `misuse` of `func` if not.
+fn known_state(func: &'static str, state: u32) -> bool {
+    let known = (state as usize) < content().states.len();
+    if !known {
+        misuse(func, || format!("no block state {state}"));
+    }
+    known
 }
 
 /// A mod called a host function with something that does not exist: logged, the first 20 times
@@ -495,8 +502,7 @@ pub(crate) fn misuse(func: &'static str, detail: impl FnOnce() -> String) {
 }
 
 unsafe extern "C" fn block_set(w: *mut abi::WorldCtx, pos: *const abi::BlockPos, state: u32) -> u32 {
-    if state as usize >= content().states.len() {
-        log::error!("mod tried to set invalid state {state}");
+    if !known_state("block_set", state) {
         return 0;
     }
     unsafe { dim(w).set_seen(content(), ip(pos), state).is_some() as u32 }
@@ -748,8 +754,8 @@ unsafe extern "C" fn entity_push(w: *mut abi::WorldCtx, id: u64, v: *const abi::
 unsafe extern "C" fn entity_walk(w: *mut abi::WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, jump: u32) {
     unsafe {
         let d = dim(w);
-        let mul = d.attribute(content(), id, crate::server::MOVEMENT_SPEED, false) as f32;
-        let jump_mul = d.attribute(content(), id, crate::server::JUMP_STRENGTH, false) as f32;
+        let mul = d.attribute(content(), id, crate::registry::attr::MOVEMENT_SPEED, false) as f32;
+        let jump_mul = d.attribute(content(), id, crate::registry::attr::JUMP_STRENGTH, false) as f32;
         if let Some(e) = d.entities.get_mut(id) {
             e.walk = Some((*dir, speed * mul, jump != 0));
             e.jump_mul = jump_mul;
@@ -1006,8 +1012,7 @@ unsafe extern "C" fn fill(w: *mut abi::WorldCtx, desc: *const abi::FillDesc) {
             misuse("fill", || "the shape's steps don't make one shape".to_string());
             return;
         };
-        if a.state as usize >= c.states.len() {
-            misuse("fill", || format!("no block state {}", a.state));
+        if !known_state("fill", a.state) {
             return;
         }
         let fill = match crate::server::area::AreaFill::new(c, shape, a.state, a.keep.as_str(), a.only.as_str()) {
@@ -2016,7 +2021,7 @@ unsafe extern "C" fn entity_effect(w: *mut abi::WorldCtx, id: u64, effect: u32, 
             return;
         }
         let comp = c.game.fields.effect;
-        let mut list: Vec<_> = crate::server::dim::effects_on(d.entities.comps.get(&(id, comp)).map(|b| &b[..]), d.time)
+        let mut list: Vec<_> = crate::world::effects_on(d.entities.comps.get(&(id, comp)).map(|b| &b[..]), d.time)
             .filter(|f| f.0 != effect)
             .collect();
         if ticks > 0 {

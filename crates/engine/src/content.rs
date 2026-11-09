@@ -1373,6 +1373,29 @@ impl Content {
                 .any(|&(mineable, tools)| self.components.has(comps::BLOCK, state, mineable) && self.stack_has(tool, tools))
     }
 
+    /// The share of a block a player's mining does in a tick, which client and server each add up
+    /// as it goes: vanilla's five times as slow with the head in a liquid, and again off the
+    /// ground, and its slower rate without a tool that harvests it. All at once in creative or at
+    /// 1 and up, nothing for what can't be broken.
+    pub fn mining_rate(&self, state: u32, tool: &abi::ItemStack, head_wet: bool, on_ground: bool, speed: f32, creative: bool) -> f32 {
+        let s = &self.states[state as usize];
+        if s.hardness < 0.0 {
+            return 0.0;
+        }
+        if creative || s.hardness == 0.0 {
+            return 1.0;
+        }
+        let tool_speed = if self.tool_fits(state, tool) {
+            self.stack_value::<f32>(tool, self.ids.mining_speed)
+                .unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        let secs = s.hardness * if self.harvests(state, tool) { 1.5 } else { 5.0 } / tool_speed;
+        let secs = secs * if head_wet { 5.0 } else { 1.0 } * if on_ground { 1.0 } else { 5.0 } / speed;
+        crate::world::TICK as f32 / secs
+    }
+
     /// Mining the block with `tool` (empty: the hand) harvests it: it needs no tool, or this
     /// one fits and is of a high enough level.
     pub fn harvests(&self, state: u32, tool: &abi::ItemStack) -> bool {
@@ -1715,29 +1738,31 @@ fn creative_tabs(
 }
 
 /// One list of every texture by name, for blocks, items and particles alike.
-struct TextureList {
-    names: Vec<String>,
-    index: FxHashMap<String, u32>,
+/// Strings numbered in the order they first come.
+#[derive(Default)]
+pub struct Interner {
+    pub list: Vec<String>,
+    ids: FxHashMap<String, u32>,
 }
 
-impl TextureList {
-    fn new() -> Self {
-        let mut index = FxHashMap::default();
-        index.insert("core:missing".to_string(), 0);
-        Self { names: vec!["core:missing".into()], index }
+impl Interner {
+    pub fn new(list: Vec<String>) -> Self {
+        let ids = list
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.clone(), i as u32))
+            .collect();
+        Interner { list, ids }
     }
 
-    fn intern(&mut self, name: &str) -> u32 {
-        if name.is_empty() {
-            return 0;
-        }
-        if let Some(&i) = self.index.get(name) {
+    pub fn id(&mut self, s: &str) -> u32 {
+        if let Some(&i) = self.ids.get(s) {
             return i;
         }
-        self.names.push(name.to_string());
-        self.index
-            .insert(name.to_string(), self.names.len() as u32 - 1);
-        self.names.len() as u32 - 1
+        let i = self.list.len() as u32;
+        self.list.push(s.to_string());
+        self.ids.insert(s.to_string(), i);
+        i
     }
 }
 
@@ -1804,23 +1829,17 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
     let mut tables = crate::entries::Tables::default();
     let tint_kinds = freeze_tints(entries_of(&mut games, abi::entry_kind::TINT_KIND), &mut tables, &mod_name, &mut errors);
 
-    let mut textures = TextureList::new();
-    let crack_textures: [u32; 10] = std::array::from_fn(|i| textures.intern(&format!("core:block/destroy_{i}")));
-    let fire_texture = textures.intern("core:block/fire");
+    let mut textures = Interner::new(vec!["core:missing".into()]);
+    // No texture named is the missing one.
+    textures.ids.insert(String::new(), 0);
+    let crack_textures: [u32; 10] = std::array::from_fn(|i| textures.id(&format!("core:block/destroy_{i}")));
+    let fire_texture = textures.id("core:block/fire");
     let mut raw_blocks = entries_of(&mut games, abi::entry_kind::BLOCK);
     raw_blocks.insert(0, covered_entry());
     let read_model = |name: &str| model_file(&mods, name);
     let liquid_names: Vec<String> = liquids.entries.iter().map(|e| e.name.clone()).collect();
-    let mut block_tables = crate::blocks::freeze(
-        raw_blocks,
-        &mut items,
-        &hot,
-        &liquid_names,
-        &read_model,
-        &mut |t| textures.intern(t),
-        &mod_name,
-        &mut errors,
-    );
+    let mut block_tables =
+        crate::blocks::freeze(raw_blocks, &mut items, &hot, &liquid_names, &read_model, &mut |t| textures.id(t), &mod_name, &mut errors);
     let mut patterns = std::mem::take(&mut block_tables.patterns);
     patterns.extend(items.apply_patterns(&mut errors));
     let tag_patterns = check_patterns(patterns, &mod_name, &mut errors);
@@ -2063,7 +2082,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
         cond_cache: Default::default(),
         source_mods,
         tool_classes,
-        textures: textures.names,
+        textures: textures.list,
         crack_textures,
         fire_texture,
         commands,
@@ -2160,7 +2179,7 @@ fn number_items(
     items: crate::entries::Folded,
     blocks: &crate::blocks::Blocks,
     retextures: &[(String, Vec<(String, String)>)],
-    textures: &mut TextureList,
+    textures: &mut Interner,
     errors: &mut Vec<String>,
 ) -> (ItemTables, FxHashMap<u32, (ModId, Callback)>) {
     use abi::comp::item as it;
@@ -2198,20 +2217,20 @@ fn number_items(
         if e.has(abi::comp::SPAWN_EGG) && !picture_exists(mods, &texture) {
             texture = "core:item/spawn_egg".into();
         }
-        let mut icon = if texture.is_empty() && block.is_some() { u32::MAX } else { textures.intern(&texture) };
+        let mut icon = if texture.is_empty() && block.is_some() { u32::MAX } else { textures.id(&texture) };
         // Its model file: a flat item of another texture, or boxes (faces it leaves to the item
         // show the icon).
         let mut model = Vec::new();
         match crate::block_model::load(&format!("{ns}:item/{path}"), &read_model) {
             Ok(Some(m)) => {
                 if let Some(t) = m.sprite.filter(|t| !t.is_empty()) {
-                    icon = textures.intern(&t);
+                    icon = textures.id(&t);
                 }
                 let own = if icon == u32::MAX { 0 } else { icon };
                 model = m
                     .boxes
                     .iter()
-                    .map(|b| b.model_box(|t, _| if t.is_empty() { own } else { textures.intern(t) }))
+                    .map(|b| b.model_box(|t, _| if t.is_empty() { own } else { textures.id(t) }))
                     .collect();
             }
             Ok(None) => {}
@@ -3307,10 +3326,10 @@ fn collect_stack_flags(decls: &[crate::registry::ComponentDecl], components: &Co
         .collect()
 }
 
-fn link_particles(game: &mut crate::registry::Game, textures: &mut TextureList) {
+fn link_particles(game: &mut crate::registry::Game, textures: &mut Interner) {
     for p in &mut game.particles {
         for f in &mut p.frames {
-            *f = textures.intern(&game.particle_textures[*f as usize]);
+            *f = textures.id(&game.particle_textures[*f as usize]);
         }
     }
     game.particle_textures.clear();

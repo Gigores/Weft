@@ -324,10 +324,10 @@ impl Screen for Profile {
                 label(ui, cx, "profile.name", &[], "default");
                 let input = ui.add(
                     Kind::Input {
-                        value: cx.settings.name().clone(),
-                        caret: cx.settings.name().chars().count(),
+                        value: crate::settings::name(),
+                        caret: crate::settings::name().chars().count(),
                         max: 16,
-                        on_change: Some(Rc::new(|c: &mut Ctx, v: &str| c.settings.set_text("name", v))),
+                        on_change: Some(Rc::new(|_: &mut Ctx, v: &str| crate::settings::set_text("name", v))),
                     },
                     Style::default().h(16.0).w(300.0),
                 );
@@ -899,8 +899,8 @@ impl Screen for LanguageScreen {
                     let b = ui.button(
                         "button",
                         Style::default().min_h(20.0).pad_xy(6.0, 4.0).stretch(),
-                        Rc::new(move |c: &mut Ctx| {
-                            c.settings.set_text("language", &code);
+                        Rc::new(move |_: &mut Ctx| {
+                            crate::settings::set_text("language", &code);
                         }),
                         |ui| {
                             ui.text(text::plain(name), "button");
@@ -1056,14 +1056,13 @@ impl Screen for Controls {
                     .min_h(60.0)
                     .scroll(),
                 |ui| {
-                    let s = cx.settings;
-                    let on = s.invert_y();
+                    let on = crate::settings::invert_y();
                     let spans = cx.t("settings.invert_y", &[on_off(on)]);
                     ui.button(
                         "button",
                         Style::default().min_h(20.0).pad_xy(6.0, 4.0).stretch(),
                         Rc::new(move |c: &mut Ctx| {
-                            c.settings.set("invert_y", !on as u8 as f64);
+                            crate::settings::set("invert_y", !on as u8 as f64);
                             c.requests.push(Request::Rebuild);
                         }),
                         |ui| {
