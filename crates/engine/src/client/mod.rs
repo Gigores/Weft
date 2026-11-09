@@ -1529,6 +1529,20 @@ impl Client {
         (at - cell.as_dvec3()).as_vec3().to_array()
     }
 
+    /// Whether the ground around the player is drawn, columns `reach` cubes about: what a
+    /// picture of the world is needed for no longer (the rest comes in from far away, as it does
+    /// anyway).
+    pub fn near_shown(&self, reach: i32) -> bool {
+        let at = crate::world::cube_of(self.player.pos.floor().as_ivec3());
+        self.joined
+            && (-reach..=reach).all(|x| {
+                (-reach..=reach).all(|z| {
+                    self.world
+                        .column_shown(glam::IVec2::new(at.x + x, at.z + z), self.seed)
+                })
+            })
+    }
+
     /// The held block used on `hit`, shown placed at once where the server will put it
     /// (`Dim::place_clicked`, `Dim::place`), as vanilla's client does: placing doesn't wait for the
     /// server, nor does the player fall into the cell meanwhile. Only what is sure here: a block

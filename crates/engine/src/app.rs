@@ -108,6 +108,9 @@ struct Entering {
     shown: Option<Instant>,
 }
 
+/// Cubes about the player whose ground has to be drawn for the world to be there to see.
+const NEAR: i32 = 2;
+
 /// Seconds the HUD takes to come in when the world is there.
 const HUD_FADE: f32 = 0.5;
 
@@ -735,7 +738,7 @@ impl Running {
     fn pause(&mut self) {
         match self.world_dir.clone() {
             Some(dir) if !self.shot_pending && self.preview_shot.is_none() => {
-                self.preview_shot = Some((dir.join("preview.png"), self.hud_off));
+                self.preview_shot = Some((dir.join(saves::PREVIEW), self.hud_off));
                 self.hud_off = true;
                 self.quads_dirty = true;
                 self.gpu.request_capture();
@@ -2491,10 +2494,17 @@ fn save_screenshot(r: &mut Running) {
     r.shot_pending = false;
     if let Some((path, hud)) = r.preview_shot.take() {
         if let Some(cap) = r.gpu.take_capture() {
-            let (rgba, w, h) = shrink(&cap.rgba, cap.width, cap.height, PREVIEW_WIDTH);
-            if let Err(e) = crate::assets::encode_png(&path, w, h, &rgba) {
-                log::warn!("world picture {}: {e}", path.display());
-            }
+            // Whole for going into the world through it, small for the list; written aside, the
+            // pause screen doesn't wait for it.
+            let small = path.with_file_name(saves::PREVIEW_SMALL);
+            crate::background().spawn(move || {
+                let (rgba, w, h) = shrink(&cap.rgba, cap.width, cap.height, PREVIEW_WIDTH);
+                for (p, w, h, px) in [(&path, cap.width, cap.height, &cap.rgba), (&small, w, h, &rgba)] {
+                    if let Err(e) = crate::assets::encode_png(p, w, h, px) {
+                        log::warn!("world picture {}: {e}", p.display());
+                    }
+                }
+            });
         }
         r.hud_off = hud;
         r.quads_dirty = true;
@@ -2542,7 +2552,7 @@ fn save_screenshot(r: &mut Running) {
 fn enter_world(r: &mut Running) {
     if r.game.is_none() {
         r.seen_since = None;
-    } else if r.seen_since.is_none() && r.load_state().0 {
+    } else if r.seen_since.is_none() && r.game.as_ref().is_some_and(|g| g.client.near_shown(NEAR)) {
         r.seen_since = Some(Instant::now());
     }
     let Some(e) = &mut r.entering else { return };
@@ -2559,9 +2569,9 @@ fn enter_world(r: &mut Running) {
             r.entering = None;
             return;
         }
-        let loaded = r.load_state().0;
+        let near = r.seen_since.is_some();
         let e = r.entering.as_mut().unwrap();
-        if e.shown.is_none() && loaded {
+        if e.shown.is_none() && near {
             e.shown = Some(Instant::now());
         }
         if e.shown
@@ -2590,7 +2600,7 @@ fn draw_entering(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
     }
 }
 
-/// Pixels across a world's picture in the list.
+/// Pixels across a world's small picture, for the list.
 const PREVIEW_WIDTH: u32 = 384;
 
 /// `rgba` (`w` x `h`) made `to` wide, each pixel the average of those it covers.

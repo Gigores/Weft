@@ -768,9 +768,19 @@ impl Screen for WorldSelect {
 const TILE_W: f32 = 136.0;
 const TILE_GAP: f32 = 6.0;
 
-/// The picture a world shows in the list: the last frame it was seen in, else a question mark.
-fn picture(w: &WorldMeta) -> String {
-    crate::ui::render::file_texture(&w.dir.join("preview.png")).unwrap_or_else(|| "core:gui/world_unknown".into())
+/// A world's picture as last seen, whole, and made small for the list.
+pub const PREVIEW: &str = "preview.png";
+pub const PREVIEW_SMALL: &str = "preview_small.png";
+
+/// The picture a world shows in the list (`small`) or going into it: the last frame it was seen
+/// in, else a question mark.
+fn picture(w: &WorldMeta, small: bool) -> String {
+    let file = |name: &str| crate::ui::render::file_texture(&w.dir.join(name));
+    small
+        .then(|| file(PREVIEW_SMALL))
+        .flatten()
+        .or_else(|| file(PREVIEW))
+        .unwrap_or_else(|| "core:gui/world_unknown".into())
 }
 
 /// Into the world, its picture growing from where it is in the list.
@@ -785,7 +795,7 @@ fn enter(c: &mut Ctx, w: &WorldMeta) {
         })
         .unwrap_or_default();
     c.requests
-        .push(Request::EnterWorld { world: w.clone(), picture: picture(w), from });
+        .push(Request::EnterWorld { world: w.clone(), picture: picture(w, false), from });
 }
 
 /// Where `w` is in the list as built (its picture's id).
@@ -811,7 +821,7 @@ fn tile(ui: &mut Ui, cx: &BuildCx, w: &WorldMeta, i: usize, selected: bool) {
         }),
         |ui| {
             let p = ui.add(
-                Kind::Image { texture: picture(w), color: 0xFFFFFFFF },
+                Kind::Image { texture: picture(w, true), color: 0xFFFFFFFF },
                 Style::default()
                     .w(TILE_W - 8.0)
                     .h((TILE_W - 8.0) * 9.0 / 16.0),
