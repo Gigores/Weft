@@ -10,6 +10,7 @@ pub static WHEAT: Item = Item::named("wheat");
 pub static BUCKET: Item = Item::named("bucket");
 pub static FLINT: Item = Item::named("flint");
 pub static CLAY_BALL: Item = Item::named("clay_ball");
+pub static SNOWBERRY: Item = Item::named("snowberry");
 
 pub use base_api::{ARMOR, Armor, FLAMMABLE, FOOD, FUEL, Food};
 /// Tags of armor pieces, head to feet; `<tag>/<material>` picks the recipe (see recipes.rs).
@@ -66,6 +67,10 @@ pub fn register(r: &mut Registry) {
     r.item(&WHEAT)
         .tag("crops/wheat")
         .tab(&crate::tabs::INGREDIENTS);
+    r.item(&SNOWBERRY)
+            .set(&FOOD, Food { hunger: 2, saturation: 3.2 })
+            .use_ticks(16)
+            .tab(&crate::tabs::FOOD);
     // What gravel and clay drop.
     r.item(&FLINT).tab(&crate::tabs::INGREDIENTS);
     r.item(&CLAY_BALL).tab(&crate::tabs::INGREDIENTS);
@@ -88,11 +93,12 @@ pub fn register(r: &mut Registry) {
         ("mutton", 2, 1.2, "raw_meat/mutton"),
         ("cooked_mutton", 6, 9.6, "cooked_meat/mutton"),
         ("spider_eye", 2, 3.2, ""),
+        ("raspberry", 2, 3.2, "berries"),
     ] {
         let i = r
             .item(Item::generated(name.into()))
             .set(&FOOD, Food { hunger, saturation })
-            .use_ticks(32)
+            .use_ticks(if (tag == "berries") {16} else {32})
             .on_use(base_api::eat)
             .tab(&crate::tabs::FOOD);
         let i = if tag.starts_with("cooked_meat/") { i.tag("cooked_meat") } else { i };
