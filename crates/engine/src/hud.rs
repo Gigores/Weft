@@ -88,12 +88,12 @@ pub fn effect_name(lang: &Lang, effect: u32, level: u32) -> Vec<text::Span> {
     text::rich(&format!("{}{level}", text::escape(lang.get(&key))), lang, None)
 }
 
-/// Ticks as `m:ss`, `**:**` past an hour and `∞` for good (`INFINITE_TICKS` and up) as vanilla's.
+/// Ticks as `m:ss`, `**:**` past 99:59 and `∞` for good (`INFINITE_TICKS` and up) as vanilla's.
 pub fn effect_time(ticks: u64) -> text::Arg {
     let secs = ticks / crate::world::TPS as u64;
     if ticks >= weft_abi::INFINITE_TICKS as u64 {
         Arg::Key("effect.infinite".into())
-    } else if secs >= 5979 { // 5979 is 99 minutes and 59 seconds
+    } else if secs > 99 * 60 + 59 {
         Arg::Text("**:**".into())
     } else {
         Arg::Text(format!("{}:{:02}", secs / 60, secs % 60))

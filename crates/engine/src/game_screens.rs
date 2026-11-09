@@ -114,39 +114,51 @@ fn effects_now(client: &crate::client::Client) -> Vec<(u32, u32)> {
         .collect()
 }
 
-/// The player's status effects beside its inventory: icon, name with level, time left.
+/// The player's status effects beside its inventory: icons with the time left under them, four
+/// a column, the name and level in a tooltip.
 fn effects_panel(ui: &mut Ui, cx: &BuildCx) {
     let Some(client) = cx.client else { return };
     let all = crate::hud::shown_effects(client);
     if all.is_empty() {
         return;
     }
-    ui.panel("panel", Style::default().pad(4.0).gap(2.0), |ui| {
-        for (effect, level, _) in all {
-            ui.container(Style::row().gap(4.0).align(crate::ui::Align::Center), |ui| {
-                crate::hud::effect_icon(ui, effect);
-                ui.container(Style::default().gap(1.0), |ui| {
-                    ui.text(crate::hud::effect_name(cx.lang, effect, level), "label");
-                    // Counted down as it shows, without building the screen again.
-                    ui.text_bound(
-                        "label",
-                        Box::new(move |c: &crate::app::Ctx| {
-                            let left = c
-                                .client
-                                .as_deref()
-                                .and_then(|cl| {
-                                    crate::hud::shown_effects(cl)
-                                        .into_iter()
-                                        .find(|f| f.0 == effect)
-                                })
-                                .map_or(0, |f| f.2);
-                            ("effect.time".into(), vec![crate::hud::effect_time(left)])
-                        }),
-                    );
+    ui.panel(
+        "panel",
+        Style::row()
+            .pad(4.0)
+            .gap(3.0)
+            .align(crate::ui::Align::Start),
+        |ui| {
+            for column in all.chunks(4) {
+                ui.container(Style::default().gap(3.0), |ui| {
+                    for &(effect, level, _) in column {
+                        let name = crate::hud::effect_name(cx.lang, effect, level);
+                        let cell = ui.container(Style::default().gap(1.0).align(crate::ui::Align::Center), |ui| {
+                            let icon = crate::hud::effect_icon(ui, effect);
+                            ui.nodes[icon].tooltip = Some(name.clone());
+                            // Counted down as it shows, without building the screen again.
+                            ui.text_bound(
+                                "label",
+                                Box::new(move |c: &Ctx| {
+                                    let left = c
+                                        .client
+                                        .as_deref()
+                                        .and_then(|cl| {
+                                            crate::hud::shown_effects(cl)
+                                                .into_iter()
+                                                .find(|f| f.0 == effect)
+                                        })
+                                        .map_or(0, |f| f.2);
+                                    ("effect.time".into(), vec![crate::hud::effect_time(left)])
+                                }),
+                            );
+                        });
+                        ui.nodes[cell].tooltip = Some(name);
+                    }
                 });
-            });
-        }
-    });
+            }
+        },
+    );
 }
 
 impl Screen for MenuScreen {

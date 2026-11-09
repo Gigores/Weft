@@ -1019,9 +1019,11 @@ impl Running {
                         .send(net::ToServer::CreativeTake { item, button: 0 });
                 }
             }
-            // Tooltip with the hovered item's name.
+            // Tooltip with the hovered item's name; other custom nodes (an effect's icon) have their own.
             if let Some(h) = hovered {
-                if let Kind::Custom { tag, data } = ui.nodes[h].kind {
+                if let Kind::Custom { tag: tag @ (crate::client::modui::TAG_SLOT | crate::client::modui::TAG_CREATIVE), data } =
+                    ui.nodes[h].kind
+                {
                     let stack = if tag == crate::client::modui::TAG_CREATIVE {
                         weft_abi::ItemStack::new(data as u32, 1)
                     } else {
