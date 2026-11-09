@@ -54,7 +54,7 @@ pub fn register(r: &mut Registry) {
         .set(&TREES, 0.025)
         .set(&GRASS_COVER, 0.7)
         .set(&TALL_GRASS_COVER, 0.2)
-        .set(&BOULDER_COVER, 0.05);
+        .set(&BOULDER_COVER, 0.01);
     r.biome(&FOREST)
         .humidity(0.25..)
         .surface("grass", "dirt", 3)
