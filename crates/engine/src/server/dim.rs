@@ -2402,6 +2402,7 @@ impl Dim {
         }
         self.fire_timers(c);
         self.finish_uses(c);
+        self.mine(c);
         self.navigation(c);
         self.steer_mounts(c);
         self.choose_poses(c);
@@ -3096,13 +3097,13 @@ impl Dim {
         crate::physics::liquid_at(c, &*self.space, e.pos + DVec3::Y * e.eye(c)).is_some()
     }
 
-    /// The share of `part` of the cell at `pos` in `frame` a player's mining does this tick, by what
-    /// it holds and where it is now.
-    pub fn mining_rate_of(&mut self, c: &Content, player: u64, frame: u64, pos: IVec3, part: u32) -> f32 {
-        let Some(e) = self.entities.get(player) else { return 0.0 };
+    /// The share of `part` of the cell at `pos` in `frame` an entity's mining does this tick, by
+    /// what it holds and where it is now.
+    pub fn mining_rate_of(&mut self, c: &Content, id: u64, frame: u64, pos: IVec3, part: u32) -> f32 {
+        let Some(e) = self.entities.get(id) else { return 0.0 };
         let (wet, on_ground, creative) = (self.head_in_liquid(c, e), e.on_ground, e.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK));
-        let tool = self.entities.held(player);
-        let speed = self.attribute(c, player, crate::registry::attr::MINING_SPEED, false) as f32;
+        let tool = self.entities.held(id);
+        let speed = self.attribute(c, id, crate::registry::attr::MINING_SPEED, false) as f32;
         let state = self
             .in_frame(frame, |d| d.aimed_part(c, pos, part))
             .unwrap_or(AIR);

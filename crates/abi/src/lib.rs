@@ -3313,6 +3313,10 @@ pub struct Host {
     /// (null: on nothing) from `face`, as a player's right click does. 1 if it did something
     /// or started to (eating takes time; it goes on while the hand holds the item).
     pub entity_use_item: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, off: u32, target: *const BlockPos, face: u32) -> u32,
+    /// `id` starts breaking the block at `pos` (null: stops), as a player holding the button does:
+    /// as fast as what it holds mines it, cracks shown, broken when done within its reach. 0 when
+    /// it may not (`action::BREAK_BLOCK`).
+    pub entity_mine: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, pos: *const BlockPos) -> u32,
     /// Whether `target` is within `id`'s `ENTITY_REACH` attribute, from its eyes to the nearest
     /// point of the target's box. Non-zero if so.
     pub entity_in_reach: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, target: u64) -> u32,

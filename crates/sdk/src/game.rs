@@ -262,6 +262,17 @@ impl World {
         let pos = pos.into();
         unsafe { (host().entity_use_item)(self.raw(), id, off_hand as u32, &pos, face) != 0 }
     }
+    /// `id` starts breaking the block at `pos` as a player holding the button does: as fast as
+    /// what it holds mines it (`attribute::MINING_SPEED`), cracks showing, broken when done if
+    /// still within its reach, the tool wearing. False when it may not (`actions::BREAK_BLOCK`).
+    pub fn start_mining(&self, id: u64, pos: impl Into<BlockPos>) -> bool {
+        let pos = pos.into();
+        unsafe { (host().entity_mine)(self.raw(), id, &pos) != 0 }
+    }
+    /// `id` stops breaking what it was.
+    pub fn stop_mining(&self, id: u64) {
+        unsafe { (host().entity_mine)(self.raw(), id, std::ptr::null()) };
+    }
     /// How charged `id`'s next swing is, 0..1, with what it holds now.
     pub fn swing_strength(&self, id: u64) -> f32 {
         unsafe { (host().entity_swing_strength)(self.raw(), id) }

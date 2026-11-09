@@ -64,6 +64,7 @@ pub static HOST: Host = Host {
     in_liquid,
     entity_swing_strength,
     entity_use_item,
+    entity_mine,
     component,
     player_count,
     player_at,
@@ -822,6 +823,19 @@ unsafe extern "C" fn entity_use_item(w: *mut abi::WorldCtx, id: u64, off: u32, t
         let slot = if off != 0 { c.game.entities[e.kind as usize].off } else { Some(e.selected) };
         let target = (!target.is_null()).then(|| (ip(target), face.min(5) as u8));
         slot.is_some_and(|slot| d.use_in_hand(c, id, slot, target, false)) as u32
+    }
+}
+
+unsafe extern "C" fn entity_mine(w: *mut abi::WorldCtx, id: u64, pos: *const abi::BlockPos) -> u32 {
+    unsafe {
+        let d = dim(w);
+        if pos.is_null() {
+            if let Some(e) = d.entities.get_mut(id) {
+                e.mining = None;
+            }
+            return 1;
+        }
+        d.start_mining(content(), id, 0, ip(pos), u32::MAX) as u32
     }
 }
 

@@ -112,7 +112,6 @@ pub struct Player {
     to_send_far: Vec<IVec3>,
     known: FxHashSet<u64>,
     joined: bool,
-    mining: Option<Mining>,
     sent_cracks: Vec<crate::net::Crack>,
     /// The tick rate its client has.
     sent_rate: u32,
@@ -144,15 +143,6 @@ pub struct Player {
     /// Walking speed and jump multipliers the client has (attributes).
     /// The view distance the client has (`ToServer::View`).
     view_radius: i32,
-}
-
-/// What a player is mining, and how far along by what it held and where it was each tick.
-#[derive(Clone, Copy)]
-pub(crate) struct Mining {
-    frame: u64,
-    pos: IVec3,
-    part: u32,
-    progress: f32,
 }
 
 pub struct Generated {
@@ -213,8 +203,6 @@ pub struct Server {
     /// `/tick`: ticks per second, the world held still (players still move), ticks left to step
     /// while frozen, and a sprint (ticks left, ticks in all, started) run without waiting.
     pub tick_rate: u32,
-    /// The tick mining last went on at: its sync also runs between ticks.
-    mining_tick: u64,
     pub frozen: bool,
     pub steps: u32,
     pub sprint: Option<(u32, u32, Instant)>,
@@ -451,7 +439,6 @@ impl Server {
             next_id,
             online: Vec::new(),
             tick_rate: TPS,
-            mining_tick: 0,
             frozen: false,
             steps: 0,
             sprint: None,
@@ -522,7 +509,6 @@ impl Server {
                 to_send_far: Vec::new(),
                 known: FxHashSet::default(),
                 joined: false,
-                mining: None,
                 sent_rate: 0,
                 glow_sent: false,
                 sent_cracks: Vec::new(),

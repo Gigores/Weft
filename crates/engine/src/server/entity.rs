@@ -43,6 +43,8 @@ pub struct Entity {
     pub using: (u32, bool),
     /// The item it is using, the tick that takes effect and the slot it is in.
     pub use_done: Option<(u32, u64, u32)>,
+    /// The block it is breaking.
+    pub mining: Option<Mining>,
     pub anchor: Option<IVec3>,
     pub sent: Option<(DVec3, f32, f32, crate::world::Pose, bool)>,
     /// Worn items as last sent to clients.
@@ -81,6 +83,15 @@ pub struct Entity {
     pub vehicle: Option<(u64, u8)>,
     /// The player whose client moves it, sitting in a seat that steers.
     pub driver: Option<u64>,
+}
+
+/// What an entity is breaking, and how far along by what it held and where it was each tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mining {
+    pub frame: u64,
+    pub pos: IVec3,
+    pub part: u32,
+    pub progress: f32,
 }
 
 /// One tick of walking an entity was told (`World::walk`, its path, its rider).
@@ -154,6 +165,7 @@ impl Entity {
             selected: 0,
             using: (0, false),
             use_done: None,
+            mining: None,
             anchor: None,
             sent: None,
             worn: Vec::new(),

@@ -4,7 +4,7 @@ use super::*;
 
 impl Server {
     pub(super) fn sync_players(&mut self, c: &'static Content) {
-        let mining_now = self.mining_now(c);
+        let mining_now = self.mining_now();
         let settled: Vec<Vec<IVec3>> = self.dims.iter_mut().map(|d| d.take_settled()).collect();
         let moved = self.collect_moves(c);
 
@@ -41,27 +41,23 @@ impl Server {
         self.unload_unused(c);
     }
 
-    /// Mining goes on by what each one holds and where it is this tick. Returns who is breaking
-    /// what, in tenths as crack pictures go, so most ticks nothing is sent.
-    fn mining_now(&mut self, c: &'static Content) -> Vec<Vec<crate::net::Crack>> {
-        // This also runs between ticks, where nothing goes on.
-        let ticked = std::mem::replace(&mut self.mining_tick, self.tick) != self.tick;
-        let mut mining_now: Vec<Vec<crate::net::Crack>> = vec![Vec::new(); self.dims.len()];
-        for pi in 0..self.players.len() {
-            let Some(m) = self.players[pi].mining.filter(|_| self.players[pi].joined) else { continue };
-            let Some((r, id)) = self.region(pi) else { continue };
-            let rate = if ticked { r.mining_rate_of(c, id, m.frame, m.pos, m.part) } else { 0.0 };
-            let progress = (m.progress + rate).min(1.0);
-            let p = &mut self.players[pi];
-            p.mining = Some(Mining { progress, ..m });
-            if m.frame == 0 {
-                mining_now[p.dim as usize].push((p.entity, m.pos, m.part, (progress.min(0.99) * 10.0).floor() / 10.0));
-            }
-        }
-        mining_now
+    /// Who is breaking what in each dimension, in tenths as crack pictures go, so most ticks
+    /// nothing is sent.
+    fn mining_now(&self) -> Vec<Vec<crate::net::Crack>> {
+        self.dims
+            .iter()
+            .map(|d| {
+                d.regions
+                    .iter()
+                    .flat_map(|r| &r.entities.list)
+                    .filter(|e| !e.removed)
+                    .filter_map(|e| e.mining.filter(|m| m.frame == 0).map(|m| (e.id, m)))
+                    .map(|(id, m)| (id, m.pos, m.part, (m.progress.min(0.99) * 10.0).floor() / 10.0))
+                    .collect()
+            })
+            .collect()
     }
 
-    /// Entities that moved since last tick, per dimension (all regions).
     fn collect_moves(&mut self, c: &'static Content) -> Vec<Vec<crate::net::Move>> {
         let mut moved: Vec<Vec<crate::net::Move>> = Vec::with_capacity(self.dims.len());
         for d in &mut self.dims {

@@ -128,26 +128,20 @@ impl Server {
         match msg {
             ToServer::Join { name, key } => self.join(c, pi, name, key),
             ToServer::StartBreak { pos, part, frame } => {
-                let Some((r, _)) = self.region(pi) else { return };
-                let (frame, pos) = r.landed_as(frame, pos);
-                self.players[pi].mining = Some(Mining { frame, pos, part, progress: 0.0 });
                 let Some((r, entity)) = self.region(pi) else { return };
-                let held = r.entities.held(entity).item;
+                let (frame, pos) = r.landed_as(frame, pos);
                 // Said now, or it would mine all that time for nothing.
-                let refused = r.with_space(c, frame, |d, _| {
-                    d.get(pos).is_some() && {
-                        let state = d.aimed_part(c, pos, part);
-                        !d.may_break(c, pos, state, held, entity)
-                    }
-                });
-                if refused == Some(true) {
-                    self.players[pi].mining = None;
+                if !r.start_mining(c, entity, frame, pos, part) {
                     self.players[pi]
                         .conn
                         .send(ToClient::BreakRefused { frame, pos });
                 }
             }
-            ToServer::StopBreak => self.players[pi].mining = None,
+            ToServer::StopBreak => {
+                if let Some(e) = self.region(pi).and_then(|(r, id)| r.entities.get_mut(id)) {
+                    e.mining = None;
+                }
+            }
             ToServer::StopUsing => {
                 if let Some((r, entity)) = self.region(pi) {
                     r.stop_using(entity);
@@ -252,10 +246,9 @@ impl Server {
             }
 
             ToServer::Break { pos, part, face, hit, frame } => {
-                let Some((r, _)) = self.region(pi) else { return };
-                let (frame, pos) = r.landed_as(frame, pos);
-                let mining = self.players[pi].mining.take();
                 let Some((r, entity)) = self.region(pi) else { return };
+                let (frame, pos) = r.landed_as(frame, pos);
+                let mining = r.entities.get_mut(entity).and_then(|e| e.mining.take());
                 let Some(e) = r.entities.get(entity) else { return };
                 let (eye, sel, creative) = (e.pos + DVec3::Y * e.eye(c), e.selected, e.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK));
                 let no_break = e.mode.has(crate::tag_bits::game_mode::NO_BREAK);
@@ -742,6 +735,64 @@ impl Dim {
         if was {
             self.events
                 .push(DimEvent::Using { entity: id, using: None });
+        }
+    }
+}
+
+impl Dim {
+    /// `entity` starts breaking `part` of the cell at `pos` in `frame` (`u32::MAX`: what it
+    /// stands for), a player holding the button or a mob (`World::start_mining`). False when
+    /// it may not (`actions::BREAK_BLOCK`), said now so it doesn't mine all that time for nothing.
+    pub fn start_mining(&mut self, c: &'static Content, entity: u64, frame: u64, pos: IVec3, part: u32) -> bool {
+        let held = self.entities.held(entity).item;
+        let refused = self.with_space(c, frame, |d, _| {
+            d.get(pos).is_some() && {
+                let state = d.aimed_part(c, pos, part);
+                !d.may_break(c, pos, state, held, entity)
+            }
+        });
+        let Some(e) = self.entities.get_mut(entity) else { return false };
+        e.mining = (refused != Some(true)).then_some(super::entity::Mining { frame, pos, part, progress: 0.0 });
+        e.mining.is_some()
+    }
+
+    /// Mining goes on by what each one holds and where it is this tick. A player's client says
+    /// when it is done (`ToServer::Break`, checked against this); anything else breaks the block
+    /// when it gets there, within its reach, with what it holds, which wears.
+    pub fn mine(&mut self, c: &'static Content) {
+        let mining: Vec<(u64, super::entity::Mining, bool)> = self
+            .entities
+            .list
+            .iter()
+            .filter(|e| !e.removed)
+            .filter_map(|e| e.mining.map(|m| (e.id, m, e.player)))
+            .collect();
+        for (id, m, player) in mining {
+            let progress = (m.progress + self.mining_rate_of(c, id, m.frame, m.pos, m.part)).min(1.0);
+            let Some(e) = self.entities.get_mut(id) else { continue };
+            e.mining = Some(super::entity::Mining { progress, ..m });
+            if player || progress < 1.0 {
+                continue;
+            }
+            e.mining = None;
+            let (eye, slot) = (e.pos + DVec3::Y * e.eye(c), e.selected);
+            let (held, reach) = (self.entities.held(id), self.block_reach(c, id));
+            let broke = self.with_space(c, m.frame, |d, o| {
+                let eye = o.to_local(eye);
+                let to = eye - (m.pos.as_dvec3() + DVec3::splat(0.5));
+                // The face toward it, its middle hit.
+                let axis = to.abs().max_position();
+                let face = (axis * 2 + (to[axis] > 0.0) as usize) as u8;
+                let part = d.aimed_part(c, m.pos, m.part);
+                let hard = c
+                    .states
+                    .get(part as usize)
+                    .is_some_and(|s| s.hardness > 0.0);
+                (within(eye, m.pos, reach) && d.break_piece(c, m.pos, part, face, [0.5; 3], held, id, true)) && hard
+            });
+            if broke == Some(true) && !held.is_empty() {
+                wear(c, self, id, slot, 1);
+            }
         }
     }
 }
