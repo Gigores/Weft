@@ -180,8 +180,15 @@ pub async fn armor(t: T) -> R {
         .op(&format!("spawn zombie {}", at(add(f, [3, 0, -2]))))
         .await?;
     t.check_eq(t.op(&format!("group {z} core:equipment")).await?, "4 0".to_string(), "a zombie's equipment");
-    t.op(&format!("put {z} 0 diamond_helmet 1")).await?;
+    // Slot 0 is its hand, its equipment after it.
+    t.op(&format!("put {z} 1 diamond_helmet 1")).await?;
     t.check_eq(t.op(&format!("group {z} base:head")).await?, "1 1".to_string(), "the zombie's head slot");
+    // What is in its hand shows there, as a player's does.
+    t.op(&format!("put {z} 0 iron_sword 1")).await?;
+    let id: u64 = z.trim().parse().map_err(|_| format!("spawn zombie: {z}"))?;
+    let sword = Item::named("base:iron_sword").id();
+    t.until("the zombie holds the sword", Duration::from_secs(3), |t| t.c().view().component_of(id, &HELD) == Some(sword))
+        .await?;
     t.c().set_look((-3f32).atan2(2.0).to_degrees(), -10.0);
     t.secs(0.5).await?;
     t.shot("zombie_helmet").await?;
@@ -584,8 +591,8 @@ pub async fn beds(t: T) -> R {
     let f = t.feet();
     let foot = place_bed(&t).await?;
     let head = add(foot, [0, 0, -1]);
-    t.check(t.block(foot).await?.contains("part=foot"), format!("the foot where it was placed: {}", t.block(foot).await?));
-    t.check(t.block(head).await?.contains("part=head"), format!("the head beyond it: {}", t.block(head).await?));
+    let (a, b) = (t.block(foot).await?, t.block(head).await?);
+    t.check(a.starts_with("base:bed") && a == b, format!("one bed where it was placed and beyond: {a}, {b}"));
 
     // By day only the respawn point.
     t.look_at(foot);
@@ -682,8 +689,7 @@ pub async fn beds(t: T) -> R {
         t.until(&format!("the {facing} bed"), Duration::from_secs(3), |t| t.c().block(head).is_some_and(|s| s != 0))
             .await?;
         let (a, b) = (t.block(foot).await?, t.block(head).await?);
-        t.check(a.contains("part=foot") && a.contains(&format!("facing={facing}")), format!("the foot: {a}"));
-        t.check(b.contains("part=head") && b.contains(&format!("facing={facing}")), format!("the head: {b}"));
+        t.check(a == b && a.contains(&format!("facing={facing}")), format!("one bed on both cells: {a}, {b}"));
     }
     t.c()
         .teleport([f[0] as f64 + 0.5, f[1] as f64 + 7.0, f[2] as f64 + 0.5]);
@@ -1593,7 +1599,7 @@ pub async fn cell_parts(t: T) -> R {
     t.c().menu_open(&screens::WORLDS);
     t.screen("core:worlds").await?;
     t.frames(2).await?;
-    t.click_ui(&format!("text:{name} |"), 0);
+    t.click_ui(&format!("text:{name}"), 0);
     t.secs(0.2).await?;
     t.click_ui("id:play", 0);
     t.until("joined again", std::time::Duration::from_secs(60), |t| t.flag(client::client_flags::JOINED))
@@ -1701,6 +1707,7 @@ pub async fn burning(t: T) -> R {
 }
 
 static ON_FIRE: Component<u8> = Component::named("core:burning");
+static HELD: Component<u32> = Component::named("core:held");
 
 /// Fields the engine keeps on entities reach clients like any synced component: a pig in lava
 /// shows on fire and losing health, and stays for its death animation once the server drops it.
@@ -1768,6 +1775,98 @@ pub async fn respawn(t: T) -> R {
     t.secs(4.5).await?;
     let health: f32 = t.op("health").await?.parse().unwrap_or(20.0);
     t.check(health < 20.0, format!("hunger's pulse still runs: health {health}"));
+    Ok(())
+}
+
+/// A placed block shows at once, before the server says (so a player falling past it lands on
+/// it), and goes again when the server refuses for a reason the client can't know (a mod's).
+pub async fn placing_ahead(t: T) -> R {
+    t.flat().await?;
+    let cell = add(t.feet(), [2, 0, 0]);
+    let floor = add(cell, [0, -1, 0]);
+    t.op("put me 0 stone 4").await?;
+    t.c().select_slot(0);
+    t.cmd("/rule testkit:no_placing 1").await?;
+    t.secs(0.2).await?;
+    t.look_at(floor);
+    t.frames(2).await?;
+    t.press("core:use");
+    let stone = |t: &T| {
+        t.c()
+            .block(cell)
+            .is_some_and(|s| Block::named("base:stone").is(s))
+    };
+    t.until("the stone shown at once", Duration::from_secs(1), stone)
+        .await?;
+    t.until("taken back where it can't go", Duration::from_secs(2), |t| t.c().block(cell) == Some(0))
+        .await?;
+    t.check_eq(t.slot("me", 0).await?.1, 4, "no stone spent");
+    t.cmd("/rule testkit:no_placing 0").await?;
+    Ok(())
+}
+
+/// Base's tools in a menu's corner: sorting a chest joins its stacks and orders them, putting away
+/// moves what the player carries into storage around that already holds it.
+pub async fn inventory_tools(t: T) -> R {
+    t.flat().await?;
+    let p = add(t.feet(), [2, 0, 0]);
+    t.set(p, "chest").await?;
+    let at = format!("{} {} {}", p[0], p[1], p[2]);
+    t.op(&format!("put {at} 3 dirt 5")).await?;
+    t.op(&format!("put {at} 1 cobblestone 4")).await?;
+    t.op(&format!("put {at} 10 dirt 7")).await?;
+    t.op("put me 9 dirt 3").await?;
+    t.op("put me 10 stick 2").await?;
+    t.op(&format!("menu base:chest {at}")).await?;
+    t.screen("core:menu").await?;
+    t.frames(3).await?;
+    // What base's corner buttons do.
+    t.check(t.c().menu_sort(None), "sorting the chest");
+    t.secs(0.4).await?;
+    let mut held = Vec::new();
+    for i in 0..27 {
+        held.push(t.slot(&at, i).await?);
+    }
+    let filled: Vec<_> = held.iter().filter(|s| s.1 > 0).collect();
+    t.check_eq(filled.len(), 2, "two stacks left of three");
+    t.check(held[0].1 > 0 && held[1].1 > 0, format!("at the front: {held:?}"));
+    t.check(held.iter().any(|s| s.0 == "base:dirt" && s.1 == 12), format!("the dirt joined: {held:?}"));
+    static DEPOSIT: Channel<()> = Channel::named("base:deposit_nearby");
+    t.c().send(&DEPOSIT, &());
+    t.secs(0.4).await?;
+    t.check_eq(t.slot("me", 9).await?.1, 0, "the dirt went into the chest");
+    t.check_eq(t.slot("me", 10).await?.1, 2, "the sticks stay: the chest has none");
+    let dirt: u32 = {
+        let mut n = 0;
+        for i in 0..27 {
+            let s = t.slot(&at, i).await?;
+            if s.0 == "base:dirt" {
+                n += s.1;
+            }
+        }
+        n
+    };
+    t.check_eq(dirt, 15, "all the dirt in the chest");
+    t.c().menu_close();
+    Ok(())
+}
+
+/// A hoe tills what is tillable (any mod's hoe: it is the hoe's use), and nothing else.
+pub async fn hoe_tills(t: T) -> R {
+    t.flat().await?;
+    let soil = add(t.feet(), [2, -1, 0]);
+    let stone = add(t.feet(), [-2, -1, 0]);
+    t.set(stone, "stone").await?;
+    t.op("put me 0 wood_hoe 1").await?;
+    t.c().select_slot(0);
+    for p in [soil, stone] {
+        t.look_at(p);
+        t.frames(2).await?;
+        t.press("core:use");
+        t.secs(0.3).await?;
+    }
+    t.check_eq(t.block(soil).await?, "base:farmland".to_string(), "the grass tilled");
+    t.check_eq(t.block(stone).await?, "base:stone".to_string(), "stone left as it is");
     Ok(())
 }
 
@@ -1990,7 +2089,7 @@ pub async fn base_alone(t: T) -> R {
     std::fs::write(format!("{dir}/config/disabled_mods.txt"), "testkit\ntestmod").map_err(|e| e.to_string())?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut server = std::process::Command::new(exe)
-        .args(["--server", "--world", "w", "--seed", "1", "--view", "4", "--port", &port.to_string(), "--run-dir", &dir])
+        .args(["server", "--world", "w", "--seed", "1", "--view", "4", "--port", &port.to_string(), "--run-dir", &dir])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -2037,7 +2136,7 @@ pub async fn dedicated_server(t: T) -> R {
     let start = || -> Result<Child, String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         std::process::Command::new(exe)
-            .args(["--server", "--world", "w", "--seed", "1", "--view", "4", "--port", &port.to_string(), "--run-dir", &dir])
+            .args(["server", "--world", "w", "--seed", "1", "--view", "4", "--port", &port.to_string(), "--run-dir", &dir])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

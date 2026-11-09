@@ -3,6 +3,7 @@
 //! Templates (`SHAPES_OF`) make a block for each source first, which edits and patterns then reach
 //! like any other.
 
+use glam::IVec3;
 use std::borrow::Cow;
 
 use rustc_hash::FxHashMap;
@@ -94,6 +95,7 @@ pub(crate) fn freeze(
             states: 1,
             props: Vec::new(),
             opens: None,
+            sneak_use: abi::sneak_use::EMPTY_HANDS,
             cb: BlockCallbacks::default(),
             sides: 0,
         }],
@@ -240,7 +242,8 @@ pub(crate) fn freeze(
             on_signal: e.callback(b::ON_SIGNAL),
             signal_gate: e.callback(b::SIGNAL_GATE),
         };
-        let def = BlockDef { name: e.name, owner: e.owner, first_state: first, states: count, props, cb, opens: None, sides };
+        let sneak_use = e.or(b::SNEAK_USE, abi::sneak_use::EMPTY_HANDS);
+        let def = BlockDef { name: e.name, owner: e.owner, first_state: first, states: count, props, cb, opens: None, sneak_use, sides };
         // A piece's properties are of the state it is in.
         for (state, raw) in pieces {
             let to = |text: &str| def.changed_text(state as u32, text);
@@ -385,7 +388,7 @@ fn full_key(props: &[Prop], s: u32) -> String {
 }
 
 /// What only a block as a whole has: its states leave it out.
-const BLOCK_ONLY: [&str; 15] = [
+const BLOCK_ONLY: [&str; 16] = [
     b::PROPS,
     b::ON_USE,
     b::ON_NEIGHBOR,
@@ -398,6 +401,7 @@ const BLOCK_ONLY: [&str; 15] = [
     b::SIGNAL_GATE,
     b::SIGNAL_READ,
     b::OPENS,
+    b::SNEAK_USE,
     b::SHARES_CELL,
     b::SHAPES_OF,
     b::RETEXTURE,
@@ -701,8 +705,14 @@ fn bake_state(
             .map(|b| [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]])
             .collect()
     };
+    let cells = cells_of(name, turn, s.or::<Vec<[i32; 3]>>(b::CELLS, Vec::new()), errors);
+    // A big block's reach out of its cell is its cells.
+    let (lo, hi) = cells
+        .iter()
+        .fold((IVec3::ZERO, IVec3::ZERO), |(lo, hi), (o, _)| (lo.min(*o), hi.max(*o)));
     for bx in &hitbox {
-        if bx.iter().any(|v| !(-1.0..=2.0).contains(v)) {
+        let out = (0..3).any(|i| bx[i] < lo[i] as f32 - 1.0 || bx[i + 3] > hi[i] as f32 + 2.0);
+        if out {
             errors
                 .push(format!("{name}: hitbox {:?} reaches more than a block out of its cell (it is in sixteenths)", bx.map(|v| v * 16.0)));
         }
@@ -774,10 +784,42 @@ fn bake_state(
         spread: None,
         effects: [crate::content::Fx::NONE; 6],
         pieces: Vec::new(),
+        cells,
         rules: Vec::new(),
         hazards: Vec::new(),
     };
     (info, signal.head, pieces, rules)
+}
+
+/// A big block's other cells turned, each with its step toward the block's own cell, found
+/// spreading from it face by face.
+fn cells_of(name: &str, turn: weft_abi::Turn, own: Vec<[i32; 3]>, errors: &mut Vec<String>) -> Vec<(IVec3, u8)> {
+    use crate::world::DIRS;
+    let mut left: Vec<IVec3> = own
+        .into_iter()
+        .map(|o| IVec3::from_array(turn.vector(o)))
+        .filter(|o| *o != IVec3::ZERO)
+        .collect();
+    left.sort_by_key(|o| o.to_array());
+    left.dedup();
+    let (mut out, mut reached) = (Vec::new(), vec![IVec3::ZERO]);
+    let mut at = 0;
+    while at < reached.len() {
+        let from = reached[at];
+        at += 1;
+        for (d, step) in DIRS.iter().enumerate() {
+            if let Some(i) = left.iter().position(|o| *o == from + *step) {
+                let o = left.swap_remove(i);
+                // The way back is the opposite face.
+                out.push((o, (d ^ 1) as u8));
+                reached.push(o);
+            }
+        }
+    }
+    if !left.is_empty() {
+        errors.push(format!("{name}: cells {left:?} don't touch the rest of the block by a face"));
+    }
+    out
 }
 
 fn air() -> StateInfo {
@@ -810,6 +852,7 @@ fn air() -> StateInfo {
         spread: None,
         effects: [crate::content::Fx::NONE; 6],
         pieces: Vec::new(),
+        cells: Vec::new(),
         rules: Vec::new(),
         hazards: Vec::new(),
     }
@@ -981,7 +1024,8 @@ fn expand_templates(
     (made, shapes)
 }
 
-/// `v` of a block made of `source` (its name) with `{source}` in its texts as that name and
+/// `v` of a block made of `source` (its name) with `{source}` in its texts as that name,
+/// `{source.name}` and `{source.mod}` as its parts (for paths: no `:` in them) and
 /// `{source.side}` (`top`, `bottom`, or a face: `north`..) as its texture there. Of texts with
 /// alternatives (`{source.side}_inner | {source.top}`) the first texture that exists is taken.
 fn of_source(v: RawValue, source: &str, textures: &[String; 6]) -> RawValue {
@@ -995,7 +1039,12 @@ fn of_source(v: RawValue, source: &str, textures: &[String; 6]) -> RawValue {
         n => abi::FACE_NAMES.iter().position(|f| *f == n),
     };
     let one = |t: &str| -> String {
-        let mut out = t.trim().replace("{source}", source);
+        let (owner, path) = source.split_once(':').unwrap_or(("", source));
+        let mut out = t
+            .trim()
+            .replace("{source}", source)
+            .replace("{source.name}", path)
+            .replace("{source.mod}", owner);
         while let Some(at) = out.find("{source.") {
             let Some(end) = out[at..].find('}') else { break };
             let tex = face(&out[at + 8..at + end])

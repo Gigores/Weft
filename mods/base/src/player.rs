@@ -3,7 +3,7 @@
 
 use weft_sdk::*;
 
-use crate::items::{ARMOR, FOOD};
+use crate::items::{ARMOR, ARMOR_PIECE, ARMOR_TOUGHNESS, FOOD};
 
 pub use base_api::{FEET, HEAD, HUNGER, Hunger, LEGS};
 
@@ -26,15 +26,9 @@ const MAX_AIR: f32 = 300.0;
 /// Head to feet.
 pub const EQUIPMENT: [&EquipmentSlot; 4] = [&HEAD, &base_api::CHEST, &LEGS, &FEET];
 
-/// Armor points and toughness of what `entity` wears.
-fn armor_of(w: &World, entity: u64) -> (u32, f32) {
-    let Some(worn) = w.inventory(entity).find_group(EQUIPMENT_GROUP) else { return (0, 0.0) };
-    (0..worn.len())
-        .filter_map(|i| ARMOR.on_item(worn.get(i).item))
-        .fold((0, 0.0), |t, a| (t.0 + a.points, t.1 + a.toughness))
-}
-
 pub fn register(r: &mut Registry) {
+    r.attribute(&ARMOR, 0.0, 0.0, 30.0);
+    r.attribute(&ARMOR_TOUGHNESS, 0.0, 0.0, 20.0);
     r.player_slots()
         .group("hotbar", Slots::row(9).hotbar())
         .group("main", Slots::grid(9, 3));
@@ -97,9 +91,9 @@ pub fn register(r: &mut Registry) {
         if !armor_applies(q.cause) {
             return;
         }
-        let (points, toughness) = armor_of(&m.world(), q.entity);
-        let points = points as f64;
-        let through = m.value / (2.0 + toughness as f64 / 4.0);
+        let w = m.world();
+        let (points, toughness) = (w.attribute(q.entity, &ARMOR), w.attribute(q.entity, &ARMOR_TOUGHNESS));
+        let through = m.value / (2.0 + toughness / 4.0);
         m.value *= 1.0 - (points - through).clamp(points * 0.2, 20.0) / 25.0;
     });
     r.on_event(&actions::HURT, |b| {
@@ -109,7 +103,7 @@ pub fn register(r: &mut Registry) {
             let wear = ((h.amount / 4.0) as u32).max(1);
             for slot in 0..worn.len() {
                 let s = worn.get(slot);
-                if ARMOR.on_item(s.item).is_some() {
+                if ARMOR_PIECE.on_item(s.item) {
                     worn.set(slot, s.add_wear(wear));
                 }
             }
@@ -140,25 +134,24 @@ pub fn register(r: &mut Registry) {
     r.hud_element(&HUD_HEALTH, hud_anchor::HOTBAR_LEFT, 0, |ui| {
         ui.icons("heart", 10, |c| if c.outside_survival() { -1.0 } else { c.player_state().map_or(20.0, |s| s.health.ceil()) })
             .max_by(|c| c.player_state().map_or(20.0, |s| s.max_health.ceil()))
+            // Wither's black hearts over poison's green ones, as vanilla's.
+            .look_while("heart_withered", |c| c.effect_level(&crate::effects::WITHER) as f32)
+            .look_while("heart_poisoned", |c| c.effect_level(&crate::effects::POISON) as f32)
             .shaking()
             .flash_on_gain(0.5)
             .flash_on_loss(1.0);
     });
     r.hud_element(&HUD_ARMOR, hud_anchor::HOTBAR_LEFT, 1, |ui| {
         ui.icons("armor", 10, |c| {
-            // From what the client knows of its own inventory, like the server's damage chain.
-            let points: u32 = c
-                .inventory_group(EQUIPMENT_GROUP)
-                .iter()
-                .filter_map(|s| ARMOR.on_item(s.item))
-                .map(|a| a.points)
-                .sum();
-            if points > 0 && !c.outside_survival() { points as f32 } else { -1.0 }
+            let points = c.attribute(&ARMOR).floor() as f32;
+            if points > 0.0 && !c.outside_survival() { points } else { -1.0 }
         });
     });
     r.hud_element(&HUD_FOOD, hud_anchor::HOTBAR_RIGHT, 0, |ui| {
         ui.icons("food", 10, |c| if c.outside_survival() { -1.0 } else { c.component(&HUNGER).map_or(20.0, |h| h.food.ceil()) })
             .from_right()
+            // Green while something drains it (the hunger effect), as vanilla's.
+            .look_while("food_hunger", |c| c.attribute(&crate::effects::EXHAUSTION) as f32)
             // With no saturation left the food shakes, harder when it is nearly gone.
             .shaking_by(|c| match c.component(&HUNGER) {
                 Some(h) if h.saturation <= 0.0 => {
@@ -201,6 +194,14 @@ pub fn register(r: &mut Registry) {
         .group("result", Slots::single().output().large())
         .equipment()
         .player_inventory()
+        // Last, so the slots before keep their numbers.
+        .group(
+            "trash",
+            Slots::single()
+                .trash()
+                .background("slot_trash")
+                .tooltip("storage.base.trash"),
+        )
         .recipes(&crate::recipes::CRAFTING)
         .on_change(craft_result)
         .on_take(consume_grid)
@@ -218,7 +219,10 @@ pub fn register(r: &mut Registry) {
                             ui.group("result");
                         });
                         ui.spacer();
-                        ui.group(OFF_HAND.name());
+                        ui.row(S::row(), |ui| {
+                            ui.group(OFF_HAND.name());
+                            ui.group("trash");
+                        });
                     });
                 });
                 ui.player_inventory(false);
@@ -332,7 +336,10 @@ fn tick_players(w: &World) {
             tire(w, id, if st.sprinting != 0 { 0.2 } else { 0.05 });
         }
         let per_point = 4.0 / w.attribute(id, &HUNGER_RATE) as f32;
+        let drain = w.attribute(id, &crate::effects::EXHAUSTION) as f32;
+        let breathes = w.attribute(id, &crate::effects::BREATHES_UNDER_WATER) >= 1.0;
         let Some(h) = w.component_mut(id, &HUNGER) else { continue };
+        h.exhaustion += drain;
         // Modern's: 0.1 a block sprinting, 0.01 swimming, 0 walking; jumps are counted from `Move`.
         h.exhaustion += st.moved
             * if st.sprinting != 0 {
@@ -351,7 +358,7 @@ fn tick_players(w: &World) {
             }
         }
         // Only water takes the breath, whatever else burns or drags.
-        let underwater = WATER_LIKE.on_block(w.block(block_pos_of(st.eye()))) && w.in_liquid(st.eye());
+        let underwater = !breathes && WATER_LIKE.on_block(w.block(block_pos_of(st.eye()))) && w.in_liquid(st.eye());
         let Some(h) = w.component_mut(id, &HUNGER) else { continue };
         if underwater {
             h.air -= 1.0;

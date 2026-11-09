@@ -6,12 +6,15 @@ mod beds;
 mod block_entities;
 mod blocks;
 mod commands;
+mod doors;
+mod effects;
 mod items;
 mod mobs;
 mod player;
 mod recipes;
 mod redstone;
 mod sounds;
+mod storage;
 mod woodcutter;
 mod worldgen;
 
@@ -47,8 +50,11 @@ fn init(r: &mut Registry) {
     worldgen::register(r);
     advancements::register(r);
     beds::register(r);
+    doors::register(r);
+    effects::register(r);
     redstone::register(r);
     woodcutter::register(r);
+    storage::register(r);
     // Its terrain is described in `worldgen`.
     r.dimension(&OVERWORLD)
         .player_spawn()

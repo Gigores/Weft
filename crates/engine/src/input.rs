@@ -53,8 +53,8 @@ pub const ENGINE_KEYS: &[(&str, &str, u32)] = {
         // Vanilla's double tap of forward is a second way to sprint.
         ("core:sprint", "ControlLeft, double KeyW", MOVEMENT),
         ("core:crawl", "KeyC", MOVEMENT),
-        // And of jump to fly.
-        ("core:fly", "KeyF, double Space", MOVEMENT),
+        // A double tap of jump flies, as vanilla's; F is the other hand's.
+        ("core:fly", "double Space", MOVEMENT),
         // A spectator's wheel, where others have the hotbar's.
         ("core:fly_faster", "wheel_up", MOVEMENT),
         ("core:fly_slower", "wheel_down", MOVEMENT),
@@ -74,7 +74,9 @@ pub const ENGINE_KEYS: &[(&str, &str, u32)] = {
         // In a screen with a search field (the creative inventory, the recipe viewer).
         ("core:focus_search", "Tab", SCREEN),
         ("core:hide_hud", "F1", 0),
-        ("core:swap_hands", "KeyG", HANDS),
+        ("core:swap_hands", "KeyF", HANDS),
+        // Over a slot: its stack into the trash.
+        ("core:trash", "Delete", SCREEN),
         ("core:reload", "F8, F3+KeyT", 0),
         ("core:cycle_game_mode", "F3+F4", DEBUG),
         ("core:debug_options", "F3+F6", DEBUG),
@@ -350,22 +352,20 @@ impl Input {
 
     /// `held` even while muted: the camera's own reading of the keys.
     pub fn held_raw(&self, action: &str) -> bool {
-        self.lookup.get(action).is_some_and(|&i| {
-            let b = &self.binds[i];
-            (0..SLOTS).any(|s| match b.keys[s] {
-                Some(Binding { chord, trigger: Trigger::Hold }) => self.active(chord, &self.held),
-                Some(_) => b.on[s],
-                None => false,
-            })
-        })
+        self.raw(action, &self.held, |b| &b.on)
     }
 
     pub fn pressed_raw(&self, action: &str) -> bool {
+        self.raw(action, &self.pressed, |b| &b.fired)
+    }
+
+    /// A held key's chord read in `keys`, another trigger's slot from `latched`.
+    fn raw(&self, action: &str, keys: &FxHashSet<Key>, latched: fn(&Bind) -> &[bool; SLOTS]) -> bool {
         self.lookup.get(action).is_some_and(|&i| {
             let b = &self.binds[i];
             (0..SLOTS).any(|s| match b.keys[s] {
-                Some(Binding { chord, trigger: Trigger::Hold }) => self.active(chord, &self.pressed),
-                Some(_) => b.fired[s],
+                Some(Binding { chord, trigger: Trigger::Hold }) => self.active(chord, keys),
+                Some(_) => latched(b)[s],
                 None => false,
             })
         })

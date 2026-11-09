@@ -51,6 +51,27 @@ pub use app::{BackendFactory, Options, Renderers, run};
 
 /// Background workers (generation, meshing, region ticks) leave two cores to the render and
 /// server threads: a full pool starved the render thread during loading and frames missed vsync.
+/// `weft export-models <dir>`: every entity kind whose model is made in code, any mod's, as a
+/// `.geo.json` in `<dir>/<mod>/<name>.geo.json`, to go on with in Blockbench. How many.
+pub fn export_models(opts: &Options, out: &std::path::Path) -> Result<usize, String> {
+    let off = modloader::off_file(&opts.run_dir, false);
+    let _mods = modloader::load(&opts.mod_dirs, &opts.cache_dir, &off, &opts.mods_off)?;
+    let mut n = 0;
+    for k in content::content()
+        .game
+        .entities
+        .iter()
+        .filter(|k| !k.parts.is_empty())
+    {
+        let (ns, path) = k.name.split_once(':').unwrap_or(("core", &k.name));
+        let file = out.join(ns).join(format!("{path}.geo.json"));
+        std::fs::create_dir_all(file.parent().unwrap_or(out)).map_err(|e| e.to_string())?;
+        std::fs::write(&file, model::save_geo(&k.name, &k.parts, k.texture_size)).map_err(|e| format!("{}: {e}", file.display()))?;
+        n += 1;
+    }
+    Ok(n)
+}
+
 pub fn init_workers() {
     // The frame's own parallel work (culling, taking terrain) runs here and the main thread
     // waits for it: above the bulk pools, which keep every core busy while loading.
@@ -72,41 +93,35 @@ fn workers() -> usize {
 /// something waits for (region ticks, path searches, meshing) runs on the global pool: queued
 /// behind a full generation backlog there, a tick or a frame waited for all of it.
 pub fn background() -> &'static rayon::ThreadPool {
-    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(workers())
-            .thread_name(|i| format!("background {i}"))
-            .start_handler(|_| lower_priority())
-            .build()
-            .expect("background pool")
-    })
+    static POOL: Pool = Pool::new();
+    pool(&POOL, "background", workers(), true)
 }
 
 /// Meshing: queued by the thousand while loading, so apart from the global pool, where the
 /// frame's culling waited behind it.
 pub fn meshing() -> &'static rayon::ThreadPool {
-    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(workers())
-            .thread_name(|i| format!("mesh {i}"))
-            .start_handler(|_| lower_priority())
-            .build()
-            .expect("mesh pool")
-    })
+    static POOL: Pool = Pool::new();
+    pool(&POOL, "mesh", workers(), true)
 }
 
 /// Meshing of what the player is looking at changing (around them, edits): a few threads of
 /// normal priority, not behind the loading queue.
 pub fn meshing_urgent() -> &'static rayon::ThreadPool {
-    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .thread_name(|i| format!("mesh urgent {i}"))
+    static POOL: Pool = Pool::new();
+    pool(&POOL, "mesh urgent", 4, false)
+}
+
+pub type Pool = std::sync::OnceLock<rayon::ThreadPool>;
+
+/// A pool of its own, made on first use; `low` puts it below normal priority with the bulk work.
+pub fn pool(cell: &'static Pool, name: &'static str, threads: usize, low: bool) -> &'static rayon::ThreadPool {
+    cell.get_or_init(|| {
+        let b = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(move |i| format!("{name} {i}"));
+        if low { b.start_handler(|_| lower_priority()) } else { b }
             .build()
-            .expect("urgent mesh pool")
+            .expect(name)
     })
 }
 

@@ -60,7 +60,7 @@ pub static BUSH_STEM: Block = Block::named("bush_stem");
 pub static RASPBERRY_LEAVES: Block = Block::named("raspberry_leaves");
 pub static SNOWBERRY_LEAVES: Block = Block::named("snowberry_leaves");
 
-static HOE_TAG: Tag = Tag::named("tools/hoe");
+static TILLABLE: Tag = Tag::named("tillable");
 
 /// A log that grows into a tree of `leaves` (a cone, like a spruce, when `cone`).
 fn log(r: &mut Registry, handle: &'static Block, wood: &str, leaves: &str, cone: bool) {
@@ -361,6 +361,7 @@ pub fn register(r: &mut Registry) {
     r.block(&SUGAR_CANE)
         .sound_group("grass")
         .texture("reeds")
+        .item_texture("reeds")
         .plant()
         .needs_below("#sugar_cane_soil")
         .needs_near("#water")
@@ -567,14 +568,15 @@ pub fn register(r: &mut Registry) {
     r.tag("grass_spreads_to", &["dirt"]);
     r.tag("animal_spawn", &["grass"]);
 
-    r.edit_pattern::<kind::Block>("#tillable").on_use(till_soil);
+    // A hoe's own use, as vanilla's, any mod's hoe: the soil stays a block nothing happens to
+    // when clicked, so a block placed on it shows at once.
+    r.edit_pattern::<kind::Item>("#tools/hoe").on_use(till_soil);
 }
 
-fn till_soil(u: &mut Use) -> bool {
-    let (w, pos, player) = (u.world(), u.pos(), u.player());
-    let held = w.inventory(player).get(w.selected_slot(player));
-
-    if HOE_TAG.on_item(held.item) {
+fn till_soil(u: &mut ItemUse) -> bool {
+    let w = u.world();
+    let Some((pos, _)) = u.target_block() else { return false };
+    if TILLABLE.on_block(w.block(pos)) {
         w.set_block(pos, FARMLAND.id());
         return true;
     }
