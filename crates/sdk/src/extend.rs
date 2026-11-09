@@ -99,6 +99,10 @@ pub mod attribute {
     pub static AIRBORNE_MINING_SPEED: Attribute = Attribute::named(crate::abi::attribute::AIRBORNE_MINING_SPEED);
     /// How much its player sees as if everything were lit (0..1).
     pub static NIGHT_VISION: Attribute = Attribute::named(crate::abi::attribute::NIGHT_VISION);
+    /// Multiplier on how fast it moves itself in liquids (1).
+    pub static SWIM_SPEED: Attribute = Attribute::named(crate::abi::attribute::SWIM_SPEED);
+    /// Multiplier on how fast it flies (1).
+    pub static FLYING_SPEED: Attribute = Attribute::named(crate::abi::attribute::FLYING_SPEED);
 }
 
 /// An attribute modifier that comes with something (`.modifier(..)` on an item, a pose, an

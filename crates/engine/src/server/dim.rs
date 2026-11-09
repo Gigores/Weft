@@ -2475,13 +2475,15 @@ impl Dim {
             .collect();
         for id in bodies {
             use crate::registry::attr as a;
-            let (step, gravity, safe) = (
+            let (step, gravity, safe, swim, fly) = (
                 self.attribute(c, id, a::STEP_HEIGHT, false),
                 self.attribute(c, id, a::GRAVITY, false),
                 self.attribute(c, id, a::SAFE_FALL, false),
+                self.attribute(c, id, a::SWIM_SPEED, false),
+                self.attribute(c, id, a::FLYING_SPEED, false),
             );
             if let Some(e) = self.entities.get_mut(id) {
-                (e.step_height, e.gravity_mul, e.safe_fall) = (step, gravity, safe as f32);
+                (e.step_height, e.gravity_mul, e.safe_fall, e.swim_mul, e.fly_mul) = (step, gravity, safe as f32, swim, fly);
             }
         }
         let (here, now, gravity) = (self.id, self.time, c.dims[self.id as usize].gravity as f64);
@@ -3520,12 +3522,30 @@ impl Dim {
         true
     }
 
-    /// True if the block consumed the click.
-    pub fn player_use(&mut self, c: &'static Content, p: IVec3, part: u32, face: u8, player: u64) -> bool {
+    /// True if the block consumed the click. A sneaking player uses it as its `sneak_use` says.
+    pub fn player_use(&mut self, c: &'static Content, p: IVec3, part: u32, face: u8, player: u64, sneaking: bool) -> bool {
         let p = self.block_at(c, p).map_or(p, |b| b.0);
         let state = self.aimed_part(c, p, part);
         if state == AIR {
             return false;
+        }
+        if sneaking {
+            let empty_hands = || {
+                let off = self
+                    .entities
+                    .get(player)
+                    .zip(self.entities.inventories.get(&player))
+                    .map(|(e, i)| crate::content::in_off_hand(c, e.kind, i));
+                self.entities.held(player).is_empty() && off.is_none_or(|s| s.is_empty())
+            };
+            let uses = match c.block_of(state).sneak_use {
+                abi::sneak_use::ALWAYS => true,
+                abi::sneak_use::NEVER => false,
+                _ => empty_hands(),
+            };
+            if !uses {
+                return false;
+            }
         }
         let opens = c.block_of(state).opens;
         if c.block_of(state).cb.on_use.is_some() || opens.is_some() {
@@ -3551,7 +3571,15 @@ impl Dim {
                 c,
                 state,
                 |b| b.on_use,
-                |w| abi::UseArgs { world: w, pos: p.to_array().into(), state, face: face as u32, player, handled: 0 },
+                |w| abi::UseArgs {
+                    world: w,
+                    pos: p.to_array().into(),
+                    state,
+                    face: face as u32,
+                    player,
+                    handled: 0,
+                    sneaking: sneaking as u32,
+                },
             )
         });
         r.is_some_and(|a| a.handled != 0)

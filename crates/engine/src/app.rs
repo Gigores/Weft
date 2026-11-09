@@ -923,7 +923,10 @@ impl Running {
             // Pressing with a stack on the cursor starts a drag; releasing over one slot is
             // a plain click, over several it spreads the stack.
             let holding = g.client.menu.as_ref().is_some_and(|m| !m.cursor.is_empty());
-            use crate::server::menu::{CLONE, GATHER, HOTBAR_SWAP};
+            use crate::server::menu::{CLONE, GATHER, HOTBAR_SWAP, PICK_SAME, THROW, THROW_ALL};
+            let typing = ui
+                .focused
+                .is_some_and(|f| matches!(ui.nodes[f].kind, Kind::Input { .. }));
             for button in [0u8, 1] {
                 if self.input.pressed_button(button) {
                     let inside = ui
@@ -949,9 +952,13 @@ impl Running {
                             g.client.last_click = None;
                         }
                         Some(s) if holding && !shift && g.client.drag.is_none() => g.client.drag = Some((button, vec![s])),
-                        Some(s) => g
-                            .client
-                            .send(net::ToServer::Click { slot: s, button, shift }),
+                        Some(s) => {
+                            g.client
+                                .send(net::ToServer::Click { slot: s, button, shift });
+                            if button == 0 && !shift {
+                                g.client.picking = vec![s];
+                            }
+                        }
                         None if !inside => g
                             .client
                             .send(net::ToServer::Click { slot: u32::MAX, button, shift: false }),
@@ -973,16 +980,33 @@ impl Running {
             } else if !self.input.held_button(0) {
                 g.client.sweep.clear();
             }
-            // Number keys over a slot swap it with that hotbar slot, unless typing a search.
-            if let Some(s) = slot.filter(|_| {
-                !ui.focused
-                    .is_some_and(|f| matches!(ui.nodes[f].kind, Kind::Input { .. }))
-            }) {
+            // Picked a stack up and still holding the button: slots swept over give theirs.
+            if !self.input.held_button(0) {
+                g.client.picking.clear();
+            } else if let Some(s) = slot.filter(|s| !g.client.picking.is_empty() && !g.client.picking.contains(s)) {
+                g.client.picking.push(s);
+                g.client
+                    .send(net::ToServer::Click { slot: s, button: PICK_SAME, shift: false });
+            }
+            // Number keys over a slot swap it with that hotbar slot, the drop keys throw from
+            // it, unless typing a search.
+            if let Some(s) = slot.filter(|_| !typing) {
                 for (n, action) in crate::input::HOTBAR.into_iter().enumerate() {
                     if self.input.pressed(action) {
                         g.client
                             .send(net::ToServer::Click { slot: s, button: HOTBAR_SWAP + n as u8, shift: false });
                     }
+                }
+                let throw = if self.input.pressed("core:drop_all") {
+                    Some(THROW_ALL)
+                } else if self.input.pressed("core:drop") {
+                    Some(THROW)
+                } else {
+                    None
+                };
+                if let Some(button) = throw.filter(|_| !holding) {
+                    g.client
+                        .send(net::ToServer::Click { slot: s, button, shift: false });
                 }
             }
             if let Some((button, slots)) = &mut g.client.drag {
@@ -1017,6 +1041,13 @@ impl Running {
                 if self.input.pressed_button(2) {
                     g.client
                         .send(net::ToServer::CreativeTake { item, button: 0 });
+                }
+                // Number keys: a stack of it in that hotbar slot.
+                for (n, action) in crate::input::HOTBAR.into_iter().enumerate() {
+                    if !typing && self.input.pressed(action) {
+                        g.client
+                            .send(net::ToServer::CreativeTake { item, button: HOTBAR_SWAP + n as u8 });
+                    }
                 }
             }
             // Tooltip with the hovered item's name; other custom nodes (an effect's icon) have their own.

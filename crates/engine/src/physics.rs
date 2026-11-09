@@ -833,6 +833,8 @@ pub struct Control {
     pub ground: f64,
     /// Acceleration in the air.
     pub air: f64,
+    /// Acceleration in liquids (vanilla's 0.02, times `SWIM_SPEED`).
+    pub liquid: f64,
     /// Jump speed when it jumps off the ground, 0 = not jumping.
     pub jump: f64,
     /// Added to the velocity with a jump (a sprinting player's leap).
@@ -846,6 +848,9 @@ pub struct Control {
     /// Never steps off an edge, and holds on to a ladder (sneaking).
     pub careful: bool,
 }
+
+/// Vanilla's acceleration in liquids.
+pub const SWIM: f64 = 0.02;
 
 /// The walker's box and the world's pull.
 #[derive(Clone, Copy)]
@@ -901,7 +906,7 @@ pub fn walk(
     };
     let mut jumped = false;
     if liquid {
-        accelerate(vel, 0.02 * drag);
+        accelerate(vel, ctl.liquid * drag);
         if ctl.swim {
             vel.y += 0.04;
         }

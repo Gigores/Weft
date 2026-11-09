@@ -95,6 +95,7 @@ pub(crate) fn freeze(
             states: 1,
             props: Vec::new(),
             opens: None,
+            sneak_use: abi::sneak_use::EMPTY_HANDS,
             cb: BlockCallbacks::default(),
             sides: 0,
         }],
@@ -241,7 +242,8 @@ pub(crate) fn freeze(
             on_signal: e.callback(b::ON_SIGNAL),
             signal_gate: e.callback(b::SIGNAL_GATE),
         };
-        let def = BlockDef { name: e.name, owner: e.owner, first_state: first, states: count, props, cb, opens: None, sides };
+        let sneak_use = e.or(b::SNEAK_USE, abi::sneak_use::EMPTY_HANDS);
+        let def = BlockDef { name: e.name, owner: e.owner, first_state: first, states: count, props, cb, opens: None, sneak_use, sides };
         // A piece's properties are of the state it is in.
         for (state, raw) in pieces {
             let to = |text: &str| def.changed_text(state as u32, text);
@@ -386,7 +388,7 @@ fn full_key(props: &[Prop], s: u32) -> String {
 }
 
 /// What only a block as a whole has: its states leave it out.
-const BLOCK_ONLY: [&str; 15] = [
+const BLOCK_ONLY: [&str; 16] = [
     b::PROPS,
     b::ON_USE,
     b::ON_NEIGHBOR,
@@ -399,6 +401,7 @@ const BLOCK_ONLY: [&str; 15] = [
     b::SIGNAL_GATE,
     b::SIGNAL_READ,
     b::OPENS,
+    b::SNEAK_USE,
     b::SHARES_CELL,
     b::SHAPES_OF,
     b::RETEXTURE,
@@ -1021,7 +1024,8 @@ fn expand_templates(
     (made, shapes)
 }
 
-/// `v` of a block made of `source` (its name) with `{source}` in its texts as that name and
+/// `v` of a block made of `source` (its name) with `{source}` in its texts as that name,
+/// `{source.name}` and `{source.mod}` as its parts (for paths: no `:` in them) and
 /// `{source.side}` (`top`, `bottom`, or a face: `north`..) as its texture there. Of texts with
 /// alternatives (`{source.side}_inner | {source.top}`) the first texture that exists is taken.
 fn of_source(v: RawValue, source: &str, textures: &[String; 6]) -> RawValue {
@@ -1035,7 +1039,12 @@ fn of_source(v: RawValue, source: &str, textures: &[String; 6]) -> RawValue {
         n => abi::FACE_NAMES.iter().position(|f| *f == n),
     };
     let one = |t: &str| -> String {
-        let mut out = t.trim().replace("{source}", source);
+        let (owner, path) = source.split_once(':').unwrap_or(("", source));
+        let mut out = t
+            .trim()
+            .replace("{source}", source)
+            .replace("{source.name}", path)
+            .replace("{source.mod}", owner);
         while let Some(at) = out.find("{source.") {
             let Some(end) = out[at..].find('}') else { break };
             let tex = face(&out[at + 8..at + end])

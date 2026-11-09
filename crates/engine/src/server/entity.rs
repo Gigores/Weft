@@ -30,9 +30,12 @@ pub struct Entity {
     pub walk: Option<Walk>,
     /// Jump strength attribute when its walk was set (1 = vanilla's).
     pub jump_mul: f32,
-    /// Its `STEP_HEIGHT` and `GRAVITY` attributes this tick, which physics goes by.
+    /// Its `STEP_HEIGHT`, `GRAVITY`, `SWIM_SPEED` and `FLYING_SPEED` attributes this tick, which
+    /// physics goes by.
     pub step_height: f64,
     pub gravity_mul: f64,
+    pub swim_mul: f64,
+    pub fly_mul: f64,
     /// Its `SAFE_FALL` this tick: how far its paths go down at once.
     pub safe_fall: f32,
     pub removed: bool,
@@ -163,6 +166,8 @@ impl Entity {
             jump_mul: 1.0,
             step_height: 0.6,
             gravity_mul: 1.0,
+            swim_mul: 1.0,
+            fly_mul: 1.0,
             safe_fall: 3.0,
             removed: false,
             item: ItemStack::EMPTY,
@@ -748,7 +753,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     e.sprinting = sprint && !sneak && !using && dir != DVec3::ZERO && (e.flying || swimming || !e.in_liquid);
     e.jumped = false;
     if e.flying {
-        let speed = walk.map_or(1.0, |w| w.speed as f64) * if e.sprinting { 2.0 } else { 1.0 };
+        let speed = walk.map_or(1.0, |w| w.speed as f64) * e.fly_mul * if e.sprinting { 2.0 } else { 1.0 };
         let f = physics::Flight { wish: dir, up, down: sneak, speed };
         let mut v = e.vel * DT;
         // Down on the ground it stops flying, as a player does, unless it goes up again.
@@ -765,7 +770,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     // The step players take, in blocks per tick: a mob walks at its target speed on plain
     // ground, faster on ice, slower in lava, and climbs ladders it walks into. Its keys do what a
     // player's do.
-    let mut ctl = physics::Control { swim: k.is(ef::SWIMS), ..Default::default() };
+    let mut ctl = physics::Control { swim: k.is(ef::SWIMS), liquid: physics::SWIM * e.swim_mul, ..Default::default() };
     if let Some(w) = walk {
         // Using something (eating), at a fifth of the speed, as a player.
         let slow = if using {

@@ -93,7 +93,7 @@ fn creative_panel(ui: &mut Ui, cx: &BuildCx, search: &Rc<RefCell<String>>, tab: 
             Style::default().h(14.0).w(162.0),
         );
         ui.set_id(input, "creative_search");
-        let grid = ui.container(Style::default().w(162.0).h(18.0 * 8.0).scroll(), |ui| {
+        let grid = ui.container(Style::default().h(18.0 * 8.0).scroll(), |ui| {
             for row in items.chunks(9) {
                 ui.container(Style::row(), |ui| {
                     for &i in row {
@@ -865,7 +865,8 @@ pub fn recipe_slot(
                 return;
             }
             let shown = items.clone();
-            let tag = if let Ingredient::Tag(t) = ing { Some(*t) } else { None };
+            // A tag only one item has goes straight to that item.
+            let tag = if let Ingredient::Tag(t) = ing { Some(*t).filter(|_| items.len() > 1) } else { None };
             let b = ui.button(
                 "recipe_slot",
                 size,

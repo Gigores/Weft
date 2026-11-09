@@ -1225,7 +1225,7 @@ pub const EQUIPMENT_GROUP: &str = "core:equipment";
 /// ```ignore
 /// r.menu(&MENU)
 ///     .group("input", Slots::row(2).holder())
-///     .group("fuel", Slots::single().accepts("fuel").background("flame_slot"))
+///     .group("fuel", Slots::single().accepts("#fuel").background("flame_slot"))
 ///     .group("output", Slots::single().output().large());
 /// ```
 #[derive(Clone)]
@@ -1311,9 +1311,10 @@ impl Slots {
         self.flags |= abi::slot_flags::OUTPUT;
         self
     }
-    /// Only items with this tag or component (its full name, like `fuel` or `armor_head`).
-    pub fn accepts(mut self, tag: &str) -> Self {
-        self.accepts = tag.to_string();
+    /// Only these items, a reference like everywhere else: `#fuel` (anything with the component),
+    /// `#fuel #mymod:fire_starter` (either), `#fuel !base:lava_bucket` (but that one), names.
+    pub fn accepts(mut self, items: &str) -> Self {
+        self.accepts = items.to_string();
         self
     }
     /// At most this many items per slot.

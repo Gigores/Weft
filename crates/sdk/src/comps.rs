@@ -520,6 +520,7 @@ pub mod block {
     pub static SIGNAL_GATE: Component<Callback, Block> = Component::named(b::SIGNAL_GATE);
     pub static SIGNAL_READ: Component<Callback, Block> = Component::named(b::SIGNAL_READ);
     pub static OPENS: Component<Text, Block> = Component::named(b::OPENS);
+    pub static SNEAK_USE: Component<u32, Block> = Component::named(b::SNEAK_USE);
     pub static SHARES_CELL: Component<crate::Matcher, Block> = Component::named(b::SHARES_CELL);
     pub static MODEL_FILE: Component<Text, Block> = Component::named(b::MODEL_FILE);
     pub static MODEL_TEXTURES: Component<Vec<abi::ModelTexture>, Block> = Component::named(b::MODEL_TEXTURES);

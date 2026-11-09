@@ -274,7 +274,7 @@ impl Server {
                     if !within(o.to_local(eye), pos, reach) {
                         return None;
                     }
-                    Some(!sneak && d.player_use(c, pos, part, face, entity))
+                    Some(d.player_use(c, pos, part, face, entity, sneak))
                 });
                 match used {
                     Some(Some(true)) => {
@@ -403,7 +403,12 @@ impl Server {
                 let creative = dims[p.dim as usize]
                     .entity(p.entity)
                     .is_some_and(|e| e.mode.has(crate::tag_bits::game_mode::CREATIVE_INVENTORY));
-                if let (true, Some(m), true) = (creative, &mut p.menu, item != 0 && (item as usize) < c.items.len()) {
+                let hot = button.wrapping_sub(menu::HOTBAR_SWAP);
+                if let (true, Some(m), true, true) = (creative, &mut p.menu, item != 0 && (item as usize) < c.items.len(), hot < 9) {
+                    if let Some(r) = dims[p.dim as usize].entity_region(p.entity) {
+                        menu::creative_to_hotbar(m, r, c, p.entity, hot as u32, item);
+                    }
+                } else if let (true, Some(m), true) = (creative, &mut p.menu, item != 0 && (item as usize) < c.items.len()) {
                     // Like vanilla: the same item adds one, anything else held is thrown away
                     // first, an empty hand takes a stack (left) or one (right).
                     let max = c.max_stack(item);

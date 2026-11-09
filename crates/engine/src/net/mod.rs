@@ -428,7 +428,8 @@ messages! {
         OpenInventory,
         Click { slot: u32, button: u8, shift: bool },
         /// Creative inventory: a full stack of this item onto the menu cursor.
-        /// Click on a creative entry: 0 left (stack), 1 right (one).
+        /// Click on a creative entry: 0 left (stack), 1 right (one), `menu::HOTBAR_SWAP + n` a
+        /// number key (a stack into that hotbar slot).
         CreativeTake { item: u32, button: u8 },
         /// Middle click on a block whose item is not in the hotbar: bring it into the selected slot
         /// from the inventory, or in creative make one.

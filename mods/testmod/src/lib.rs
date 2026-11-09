@@ -241,7 +241,7 @@ fn init(r: &mut Registry) {
         .group(
             "fuel",
             Slots::single()
-                .accepts("fuel")
+                .accepts("#fuel")
                 .input()
                 .tooltip("testmod.fuel_slot")
                 .holder(),

@@ -90,6 +90,9 @@ pub struct LocalPlayer {
     pub jump_mul: f64,
     pub step_height: f64,
     pub gravity_mul: f64,
+    /// `SWIM_SPEED` and `FLYING_SPEED`.
+    pub swim_mul: f64,
+    pub fly_mul: f64,
 }
 
 pub struct ClientEntity {
@@ -227,6 +230,7 @@ fn ride_step(
             // As a mob walks: this much a tick keeps it at its speed on plain ground.
             ground: target * (1.0 - 0.6 * 0.91),
             air: 0.02,
+            liquid: physics::SWIM,
             jump: if s.jump > 0.0 { s.jump as f64 * tick } else { 0.0 },
             swim: k.is(crate::tag_bits::entity::SWIMS),
             ..Default::default()
@@ -573,6 +577,9 @@ pub struct Client {
     pub drag: Option<(u8, Vec<u32>)>,
     /// Slots shift-clicked by sweeping over them with shift and the left button held.
     pub sweep: Vec<u32>,
+    /// Slots swept over with the left button still held after picking a stack up: what they
+    /// have of it joins the cursor.
+    pub picking: Vec<u32>,
     /// The last slot pressed and when, for double clicks.
     pub last_click: Option<(u32, u8, Instant)>,
     pub particles: particles::Particles,
@@ -799,6 +806,8 @@ impl Client {
                 step_height: 0.6,
                 gravity_mul: 1.0,
                 jump_mul: 1.0,
+                swim_mul: 1.0,
+                fly_mul: 1.0,
             },
             joined: false,
             player_id: 0,
@@ -854,6 +863,7 @@ impl Client {
             rng: weft_noise::Rng(0x9E37_79B9_7F4A_7C15),
             drag: None,
             sweep: Vec::new(),
+            picking: Vec::new(),
             last_click: None,
             players: Vec::new(),
             sent: Vec::new(),
@@ -2269,6 +2279,8 @@ impl Client {
             self.player.can_sprint = self.attributes[a::CAN_SPRINT as usize] >= 1.0;
             (self.player.step_height, self.player.gravity_mul) =
                 (self.attributes[a::STEP_HEIGHT as usize] as f64, self.attributes[a::GRAVITY as usize] as f64);
+            (self.player.swim_mul, self.player.fly_mul) =
+                (self.attributes[a::SWIM_SPEED as usize] as f64, self.attributes[a::FLYING_SPEED as usize] as f64);
             // Flight goes with what allowed it (a mode, a ring), which comes a tick after the mode;
             // a mod's flight without it stays.
             if could && !self.can_fly() && !self.mode.has(crate::tag_bits::game_mode::ALWAYS_FLY) {
@@ -2859,7 +2871,7 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
     let before = p.pos;
 
     if p.flying || p.noclip {
-        let f = physics::Flight { wish, up: jump, down: sneak, speed: p.fly_speed as f64 * if sprint { 2.0 } else { 1.0 } };
+        let f = physics::Flight { wish, up: jump, down: sneak, speed: p.fly_speed as f64 * p.fly_mul * if sprint { 2.0 } else { 1.0 } };
         // Flying creative players stop flying when they come down onto the ground.
         if physics::fly(c, block, bodies, 0, &mut p.pos, &mut p.vel, &mut p.on_ground, hw, height, &f, p.noclip) {
             p.flying = false;
@@ -2879,6 +2891,7 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
         wish,
         ground: if sprint { 0.13 } else { 0.1 } * p.speed_mul,
         air: if sprint { 0.026 } else { 0.02 },
+        liquid: physics::SWIM * p.swim_mul,
         jump: if jump && p.jump_cooldown == 0 { physics::JUMP * p.jump_mul } else { 0.0 },
         jump_boost: if sprint { forward * 0.2 } else { DVec3::ZERO },
         swim: jump,

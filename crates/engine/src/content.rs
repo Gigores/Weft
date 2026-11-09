@@ -287,6 +287,8 @@ pub struct BlockDef {
     pub cb: BlockCallbacks,
     /// The menu using the block opens.
     pub opens: Option<u32>,
+    /// `abi::sneak_use`: whether a sneaking player uses it.
+    pub sneak_use: u32,
     /// `on_sides`: the faces it may lie on, a bit each; 0 for other blocks.
     pub sides: u8,
 }
@@ -1930,8 +1932,8 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
     }
     for (m, pattern) in tag_patterns {
         let tag = &pattern[1..];
-        if !(0..components.count()).any(|c| components.is_tag(c) && comps::matches(tag, &components.names[c as usize])) {
-            errors.push(format!("{}: {pattern} matches no tag", mod_name(m)));
+        if !(0..components.count()).any(|c| comps::matches(tag, &components.names[c as usize])) {
+            errors.push(format!("{}: {pattern} matches no tag or component", mod_name(m)));
         }
     }
     let crate::blocks::Blocks { mut states, mut block_defs, opens_names, block_names, rules: raw_rules, hazards: raw_hazards, .. } =
@@ -2020,6 +2022,14 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
     game.item_model_for_stack = item_looks;
     link_particles(&mut game, &mut textures);
     check_ambient_particles(&game, &components, states.len() as u32, &mut errors);
+    for m in &mut game.menus {
+        for g in m.groups.iter_mut().filter(|g| !g.accepts.is_empty()) {
+            match crate::refs::bits(&g.accepts, comps::ITEM, &item_names, item_defs.len() as u32, &components, "item") {
+                Ok(bits) => g.accepted = Some(bits.into()),
+                Err(e) => errors.push(format!("menu {}: group {} accepts {}: {e}", m.name, g.name, g.accepts)),
+            }
+        }
+    }
     link_entity_templates(&mut game, &templates, &template_names, &mut errors);
     link_equipment(&game, &mut item_defs, &components);
     for d in &mut dim_defs {

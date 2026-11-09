@@ -336,6 +336,8 @@ async fn damage_chain(t: &T) -> R {
     t.check((value(&bare) - 8.0).abs() < 1e-6, format!("no armor: {bare}"));
     // Iron chestplate: 6 points, 4% each.
     t.op("put me 37 iron_chestplate 1").await?;
+    // Worn modifiers come with the next tick, as vanilla's equipment check.
+    t.secs(0.15).await?;
     let armored = t.op("damage 8 0").await?;
     t.check((value(&armored) - 7.36).abs() < 1e-4, format!("iron chestplate: {armored}"));
     let fall = t

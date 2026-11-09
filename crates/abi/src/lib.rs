@@ -1131,7 +1131,8 @@ pub mod comp {
     /// `signal_kind::SINK` changed), `SIGNAL_GATE` (`GateArgs`, a `signal_kind::GATE`'s output),
     /// `SIGNAL_READ` (`SignalReadArgs`, what a comparator behind it reads instead of how full it
     /// is); `OPENS` (`str`, a menu using it opens, on its block entity if it has one: a station of
-    /// the menu's recipe kinds), `SHARES_CELL` (`match`: what may share its cell
+    /// the menu's recipe kinds), `SNEAK_USE` (`u32`, `sneak_use`: whether a sneaking player uses it
+    /// or what it holds; none: vanilla's, used with empty hands), `SHARES_CELL` (`match`: what may share its cell
     /// though their shapes overlap), `MODEL_FILE` (`str`, `models/block/<path>.json` of the named
     /// mod instead of the one named like the block), `MODEL_TEXTURES` (`[ModelTexture]`),
     /// `SHAPES_OF` (`ShapesOf`: no block of its own but a template, one for each full cube among
@@ -1167,6 +1168,7 @@ pub mod comp {
         pub const SIGNAL_GATE: &str = "block.signal_gate";
         pub const SIGNAL_READ: &str = "block.signal_read";
         pub const OPENS: &str = "block.opens";
+        pub const SNEAK_USE: &str = "block.sneak_use";
         pub const SHARES_CELL: &str = "block.shares_cell";
         pub const MODEL_FILE: &str = "block.model_file";
         pub const MODEL_TEXTURES: &str = "block.model_textures";
@@ -2100,6 +2102,18 @@ pub struct UseArgs {
     pub face: u32,
     pub player: u64,
     pub handled: u32,
+    /// 1: the player sneaks (it got here by the block's `comp::block::SNEAK_USE`).
+    pub sneaking: u32,
+}
+
+/// Whether a sneaking player uses a block or, past it, what it holds (`comp::block::SNEAK_USE`).
+pub mod sneak_use {
+    /// Vanilla's: the block with empty hands, else what is held (placing against a chest).
+    pub const EMPTY_HANDS: u32 = 0;
+    /// The block whatever is held; its `on_use` sees `sneaking` and may pass (`handled = 0`).
+    pub const ALWAYS: u32 = 1;
+    /// Never the block.
+    pub const NEVER: u32 = 2;
 }
 
 #[repr(C)]
@@ -2958,8 +2972,8 @@ crate::data! {
     /// `comp::entity::SLOT_GROUPS`): a grid of `cols` by `rows` of one `owner`'s (`slot_owner`)
     /// inventory with the same rules, found by `name` by the screen and the menu's callbacks.
     /// `start` is the first index in the owner's inventory (`u32::MAX`: right after the previous
-    /// group of the same owner), `flags` are `slot_flags`; only items with tag or component
-    /// `accepts` go in (empty: any), at most `limit` a slot (0: as many as the item stacks to);
+    /// group of the same owner), `flags` are `slot_flags`; only the items reference `accepts`
+    /// names go in (`#fuel #mymod:fire_starter`; empty: any), at most `limit` a slot (0: as many as the item stacks to);
     /// `size` is a slot's side in GUI pixels (0: 18), `background` a GUI texture and `tooltip` a
     /// translation shown while it is empty. Shift-clicks from the player's inventory fill groups
     /// with a higher `priority` first.
@@ -4513,6 +4527,10 @@ pub mod attribute {
     /// How much its player sees as if everything were under the noon sky, lamps still adding
     /// their warmth (0..1; the night vision effect 1).
     pub const NIGHT_VISION: &str = "core:night_vision";
+    /// Multiplier on how fast it moves itself in liquids (1).
+    pub const SWIM_SPEED: &str = "core:swim_speed";
+    /// Multiplier on how fast it flies (1), on top of a player's own flight speed (the wheel).
+    pub const FLYING_SPEED: &str = "core:flying_speed";
 }
 
 /// How an attribute modifier applies, like vanilla: ADD amounts sum onto the base, then times

@@ -665,6 +665,10 @@ impl Ui {
                         main += cm + if i > 0 { style.gap } else { 0.0 };
                         cross = cross.max(cc);
                     }
+                    // A column that will scroll is wider by its bar, so the bar covers nothing.
+                    if style.scroll && !style.row && main + pad_h > fixed_h.unwrap_or(avail[1]) {
+                        cross += Scrollbar::ROOM;
+                    }
                     if style.row { [main, cross] } else { [cross, main] }
                 }
             }

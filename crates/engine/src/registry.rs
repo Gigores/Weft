@@ -207,8 +207,11 @@ pub struct GroupDef {
     pub cols: u32,
     pub rows: u32,
     pub flags: u32,
-    /// Tag or component name, empty for any item.
+    /// What items it takes, a reference (`#fuel #mymod:fire_starter !base:lava_bucket`), empty
+    /// for any.
     pub accepts: String,
+    /// `accepts` as a bit per item, made at the freeze; `None` any.
+    pub accepted: Option<std::sync::Arc<[u64]>>,
     pub limit: u32,
     pub size: f32,
     pub background: Option<String>,
@@ -1388,6 +1391,8 @@ pub mod attr {
     pub const SUBMERGED_MINING_SPEED: u32 = 21;
     pub const AIRBORNE_MINING_SPEED: u32 = 22;
     pub const NIGHT_VISION: u32 = 23;
+    pub const SWIM_SPEED: u32 = 24;
+    pub const FLYING_SPEED: u32 = 25;
 }
 
 fn engine_attributes() -> Vec<RawEntry> {
@@ -1418,6 +1423,8 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::SUBMERGED_MINING_SPEED, 0.2, 0.0, 20.0),
         (a::AIRBORNE_MINING_SPEED, 0.2, 0.0, 20.0),
         (a::NIGHT_VISION, 0.0, 0.0, 1.0),
+        (a::SWIM_SPEED, 1.0, 0.0, 16.0),
+        (a::FLYING_SPEED, 1.0, 0.0, 16.0),
     ]
     .iter()
     .map(|&(name, default, min, max)| {
@@ -1662,6 +1669,7 @@ fn bake_menu(e: &Entry) -> MenuDef {
                 rows: g.rows.max(1),
                 flags: g.flags,
                 accepts: g.accepts,
+                accepted: None,
                 limit: g.limit,
                 size: if g.size > 0.0 { g.size } else { 18.0 },
                 background: text(g.background),
@@ -2476,7 +2484,8 @@ fn lay_out_slots(
                     cols: 1,
                     rows: 1,
                     flags: if off { weft_abi::slot_flags::OFF_HAND } else { 0 },
-                    accepts: if off { String::new() } else { format!("worn/{}", e.name) },
+                    accepts: if off { String::new() } else { format!("#worn/{}", e.name) },
+                    accepted: None,
                     limit: if off { 0 } else { 1 },
                     size: 18.0,
                     background: (!e.background.is_empty()).then(|| e.background.clone()),

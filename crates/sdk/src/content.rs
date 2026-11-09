@@ -1113,7 +1113,7 @@ impl Registry {
     }
 
     /// `edit` of everything of a kind `pattern` names, any mod's: `#tag` (a block's states by
-    /// their own tags), a name with `*` in it, `name[prop=value]` (those states of a block):
+    /// their own tags; a component too, `#fuel` anything that burns), a name with `*` in it, `name[prop=value]` (those states of a block):
     /// `r.edit_pattern::<kind::Block>("#planks/*").set(&FUEL, 300)`. Patterns apply after edits by
     /// name. For blocks and items a pattern matching nothing is a load error (a `#tag` one when
     /// no such tag exists), for other kinds it is fine.
@@ -2105,6 +2105,13 @@ impl<'a> BlockBuilder<'a> {
     /// the recipe viewer.
     pub fn opens(self, menu: &crate::Menu) -> Self {
         self.set_text(&bc::OPENS, menu.name())
+    }
+
+    /// Whether a sneaking player uses it (`abi::sneak_use`): without, as vanilla, only with empty
+    /// hands, what is held going first otherwise (a block placed against a chest). `ALWAYS`
+    /// calls `on_use` with `sneaking` set, and it passes the click on with `handled = 0`.
+    pub fn sneak_use(self, rule: u32) -> Self {
+        self.set(&bc::SNEAK_USE, rule)
     }
 
     /// A `facing` property with the directions in `allowed` (`p.facing()` in `.states`), set by
@@ -3331,6 +3338,11 @@ impl Use {
     }
     pub fn player(&self) -> u64 {
         self.args.player
+    }
+    /// The player sneaks: only with `.sneak_use(..)` saying so, or with empty hands. Returning
+    /// false passes the click on to what it holds.
+    pub fn sneaking(&self) -> bool {
+        self.args.sneaking != 0
     }
 }
 
