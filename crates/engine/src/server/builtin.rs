@@ -70,7 +70,7 @@ pub const COMMANDS: &[(&str, &str, Handler, u32)] = &[
     ("heal", "[who:targets]", heal, p::GAME_MASTER),
     (
         "effect",
-        "give <who:targets> <effect:word(#core:effects)> [seconds:int] [level:int] | clear <who:targets> [effect:word(#core:effects)]",
+        "give <who:targets> <effect:word(#core:effects)> [seconds:int(infinite)] [level:int] | clear <who:targets> [effect:word(#core:effects)]",
         effect,
         p::GAME_MASTER,
     ),
@@ -432,7 +432,7 @@ fn heal(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     say("heal.done", Vec::new())
 }
 
-/// `/effect give`: an effect for 30 seconds at level 1 unless said; `/effect clear`: all of them,
+/// `/effect give`: an effect for 30 seconds (or `infinite`) at level 1 unless said; `/effect clear`: all of them,
 /// or the one named. Short names do when only one mod has that effect.
 fn effect(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let c = x.c;
@@ -455,7 +455,10 @@ fn effect(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let one = found.flatten();
     let give = x.a.get("give").is_some();
     // A day of seconds and level 255 at most, as vanilla's amplifier.
-    let ticks = x.a.int("seconds").map_or(30, |t| t.clamp(0, 1_000_000)) as u32 * crate::world::TPS;
+    let ticks = match x.a.text("seconds") {
+        Some(_) => weft_abi::INFINITE_TICKS,
+        None => x.a.int("seconds").map_or(30, |t| t.clamp(0, 1_000_000)) as u32 * crate::world::TPS,
+    };
     let level = x.a.int("level").map_or(1, |l| l.clamp(1, 255)) as u32;
     let comp = c.game.fields.effect;
     for (d, id) in x.targets(s, "who") {

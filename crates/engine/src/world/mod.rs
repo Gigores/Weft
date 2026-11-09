@@ -144,9 +144,12 @@ pub struct OnEffect {
     pub id: u32,
     /// 1 and up.
     pub level: u32,
-    /// The tick of its dimension it ends at.
+    /// The tick of its dimension it ends at, `FOREVER` for never.
     pub until: u64,
 }
+
+/// `OnEffect::until` of an effect that doesn't end.
+pub const FOREVER: u64 = u64::MAX;
 
 /// The entity effects in an `EFFECT` component still on at `now` (`u64::MAX`: all).
 pub fn effects_on(bytes: Option<&[u8]>, now: u64) -> impl Iterator<Item = OnEffect> + '_ {
@@ -176,7 +179,9 @@ pub fn encode_effects(list: &[OnEffect]) -> Box<[u8]> {
 pub fn rebase_effects(comps: &mut [(u32, Box<[u8]>)], effect: u32, by: i64) {
     for (_, v) in comps.iter_mut().filter(|(k, _)| *k == effect) {
         let moved: Vec<OnEffect> = effects_on(Some(v), u64::MAX)
+            .filter(|f| f.until != FOREVER)
             .map(|f| OnEffect { until: f.until.saturating_add_signed(by), ..f })
+            .chain(effects_on(Some(v), u64::MAX).filter(|f| f.until == FOREVER))
             .collect();
         *v = encode_effects(&moved);
     }

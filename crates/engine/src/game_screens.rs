@@ -140,7 +140,7 @@ fn effects_panel(ui: &mut Ui, cx: &BuildCx) {
                                         .find(|f| f.0 == effect)
                                 })
                                 .map_or(0, |f| f.2);
-                            ("effect.time".into(), vec![crate::ui::text::Arg::Text(crate::hud::effect_time(left))])
+                            ("effect.time".into(), vec![crate::hud::effect_time(left)])
                         }),
                     );
                 });

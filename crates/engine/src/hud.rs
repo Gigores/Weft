@@ -39,7 +39,8 @@ pub const TAG_CROSSHAIR: u32 = 2;
 /// A status effect's icon in its frame (`data` the effect), fading its last ten seconds.
 pub const TAG_EFFECT: u32 = 3;
 
-/// The status effects the local player has now, beneficial ones first: effect, level, ticks left.
+/// The status effects the local player has now, beneficial ones first: effect, level, ticks left
+/// (`u64::MAX` for good).
 pub fn shown_effects(client: &Client) -> Vec<(u32, u32, u64)> {
     let c = content();
     let now = client.ticks();
@@ -54,7 +55,7 @@ pub fn shown_effects(client: &Client) -> Vec<(u32, u32, u64)> {
                     .get(f.id as usize)
                     .is_some_and(|d| d.shown())
         })
-        .map(|f| (f.id, f.level, f.until - now))
+        .map(|f| (f.id, f.level, if f.until == crate::world::FOREVER { u64::MAX } else { f.until - now }))
         .collect();
     v.sort_by_key(|f| (c.game.entity_effects[f.0 as usize].kind == crate::registry::effect_kind::HARMFUL, f.0));
     v
@@ -87,10 +88,16 @@ pub fn effect_name(lang: &Lang, effect: u32, level: u32) -> Vec<text::Span> {
     text::rich(&format!("{}{level}", text::escape(lang.get(&key))), lang, None)
 }
 
-/// Ticks as `m:ss`, `**:**` past an hour as vanilla's.
-pub fn effect_time(ticks: u64) -> String {
+/// Ticks as `m:ss`, `**:**` past an hour and `∞` for good (`INFINITE_TICKS` and up) as vanilla's.
+pub fn effect_time(ticks: u64) -> text::Arg {
     let secs = ticks / crate::world::TPS as u64;
-    if secs >= 3600 { "**:**".into() } else { format!("{}:{:02}", secs / 60, secs % 60) }
+    if ticks >= weft_abi::INFINITE_TICKS as u64 {
+        Arg::Key("effect.infinite".into())
+    } else if secs >= 5979 { // 5979 is 99 minutes and 59 seconds
+        Arg::Text("**:**".into())
+    } else {
+        Arg::Text(format!("{}:{:02}", secs / 60, secs % 60))
+    }
 }
 
 /// A player's say on one element (`config/hud.txt`): its place in an anchor's flow or a free spot,
@@ -1194,7 +1201,7 @@ pub fn item_tooltip(lang: &Lang, input: &crate::input::Input, stack: weft_abi::I
             .get(g.level as usize)
             .map_or_else(|| format!(" {}", g.level), |s| s.to_string());
         let name = text::Arg::Key(format!("effect.{}", d.name.replace(':', ".")));
-        line(lang.get(&key), &[name, text::Arg::Text(level), text::Arg::Text(effect_time(g.ticks as u64))], None, &mut out);
+        line(lang.get(&key), &[name, text::Arg::Text(level), effect_time(g.ticks as u64)], None, &mut out);
     }
     let max = c.durability(&stack);
     if max > 0 {

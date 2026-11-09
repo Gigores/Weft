@@ -380,7 +380,8 @@ impl World {
         unsafe { (host().weather_now)(self.raw()) }
     }
 
-    /// Effect `effect` on an entity at `level` (1 and up) for `ticks` (0 ends it):
+    /// Effect `effect` on an entity at `level` (1 and up) for `ticks` (0 ends it,
+    /// `abi::INFINITE_TICKS` never):
     /// `w.entity_effect(id, &entity_effects::GLOW, 1, 200)`, or one of your own
     /// (`Registry::entity_effect`). Several at once, one of each: giving one again replaces it.
     /// An instant one acts once and doesn't stay.

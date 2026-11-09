@@ -2063,7 +2063,17 @@ unsafe extern "C" fn entity_effects(w: *mut abi::WorldCtx, id: u64, out: *mut ab
         let d = dim(w);
         let comp = content().game.fields.effect;
         let list: Vec<abi::EffectOn> = crate::world::effects_on(d.entities.comps.get(&(id, comp)).map(|b| &b[..]), d.time)
-            .map(|f| abi::EffectOn { effect: f.id, level: f.level, ticks_left: f.until.saturating_sub(d.time).min(u32::MAX as u64) as u32 })
+            .map(|f| abi::EffectOn {
+                effect: f.id,
+                level: f.level,
+                ticks_left: if f.until == crate::world::FOREVER {
+                    abi::INFINITE_TICKS
+                } else {
+                    f.until
+                        .saturating_sub(d.time)
+                        .min(abi::INFINITE_TICKS as u64 - 1) as u32
+                },
+            })
             .collect();
         for (i, e) in list.iter().take(cap as usize).enumerate() {
             *out.add(i) = *e;

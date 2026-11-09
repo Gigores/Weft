@@ -293,7 +293,8 @@ pub fn effects_from_save(c: &Content, bytes: &[u8], now: u64) -> Vec<u8> {
         let (Some(name), Some(level), Some(left)) = (r.take(len as usize), r.u32(), r.u32()) else { break };
         let name = String::from_utf8_lossy(name);
         if let Some(&id) = c.game.entity_effect_names.get(name.as_ref()) {
-            list.push(crate::world::OnEffect { id, level, until: now + left as u64 });
+            let until = if left == weft_abi::INFINITE_TICKS { crate::world::FOREVER } else { now + left as u64 };
+            list.push(crate::world::OnEffect { id, level, until });
         }
     }
     crate::world::encode_effects(&list).into_vec()

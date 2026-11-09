@@ -526,3 +526,4 @@ chat.screenshot = Screenshot saved: {0}, {1}
 chat.screenshot.picture = open picture
 chat.screenshot.folder = open folder
 effect.time = {color:gray}{0}
+effect.infinite = ∞

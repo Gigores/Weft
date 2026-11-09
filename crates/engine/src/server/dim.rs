@@ -1737,7 +1737,8 @@ impl Dim {
         )
     }
 
-    /// Effect `effect` on `id` at `level` for `ticks`, replacing the one it had (0 ticks ends it).
+    /// Effect `effect` on `id` at `level` for `ticks`, replacing the one it had (0 ticks ends it,
+    /// `INFINITE_TICKS` never does).
     /// An instant one acts once, its hazards at that level, and doesn't stay.
     pub fn give_effect(&mut self, c: &'static Content, id: u64, effect: u32, level: u32, ticks: u32) {
         let Some(def) = c.game.entity_effects.get(effect as usize) else { return };
@@ -1758,7 +1759,8 @@ impl Dim {
             .filter(|f| f.id != effect)
             .collect();
         if ticks > 0 {
-            list.push(crate::world::OnEffect { id: effect, level, until: self.time + ticks as u64 });
+            let until = if ticks == abi::INFINITE_TICKS { crate::world::FOREVER } else { self.time + ticks as u64 };
+            list.push(crate::world::OnEffect { id: effect, level, until });
         }
         self.entities
             .comps

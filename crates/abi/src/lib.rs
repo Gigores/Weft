@@ -2611,8 +2611,13 @@ pub struct EffectOn {
     pub effect: u32,
     /// 1 and up.
     pub level: u32,
+    /// `INFINITE_TICKS` for one that doesn't end.
     pub ticks_left: u32,
 }
+
+/// Ticks of an entity effect that never ends (`Host::entity_effect`, `EffectGift`), vanilla's
+/// `infinite`.
+pub const INFINITE_TICKS: u32 = u32::MAX;
 
 /// The engine's entity effects, registered first in this order.
 pub mod entity_effect {
@@ -2656,7 +2661,7 @@ pub mod game_mode {
 
 crate::data! {
     /// An entity effect an item gives when used (`comp::GIVES_EFFECTS`): its name, its level (1
-    /// and up) and for how many ticks.
+    /// and up) and for how many ticks (`INFINITE_TICKS`: for good).
     pub struct EffectGift {
         pub effect: alloc::string::String,
         pub level: u32,
@@ -3669,7 +3674,8 @@ pub struct Host {
     /// The weather the client has now.
     pub client_weather: unsafe extern "C" fn(client: *mut ClientCtx) -> u32,
     /// Effect `effect` on an entity at `level` (1 and up) for `ticks`, seen by everyone (players
-    /// coming along later too), with its hazards and modifiers; 0 ticks ends it. Several at once,
+    /// coming along later too), with its hazards and modifiers; 0 ticks ends it, `INFINITE_TICKS`
+    /// keeps it on until taken off. Several at once,
     /// one of each: giving one again replaces it; an instant one acts once and doesn't stay.
     pub entity_effect: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, effect: u32, level: u32, ticks: u32),
     /// The effects on entity `id`, at most `cap` of them into `out`; returns how many it has.

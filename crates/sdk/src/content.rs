@@ -2549,7 +2549,7 @@ impl ItemBuilder<'_> {
     pub fn remainder(self, item: &crate::Item) -> Self {
         self.set_text(&c::REMAINDER, item.name())
     }
-    /// Used, it gives `effect` at `level` for `secs` (a potion: with `.use_ticks(32)` and
+    /// Used, it gives `effect` at `level` for `secs` (`f32::INFINITY` for good; a potion: with `.use_ticks(32)` and
     /// `.remainder(&GLASS_BOTTLE)` that is all of it); several for several effects. It turns into
     /// its remainder, or one fewer; with an `on_use` of its own (eating) that does the rest and
     /// these come when it goes through.
