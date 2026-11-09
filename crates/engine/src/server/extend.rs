@@ -384,15 +384,20 @@ impl Dim {
                 .insert((id, comp), crate::world::encode_effects(&on));
             self.entities.dirty_comp.insert((id, comp));
         }
-        // An effect's at its level: those given for it, else the others times the level.
+        // An effect's at its level: for each attribute those given for that level, else the
+        // others times the level (what is set is the value at every level).
         for f in &on {
             let all = s.effects.get(&f.id).map_or(&[][..], |v| &v[..]);
-            let exact = all.iter().any(|m| m.level == f.level);
-            from.extend(
-                all.iter()
-                    .filter(|m| if exact { m.level == f.level } else { m.level == 0 })
-                    .map(|m| SourceMod { amount: if exact { m.amount } else { m.amount * f.level as f64 }, ..*m }),
-            );
+            from.extend(all.iter().filter_map(|m| {
+                let exact = all.iter().any(|o| o.attr == m.attr && o.level == f.level);
+                match m.level {
+                    l if l == f.level => Some(*m),
+                    0 if !exact => {
+                        Some(SourceMod { amount: if m.op == abi::attr_op::SET { m.amount } else { m.amount * f.level as f64 }, ..*m })
+                    }
+                    _ => None,
+                }
+            }));
         }
         from.extend(s.modes.get(&(mode.0 as u32)).into_iter().flatten());
         from.extend(s.poses.get(&(pose.0 as u32)).into_iter().flatten());

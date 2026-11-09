@@ -440,12 +440,12 @@ impl EntityEffectBuilder<'_> {
         self.push(&crate::comps::entity_effect::HAZARDS, h.0)
     }
     /// A modifier its entity has while it is on (`Modifier::add(&attribute::MOVEMENT_SPEED, 0.2)`),
-    /// its amount times the level.
+    /// its amount times the level; a `attr_op::SET` one sets what it says at every level.
     pub fn modifier(self, m: crate::Modifier) -> Self {
         self.push(&crate::comps::entity_effect::MODIFIERS, m.0)
     }
-    /// `modifier` for `level` only, as it is: at that level the others don't count (mining
-    /// fatigue's steep steps).
+    /// `modifier` for `level` only, as it is: at that level the others of its attribute don't
+    /// count (mining fatigue's steep steps).
     pub fn modifier_at(self, level: u32, mut m: crate::Modifier) -> Self {
         m.0.level = level.max(1);
         self.push(&crate::comps::entity_effect::MODIFIERS, m.0)
@@ -454,7 +454,8 @@ impl EntityEffectBuilder<'_> {
     /// like vanilla's), on the HUD and beside the inventory, named `effect.<namespace>.<name>`
     /// in lang.
     pub fn icon(self, texture: &str) -> Self {
-        self.set_text(&crate::comps::entity_effect::ICON, texture)
+        let tex = crate::asset("", texture);
+        self.set_text(&crate::comps::entity_effect::ICON, &tex)
     }
     /// Swirls of this color (`0xRRGGBB`) around who has it, as vanilla's potion effects.
     pub fn color(self, rgb: u32) -> Self {
@@ -826,6 +827,10 @@ impl DamageCauseBuilder<'_> {
     /// No hurt sound.
     pub fn silent(self) -> Self {
         self.tag(abi::comp::damage_cause::SILENT)
+    }
+    /// Never kills: it leaves half a heart (poison).
+    pub fn not_lethal(self) -> Self {
+        self.tag(abi::comp::damage_cause::NOT_LETHAL)
     }
     /// Translation key said when a player dies of it, `{0}` their name.
     pub fn death_message(self, key: &str) -> Self {
@@ -2539,6 +2544,17 @@ impl ItemBuilder<'_> {
     /// Takes effect after holding the use button this many ticks (food 32), slowing the player down.
     pub fn use_ticks(self, ticks: u32) -> Self {
         self.set(&c::USE_TICKS, ticks)
+    }
+    /// What is left of it when it is used up (a potion's bottle, fuel's bucket).
+    pub fn remainder(self, item: &crate::Item) -> Self {
+        self.set_text(&c::REMAINDER, item.name())
+    }
+    /// Used, it gives `effect` at `level` for `secs` (a potion: with `.use_ticks(32)` and
+    /// `.remainder(&GLASS_BOTTLE)` that is all of it); several for several effects. It turns into
+    /// its remainder, or one fewer.
+    pub fn gives_effect(self, effect: &crate::EntityEffect, level: u32, secs: f32) -> Self {
+        let gift = abi::EffectGift { effect: effect.name().to_string(), level: level.max(1), ticks: (secs * 20.0) as u32 };
+        self.push(&c::GIVES_EFFECTS, gift)
     }
     /// Full swings per second: hitting sooner does less (a sword 1.6, an empty hand 4).
     pub fn attack_speed(self, per_second: f32) -> Self {

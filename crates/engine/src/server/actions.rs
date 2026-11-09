@@ -642,7 +642,48 @@ impl Dim {
             return true;
         }
         let mut used = false;
-        if def.on_use.is_none() {
+        let gifts = c
+            .components
+            .id(abi::comp::GIVES_EFFECTS)
+            .and_then(|id| c.components.bytes(crate::components::ITEM, held.item, id))
+            .and_then(abi::data::from_bytes::<Vec<abi::EffectGift>>)
+            .filter(|_| def.on_use.is_none());
+        if let Some(gifts) = gifts {
+            for g in gifts {
+                if let Some(&effect) = c.game.entity_effect_names.get(&g.effect) {
+                    self.give_effect(c, entity, effect, g.level, g.ticks);
+                }
+            }
+            // What is left of it: its remainder (the potion's bottle), else one fewer.
+            let creative = self
+                .entities
+                .get(entity)
+                .is_some_and(|e| e.mode.has(crate::tag_bits::game_mode::NO_COSTS));
+            if !creative {
+                let rest = c
+                    .components
+                    .id(abi::comp::REMAINDER)
+                    .and_then(|id| {
+                        c.components
+                            .get::<u32>(crate::components::ITEM, held.item, id)
+                    })
+                    .filter(|&r| r != 0);
+                let after = match rest {
+                    Some(r) if held.count <= 1 => ItemStack::new(r, 1),
+                    Some(r) => {
+                        let left = self.entities.insert_item(c, entity, ItemStack::new(r, 1));
+                        if !left.is_empty() {
+                            self.spawn_item(c, self.entities.get(entity).map_or(DVec3::ZERO, |e| e.pos), left);
+                        }
+                        ItemStack { count: held.count - 1, ..held }
+                    }
+                    None => ItemStack { count: held.count - 1, ..held },
+                };
+                self.entities
+                    .set_slot(entity, slot, if after.count == 0 { ItemStack::EMPTY } else { after });
+            }
+            used = true;
+        } else if def.on_use.is_none() {
             if let Some(after) = self.use_container(c, entity, held) {
                 if after != held {
                     self.entities.set_slot(entity, slot, after);

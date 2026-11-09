@@ -75,6 +75,28 @@ pub mod attribute {
     pub static CAN_FLY: Attribute = Attribute::named(crate::abi::attribute::CAN_FLY);
     /// 1: no damage, hunger or air but from what pierces it (creative, a shield effect).
     pub static INVULNERABLE: Attribute = Attribute::named(crate::abi::attribute::INVULNERABLE);
+    /// Blocks it falls without harm (3).
+    pub static SAFE_FALL: Attribute = Attribute::named(crate::abi::attribute::SAFE_FALL);
+    /// Damage per block fallen past `SAFE_FALL` (1).
+    pub static FALL_DAMAGE_MULTIPLIER: Attribute = Attribute::named(crate::abi::attribute::FALL_DAMAGE_MULTIPLIER);
+    /// Blocks it walks up without jumping (0.6).
+    pub static STEP_HEIGHT: Attribute = Attribute::named(crate::abi::attribute::STEP_HEIGHT);
+    /// Multiplier on its dimension's gravity (1; below 0 floats up).
+    pub static GRAVITY: Attribute = Attribute::named(crate::abi::attribute::GRAVITY);
+    /// Share of knockback shrugged off (0..1).
+    pub static KNOCKBACK_RESISTANCE: Attribute = Attribute::named(crate::abi::attribute::KNOCKBACK_RESISTANCE);
+    /// Added to each melee hit (0).
+    pub static ATTACK_DAMAGE: Attribute = Attribute::named(crate::abi::attribute::ATTACK_DAMAGE);
+    /// Share of damage taken off after armor (0..1).
+    pub static DAMAGE_RESISTANCE: Attribute = Attribute::named(crate::abi::attribute::DAMAGE_RESISTANCE);
+    /// Share of burning damage taken off (0..1).
+    pub static FIRE_RESISTANCE: Attribute = Attribute::named(crate::abi::attribute::FIRE_RESISTANCE);
+    /// Multiplier on how long fire keeps it burning (1).
+    pub static BURNING_TIME: Attribute = Attribute::named(crate::abi::attribute::BURNING_TIME);
+    /// Multiplier on mining speed with its head in a liquid (0.2).
+    pub static SUBMERGED_MINING_SPEED: Attribute = Attribute::named(crate::abi::attribute::SUBMERGED_MINING_SPEED);
+    /// Multiplier on mining speed off the ground (0.2).
+    pub static AIRBORNE_MINING_SPEED: Attribute = Attribute::named(crate::abi::attribute::AIRBORNE_MINING_SPEED);
 }
 
 /// An attribute modifier that comes with something (`.modifier(..)` on an item, a pose, an

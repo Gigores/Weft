@@ -774,6 +774,7 @@ pub static DURABILITY: Component<u32> = Component::named(abi::comp::DURABILITY);
 pub static ATTACK_DAMAGE: Component<f32> = Component::named(abi::comp::ATTACK_DAMAGE);
 pub static ATTACK_SPEED: Component<f32> = Component::named(abi::comp::ATTACK_SPEED);
 pub static USE_TICKS: Component<u32> = Component::named(abi::comp::USE_TICKS);
+pub static GIVES_EFFECTS: Component<Vec<abi::EffectGift>> = Component::named(abi::comp::GIVES_EFFECTS);
 pub static INVENTORY_SLOTS: Component<u32> = Component::named(abi::comp::INVENTORY);
 pub static PRECIPITATION: Component<Text> = Component::named(abi::comp::PRECIPITATION);
 /// What liquid an item is, by the millibucket (`str`): every liquid's own item has it.

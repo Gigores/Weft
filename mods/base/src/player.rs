@@ -320,7 +320,10 @@ fn tick_players(w: &World) {
             tire(w, id, if st.sprinting != 0 { 0.2 } else { 0.05 });
         }
         let per_point = 4.0 / w.attribute(id, &HUNGER_RATE) as f32;
+        let drain = w.attribute(id, &crate::effects::EXHAUSTION) as f32;
+        let breathes = w.attribute(id, &crate::effects::BREATHES_UNDER_WATER) >= 1.0;
         let Some(h) = w.component_mut(id, &HUNGER) else { continue };
+        h.exhaustion += drain;
         // Modern's: 0.1 a block sprinting, 0.01 swimming, 0 walking; jumps are counted from `Move`.
         h.exhaustion += st.moved
             * if st.sprinting != 0 {
@@ -339,7 +342,7 @@ fn tick_players(w: &World) {
             }
         }
         // Only water takes the breath, whatever else burns or drags.
-        let underwater = WATER_LIKE.on_block(w.block(block_pos_of(st.eye()))) && w.in_liquid(st.eye());
+        let underwater = !breathes && WATER_LIKE.on_block(w.block(block_pos_of(st.eye()))) && w.in_liquid(st.eye());
         let Some(h) = w.component_mut(id, &HUNGER) else { continue };
         if underwater {
             h.air -= 1.0;

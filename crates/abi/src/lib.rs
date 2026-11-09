@@ -1398,6 +1398,9 @@ pub mod comp {
     pub const ATTACK_DAMAGE: &str = "attack_damage";
     /// Item: ticks of holding the use button before it takes effect (food 32); slows while held.
     pub const USE_TICKS: &str = "use_ticks";
+    /// Item: `[EffectGift]` its user gets when it is used (after `USE_TICKS`), the item turning
+    /// into its `REMAINDER` (a potion's bottle) or one fewer; nothing else needed for a potion.
+    pub const GIVES_EFFECTS: &str = "gives_effects";
     /// Item: full swings per second (a sword 1.6). On an entity kind, its bare hand's (the
     /// player 4); 1 when neither says.
     pub const ATTACK_SPEED: &str = "attack_speed";
@@ -2651,6 +2654,16 @@ pub mod game_mode {
 }
 
 crate::data! {
+    /// An entity effect an item gives when used (`comp::GIVES_EFFECTS`): its name, its level (1
+    /// and up) and for how many ticks.
+    pub struct EffectGift {
+        pub effect: alloc::string::String,
+        pub level: u32,
+        pub ticks: u32,
+    }
+}
+
+crate::data! {
     /// An attribute modifier something gives (`comp::MODIFIERS`): a game mode its players, an item
     /// while held in the main hand or (`worn`) in an equipment slot, a pose while in it, an entity
     /// kind while all of `when` hold for it (`condition`; checked each tick).
@@ -2661,7 +2674,7 @@ crate::data! {
         pub worn: bool,
         pub when: alloc::vec::Vec<alloc::string::String>,
         /// An entity effect's: only at this level of it, as it is; 0, at every level, `amount`
-        /// times the level.
+        /// times the level (a `SET` sets the same at every level).
         pub level: u32,
     }
 }
