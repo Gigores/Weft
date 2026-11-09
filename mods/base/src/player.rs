@@ -137,6 +137,8 @@ pub fn register(r: &mut Registry) {
             // Wither's black hearts over poison's green ones, as vanilla's.
             .look_while("heart_withered", |c| c.effect_level(&crate::effects::WITHER) as f32)
             .look_while("heart_poisoned", |c| c.effect_level(&crate::effects::POISON) as f32)
+            // One life: hearts that say so, as vanilla's hardcore ones.
+            .look_while("heart_hardcore", |_| (weft_sdk::settings::LIVES.get() == 1) as u32 as f32)
             .shaking()
             .flash_on_gain(0.5)
             .flash_on_loss(1.0);
