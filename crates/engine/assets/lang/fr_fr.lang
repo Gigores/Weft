@@ -97,6 +97,7 @@ key.core.debug = Overlay de débugage
 key.core.screenshot = Capture d'écran
 key.core.reload = Recharger les packs de ressources et shaders
 key.core.drop_all = Jeter la pile
+key.core.trash = Mettre à la corbeille
 key.core.fly_faster = Voler plus vite (spectateur)
 key.core.fly_slower = Voler moins vite (spectateur)
 key.core.hotbar_next = Emplacement suivant

@@ -90,6 +90,9 @@ pub struct Style {
     /// Placed at a point instead of in the flow: (x, y) in GUI pixels from the parent's inner
     /// corner, and which point of the node goes there (0..1 of its width and height).
     pub at: Option<[f32; 4]>,
+    /// The point of the parent's inside `at` counts from, 0..1 of its width and height (top
+    /// left unless said).
+    pub at_from: [f32; 2],
 }
 
 impl Default for Style {
@@ -110,6 +113,7 @@ impl Default for Style {
             scroll: false,
             fill: None,
             at: None,
+            at_from: [0.0; 2],
         }
     }
 }
@@ -119,6 +123,11 @@ impl Style {
     pub fn at(mut self, x: f32, y: f32, pivot: [f32; 2]) -> Self {
         self.at = Some([x, y, pivot[0], pivot[1]]);
         self
+    }
+    /// `at` from point `from` of the parent's inside ([1.0, 0.0] its top right corner).
+    pub fn at_from(mut self, from: [f32; 2], x: f32, y: f32, pivot: [f32; 2]) -> Self {
+        self.at_from = from;
+        self.at(x, y, pivot)
     }
     pub fn row() -> Style {
         Style { row: true, align: Align::Center, ..Default::default() }
@@ -734,7 +743,9 @@ impl Ui {
             .collect();
         for c in placed {
             let ([x, y, px, py], [w, h]) = (self.nodes[c].style.at.unwrap(), self.nodes[c].measured);
-            self.arrange(c, Rect { x: inner.x + x - px * w, y: inner.y + y - py * h, w, h }, font);
+            let [fx, fy] = self.nodes[c].style.at_from;
+            let (ox, oy) = (inner.x + fx * inner.w, inner.y + fy * inner.h);
+            self.arrange(c, Rect { x: ox + x - px * w, y: oy + y - py * h, w, h }, font);
         }
         let children: Vec<NodeId> = children
             .into_iter()

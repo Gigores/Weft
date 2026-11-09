@@ -354,5 +354,5 @@ item.base.glass_bottle = Glass Bottle
 death.base.magic = {0} was killed by magic
 death.base.wither = {0} withered away
 storage.base.sort = Sort
-storage.base.deposit = Put Away Nearby
-storage.base.trash = Trash: what goes in is gone
+storage.base.deposit = Put away nearby: into the storage around that already holds the same
+storage.base.trash = Trash: keeps the last thing put in, the next takes its place ({key:core:trash} over a slot)

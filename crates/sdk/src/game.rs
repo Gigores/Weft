@@ -1294,6 +1294,13 @@ impl Slots {
         self.start = start;
         self
     }
+    /// The player's trash (`slot_flags::TRASH`), one slot: it keeps the last thing put in until the
+    /// next takes its place or the player leaves, and the trash key (Delete) over any slot sends
+    /// that stack there.
+    pub fn trash(mut self) -> Self {
+        self.flags |= abi::slot_flags::TRASH;
+        self
+    }
     /// Items only go in (a machine uses them up).
     pub fn input(mut self) -> Self {
         self.flags |= abi::slot_flags::INPUT;

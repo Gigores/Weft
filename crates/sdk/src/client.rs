@@ -728,7 +728,8 @@ pub mod screens {
     pub static SOUND: Menu = Menu::named("core:sound");
     pub static HUD_EDITOR: Menu = Menu::named("core:hud_editor");
     pub static DEBUG_OPTIONS: Menu = Menu::named("core:debug_options");
-    /// Every menu's screen, for `Registry::screen_part`: its place `side` is beside any menu.
+    /// Every menu's screen, for `Registry::screen_part`: its place `side` is beside any menu,
+    /// `corner` in the top right corner inside its panel (small icon buttons).
     pub static MENUS: Menu = Menu::named("core:menus");
 }
 

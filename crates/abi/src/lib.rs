@@ -2945,6 +2945,10 @@ pub mod slot_flags {
     /// Holds a liquid (its `fluid` item, the count in millibuckets, `limit` the capacity):
     /// filled and emptied with containers like a bucket, never picked up.
     pub const LIQUID: u32 = 32;
+    /// The player's trash, one slot (Terraria's): it keeps the last thing put in until the next
+    /// takes its place, or the player leaves; never filled by a shift-click. `core:trash`
+    /// (Delete) over a slot sends that stack there.
+    pub const TRASH: u32 = 64;
 }
 
 /// The equipment slot of the second hand. Without it, players have one.

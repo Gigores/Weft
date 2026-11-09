@@ -71,6 +71,7 @@ key.core.debug = Отладочная информация
 key.core.screenshot = Скриншот
 key.core.reload = Перезагрузить ассеты и шейдеры
 key.core.drop_all = Выбросить стак
+key.core.trash = В урну
 key.core.fly_faster = Лететь быстрее (наблюдатель)
 key.core.fly_slower = Лететь медленнее (наблюдатель)
 key.core.hotbar_next = Следующий слот

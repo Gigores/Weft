@@ -1010,7 +1010,7 @@ impl Running {
             // Pressing with a stack on the cursor starts a drag; releasing over one slot is
             // a plain click, over several it spreads the stack.
             let holding = g.client.menu.as_ref().is_some_and(|m| !m.cursor.is_empty());
-            use crate::server::menu::{CLONE, GATHER, HOTBAR_SWAP, PICK_SAME, THROW, THROW_ALL};
+            use crate::server::menu::{CLONE, GATHER, HOTBAR_SWAP, PICK_SAME, THROW, THROW_ALL, TO_TRASH};
             let typing = ui
                 .focused
                 .is_some_and(|f| matches!(ui.nodes[f].kind, Kind::Input { .. }));
@@ -1088,6 +1088,8 @@ impl Running {
                     Some(THROW_ALL)
                 } else if self.input.pressed("core:drop") {
                     Some(THROW)
+                } else if self.input.pressed("core:trash") {
+                    Some(TO_TRASH)
                 } else {
                     None
                 };

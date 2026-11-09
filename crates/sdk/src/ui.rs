@@ -619,6 +619,17 @@ impl Ui {
         self.with(n, |ui| ui.text_styled(S::column().class("button").no_wrap(), key, &[]));
     }
 
+    /// A button showing a picture (a texture like `image`'s, `"mymod:gui/sort"`, `w` by `h` GUI
+    /// pixels) and nothing else: what it does goes in its tooltip (`S::tooltip`).
+    pub fn icon_button(&mut self, texture: &str, w: f32, h: f32, s: S, f: impl Fn(&ClientView) + Send + Sync + 'static) {
+        let mut n = node(k::BUTTON, s.size(w + 2.0, h + 2.0).pad(1.0));
+        n.on_click = callback(move |a: &mut abi::UiArgs| f(&ClientView { raw: a.client }));
+        if n.class.len == 0 {
+            n.class = Str::new("button");
+        }
+        self.with(n, |ui| ui.image(texture, w, h));
+    }
+
     /// A button whose label has arguments (`settings.gui_scale` with the scale).
     pub fn button_args(&mut self, key: &str, args: &[Arg], s: S, f: impl Fn(&ClientView) + Send + Sync + 'static) {
         let mut n = node(k::BUTTON, s);

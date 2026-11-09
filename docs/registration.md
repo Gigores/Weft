@@ -573,7 +573,7 @@ r.edit(&FOOD).anchor(hud_anchor::TOP_RIGHT).order(2);
 ```
 
 ## Screen part
-Something added to a place of a screen, named `<mod>:<screen>/<area>`, `/2`... `r.screen_part(&screens::TITLE, "buttons", 0, |ui| ..)`. Beside menus: a menu's own `side` (`r.screen_part(&base::CHEST_MENU, "side", ..)`, any mod's menu) and `screens::MENUS` `side` beside every menu (base's sort and put away buttons, which call `c.client().menu_sort(None)`). `comps::screen_part`: `SCREEN`, `AREA` (`str`), `ORDER` (`i32`), `CALL` (callback).
+Something added to a place of a screen, named `<mod>:<screen>/<area>`, `/2`... `r.screen_part(&screens::TITLE, "buttons", 0, |ui| ..)`. Menus: a menu's own `corner` (top right inside its panel) and `side` (beside it), `r.screen_part(&base::CHEST_MENU, "side", ..)` for any mod's menu, and `screens::MENUS` `corner` and `side` for every menu (base's sort and put away icons are in its `corner`; sorting is `c.client().menu_sort(None)`). `comps::screen_part`: `SCREEN`, `AREA` (`str`), `ORDER` (`i32`), `CALL` (callback).
 
 ```rust
 static PAUSE_BUTTONS: ScreenPart = ScreenPart::named("base:pause/buttons");

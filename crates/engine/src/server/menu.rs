@@ -14,6 +14,8 @@ use crate::host;
 pub enum Owner {
     Temp,
     Player,
+    /// The player's trash (`slot_flags::TRASH`).
+    Trash,
     /// The inventory the menu opened on.
     On(Inv),
 }
@@ -96,6 +98,7 @@ fn get(m: &OpenMenu, dim: &Dim, player: u64, slot: u32) -> ItemStack {
     let c = crate::content::content();
     match r.owner {
         Owner::Temp => m.temp.get(r.index as usize).copied().unwrap_or_default(),
+        Owner::Trash => trash(dim, c, player),
         Owner::Player => holder::get(dim, c, Inv::own(At::Entity(player)), r.index),
         Owner::On(inv) => holder::get(dim, c, inv, r.index),
     }
@@ -110,9 +113,31 @@ fn set(m: &mut OpenMenu, dim: &mut Dim, player: u64, slot: u32, stack: ItemStack
                 *s = stack;
             }
         }
+        Owner::Trash => {
+            let comp = crate::content::content().game.fields.trash;
+            let bytes: Box<[u8]> = [stack.item, stack.count, stack.data]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            dim.entities.comps.insert((player, comp), bytes);
+        }
         Owner::Player => dim.entities.set_slot(player, r.index, stack),
         Owner::On(inv) => holder::set(dim, crate::content::content(), inv, r.index, stack),
     }
+}
+
+/// What `player` last put in its trash.
+fn trash(dim: &Dim, c: &Content, player: u64) -> ItemStack {
+    let Some(b) = dim
+        .entities
+        .comps
+        .get(&(player, c.game.fields.trash))
+        .filter(|b| b.len() >= 12)
+    else {
+        return ItemStack::EMPTY;
+    };
+    let word = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+    ItemStack { item: word(0), count: word(4), data: word(8) }
 }
 
 fn call(
@@ -146,6 +171,7 @@ pub fn slots(c: &'static Content, kind: u32, on: Option<Inv>, worn: Option<u32>,
     for (g, _, n) in def.slot_groups(layout) {
         let accepts = g.accepted.as_deref();
         let (o, first) = match (g.owner, worn) {
+            _ if g.flags & sf::TRASH != 0 => (Owner::Trash, None),
             (so::MENU, _) => (Owner::Temp, None),
             (so::HOLDER, _) => (Owner::On(on.unwrap_or(Inv::own(At::Entity(0)))), None),
             (so::WORN, Some(w)) => (Owner::On(on.unwrap_or(Inv::own(At::Entity(0)))), Some(w + g.start)),
@@ -411,6 +437,9 @@ pub fn creative_to_hotbar(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, 
     call(m, dim, c, player, h, |d| d.on_change);
 }
 
+/// The trash key over a slot: its stack goes to the player's trash, what was there gone.
+pub const TO_TRASH: u8 = 17;
+
 /// Sorts the storage slot `slot` is in (`client_op::MENU_SORT`); `u32::MAX`: what the menu is
 /// opened on, else the player's main inventory.
 pub const SORT: u8 = 16;
@@ -490,6 +519,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
                 }
                 let s = get(m, dim, player, i);
                 if m.slots[i as usize].flags & sf::OUTPUT != 0
+                    || m.slots[i as usize].owner == Owner::Trash
                     || !takeable(&m.slots[i as usize])
                     || s.is_empty()
                     || s.item != want.item
@@ -508,6 +538,46 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
     }
     if button == SORT {
         sort(m, dim, c, player, slot);
+        return;
+    }
+    // Into the trash, whole, what was there gone (Terraria's).
+    let trash_at = m
+        .slots
+        .iter()
+        .position(|s| s.owner == Owner::Trash)
+        .map(|i| i as u32);
+    let into_trash = |m: &mut OpenMenu, dim: &mut Dim, stack: ItemStack| match trash_at {
+        Some(t) => set(m, dim, player, t, stack),
+        None => {
+            let bytes: Box<[u8]> = [stack.item, stack.count, stack.data]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            dim.entities
+                .comps
+                .insert((player, c.game.fields.trash), bytes);
+        }
+    };
+    if button == TO_TRASH {
+        let Some(r) = m.slots.get(slot as usize).copied() else { return };
+        let cur = get(m, dim, player, slot);
+        if cur.is_empty() || r.owner == Owner::Trash || !takeable(&r) || r.flags & sf::OUTPUT != 0 {
+            return;
+        }
+        into_trash(m, dim, cur);
+        set(m, dim, player, slot, ItemStack::EMPTY);
+        call(m, dim, c, player, slot, |d| d.on_change);
+        return;
+    }
+    if m.slots
+        .get(slot as usize)
+        .is_some_and(|s| s.owner == Owner::Trash)
+        && button <= 1
+        && !shift
+        && !m.cursor.is_empty()
+    {
+        let s = std::mem::replace(&mut m.cursor, ItemStack::EMPTY);
+        into_trash(m, dim, s);
         return;
     }
     if button == THROW || button == THROW_ALL || button == PICK_SAME {
@@ -624,6 +694,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
                 i != slot
                     && s.flags & sf::OUTPUT == 0
                     && s.owner != Owner::Temp
+                    && s.owner != Owner::Trash
                     && (s.owner == Owner::Player) != from_player
                     && fits(c, &s, cur.item)
             })

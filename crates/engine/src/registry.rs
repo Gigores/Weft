@@ -690,6 +690,7 @@ fn engine_components() -> Vec<RawEntry> {
         (PERMISSION, "u32", cf::SYNC_OWNER, vec![0; 4]),
         (ATTRIBUTES, "bytes", cf::SYNC_OWNER, Vec::new()),
         (SIMULATED, "u64", cf::SAVE, vec![0; 8]),
+        (TRASH, "bytes", 0, Vec::new()),
     ] {
         all.push(entity(name, schema, flags, default));
     }
@@ -1824,6 +1825,9 @@ pub const RIDING: &str = "core:riding";
 /// Entity component (`[u32]`, synced to watchers): the items in its kind's `SHOWN_SLOTS`, 0 empty.
 pub const SHOWN: &str = "core:shown";
 use abi::comp::{ATTRIBUTES, GAME_MODE, PERMISSION};
+/// Entity component (`ItemStack`, not saved): what a player last put in its trash
+/// (`slot_flags::TRASH`).
+pub const TRASH: &str = "core:trash";
 /// Entity component (`u64`, saved): the world time a system last simulated it to, so it can
 /// catch up on what it missed (`Dim::run_systems`).
 pub const SIMULATED: &str = "core:simulated";
@@ -1847,6 +1851,7 @@ pub struct FieldComps {
     pub permission: u32,
     pub attributes: u32,
     pub shown: u32,
+    pub trash: u32,
 }
 
 /// Entity kinds, frozen before components (which attach to them).
@@ -2364,6 +2369,7 @@ fn freeze_entity_storage(
         permission: id(PERMISSION),
         attributes: id(ATTRIBUTES),
         shown: id(SHOWN),
+        trash: id(TRASH),
     };
     g.simulated_comp = g.component_names[SIMULATED];
     let with_flag = |f: u32| {

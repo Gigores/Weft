@@ -698,6 +698,23 @@ pub async fn inventory_hotkeys(t: T) -> R {
     t.secs(0.4).await?;
     let now = (0..64).find(|&i| t.c().menu_slot(i).item == plate);
     t.check(now.is_some_and(|i| i != at), format!("the chestplate left its slot {at} for {now:?}"));
+
+    // The trash key over a slot: its stack goes to the trash (base's, in the inventory), the
+    // next one takes its place.
+    let slots = t.c().menu().map_or(0, |m| m.slots);
+    t.op("put me 12 stick 3").await?;
+    t.op("put me 13 sand 2").await?;
+    t.secs(0.3).await?;
+    for (slot, item) in [(12, "base:stick"), (13, "base:sand")] {
+        hover(slot)?;
+        t.frames(3).await?;
+        t.press("core:trash");
+        t.secs(0.3).await?;
+        t.check_eq(t.slot("me", slot).await?.1, 0, "the stack left for the trash");
+        let shown: Vec<u32> = (0..slots).map(|i| t.c().menu_slot(i).item).collect();
+        t.check(shown.contains(&id(item)), format!("{item} shown in the trash"));
+    }
+    t.check(!(0..slots).any(|i| t.c().menu_slot(i).item == id("base:stick")), "the sticks gone for the sand");
     Ok(())
 }
 

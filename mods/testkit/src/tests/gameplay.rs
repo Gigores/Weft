@@ -1805,7 +1805,7 @@ pub async fn placing_ahead(t: T) -> R {
     Ok(())
 }
 
-/// Base's tools beside a menu: sorting a chest joins its stacks and orders them, putting away
+/// Base's tools in a menu's corner: sorting a chest joins its stacks and orders them, putting away
 /// moves what the player carries into storage around that already holds it.
 pub async fn inventory_tools(t: T) -> R {
     t.flat().await?;
@@ -1820,7 +1820,8 @@ pub async fn inventory_tools(t: T) -> R {
     t.op(&format!("menu base:chest {at}")).await?;
     t.screen("core:menu").await?;
     t.frames(3).await?;
-    t.check(t.click_ui("text:Sort", 0), "a sort button beside the chest");
+    // What base's corner buttons do.
+    t.check(t.c().menu_sort(None), "sorting the chest");
     t.secs(0.4).await?;
     let mut held = Vec::new();
     for i in 0..27 {
@@ -1830,7 +1831,8 @@ pub async fn inventory_tools(t: T) -> R {
     t.check_eq(filled.len(), 2, "two stacks left of three");
     t.check(held[0].1 > 0 && held[1].1 > 0, format!("at the front: {held:?}"));
     t.check(held.iter().any(|s| s.0 == "base:dirt" && s.1 == 12), format!("the dirt joined: {held:?}"));
-    t.check(t.click_ui("text:Put Away Nearby", 0), "a put away button");
+    static DEPOSIT: Channel<()> = Channel::named("base:deposit_nearby");
+    t.c().send(&DEPOSIT, &());
     t.secs(0.4).await?;
     t.check_eq(t.slot("me", 9).await?.1, 0, "the dirt went into the chest");
     t.check_eq(t.slot("me", 10).await?.1, 2, "the sticks stay: the chest has none");

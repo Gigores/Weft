@@ -193,14 +193,12 @@ pub fn register(r: &mut Registry) {
         .group(
             "trash",
             Slots::single()
+                .trash()
                 .background("slot_trash")
                 .tooltip("storage.base.trash"),
         )
         .recipes(&crate::recipes::CRAFTING)
-        .on_change(|m| {
-            craft_result(m);
-            crate::storage::empty_trash(m);
-        })
+        .on_change(craft_result)
         .on_take(consume_grid)
         .screen(|ui| {
             ui.panel("panel", S::column().pad(7.0).gap(5.0), |ui| {
@@ -216,7 +214,7 @@ pub fn register(r: &mut Registry) {
                             ui.group("result");
                         });
                         ui.spacer();
-                        ui.row(S::row().gap(2.0), |ui| {
+                        ui.row(S::row(), |ui| {
                             ui.group(OFF_HAND.name());
                             ui.group("trash");
                         });

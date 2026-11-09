@@ -97,6 +97,7 @@ key.core.debug = Debug overlay
 key.core.screenshot = Screenshot
 key.core.reload = Reload assets and shaders
 key.core.drop_all = Drop stack
+key.core.trash = Send to trash
 key.core.fly_faster = Fly faster (spectator)
 key.core.fly_slower = Fly slower (spectator)
 key.core.hotbar_next = Next hotbar slot

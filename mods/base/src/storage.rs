@@ -1,7 +1,6 @@
-//! Tools beside every menu: sorting what it is opened on (or the player's own inventory), and
+//! Tools in the corner of every menu: sorting what it is opened on (or the player's own inventory), and
 //! putting what the player carries into the storage around it that already holds the same
-//! (blocks tagged `storage`, any mod's: chests, not a furnace's slots). A trash slot sits in the
-//! player's own inventory.
+//! (blocks tagged `storage`, any mod's: chests, not a furnace's slots).
 
 use weft_sdk::*;
 
@@ -13,11 +12,14 @@ const REACH: i32 = 5;
 
 pub fn register(r: &mut Registry) {
     r.tag("storage", &["chest"]);
-    r.screen_part(&screens::MENUS, "side", 0, |ui| {
-        ui.button("storage.base.sort", S::column().min_w(80.0), |c| {
+    // Small, in the corner of every menu's panel; what they do in their tooltips.
+    r.screen_part(&screens::MENUS, "corner", 0, |ui| {
+        ui.icon_button("base:gui/icon_sort", 8.0, 8.0, S::default().tooltip("storage.base.sort"), |c| {
             c.client().menu_sort(None);
         });
-        ui.button("storage.base.deposit", S::column().min_w(80.0), |c| c.client().send(&DEPOSIT, &()));
+        ui.icon_button("base:gui/icon_put_away", 8.0, 8.0, S::default().tooltip("storage.base.deposit"), |c| {
+            c.client().send(&DEPOSIT, &())
+        });
     });
     r.packet(&DEPOSIT, |p, ()| deposit(&p.world(), p.player()));
 }
@@ -60,14 +62,5 @@ fn deposit(w: &World, player: u64) {
             }
         }
         main.set(i, s);
-    }
-}
-
-/// The trash slot of the player's inventory takes what is put in for good.
-pub fn empty_trash(m: &MenuCtx) {
-    if let Some(t) = m.find_group("trash") {
-        if !t.get(0).is_empty() {
-            t.set(0, ItemStack::EMPTY);
-        }
     }
 }

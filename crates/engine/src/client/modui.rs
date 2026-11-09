@@ -201,6 +201,7 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
             fill: None,
             max_h: f32::INFINITY,
             at: None,
+            at_from: [0.0; 2],
         };
         let (lang, input) = (b.lang, b.input);
         let spans = |key: Str, a: abi::Slice<abi::UiArg>| {

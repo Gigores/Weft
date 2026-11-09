@@ -2292,6 +2292,8 @@ impl Client {
             permission,
             attributes,
             shown,
+            // Only in its slot.
+            trash: _,
         } = c.game.fields;
         let now = self.ticks();
         let f: Vec<f32> = words(bytes).map(f32::from_le_bytes).collect();
