@@ -301,15 +301,19 @@ impl Dim {
         m.moved = (pos - m.pos).with_y(0.0).length() as f32;
         (m.pos, m.yaw, m.vel, m.on_ground) = (pos, yaw, vel, on_ground);
         let fell = super::entity::track_fall(&mut m.fall, dy, on_ground, m.in_liquid);
-        if let Some(amount) = fell.and_then(|f| self.fall_damage(c, mount, f)) {
-            self.damage(c, mount, amount, 0, abi::damage_cause::FALL);
-            self.riders_fall(c, mount, amount);
+        if let Some(f) = fell {
+            if let Some(amount) = self.fall_damage(c, mount, f) {
+                self.damage(c, mount, amount, 0, abi::damage_cause::FALL);
+            }
+            self.riders_fall(c, mount, f);
         }
         self.seat_riders(c);
     }
 
     /// A mount's fall hurts its riders too, when its kind says so (`RIDERS_FALL`).
-    pub fn riders_fall(&mut self, c: &'static Content, mount: u64, amount: f32) {
+    /// Riders of a mount that takes its riders' falls fall as far as it did, each hurt by its own
+    /// attributes.
+    pub fn riders_fall(&mut self, c: &'static Content, mount: u64, fell: f32) {
         let Some(m) = self.entities.get(mount) else { return };
         if !c.game.entities[m.kind as usize].is(crate::tag_bits::entity::RIDERS_FALL) {
             return;
@@ -322,7 +326,9 @@ impl Dim {
             .map(|e| e.id)
             .collect();
         for r in riders {
-            self.damage(c, r, amount, 0, abi::damage_cause::FALL);
+            if let Some(amount) = self.fall_damage(c, r, fell) {
+                self.damage(c, r, amount, 0, abi::damage_cause::FALL);
+            }
         }
     }
 }

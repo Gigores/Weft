@@ -1197,7 +1197,7 @@ impl EntityRenderer {
             let lit = shade(e.pos + DVec3::Y * 0.5);
             // The effect a mod put on it, else the red of a recent hit; boxes only show the red.
             let hurt = (e.hurt / 0.5).clamp(0.0, 1.0);
-            let shader_effect = e.shader_effect(now);
+            let shader_effect = e.shader_effect(now, |id| self.effect_slots.get(id as usize).is_some_and(|&s| s != 0));
             let effect = match shader_effect {
                 Some((id, s)) => (self.effect_slots.get(id as usize).copied().unwrap_or(0), s),
                 None if hurt > 0.0 => (self.effect_slots[weft_abi::entity_effect::HURT as usize], hurt),

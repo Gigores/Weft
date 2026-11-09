@@ -15,6 +15,8 @@ use crate::ui::{Kind, Style, Ui};
 
 pub struct MenuScreen {
     pub kind: u32,
+    /// The status effects (effect, level) its list was built with.
+    effects: Vec<(u32, u32)>,
     /// Creative inventory filter and open tab.
     search: Rc<RefCell<String>>,
     tab: Rc<std::cell::Cell<usize>>,
@@ -22,7 +24,7 @@ pub struct MenuScreen {
 
 impl MenuScreen {
     pub fn new(kind: u32) -> MenuScreen {
-        MenuScreen { kind, search: Default::default(), tab: Default::default() }
+        MenuScreen { kind, effects: Vec::new(), search: Default::default(), tab: Default::default() }
     }
 }
 
@@ -104,6 +106,14 @@ fn creative_panel(ui: &mut Ui, cx: &BuildCx, search: &Rc<RefCell<String>>, tab: 
     });
 }
 
+/// The status effects shown and their levels.
+fn effects_now(client: &crate::client::Client) -> Vec<(u32, u32)> {
+    crate::hud::shown_effects(client)
+        .iter()
+        .map(|f| (f.0, f.1))
+        .collect()
+}
+
 /// The player's status effects beside its inventory: icon, name with level, time left.
 fn effects_panel(ui: &mut Ui, cx: &BuildCx) {
     let Some(client) = cx.client else { return };
@@ -144,6 +154,20 @@ impl Screen for MenuScreen {
         "core:menu"
     }
 
+    /// Built again when an effect comes, goes or changes level while it is open.
+    fn pointer(&mut self, _cursor: glam::Vec2, _ui: &mut Ui, ctx: &mut Ctx, _hud: &mut crate::hud::Hud) -> bool {
+        let c = content();
+        let shows = c.game.player_menu == Some(self.kind)
+            && !ctx
+                .client
+                .as_deref()
+                .is_some_and(|cl| cl.mode.has(crate::tag_bits::game_mode::CREATIVE_INVENTORY));
+        if shows && ctx.client.as_deref().map_or(Vec::new(), effects_now) != self.effects {
+            ctx.requests.push(Request::Rebuild);
+        }
+        false
+    }
+
     fn shows_menu(&self) -> bool {
         true
     }
@@ -160,6 +184,7 @@ impl Screen for MenuScreen {
                 if creative {
                     creative_panel(ui, cx, &self.search, &self.tab);
                 } else if c.game.player_menu == Some(self.kind) {
+                    self.effects = cx.client.map_or(Vec::new(), effects_now);
                     effects_panel(ui, cx);
                 }
                 if let Some(def) = c.game.menus.get(self.kind as usize) {

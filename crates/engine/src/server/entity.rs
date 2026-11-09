@@ -33,6 +33,8 @@ pub struct Entity {
     /// Its `STEP_HEIGHT` and `GRAVITY` attributes this tick, which physics goes by.
     pub step_height: f64,
     pub gravity_mul: f64,
+    /// Its `SAFE_FALL` this tick: how far its paths go down at once.
+    pub safe_fall: f32,
     pub removed: bool,
     pub item: ItemStack,
     pub pickup_delay: u32,
@@ -161,6 +163,7 @@ impl Entity {
             jump_mul: 1.0,
             step_height: 0.6,
             gravity_mul: 1.0,
+            safe_fall: 3.0,
             removed: false,
             item: ItemStack::EMPTY,
             pickup_delay: 0,

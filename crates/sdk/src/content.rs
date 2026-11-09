@@ -2551,7 +2551,8 @@ impl ItemBuilder<'_> {
     }
     /// Used, it gives `effect` at `level` for `secs` (a potion: with `.use_ticks(32)` and
     /// `.remainder(&GLASS_BOTTLE)` that is all of it); several for several effects. It turns into
-    /// its remainder, or one fewer.
+    /// its remainder, or one fewer; with an `on_use` of its own (eating) that does the rest and
+    /// these come when it goes through.
     pub fn gives_effect(self, effect: &crate::EntityEffect, level: u32, secs: f32) -> Self {
         let gift = abi::EffectGift { effect: effect.name().to_string(), level: level.max(1), ticks: (secs * 20.0) as u32 };
         self.push(&c::GIVES_EFFECTS, gift)

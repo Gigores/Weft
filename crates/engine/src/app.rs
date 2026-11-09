@@ -2409,19 +2409,23 @@ fn load_chat_history(run_dir: &std::path::Path) -> Vec<String> {
 /// effects it no longer has off.
 fn effect_screens(r: &mut Running) {
     let c = content();
-    let wanted: Vec<(String, f32)> = r.game.as_ref().map_or(Vec::new(), |g| {
-        let now = g.client.ticks();
-        g.client
-            .me
-            .effects
-            .iter()
-            .filter(|f| f.until > now)
-            .filter_map(|f| {
-                let d = c.game.entity_effects.get(f.id as usize)?;
-                (!d.screen.is_empty()).then(|| (d.screen.clone(), ((f.until - now) as f32 / crate::world::TPS as f32).min(1.0)))
-            })
-            .collect()
-    });
+    let wanted: Vec<(String, f32)> = r
+        .game
+        .as_ref()
+        .filter(|g| g.client.camera_has(crate::tag_bits::camera::EFFECTS))
+        .map_or(Vec::new(), |g| {
+            let now = g.client.ticks();
+            g.client
+                .me
+                .effects
+                .iter()
+                .filter(|f| f.until > now)
+                .filter_map(|f| {
+                    let d = c.game.entity_effects.get(f.id as usize)?;
+                    (!d.screen.is_empty()).then(|| (d.screen.clone(), ((f.until - now) as f32 / crate::world::TPS as f32).min(1.0)))
+                })
+                .collect()
+        });
     for name in std::mem::take(&mut r.effect_screens) {
         if !wanted.iter().any(|w| w.0 == name) {
             r.post.set(&name, 0.0);

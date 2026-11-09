@@ -486,7 +486,7 @@ r.edit(&damage_causes::FALL).death_message("death.mymod.fell");
 ```
 
 ## Entity effect
-What is on a mob for a while (`w.entity_effect(id, &E, strength, ticks)`), several at once: a shader drawn over it, what it does to it and what it gives it. `r.entity_effect(&E)`. `comps::entity_effect::SHADER` (`str`, its own name by default; `.shader`, `.unseen()` for none), `HAZARDS` (`.hazard(Hazard::own(..))`), `MODIFIERS` (`.modifier(..)`), `LIGHT` (`[u8;3]`, given off while on; `.light`, `.light_rgb`). The engine's `core:burning` draws nothing and is the light of every burning entity (`r.edit(&entity_effects::BURNING).light_rgb(..)` for another fire).
+What is on a mob for a while (`w.entity_effect(id, &E, level, ticks)`), several at once: a shader drawn over it, what it does to it and what it gives it, the last two times the level. With an icon it is a status effect its player sees (`docs/modding.md`, Status effects). `r.entity_effect(&E)`. `comps::entity_effect::SHADER` (`str`, its own name by default; `.shader`, `.unseen()` for none), `HAZARDS` (`.hazard(Hazard::own(..))`), `MODIFIERS` (`.modifier(..)`), `LIGHT` (`[u8;3]`, given off while on; `.light`, `.light_rgb`). The engine's `core:burning` draws nothing and is the light of every burning entity (`r.edit(&entity_effects::BURNING).light_rgb(..)` for another fire).
 
 ```rust
 r.edit(&entity_effects::HURT).shader(&Shader::named("mymod:hurt_blue"));

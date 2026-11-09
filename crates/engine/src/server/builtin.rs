@@ -454,8 +454,9 @@ fn effect(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     }
     let one = found.flatten();
     let give = x.a.get("give").is_some();
-    let ticks = x.a.int("seconds").map_or(30, |t| t.max(0)) as u32 * crate::world::TPS;
-    let level = x.a.int("level").map_or(1, |l| l.max(1)) as u32;
+    // A day of seconds and level 255 at most, as vanilla's amplifier.
+    let ticks = x.a.int("seconds").map_or(30, |t| t.clamp(0, 1_000_000)) as u32 * crate::world::TPS;
+    let level = x.a.int("level").map_or(1, |l| l.clamp(1, 255)) as u32;
     let comp = c.game.fields.effect;
     for (d, id) in x.targets(s, "who") {
         let Some(r) = s.dims[d as usize].entity_region(id) else { continue };

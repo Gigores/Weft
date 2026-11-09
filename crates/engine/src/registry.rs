@@ -1282,13 +1282,20 @@ pub mod effect_kind {
 }
 
 impl EntityEffectDef {
-    /// Its hazards at `level`: those given for that level, else the others times the level.
+    /// Its hazards at `level`: those given for the highest level up to it, else the others times
+    /// the level.
     pub fn hazards_at(&self, level: u32) -> Vec<crate::content::Hazard> {
-        if self.hazards.iter().any(|h| h.level == level) {
+        if let Some(at) = self
+            .hazards
+            .iter()
+            .map(|h| h.level)
+            .filter(|&l| l > 0 && l <= level)
+            .max()
+        {
             return self
                 .hazards
                 .iter()
-                .filter(|h| h.level == level)
+                .filter(|h| h.level == at)
                 .copied()
                 .collect();
         }

@@ -141,7 +141,7 @@ pub struct ClientEntity {
     pub body_yaw: f32,
     /// Arm swing progress 0..1 while swinging.
     pub arm_swing: Option<f32>,
-    /// Every effect on it, its strength and the tick it ends (`ClientWorld::ticks`).
+    /// Every effect on it, its level and the tick it ends (`ClientWorld::ticks`).
     pub effects: Vec<crate::world::OnEffect>,
     /// The items its kind shows (`registry::SHOWN`), 0 empty.
     pub shown: Vec<u32>,
@@ -287,19 +287,12 @@ fn fade_pose(now: f32, on: bool, dt: f32) -> f32 {
 }
 
 impl ClientEntity {
-    /// The shader effect drawn on it at tick `now` (of several, the latest with a shader) and
-    /// its strength.
-    pub fn shader_effect(&self, now: u64) -> Option<(u32, f32)> {
-        let c = content();
+    /// The shader effect drawn on it at tick `now`: of several, the latest that `drawn` says has a
+    /// shader.
+    pub fn shader_effect(&self, now: u64, drawn: impl Fn(u32) -> bool) -> Option<(u32, f32)> {
         self.effects
             .iter()
-            .filter(|f| {
-                f.until > now
-                    && c.game
-                        .entity_effects
-                        .get(f.id as usize)
-                        .is_some_and(|d| !d.shader.is_empty())
-            })
+            .filter(|f| f.until > now && drawn(f.id))
             .last()
             .map(|f| (f.id, 1.0))
     }
@@ -2293,7 +2286,16 @@ impl Client {
             sources.push(glow::entity_glow(c, &self.me, now, self.player.pos, self.me.body_yaw, stored, &own));
         }
         let all = self.entities.iter().chain(&self.showing_blocks);
-        for (id, e) in all.filter(|e| e.1.dying.is_none()) {
+        let hidden = |e: &ClientEntity| {
+            e.effects.iter().any(|f| {
+                f.until > now
+                    && c.game
+                        .entity_effects
+                        .get(f.id as usize)
+                        .is_some_and(|d| d.hides)
+            })
+        };
+        for (id, e) in all.filter(|e| e.1.dying.is_none() && !hidden(e.1)) {
             let shown: Vec<ItemStack> = [e.held, e.off_held]
                 .iter()
                 .chain(&e.worn)

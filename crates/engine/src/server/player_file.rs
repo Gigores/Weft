@@ -75,6 +75,18 @@ impl Server {
         e.permission = permission;
         e.selected = selected.min(c.game.player_layout.hotbar.saturating_sub(1));
         let selected = e.selected;
+        // Effects come back with the ticks they had left, by this dimension's clock.
+        let comps =
+            comps
+                .into_iter()
+                .map(|(k, v)| {
+                    if k == c.game.fields.effect {
+                        (k, super::persist::effects_from_save(c, &v, r.time).into_boxed_slice())
+                    } else {
+                        (k, v)
+                    }
+                })
+                .collect();
         r.entities.insert_with(c, e, inv, comps);
         r.keep_sources(c, id);
         let worn = worn_of(c, &r.entities, id);
@@ -187,7 +199,11 @@ pub(super) fn save_player(s: &Storage, p: &Player, d: &Dim) {
     }
     for ((id, comp), bytes) in &d.entities.comps {
         if *id == p.entity && c.game.components[*comp as usize].flags & cf::SAVE != 0 {
-            let named = crate::stack::holds_stacks(c, *comp).then(|| crate::stack::contents_to_names(c, bytes));
+            let named = if crate::stack::holds_stacks(c, *comp) {
+                Some(crate::stack::contents_to_names(c, bytes))
+            } else {
+                (*comp == c.game.fields.effect).then(|| super::persist::effects_to_save(c, bytes, d.time))
+            };
             let bytes = named.as_deref().unwrap_or(bytes);
             text.push_str(&format!("comp.{} = {}\n", c.game.components[*comp as usize].name, crate::kv::hex(bytes)));
         }

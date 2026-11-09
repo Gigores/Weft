@@ -766,6 +766,13 @@ impl Dim {
                 )
             })
             .collect();
+        // A maximum that dropped (health boost ending) takes health down with it.
+        for (&id, a) in &attrs {
+            let max = a[crate::registry::attr::MAX_HEALTH as usize];
+            if let Some(e) = self.entities.get_mut(id).filter(|e| e.health > max) {
+                e.health = max;
+            }
+        }
         let Entities { list, comps, inventories, .. } = &mut self.entities;
         for e in list.iter().filter(|e| e.seen(c)) {
             let put = |comps: &mut FxHashMap<(u64, u32), Box<[u8]>>, comp: u32, bytes: &[u8]| match comps.get_mut(&(e.id, comp)) {
@@ -1636,9 +1643,11 @@ impl Dim {
             .or_else(own)
             .unwrap_or(1.0)
             + bonus;
+        // Weakness takes a hit down to nothing, never into healing.
+        let base = base.max(0.0);
         self.events
             .push(DimEvent::EntitySwing { id: attacker, off: false });
-        let dmg = self.compute(c, abi::chain::ATTACK_DAMAGE, base as f64, &q, false) as f32;
+        let dmg = (self.compute(c, abi::chain::ATTACK_DAMAGE, base as f64, &q, false) as f32).max(0.0);
         // Modern's swing: charged by time since the last, and only a full one crits or knocks. It
         // may have changed what it holds since the last tick looked.
         if let Some(me) = self.entities.get_mut(attacker) {
@@ -1681,7 +1690,8 @@ impl Dim {
             let away = (self.entities.get(target).map_or(pos, |t| t.pos) - pos)
                 .with_y(0.0)
                 .normalize_or_zero();
-            self.push(target, away * 10.0 + DVec3::Y * 2.0);
+            let resist = self.attribute(c, target, crate::registry::attr::KNOCKBACK_RESISTANCE, false);
+            self.push(target, (away * 10.0 + DVec3::Y * 2.0) * (1.0 - resist.clamp(0.0, 1.0)));
             if let Some(me) = self.entities.get_mut(attacker) {
                 me.sprinting = false;
             }
@@ -1772,6 +1782,7 @@ impl Dim {
     /// one (`comp::SPLASH`, `comp::BUBBLE`).
     pub fn fall_effects(&mut self, c: &'static Content, id: u64, fell: Option<f32>, splash: bool) {
         let safe = self.attribute(c, id, crate::registry::attr::SAFE_FALL, false) as f32;
+        let hurts = fell.and_then(|f| self.fall_damage(c, id, f)).is_some();
         let Some(e) = self.entities.get(id) else { return };
         let (pos, w) = (e.pos, e.dims(c).half_width as f32);
         let mut bursts = Vec::new();
@@ -1779,7 +1790,7 @@ impl Dim {
             .get((pos - DVec3::Y * 0.2).floor().as_ivec3())
             .unwrap_or(AIR);
         let kind = c.states[under as usize].effects[crate::content::block_event::LAND].particle;
-        if let Some(drop) = fell.filter(|&d| d > safe && under != AIR && kind != u32::MAX) {
+        if let Some(drop) = fell.filter(|_| hurts && under != AIR && kind != u32::MAX) {
             // Vanilla's `checkFallDamage`, and what its particles make of no speed of their own.
             let count = (150.0 * (0.2 + (drop - safe).ceil() / 15.0).min(2.5)) as u32;
             bursts.push(abi::ParticleBurst {
@@ -2188,6 +2199,8 @@ impl Dim {
             .map(|&i| {
                 let (e, nav) = (&list[i], list[i].nav.as_ref().unwrap());
                 let height = e.height(c).ceil() as i32;
+                // It goes down no further than it falls without harm.
+                let drop = (e.safe_fall.floor() as i32).max(1);
                 match on_body(e) {
                     Some((f, place)) => {
                         let deck = &bodies[&f];
@@ -2197,9 +2210,10 @@ impl Dim {
                             place.to_local(e.pos).floor().as_ivec3(),
                             nav.target.floor().as_ivec3(),
                             height,
+                            drop,
                         )
                     }
-                    None => super::path::find(c, &block, e.pos.floor().as_ivec3(), nav.target.floor().as_ivec3(), height),
+                    None => super::path::find(c, &block, e.pos.floor().as_ivec3(), nav.target.floor().as_ivec3(), height, drop),
                 }
             })
             .collect();
@@ -2454,14 +2468,18 @@ impl Dim {
             .entities
             .list
             .iter()
-            .filter(|e| !e.removed && !e.player && e.anchor.is_none())
+            .filter(|e| !e.removed && !e.player && e.anchor.is_none() && e.item.is_empty())
             .map(|e| e.id)
             .collect();
         for id in bodies {
-            let step = self.attribute(c, id, crate::registry::attr::STEP_HEIGHT, false);
-            let gravity = self.attribute(c, id, crate::registry::attr::GRAVITY, false);
+            use crate::registry::attr as a;
+            let (step, gravity, safe) = (
+                self.attribute(c, id, a::STEP_HEIGHT, false),
+                self.attribute(c, id, a::GRAVITY, false),
+                self.attribute(c, id, a::SAFE_FALL, false),
+            );
             if let Some(e) = self.entities.get_mut(id) {
-                (e.step_height, e.gravity_mul) = (step, gravity);
+                (e.step_height, e.gravity_mul, e.safe_fall) = (step, gravity, safe as f32);
             }
         }
         let (here, now, gravity) = (self.id, self.time, c.dims[self.id as usize].gravity as f64);
@@ -2570,6 +2588,7 @@ impl Dim {
                         .game
                         .entity_effects
                         .get(f.id as usize)
+                        .filter(|d| !d.hazards.is_empty())
                         .map_or(Vec::new(), |d| d.hazards_at(f.level));
                     met.extend(
                         of.into_iter()
@@ -2613,9 +2632,11 @@ impl Dim {
         self.seat_riders(c);
         for TickHit { id, fell, splash, burn, met } in hits {
             self.fall_effects(c, id, fell, splash);
-            if let Some(amount) = fell.and_then(|f| self.fall_damage(c, id, f)) {
-                self.damage(c, id, amount, 0, damage::FALL);
-                self.riders_fall(c, id, amount);
+            if let Some(f) = fell {
+                if let Some(amount) = self.fall_damage(c, id, f) {
+                    self.damage(c, id, amount, 0, damage::FALL);
+                }
+                self.riders_fall(c, id, f);
             }
             if burn {
                 self.damage(c, id, 1.0, 0, damage::FIRE);
@@ -2636,9 +2657,11 @@ impl Dim {
                 {
                     continue;
                 }
-                let burning = self.attribute(c, id, crate::registry::attr::BURNING_TIME, false);
-                if let Some(e) = self.entities.get_mut(id) {
-                    e.fire = e.fire.max((h.fire as f64 * burning) as u32);
+                if h.fire > 0 {
+                    let burning = self.attribute(c, id, crate::registry::attr::BURNING_TIME, false);
+                    if let Some(e) = self.entities.get_mut(id) {
+                        e.fire = e.fire.max((h.fire as f64 * burning) as u32);
+                    }
                 }
                 if let Some(cause) = h.cause {
                     self.damage(c, id, h.damage, 0, cause);

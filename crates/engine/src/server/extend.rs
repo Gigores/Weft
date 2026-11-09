@@ -384,19 +384,20 @@ impl Dim {
                 .insert((id, comp), crate::world::encode_effects(&on));
             self.entities.dirty_comp.insert((id, comp));
         }
-        // An effect's at its level: for each attribute those given for that level, else the
-        // others times the level (what is set is the value at every level).
+        // An effect's at its level: for each attribute those given for the highest level up to
+        // it, else the others times the level (what is set is the value at every level).
         for f in &on {
             let all = s.effects.get(&f.id).map_or(&[][..], |v| &v[..]);
-            from.extend(all.iter().filter_map(|m| {
-                let exact = all.iter().any(|o| o.attr == m.attr && o.level == f.level);
-                match m.level {
-                    l if l == f.level => Some(*m),
-                    0 if !exact => {
-                        Some(SourceMod { amount: if m.op == abi::attr_op::SET { m.amount } else { m.amount * f.level as f64 }, ..*m })
-                    }
-                    _ => None,
-                }
+            let given = |attr: u32| {
+                all.iter()
+                    .filter(|o| o.attr == attr && o.level > 0 && o.level <= f.level)
+                    .map(|o| o.level)
+                    .max()
+            };
+            from.extend(all.iter().filter_map(|m| match (m.level, given(m.attr)) {
+                (l, Some(at)) if l == at => Some(*m),
+                (0, None) => Some(SourceMod { amount: if m.op == abi::attr_op::SET { m.amount } else { m.amount * f.level as f64 }, ..*m }),
+                _ => None,
             }));
         }
         from.extend(s.modes.get(&(mode.0 as u32)).into_iter().flatten());

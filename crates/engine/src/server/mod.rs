@@ -1429,7 +1429,7 @@ fn serialize(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
         })
         .collect();
     let mut out = Vec::new();
-    persist::write(c, &mut out, &list);
+    persist::write(c, &mut out, &list, d.time);
     out
 }
 

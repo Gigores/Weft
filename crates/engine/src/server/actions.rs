@@ -454,6 +454,10 @@ impl Server {
                 self.change_dim(c, pi, c.spawn_dim, spawn);
                 if let Some((r, entity)) = self.region(pi) {
                     r.entities.reset_components(c, entity);
+                    // A death ends every effect, as vanilla's.
+                    let effect = c.game.fields.effect;
+                    r.entities.comps.insert((entity, effect), Box::default());
+                    r.entities.dirty_comp.insert((entity, effect));
                     // The game mode's modifiers went with the rest.
                     r.keep_sources(c, entity);
                     // After the components: modifiers are gone with them. Sent as any change.
@@ -646,14 +650,16 @@ impl Dim {
             .components
             .id(abi::comp::GIVES_EFFECTS)
             .and_then(|id| c.components.bytes(crate::components::ITEM, held.item, id))
-            .and_then(abi::data::from_bytes::<Vec<abi::EffectGift>>)
-            .filter(|_| def.on_use.is_none());
-        if let Some(gifts) = gifts {
+            .and_then(abi::data::from_bytes::<Vec<abi::EffectGift>>);
+        let give = |d: &mut Dim, gifts: &[abi::EffectGift]| {
             for g in gifts {
                 if let Some(&effect) = c.game.entity_effect_names.get(&g.effect) {
-                    self.give_effect(c, entity, effect, g.level, g.ticks);
+                    d.give_effect(c, entity, effect, g.level, g.ticks);
                 }
             }
+        };
+        if let Some(gifts) = gifts.as_ref().filter(|_| def.on_use.is_none()) {
+            give(self, gifts);
             // What is left of it: its remainder (the potion's bottle), else one fewer.
             let creative = self
                 .entities
@@ -705,6 +711,10 @@ impl Dim {
                 self.entities.set_slot(entity, slot, a.stack);
             }
             used = a.handled != 0;
+            // Its own use (eating) and what it gives besides: a golden apple.
+            if let Some(gifts) = gifts.as_ref().filter(|_| used) {
+                give(self, gifts);
+            }
         }
         if used {
             self.emit_engine(

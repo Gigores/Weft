@@ -658,9 +658,10 @@ pub mod comp {
     }
 
     /// An entity effect's `SHADER` (`str`, `shaders/entity_effect/<name>.wgsl`, its own name by
-    /// default where that file is; empty: none), `HAZARDS` (`[Hazard]`, `hazard_at::SELF`: poison),
-    /// `MODIFIERS` (`[Modifier]`: speed) and `LIGHT` while it is on, each times its level unless
-    /// one is given for that level. A status effect, one its entity's player sees, has an `ICON`
+    /// default, nothing drawn where that file isn't), `HAZARDS` (`[Hazard]`, `hazard_at::SELF`:
+    /// poison), `MODIFIERS` (`[Modifier]`: speed) and `LIGHT` while it is on; modifiers and hazards
+    /// times its level unless some are given for a level (then those of the highest level up to
+    /// it). A status effect, one its entity's player sees, has an `ICON`
     /// (`str`, a texture) and a `COLOR` (`u32`, `0xRRGGBB`, of the swirls around who has it, none
     /// without), tags `BENEFICIAL` or `HARMFUL`, and `INSTANT` for one that acts once when given
     /// (healing) and doesn't stay. `SCREEN` (`str`, `shaders/post/<name>.wgsl`) is laid over
@@ -3667,9 +3668,9 @@ pub struct Host {
     pub weather_now: unsafe extern "C" fn(world: *mut WorldCtx) -> u32,
     /// The weather the client has now.
     pub client_weather: unsafe extern "C" fn(client: *mut ClientCtx) -> u32,
-    /// Effect `effect` on an entity for `ticks` at `strength` (its shader's, for everyone who sees
-    /// it, players coming along later too), with its hazards and modifiers; 0 ticks ends it.
-    /// Several at once, one of each: giving one again replaces it.
+    /// Effect `effect` on an entity at `level` (1 and up) for `ticks`, seen by everyone (players
+    /// coming along later too), with its hazards and modifiers; 0 ticks ends it. Several at once,
+    /// one of each: giving one again replaces it; an instant one acts once and doesn't stay.
     pub entity_effect: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, effect: u32, level: u32, ticks: u32),
     /// The effects on entity `id`, at most `cap` of them into `out`; returns how many it has.
     pub entity_effects: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, out: *mut EffectOn, cap: u32) -> u32,

@@ -238,7 +238,8 @@ impl DimSet {
         }
         d.restore_timers(timers);
         let mut bodies = Vec::new();
-        for (e, inv, comps, blocks) in super::persist::read(c, entities) {
+        let now = d.time;
+        for (e, inv, comps, blocks) in super::persist::read(c, entities, now) {
             let id = e.id;
             if d.entities.get(id).is_some() {
                 continue;

@@ -88,7 +88,8 @@ pub fn register(r: &mut Registry) {
     for (level, share) in [(1, 0.3), (2, 0.09), (3, 0.0027), (4, 0.00081)] {
         fatigue = fatigue.modifier_at(level, Modifier::new(&a::MINING_SPEED, op::MULTIPLY_TOTAL, share - 1.0));
     }
-    fatigue.modifier(Modifier::new(&a::MINING_SPEED, op::SET, 0.0));
+    // Past IV as at IV.
+    drop(fatigue);
     status(r, &STRENGTH, 0xFFC700)
         .beneficial()
         .modifier(Modifier::add(&a::ATTACK_DAMAGE, 3.0));
@@ -110,7 +111,7 @@ pub fn register(r: &mut Registry) {
     for level in 1..=5 {
         levitation = levitation.modifier_at(level, Modifier::new(&a::GRAVITY, op::SET, -0.0125 * level as f64));
     }
-    levitation.modifier(Modifier::new(&a::GRAVITY, op::SET, -0.0625));
+    drop(levitation);
     // Vanilla's: a heal or a hurt every so many ticks, half as many with every level.
     for (e, color, amount, cause, first, harmful) in [
         (&REGENERATION, 0xCD5CAB, -1.0, &damage_causes::HEAL, 50, false),
@@ -119,10 +120,10 @@ pub fn register(r: &mut Registry) {
     ] {
         let mut b = status(r, e, color);
         b = if harmful { b.harmful() } else { b.beneficial() };
+        // Past V as at V.
         for level in 1..=5 {
             b = b.hazard_at(level, Hazard::own(amount, cause).every(every(first, level)));
         }
-        b.hazard(Hazard::own(amount, cause));
     }
     status(r, &RESISTANCE, 0x9146F0)
         .beneficial()
@@ -144,14 +145,16 @@ pub fn register(r: &mut Registry) {
         .beneficial()
         .hides()
         .modifier(Modifier::new(&a::VISIBILITY, op::MULTIPLY_TOTAL, -0.93));
-    status(r, &INSTANT_HEALTH, 0xF82423)
-        .beneficial()
-        .instant()
-        .hazard(Hazard::own(-4.0, &damage_causes::HEAL));
-    status(r, &INSTANT_DAMAGE, 0xA9656A)
-        .harmful()
-        .instant()
-        .hazard(Hazard::own(6.0, &MAGIC));
+    // Twice as much a level, as vanilla's, up to VIII.
+    for (e, color, amount, cause, harmful) in
+        [(&INSTANT_HEALTH, 0xF82423, -4.0, &damage_causes::HEAL, false), (&INSTANT_DAMAGE, 0xA9656A, 6.0, &MAGIC, true)]
+    {
+        let mut b = status(r, e, color).instant();
+        b = if harmful { b.harmful() } else { b.beneficial() };
+        for level in 1..=8u32 {
+            b = b.hazard_at(level, Hazard::own(amount * (1 << (level - 1)) as f32, cause));
+        }
+    }
     status(r, &HUNGER, 0x587653)
         .harmful()
         .modifier(Modifier::add(&EXHAUSTION, 0.005));
