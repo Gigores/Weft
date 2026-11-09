@@ -3936,7 +3936,10 @@ pub mod condition {
     pub const SHELTERED: u32 = 22;
     /// `height(..-64)`: the height there, in blocks.
     pub const HEIGHT: u32 = 23;
-    pub const NAMES: [&str; 24] = [
+    /// `wears(head)`: the body asked about wears something over that bone (a helmet keeping the
+    /// sun off), or in the equipment slot of that name (`wears(base:feet)`).
+    pub const WEARS: u32 = 24;
+    pub const NAMES: [&str; 25] = [
         "core:day",
         "core:night",
         "core:underground",
@@ -3961,6 +3964,7 @@ pub mod condition {
         "core:sky",
         "core:sheltered",
         "core:height",
+        "core:wears",
     ];
 }
 

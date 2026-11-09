@@ -890,13 +890,14 @@ impl EntityBuilder<'_> {
     pub fn crushing(self) -> Self {
         self.hazard(crate::Hazard::crushed(1.0, &crate::damage_causes::CRUSH))
     }
-    /// Daylight from an open sky sets it burning for 8 seconds, as the undead in vanilla.
+    /// Daylight from an open sky sets it burning for 8 seconds, as the undead in vanilla, unless
+    /// it wears something on its head.
     pub fn burns_in_sun(self) -> Self {
         let sun = crate::Hazard::own(0.0, &crate::damage_causes::FIRE)
             .harmless()
             .fire(160)
             .every(20)
-            .when(crate::Cond::new("day & sky(15) & !sheltered & !in_liquid"));
+            .when(crate::Cond::new("day & sky(15) & !sheltered & !in_liquid & !wears(head)"));
         self.hazard(sun)
     }
     /// Riders up to `blocks` above the body (jumping, flying around inside it) keep moving with

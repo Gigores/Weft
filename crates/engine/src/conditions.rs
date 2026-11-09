@@ -39,6 +39,8 @@ pub enum Arg {
     Side(u8, Option<Vec<u64>>),
     /// An attribute and its range, inclusive.
     Attr(u32, f32, f32),
+    /// Equipment slots (`PlayerLayout::equipment` order), a bit each.
+    Slots(u32),
 }
 
 /// What a condition is asked about.
@@ -233,6 +235,7 @@ impl Parser<'_, '_> {
                 | k::ATTRIBUTE
                 | k::SKY
                 | k::HEIGHT
+                | k::WEARS
                     if engine =>
                 {
                     Err(format!("condition {name} needs an argument"))
@@ -284,6 +287,22 @@ impl Parser<'_, '_> {
                 Arg::Attr(id, a, b)
             }
             k::CHANCE | k::TOOL_LEVEL => Arg::Num(num(&text)?),
+            k::WEARS => {
+                let what = text.trim();
+                let slots = self
+                    .look
+                    .game
+                    .player_layout
+                    .equipment
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.name == what || e.bones.iter().any(|b| b == what))
+                    .fold(0, |m, (i, _)| m | 1 << i);
+                if slots == 0 {
+                    return Err(format!("condition {name}({text}): no equipment slot is or covers {what}"));
+                }
+                Arg::Slots(slots)
+            }
             k::BLOCK => Arg::Blocks(crate::refs::compile(&text, self.look.block_names, self.look.blocks, self.look.components)?),
             k::TOOL => Arg::Tag(crate::refs::tag(self.look.components, text.trim_start_matches('#'))?),
             k::STATE => Arg::Text(text),
@@ -378,6 +397,17 @@ fn light_for(arg: &Arg, p: glam::IVec3, light: &dyn Fn(glam::IVec3) -> u32, dayl
     }
 }
 
+/// Whether a body of `kind` with `inventory` has something in one of the equipment `slots`.
+fn wears(kind: &crate::registry::EntityKind, inventory: &[abi::ItemStack], slots: u32) -> bool {
+    let worn = &kind.worn;
+    (0..32u32).filter(|i| slots & 1 << i != 0).any(|i| {
+        // The other hand is the slot after the rest.
+        let slot = if i < worn.len() as u32 { Some(worn.start + i) } else { kind.off.filter(|_| i == worn.len() as u32) };
+        slot.and_then(|s| inventory.get(s as usize))
+            .is_some_and(|s| !s.is_empty())
+    })
+}
+
 fn attr(arg: &Arg) -> u32 {
     if let Arg::Attr(id, ..) = arg { *id } else { u32::MAX }
 }
@@ -457,6 +487,15 @@ fn server(d: &mut Dim, c: &'static Content, e: &Expr, a: &Ask) -> Option<bool> {
                 (k::SHELTERED, _) => c.game.weathers[d.weather as usize].shelters(),
                 (k::HEIGHT, _) => in_range(arg, a.pos.y as f32),
                 (k::ATTRIBUTE, _) => in_range(arg, d.attribute(c, a.entity, attr(arg), false) as f32),
+                (k::WEARS, Arg::Slots(slots)) => {
+                    let Some(e) = d.entities.get(a.entity) else { return Some(false) };
+                    let inv = d
+                        .entities
+                        .inventories
+                        .get(&a.entity)
+                        .map_or(&[][..], |i| &i[..]);
+                    wears(&c.game.entities[e.kind as usize], inv, *slots)
+                }
                 (k::SIDE, Arg::Side(f, m)) => {
                     return side(d, *f, &|s| m.as_ref().map_or(c.solid(s), |m| crate::refs::has(m, s)));
                 }
@@ -528,6 +567,10 @@ pub fn client_holds(client: Option<&crate::client::Client>, e: &Expr, a: &Ask) -
                     in_range(arg, light_for(arg, a.pos.floor().as_ivec3(), &|q| cl.world.light(q), daylight))
                 }),
                 k::ATTRIBUTE => client.is_some_and(|cl| in_range(arg, cl.attribute(attr(arg)))),
+                k::WEARS => client.is_some_and(|cl| {
+                    let Arg::Slots(slots) = arg else { return false };
+                    wears(&c.game.entities[cl.me.kind as usize], &cl.inventory, *slots)
+                }),
                 k::SKY => client.is_some_and(|cl| in_range(arg, abi::light::sky(cl.world.light(a.pos.floor().as_ivec3())) as f32)),
                 k::SHELTERED => client.is_some_and(|cl| c.game.weathers[cl.weather_id as usize].shelters()),
                 k::HEIGHT => in_range(arg, a.pos.y as f32),

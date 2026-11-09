@@ -685,7 +685,7 @@ fn engine_components() -> Vec<RawEntry> {
         (RIDING, "bytes", own | shown | cf::SAVE, Vec::new()),
         (GAME_MODE, "u32", cf::SYNC_OWNER, vec![0; 4]),
         (PERMISSION, "u32", cf::SYNC_OWNER, vec![0; 4]),
-        (ATTRIBUTES, "bytes", own, Vec::new()),
+        (ATTRIBUTES, "bytes", cf::SYNC_OWNER, Vec::new()),
         (SIMULATED, "u64", cf::SAVE, vec![0; 8]),
     ] {
         all.push(entity(name, schema, flags, default));
@@ -2357,7 +2357,7 @@ fn lay_out_slots(
         }
     }
     // Menus showing equipment get a group per slot: what the entity the menu is on wears, or the
-    // player (`menu::slots`). The other hand is always the player's.
+    // player (`menu::slots`). The other hand is the slot after the equipment, theirs too.
     let layout = g.player_layout.clone();
     for m in &mut g.menus {
         let Some(at) = m
@@ -2376,8 +2376,8 @@ fn lay_out_slots(
                 at,
                 GroupDef {
                     name: e.name.clone(),
-                    owner: if off { weft_abi::slot_owner::PLAYER } else { weft_abi::slot_owner::WORN },
-                    start: if off { layout.worn.start + i as u32 } else { i as u32 },
+                    owner: weft_abi::slot_owner::WORN,
+                    start: i as u32,
                     cols: 1,
                     rows: 1,
                     flags: if off { weft_abi::slot_flags::OFF_HAND } else { 0 },

@@ -1909,17 +1909,25 @@ fn crack_boxes(out: &mut Vec<GpuBox>, breaking: &[Crack], textures: &GameTexture
     }
 }
 
-/// Two layers of flames facing the camera, the inner one smaller, like vanilla's burning mobs.
+/// Flames facing the camera up the whole body, like vanilla's burning mobs: a stack of quads,
+/// each higher, narrower and a little further back, in front of the body so it doesn't hide them.
 fn fire_boxes(out: &mut Vec<GpuBox>, textures: &GameTextures, base: Vec3, width: f32, height: f32, cam_yaw: f32, age: f32) {
     let c = content();
-    let frame = |offset: f32| textures.frame_now(c.fire_texture, age * crate::world::TPS as f32 + offset);
-    for (i, (scale, back)) in [(1.4, 0.0), (1.0, 0.2)].into_iter().enumerate() {
-        let l = frame(i as f32 * 11.0);
-        let w = width * scale;
+    // Vanilla's units: the body's width times 1.4.
+    let unit = width * 1.4;
+    let (mut left, mut half) = (height / unit, 0.5f32);
+    for i in 0..16 {
+        if left <= 0.0 {
+            break;
+        }
+        // Every other one at another point of the animation, as vanilla's two pictures.
+        let l = textures.frame_now(c.fire_texture, age * crate::world::TPS as f32 + i as f32 * 11.0);
+        let w = 2.0 * half * unit;
+        // Toward the camera is +Z here.
         let m = Mat4::from_translation(base)
             * Mat4::from_rotation_y(cam_yaw)
-            * Mat4::from_translation(Vec3::new(-w / 2.0, 0.0, back * width))
-            * Mat4::from_scale(Vec3::new(w, height * scale * 0.95, 0.0));
+            * Mat4::from_translation(Vec3::new(-w / 2.0, 0.45 * i as f32 * unit, (0.3 - 0.03 * i as f32) * unit))
+            * Mat4::from_scale(Vec3::new(w, 1.4 * unit, 0.0));
         out.push(GpuBox {
             rows: rows(m),
             color: [1.0, 1.0, 1.0, 0.0],
@@ -1927,6 +1935,7 @@ fn fire_boxes(out: &mut Vec<GpuBox>, textures: &GameTextures, base: Vec3, width:
             ids2: [l | l << 16, 0, 0, 0],
             ..Default::default()
         });
+        (left, half) = (left - 0.45, half * 0.9);
     }
 }
 
