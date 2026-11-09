@@ -703,9 +703,12 @@ impl Screen for WorldSelect {
         ui.root_style(Style::default().stretch());
         ui.panel("background", Style::row().grow().stretch(), |ui| {
             ui.panel("sidebar", Style::default().w(180.0).pad(12.0).gap(4.0).stretch(), |ui| {
+                // As wide as the bar, whatever the language says.
                 let t = label(ui, cx, "world.select", &[], "title");
                 if let Some(t) = ui.text_mut(t) {
                     t.wrap = false;
+                    let chars = cx.lang.get("world.select").chars().count().max(1) as f32;
+                    t.scale = (156.0 / (chars * 6.0)).clamp(1.0, 3.0);
                 }
                 ui.spacer();
                 let sel = selected.and_then(|i| worlds.get(i)).cloned();
@@ -728,6 +731,23 @@ impl Screen for WorldSelect {
                 });
                 if let Kind::Button { enabled, .. } = &mut ui.nodes[del].kind {
                     *enabled = selected.is_some();
+                }
+                // The selected world's cheats, changed where it is chosen.
+                let sel = selected.and_then(|i| worlds.get(i)).cloned();
+                let on = sel.as_ref().is_some_and(|w| w.cheats);
+                let cheats = button(ui, cx, "world.cheats", &[on_off(on)], 156.0, move |c| {
+                    if let Some(mut w) = sel.clone() {
+                        w.cheats = !w.cheats;
+                        w.save();
+                        c.requests.push(Request::Rebuild);
+                    }
+                });
+                // Hardcore stays without.
+                let hardcore = selected
+                    .and_then(|i| worlds.get(i))
+                    .is_some_and(is_hardcore);
+                if let Kind::Button { enabled, .. } = &mut ui.nodes[cheats].kind {
+                    *enabled = selected.is_some() && !hardcore;
                 }
                 let dir = cx.settings.run_dir.join("saves");
                 let open = button(ui, cx, "world.folder", &[], 156.0, move |_| crate::packs::open_folder(&dir));
@@ -831,11 +851,7 @@ fn tile(ui: &mut Ui, cx: &BuildCx, w: &WorldMeta, i: usize, selected: bool) {
             if let Some(t) = ui.text_mut(name) {
                 t.wrap = false;
             }
-            let hardcore = w
-                .configs
-                .iter()
-                .any(|(n, v)| n == "core:lives" && *v == 1.0);
-            let key = if hardcore { "gamemode.hardcore".to_string() } else { format!("gamemode.{}", w.game_mode.name()) };
+            let key = if is_hardcore(w) { "gamemode.hardcore".to_string() } else { format!("gamemode.{}", w.game_mode.name()) };
             let mut chars = cx.lang.get(&key).chars();
             let mode: String = chars
                 .next()
@@ -861,6 +877,13 @@ fn tile(ui: &mut Ui, cx: &BuildCx, w: &WorldMeta, i: usize, selected: bool) {
     tip.push(text::Span::text("\n", None));
     tip.extend(cx.t("world.cheats", &[on_off(w.cheats)]));
     ui.nodes[b].tooltip = Some(tip);
+}
+
+/// A world of one life: no cheats for it, ever.
+fn is_hardcore(w: &WorldMeta) -> bool {
+    w.configs
+        .iter()
+        .any(|(n, v)| n == "core:lives" && *v == 1.0)
 }
 
 /// The name shown for choice `i` of the world screen: a game mode, or past them hardcore.
@@ -926,14 +949,9 @@ impl Screen for CreateWorld {
                     cheats.set(next < modes && (m == crate::world::GameMode::CREATIVE || m == crate::world::GameMode::SPECTATOR));
                 },
             );
-            let cheats = self.cheats.clone();
-            button(ui, cx, "world.rules", &[], 260.0, move |c| {
-                c.requests
-                    .push(Request::Open(Box::new(crate::screens::ConfigScreen {
-                        shown: crate::screens::Shown::World,
-                        cheats: Some(cheats.clone()),
-                    })))
-            });
+            let (cheats, shown) = (self.cheats.clone(), self.cheats.clone());
+            bound_button(ui, 260.0, move || ("world.cheats".into(), vec![on_off(shown.get())]), move |_| cheats.set(!cheats.get()));
+            button(ui, cx, "world.rules", &[], 260.0, |c| c.requests.push(Request::Screen("core:world_rules".into())));
             ui.container(Style::row().gap(6.0), |ui| {
                 let (mode, cheats) = (self.mode.clone(), self.cheats.clone());
                 button(ui, cx, "world.create", &[], 120.0, move |c| {
