@@ -39,16 +39,13 @@ pub fn entity_glow(
     stacks: &[ItemStack],
 ) -> (DVec3, [u8; 3]) {
     let kind = &c.game.entities[e.kind as usize];
-    let at = kind
-        .light_at
-        .unwrap_or(DVec3::Y * (kind.size().height as f64 * 0.5));
     let own = stored
         .and_then(|b| b.try_into().ok())
         .unwrap_or(c.entity_light(e.kind));
     let effects = e
         .effects
         .iter()
-        .filter(|f| f.1 > now)
+        .filter(|f| f.2 > now)
         .map(|f| f.0)
         .chain(e.burning.then_some(weft_abi::entity_effect::BURNING));
     let light = effects
@@ -61,7 +58,7 @@ pub fn entity_glow(
                 .map(|s| c.stack_light(s)),
         )
         .fold(own, brightest);
-    (pos + crate::server::riding::turned(at, yaw), light)
+    (pos + crate::server::riding::turned(kind.light_at, yaw), light)
 }
 
 /// The light sources, and what they light, cell by cell.

@@ -121,9 +121,9 @@ pub struct EntityKind {
     pub effects: [crate::content::Fx; 4],
     /// Solid bodies: riders up to this high above it move with it.
     pub carry_height: f32,
-    /// Where its light comes from, from its position turned with it (a block entity's is its
-    /// block's middle); none: its middle.
-    pub light_at: Option<glam::DVec3>,
+    /// Where its light comes from, from its position turned with it: its middle unless said, a
+    /// block entity's block's.
+    pub light_at: glam::DVec3,
     /// Inventory slots everyone around sees (`SHOWN`).
     pub shown_slots: Vec<u32>,
     /// What it does to entities, itself among them (`abi::comp::entity::HAZARDS`): as
@@ -1519,10 +1519,11 @@ fn bake_entity(e: &Entry) -> EntityKind {
         worn: 0..0,
         effects: [crate::content::Fx::NONE; 4],
         carry_height: e.or(k::CARRY_HEIGHT, 0.0),
-        light_at: e
-            .get::<[f32; 3]>(k::LIGHT_AT)
-            .map(|v| glam::Vec3::from(v).as_dvec3())
-            .or_else(|| e.text(k::BLOCK).map(|_| glam::DVec3::ZERO)),
+        light_at: match e.get::<[f32; 3]>(k::LIGHT_AT) {
+            Some(v) => glam::Vec3::from(v).as_dvec3(),
+            None if e.text(k::BLOCK).is_some() => glam::DVec3::ZERO,
+            None => glam::DVec3::Y * (size.height as f64 * 0.5),
+        },
         shown_slots: e.or(k::SHOWN_SLOTS, Vec::new()),
         raw_hazards: e.or(k::HAZARDS, Vec::new()),
         hazards: Vec::new(),

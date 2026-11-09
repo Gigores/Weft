@@ -817,6 +817,23 @@ impl Dim {
                 }
                 None => {}
             };
+            let slots = &c.game.entities[e.kind as usize].shown_slots;
+            if !slots.is_empty() {
+                let inv = inventories.get(&e.id);
+                let items: Vec<u8> = slots
+                    .iter()
+                    .flat_map(|&s| {
+                        inv.and_then(|i| i.get(s as usize))
+                            .map_or(0, |s| s.item)
+                            .to_le_bytes()
+                    })
+                    .collect();
+                put(comps, shown, &items);
+            }
+            // A block entity is heard of only for what it shows.
+            if e.anchor.is_some() {
+                continue;
+            }
             let max = maxes.iter().find(|m| m.0 == e.id).map_or(0.0, |m| m.1);
             let mut hp = [0u8; 8];
             hp[..4].copy_from_slice(&e.health.max(0.0).to_le_bytes());
@@ -839,19 +856,6 @@ impl Dim {
                     .collect()
             });
             put(comps, riding, &rides);
-            let slots = &c.game.entities[e.kind as usize].shown_slots;
-            if !slots.is_empty() {
-                let inv = inventories.get(&e.id);
-                let items: Vec<u8> = slots
-                    .iter()
-                    .flat_map(|&s| {
-                        inv.and_then(|i| i.get(s as usize))
-                            .map_or(0, |s| s.item)
-                            .to_le_bytes()
-                    })
-                    .collect();
-                put(comps, shown, &items);
-            }
             if e.player {
                 put(comps, game_mode, &(e.mode.0 as u32).to_le_bytes());
                 put(comps, permission, &e.permission.to_le_bytes());

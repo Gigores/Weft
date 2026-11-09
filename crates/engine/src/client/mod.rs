@@ -138,8 +138,8 @@ pub struct ClientEntity {
     pub arm_swing: Option<f32>,
     /// The shader effect on it (`abi::entity_effect`), its strength and seconds left.
     pub effect: Option<(u32, f32, f32)>,
-    /// Every effect on it and the tick it ends (`ClientWorld::ticks`).
-    pub effects: Vec<(u32, u64)>,
+    /// Every effect on it, its strength and the tick it ends (`ClientWorld::ticks`).
+    pub effects: Vec<(u32, f32, u64)>,
     /// The items its kind shows (`registry::SHOWN`), 0 empty.
     pub shown: Vec<u32>,
     /// Solid bodies: where the server had them at its last ticks (tick, position), oldest
@@ -2150,7 +2150,7 @@ impl Client {
             attributes,
             shown,
         } = c.game.fields;
-        let now = self.world.ticks;
+        let now = self.ticks();
         let f: Vec<f32> = words(bytes).map(f32::from_le_bytes).collect();
         let shaped = || {
             let size = (f.len() == 4 && f[0] > 0.0).then(|| weft_abi::EntitySize { width: f[0], height: f[1], eye: f[2] });
@@ -2202,20 +2202,20 @@ impl Client {
         } else if comp == shape {
             (e.size, e.look) = shaped();
         } else if comp == effect {
-            e.effects = crate::server::dim::effects_on(Some(bytes), now)
-                .map(|f| (f.0, f.2))
-                .collect();
+            e.effects = crate::server::dim::effects_on(Some(bytes), now).collect();
             // Of several, the latest drawn one shows.
-            let shown = |f: &(u32, f32, u64)| {
+            let shown = |f: &&(u32, f32, u64)| {
                 c.game
                     .entity_effects
                     .get(f.0 as usize)
                     .is_some_and(|d| !d.shader.is_empty())
             };
-            e.effect = crate::server::dim::effects_on(Some(bytes), now)
+            e.effect = e
+                .effects
+                .iter()
                 .filter(shown)
                 .last()
-                .map(|(id, strength, until)| (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32));
+                .map(|&(id, strength, until)| (id, strength, until.saturating_sub(now) as f32 / crate::world::TPS as f32));
         }
         if !mine {
             return;
@@ -2263,7 +2263,7 @@ impl Client {
     /// The light every entity gives off (`glow`): the player's from what it holds and wears,
     /// others' from what they show.
     fn update_glow(&mut self, c: &crate::content::Content) {
-        let (now, light) = (self.world.ticks, c.ids.light.unwrap_or(u32::MAX));
+        let (now, light) = (self.ticks(), c.ids.light.unwrap_or(u32::MAX));
         let mut sources = Vec::new();
         if !self.mode.has(crate::tag_bits::game_mode::HIDDEN) && !self.dead {
             let mut own = vec![self.held(), crate::content::in_off_hand(c, &self.inventory)];
@@ -2503,6 +2503,11 @@ impl Client {
                     .push(crate::audio::Play { sound, pos: None, volume, pitch: 0.0 });
             }
         }
+    }
+
+    /// Ticks the dimension ran by now, what entity effects end by.
+    fn ticks(&self) -> u64 {
+        self.world.ticks + self.since_time as u64
     }
 
     /// Game ticks now, with the fraction of the current one.
