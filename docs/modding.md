@@ -343,7 +343,7 @@ Stacks with different data don't merge. `r.stack_component` says a component exi
 - `size(w, h)`, with `eye_height(blocks)` when its eyes aren't at 85% of that, `max_health`, `walk_speed`
 - `hostile()` or `passive()` or `category(..)`
 - `texture` (by default `entity/<name>`)
-- `model(humanoid(..))`, or `r.set_model(&KIND, "thing")` for a Blockbench geo.json (any item's or entity's, also someone else's, `"#tag"` for many items)
+- `model(humanoid(..))`, or `r.set_model(&KIND, "thing")` for a Blockbench geo.json (any item's or entity's, also someone else's, `"#tag"` for many items). A kind with neither is drawn by `models/<name>.geo.json` if there is one, which a resource pack can replace (base's mobs are files). `weft export-models <dir>` writes every model made in code, any mod's, as a geo.json to go on with in Blockbench. Files in your `assets/minecraft/` go into the pack made from the player's Minecraft, so a model for vanilla's texture layout goes there (base's sheep)
 - `r.edit(&KIND)` changes any of this on someone else's kind, the engine's too (`r.edit(&PLAYER).attach(&MANA)`), and `r.replace(&KIND)` starts it over
 - `r.bone_model(..)`, `.wearable_model(..)` on an item: a model on a bone. `r.bone_motion`, `c.bone_turn`, `c.bone_position`: bones moving by themselves or by code (`docs/models.md`)
 - `light(..)`, `light_rgb(..)` and `light_at(x, y, z)` for where on it the light comes from (a lantern on its head). One mob's own light changes with `.attach(&LIGHT)` then `w.set_component(mob, &LIGHT, [r, g, b])`; effects give light too (`r.entity_effect(&E).light(..)`), and `shown_slots(&[0])` makes a kind's slots seen by everyone, glowing if what's there glows (a pedestal holding a torch)
