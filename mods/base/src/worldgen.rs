@@ -153,19 +153,12 @@ pub fn register(r: &mut Registry) {
         .base_height(SEA as f64 - 8.0)
         .sea(SEA, "water")
         .feature(preset::continents(22.0))
-        .field(
-            "temperature",
-            Expr::fbm(0x22, 2200.0, 3) * Expr::value(1.4),
-        )
-        .field(
-            "humidity",
-            Expr::fbm(0x33, 1600.0, 3) * Expr::value(1.4),
-        )
+        .field("temperature", Expr::fbm(0x22, 2200.0, 3) * Expr::value(1.4))
+        .field("humidity", Expr::fbm(0x33, 1600.0, 3) * Expr::value(1.4))
         // Biomes shape the land through their climate, not their borders, so nothing seams:
         // the cold flattens hills into tundra, deserts get dunes.
         .feature(
-            Feature::new(Expr::fbm(fixed::salt::HILLS, 110.0, 7) * Expr::blocks(16.0))
-                .mask(Expr::temperature().ramp(-0.35, -0.6).not()),
+            Feature::new(Expr::fbm(fixed::salt::HILLS, 110.0, 7) * Expr::blocks(16.0)).mask(Expr::temperature().ramp(-0.35, -0.6).not()),
         )
         .feature(
             preset::dunes(4.0, 26.0).mask(
@@ -229,10 +222,7 @@ pub fn register(r: &mut Registry) {
             let mut rng = Rng(s.random());
             let mut place_ball = |rng: &mut Rng, ox, oy, oz| {
                 for (dx, dy, dz) in sphere(1.5) {
-                    s.put(
-                        [ox + dx, oy + dy, oz + dz],
-                        if rng.float() < 0.5 { COBBLESTONE.id() } else { MOSSY_COBBLESTONE.id() }
-                    );
+                    s.put([ox + dx, oy + dy, oz + dz], if rng.float() < 0.5 { COBBLESTONE.id() } else { MOSSY_COBBLESTONE.id() });
                 }
             };
             place_ball(&mut rng, x, y, z);
@@ -247,28 +237,24 @@ pub fn register(r: &mut Registry) {
         .cell(5)
         .reach(3)
         .density(&RASPBERRY_COVER)
-        .shape(|s| place_bush(
-            s,
-            |r| if r.float() < 0.5 {
-                RASPBERRY_LEAVES.id()
-            } else {
-                RASPBERRY_LEAVES.with(&[("berried", "true")])
-            },
-            BUSH_STEM.id())
-        );
+        .shape(|s| {
+            place_bush(
+                s,
+                |r| if r.float() < 0.5 { RASPBERRY_LEAVES.id() } else { RASPBERRY_LEAVES.with(&[("berried", "true")]) },
+                BUSH_STEM.id(),
+            )
+        });
     r.scatter(&SNOWBERRY_SITES)
         .cell(5)
         .reach(3)
         .density(&SNOWBERRY_COVER)
-        .shape(|s| place_bush(
-            s,
-            |r| if r.float() < 0.5 {
-                SNOWBERRY_LEAVES.id()
-            } else {
-                SNOWBERRY_LEAVES.with(&[("berried", "true")])
-            },
-            BUSH_STEM.id())
-        );
+        .shape(|s| {
+            place_bush(
+                s,
+                |r| if r.float() < 0.5 { SNOWBERRY_LEAVES.id() } else { SNOWBERRY_LEAVES.with(&[("berried", "true")]) },
+                BUSH_STEM.id(),
+            )
+        });
     r.decoration(decorate);
 }
 
@@ -279,7 +265,9 @@ pub fn place_bush(s: &mut Site, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
     let mut rng = Rng(s.random());
     let bush_size = {
         let mut result = rng.float() + 0.7;
-        if result < 1.0 { result = 1.0; }
+        if result < 1.0 {
+            result = 1.0;
+        }
         result
     };
     s.put([x, y, z], stem);
@@ -289,7 +277,9 @@ pub fn place_bush(s: &mut Site, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
         }
     };
     place_ball(&mut rng, x, y, z, bush_size);
-    if bush_size < 1.5 { return; }
+    if bush_size < 1.5 {
+        return;
+    }
     let dx = x + (rng.float() * 2.0) as i32;
     let dz = z + (rng.float() * 2.0) as i32;
     place_ball(&mut rng, dx, y, dz, bush_size - 0.5);
