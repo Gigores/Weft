@@ -222,8 +222,21 @@ pub fn register(r: &mut Registry) {
         .density(&BOULDER_COVER)
         .shape(|s| {
             let BlockPos { x, y, z } = s.pos();
-            for (dx, dy, dz) in sphere(1.5) {
-                s.put([x + dx, y + dy, z + dz], COBBLESTONE.id())
+            let mut rng = Rng(s.random());
+            let mut place_ball = |rng: &mut Rng, ox, oy, oz| {
+                for (dx, dy, dz) in sphere(1.5) {
+                    s.put(
+                        [ox + dx, oy + dy, oz + dz],
+                        if rng.float() < 0.5 { COBBLESTONE.id() } else { MOSSY_COBBLESTONE.id() }
+                    );
+                }
+            };
+            place_ball(&mut rng, x, y, z);
+            if rng.float() < 0.5 {
+                let dx = x + (rng.float() * 2.0) as i32;
+                let dy = y + (rng.float() * 2.0 - 0.5) as i32;
+                let dz = z + (rng.float() * 2.0) as i32;
+                place_ball(&mut rng, dx, dy, dz);
             }
         });
     r.decoration(decorate);
