@@ -451,6 +451,7 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
                                 bind: e.bind.func.is_some().then(|| float_bind(owner, e.bind)),
                                 amount: e.amount,
                                 value: 0.0,
+                                class: e.class.as_str().to_string(),
                             })
                             .collect(),
                         change: None,
@@ -517,6 +518,19 @@ pub unsafe extern "C" fn client_attribute(c: *mut abi::ClientCtx, name: abi::Str
             .copied();
         id.and_then(|id| view(c)?.attributes.get(id as usize).copied())
             .map_or(f64::NAN, |v| v as f64)
+    }
+}
+
+pub unsafe extern "C" fn client_effect_level(c: *mut abi::ClientCtx, effect: u32) -> u32 {
+    unsafe {
+        view(c).map_or(0, |cl| {
+            let now = cl.ticks();
+            cl.me
+                .effects
+                .iter()
+                .find(|f| f.id == effect && f.until > now)
+                .map_or(0, |f| f.level)
+        })
     }
 }
 

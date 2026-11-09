@@ -134,6 +134,9 @@ pub fn register(r: &mut Registry) {
     r.hud_element(&HUD_HEALTH, hud_anchor::HOTBAR_LEFT, 0, |ui| {
         ui.icons("heart", 10, |c| if c.outside_survival() { -1.0 } else { c.player_state().map_or(20.0, |s| s.health.ceil()) })
             .max_by(|c| c.player_state().map_or(20.0, |s| s.max_health.ceil()))
+            // Wither's black hearts over poison's green ones, as vanilla's.
+            .look_while("heart_withered", |c| c.effect_level(&crate::effects::WITHER) as f32)
+            .look_while("heart_poisoned", |c| c.effect_level(&crate::effects::POISON) as f32)
             .shaking()
             .flash_on_gain(0.5)
             .flash_on_loss(1.0);
@@ -147,6 +150,8 @@ pub fn register(r: &mut Registry) {
     r.hud_element(&HUD_FOOD, hud_anchor::HOTBAR_RIGHT, 0, |ui| {
         ui.icons("food", 10, |c| if c.outside_survival() { -1.0 } else { c.component(&HUNGER).map_or(20.0, |h| h.food.ceil()) })
             .from_right()
+            // Green while something drains it (the hunger effect), as vanilla's.
+            .look_while("food_hunger", |c| c.attribute(&crate::effects::EXHAUSTION) as f32)
             // With no saturation left the food shakes, harder when it is nearly gone.
             .shaking_by(|c| match c.component(&HUNGER) {
                 Some(h) if h.saturation <= 0.0 => {

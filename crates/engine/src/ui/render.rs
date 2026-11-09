@@ -1097,6 +1097,10 @@ impl UiRenderer {
             }
             Kind::Icons { class, count, value, dir, shake, effects, change, .. } if *value >= 0.0 => {
                 use weft_abi::{icon_effect as fx, ui_dir};
+                let class = effects
+                    .iter()
+                    .find(|e| e.kind == fx::LOOK && e.value > 0.0 && !e.class.is_empty())
+                    .map_or(class.as_str(), |e| e.class.as_str());
                 let now = crate::shaders::clock();
                 let tick = (now * crate::world::TPS as f32) as i64;
                 let full = look.texture(class, "full");

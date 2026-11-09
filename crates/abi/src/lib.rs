@@ -3157,6 +3157,8 @@ pub struct IconEffect {
     pub bind: Callback,
     /// GUI pixels for moves, seconds for flashes and pulses.
     pub amount: f32,
+    /// `LOOK`: the class drawn instead.
+    pub class: Str,
 }
 
 /// `IconEffect::kind`.
@@ -3179,6 +3181,9 @@ pub mod icon_effect {
     /// The halves the row holds (none: twice the icon count): past the count, more rows of it
     /// go on above, closer together the more there are (hearts past twenty health).
     pub const MAX: u32 = 6;
+    /// While the value is above 0, the row is drawn in `class`'s icons instead (food turned
+    /// green by hunger, poisoned hearts).
+    pub const LOOK: u32 = 7;
 }
 defaults!(UiNode {
     kind: 0,
@@ -3475,6 +3480,8 @@ pub struct Host {
     pub ui_text: unsafe extern "C" fn(ui: *mut UiCtx, key: Str, args: Slice<UiArg>),
     pub client_player: unsafe extern "C" fn(client: *mut ClientCtx) -> u64,
     pub client_attribute: unsafe extern "C" fn(client: *mut ClientCtx, name: Str) -> f64,
+    /// The level of entity effect `effect` on the local player, 0 without it.
+    pub client_effect_level: unsafe extern "C" fn(client: *mut ClientCtx, effect: u32) -> u32,
     pub client_swing_strength: unsafe extern "C" fn(client: *mut ClientCtx) -> f32,
     /// Ticks left of the item being used, negative when none.
     pub client_use_ticks_left: unsafe extern "C" fn(client: *mut ClientCtx) -> f32,

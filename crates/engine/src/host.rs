@@ -95,6 +95,7 @@ pub static HOST: Host = Host {
     ui_text: crate::client::modui::ui_text,
     client_player: crate::client::modui::client_player,
     client_attribute: crate::client::modui::client_attribute,
+    client_effect_level: crate::client::modui::client_effect_level,
     client_swing_strength: crate::client::modui::client_swing_strength,
     client_use_ticks_left: crate::client::modui::client_using,
     client_day_time: crate::client::modui::client_day_time,

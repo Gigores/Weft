@@ -31,6 +31,8 @@ pub struct IconEffect {
     pub bind: Option<FloatBind>,
     pub amount: f32,
     pub value: f32,
+    /// `LOOK`: the class drawn instead.
+    pub class: String,
 }
 
 /// A row of icons as `abi::icon_effect::MAX` makes it: how many icons, in how many rows of

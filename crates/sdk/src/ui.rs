@@ -32,6 +32,10 @@ impl ClientView {
     pub fn attribute(&self, a: &crate::Attribute) -> f64 {
         unsafe { (host().client_attribute)(self.raw, abi::Str::new(a.name())) }
     }
+    /// The level of `effect` on the local player, 0 without it (poisoned hearts).
+    pub fn effect_level(&self, effect: &crate::EntityEffect) -> u32 {
+        unsafe { (host().client_effect_level)(self.raw, effect.id()) }
+    }
     /// How charged the next swing is, 0..1: for a bar of your own.
     pub fn swing_strength(&self) -> f32 {
         unsafe { (host().client_swing_strength)(self.raw) }
@@ -759,7 +763,14 @@ impl Icons<'_> {
     /// Any `abi::icon_effect` by `f`'s value (none: 1).
     pub fn effect(mut self, kind: u32, amount: f32, f: Option<Box<dyn Fn(&ClientView) -> f32 + Send + Sync>>) -> Self {
         let bind = f.map_or(abi::Callback::NONE, |f| bind_cb(move |c| f(c)));
-        self.effects.push(abi::IconEffect { kind, bind, amount });
+        self.effects
+            .push(abi::IconEffect { kind, bind, amount, class: Str::EMPTY });
+        self
+    }
+    /// Drawn in `class`'s icons instead while `f` is above 0 (food turned green by hunger).
+    pub fn look_while(mut self, class: &'static str, f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> Self {
+        self.effects
+            .push(abi::IconEffect { kind: abi::icon_effect::LOOK, bind: bind_cb(f), amount: 0.0, class: Str::new(class) });
         self
     }
 }
