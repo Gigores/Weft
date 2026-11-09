@@ -601,7 +601,35 @@ pub(crate) fn in_reach(c: &Content, d: &Dim, me: &Entity, target: &Entity) -> bo
     let b = target.aabb(c);
     let slack = if me.player { ENTITY_SLACK } else { 0.0 };
     let reach = d.attribute(c, me.id, crate::registry::attr::ENTITY_REACH, false) + slack;
-    (eye.clamp(b.min, b.max) - eye).length_squared() <= reach * reach
+    (eye.clamp(b.min, b.max) - eye).length_squared() <= reach * reach && (me.player || sees(c, d, eye, target))
+}
+
+/// Whether nothing solid stands between `eye` and the middle or the top of `target`'s box, as
+/// vanilla's line of sight: a mob doesn't hit through a wall or a staircase's ceiling.
+/// Players aim by what their crosshair hits, which a wall already stops.
+fn sees(c: &Content, d: &Dim, eye: DVec3, target: &Entity) -> bool {
+    let b = target.aabb(c);
+    let middle = (b.min + b.max) / 2.0;
+    [middle, DVec3::new(middle.x, b.max.y - 0.1, middle.z)]
+        .into_iter()
+        .any(|to| {
+            let (mut from, mut left) = (eye, (to - eye).length());
+            let dir = (to - eye) / left.max(1e-9);
+            // Plants and the like are seen through: only what stops a walker blocks the view.
+            for _ in 0..16 {
+                let Some(hit) = d.ray(c, from, dir, left, false) else { return true };
+                if c.states[hit.state as usize].flags & weft_abi::block_flags::SOLID != 0 {
+                    return false;
+                }
+                let gone = hit.dist + 1e-3;
+                from += dir * gone;
+                left -= gone;
+                if left <= 0.0 {
+                    return true;
+                }
+            }
+            false
+        })
 }
 
 pub(super) fn within(eye: DVec3, block: IVec3, reach: f64) -> bool {
