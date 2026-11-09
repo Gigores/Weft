@@ -95,6 +95,7 @@ pub fn all() -> Vec<TestDef> {
         gameplay::drop_and_pickup,
         extend::events_batched,
         extend::vetoes_and_timers,
+        extend::status_effects,
         extend::block_properties,
         sync::menu_sync,
         visual::liquid_layers,
