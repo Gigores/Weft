@@ -2072,8 +2072,52 @@ pub fn freeze(
     let (spawns, _) =
         tables.bake(kind(ek::SPAWN), ek::SPAWN, mod_name, errors, |e, errors| bake_spawn(e, &g, c, conds, dim_names, biome_names, errors));
     g.spawns = spawns.into_iter().flatten().collect();
-    // Natural spawning (`spawns`) runs while this is on.
+    link_handlers(&mut g, event_handlers, interceptors, modifiers, packets, order, errors);
 
+    freeze_entity_storage(&mut g, c, decls, systems, entities.attach, order, errors);
+
+    world_ticks.sort_by_key(|h: &(ModId, Callback)| order(h.0));
+    g.world_ticks = world_ticks;
+
+    (g.menus, g.menu_names) = tables.bake_by(kind(ek::MENU), ek::MENU, mod_name, errors, |e| e.name.clone(), |e, _| bake_menu(e));
+    lay_out_slots(&mut g, entities.player_groups, equipment, c, errors);
+    g.player_menu = entities.player_menu.and_then(|n| {
+        let m = g.menu_names.get(&n).copied();
+        if m.is_none() {
+            errors.push(format!("player menu {n} is not registered"));
+        }
+        m
+    });
+
+    for (block, kind) in entities.blocks {
+        match block_names.get(&block) {
+            Some(&b) => {
+                if g.block_entities
+                    .insert(b, kind)
+                    .is_some_and(|old| old != kind)
+                {
+                    errors.push(format!("block {block} has two block entities"));
+                }
+            }
+            None => errors.push(format!("entity {}: the block entity of unknown block {block}", g.entities[kind as usize].name)),
+        }
+    }
+
+    freeze_recipes(&mut g, recipes, items, item_names, c, conds, errors);
+    g
+}
+
+/// Events with their handlers, interceptors, value chain modifiers and packet channels, each in
+/// mod order.
+fn link_handlers(
+    g: &mut Game,
+    mut event_handlers: Vec<(ModId, String, String, Callback)>,
+    mut interceptors: Vec<(ModId, String, Callback)>,
+    mut modifiers: Vec<(ModId, String, u32, Callback)>,
+    mut packets: Vec<(ModId, String, String, u32, Callback)>,
+    order: &dyn Fn(ModId) -> u32,
+    errors: &mut Vec<String>,
+) {
     let mut events: Vec<EventDef> = ENGINE_EVENTS
         .iter()
         .map(|(n, s, size)| EventDef { name: n.to_string(), schema: s.to_string(), size: (*size).into(), handlers: Vec::new() })
@@ -2122,8 +2166,19 @@ pub fn freeze(
         }
         *slot = Some((owner, cb));
     }
+}
 
-    // Entity storage, indexed by component id like everything else.
+/// Entity storage, indexed by component id like everything else: the components' definitions,
+/// the ones the engine reads, who gets them synced, systems over them and what kinds attach.
+fn freeze_entity_storage(
+    g: &mut Game,
+    c: &Components,
+    decls: &[ComponentDecl],
+    mut systems: Vec<(ModId, String, String, Callback)>,
+    attach: Vec<Vec<abi::Attach>>,
+    order: &dyn Fn(ModId) -> u32,
+    errors: &mut Vec<String>,
+) {
     g.components = c
         .names
         .iter()
@@ -2195,7 +2250,7 @@ pub fn freeze(
             None => errors.push(format!("system over {name}: no entity component of that name")),
         }
     }
-    for (k, list) in entities.attach.into_iter().enumerate() {
+    for (k, list) in attach.into_iter().enumerate() {
         let kind = &mut g.entities[k];
         for a in list {
             let Some(&cid) = g.component_names.get(&a.name) else {
@@ -2216,13 +2271,18 @@ pub fn freeze(
             kind.components.push(cid);
         }
     }
+}
 
-    world_ticks.sort_by_key(|h: &(ModId, Callback)| order(h.0));
-    g.world_ticks = world_ticks;
-
-    (g.menus, g.menu_names) = tables.bake_by(kind(ek::MENU), ek::MENU, mod_name, errors, |e| e.name.clone(), |e, _| bake_menu(e));
-    let groups: Vec<(String, u32, u32, u32)> = entities
-        .player_groups
+/// The player's inventory layout, the slots each kind carries and wears, and a group per
+/// equipment slot in the menus that show equipment.
+fn lay_out_slots(
+    g: &mut Game,
+    player_groups: Vec<abi::SlotGroupDef>,
+    equipment: Vec<EquipmentSlot>,
+    c: &Components,
+    errors: &mut Vec<String>,
+) {
+    let groups: Vec<(String, u32, u32, u32)> = player_groups
         .into_iter()
         .map(|g| (g.name, g.cols.max(1), g.rows.max(1), g.flags))
         .collect();
@@ -2283,28 +2343,18 @@ pub fn freeze(
             );
         }
     }
-    g.player_menu = entities.player_menu.and_then(|n| {
-        let m = g.menu_names.get(&n).copied();
-        if m.is_none() {
-            errors.push(format!("player menu {n} is not registered"));
-        }
-        m
-    });
+}
 
-    for (block, kind) in entities.blocks {
-        match block_names.get(&block) {
-            Some(&b) => {
-                if g.block_entities
-                    .insert(b, kind)
-                    .is_some_and(|old| old != kind)
-                {
-                    errors.push(format!("block {block} has two block entities"));
-                }
-            }
-            None => errors.push(format!("entity {}: the block entity of unknown block {block}", g.entities[kind as usize].name)),
-        }
-    }
-
+/// Recipes with their variables expanded and their ingredients and outputs resolved, by kind.
+fn freeze_recipes(
+    g: &mut Game,
+    recipes: Vec<RawRecipe>,
+    items: &[crate::content::ItemDef],
+    item_names: &FxHashMap<String, u32>,
+    c: &Components,
+    conds: &mut crate::conditions::Texts,
+    errors: &mut Vec<String>,
+) {
     // The tags items carry, what `{m}` in a recipe goes through.
     let tag_names: FxHashMap<&str, u32> = (1..items.len() as u32)
         .flat_map(|i| c.of(comps::ITEM, i))
@@ -2430,7 +2480,6 @@ pub fn freeze(
             .or_default()
             .push(Recipe { shaped, inputs, input_counts, outputs, extras, time: r.time, entry: r.entry });
     }
-    g
 }
 
 impl Game {
