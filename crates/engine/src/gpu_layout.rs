@@ -711,7 +711,8 @@ pub struct OcclusionView {
     pub cam_cube: [i32; 4],
     /// The depth's size.
     pub size: [u32; 2],
-    /// Records made by the CPU that aren't cubes.
+    /// Records made by the CPU that are distant terrain's tiles, tested by the boxes that follow
+    /// the draws' origins.
     pub skip: [u32; 2],
     pub levels: u32,
     /// Whether there is a last frame to go by.
