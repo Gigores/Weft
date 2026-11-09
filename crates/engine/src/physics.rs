@@ -45,8 +45,6 @@ pub fn look_dir(yaw: f32, pitch: f32) -> DVec3 {
 
 /// A walker's jump, blocks per tick.
 pub const JUMP: f64 = 0.42;
-/// Blocks a walker goes up without jumping.
-pub const STEP_UP: f64 = 0.6;
 
 /// A dimension's gravity, in blocks per second squared, per tick squared.
 pub fn gravity_per_tick(gravity: f64) -> f64 {
@@ -54,11 +52,15 @@ pub fn gravity_per_tick(gravity: f64) -> f64 {
 }
 
 /// Vanilla's knockback, in blocks per tick: half the speed, 0.4 away (`away` is flat and of length
-/// 1) and on the ground up, never more than that up.
-pub fn knock(vel: DVec3, away: DVec3, on_ground: bool) -> DVec3 {
-    const STRENGTH: f64 = 0.4;
-    let y = if on_ground { (vel.y / 2.0 + STRENGTH).min(STRENGTH) } else { vel.y };
-    DVec3::new(vel.x / 2.0 + away.x * STRENGTH, y, vel.z / 2.0 + away.z * STRENGTH)
+/// 1) and on the ground up, never more than that up; `resist` (`KNOCKBACK_RESISTANCE`) takes its
+/// share off, all of it leaving the speed alone.
+pub fn knock(vel: DVec3, away: DVec3, on_ground: bool, resist: f64) -> DVec3 {
+    let strength = 0.4 * (1.0 - resist.clamp(0.0, 1.0));
+    if strength <= 0.0 {
+        return vel;
+    }
+    let y = if on_ground { (vel.y / 2.0 + strength).min(strength) } else { vel.y };
+    DVec3::new(vel.x / 2.0 + away.x * strength, y, vel.z / 2.0 + away.z * strength)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1062,10 +1064,10 @@ mod knock_tests {
     fn knock_is_vanillas() {
         let away = DVec3::X;
         // On the ground: half the speed, away and up, never more than that up.
-        assert_eq!(knock(DVec3::new(0.2, 0.0, 0.1), away, true), DVec3::new(0.5, 0.4, 0.05));
-        assert_eq!(knock(DVec3::new(0.0, 0.3, 0.0), away, true).y, 0.4);
+        assert_eq!(knock(DVec3::new(0.2, 0.0, 0.1), away, true, 0.0), DVec3::new(0.5, 0.4, 0.05));
+        assert_eq!(knock(DVec3::new(0.0, 0.3, 0.0), away, true, 0.0).y, 0.4);
         // In the air it goes on up or down as it was.
-        assert_eq!(knock(DVec3::new(0.0, -0.5, 0.0), away, false).y, -0.5);
+        assert_eq!(knock(DVec3::new(0.0, -0.5, 0.0), away, false, 0.0).y, -0.5);
     }
 
     #[test]

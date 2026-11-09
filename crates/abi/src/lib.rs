@@ -582,6 +582,8 @@ pub mod comp {
         pub const NO_KNOCKBACK: &str = "damage.no_knockback";
         /// No hurt sound.
         pub const SILENT: &str = "damage.silent";
+        /// Never kills: what it would take below half a heart it leaves (poison).
+        pub const NOT_LETHAL: &str = "damage.not_lethal";
         pub const DEATH_MESSAGE: &str = "damage.death_message";
         pub const DEATH_MESSAGE_BY: &str = "damage.death_message_by";
     }
@@ -4432,6 +4434,29 @@ pub mod attribute {
     /// 1: takes no damage, hunger or air (creative, a block entity, a shield effect) but from
     /// causes that pierce it (the void); mods read it as `World::outside_survival`.
     pub const INVULNERABLE: &str = "core:invulnerable";
+    /// Blocks it falls without harm (3; jump boost raises it, slow falling takes the harm away).
+    pub const SAFE_FALL: &str = "core:safe_fall";
+    /// Damage per block fallen past `SAFE_FALL` (1).
+    pub const FALL_DAMAGE_MULTIPLIER: &str = "core:fall_damage_multiplier";
+    /// Blocks it walks up without jumping (0.6).
+    pub const STEP_HEIGHT: &str = "core:step_height";
+    /// Multiplier on its dimension's gravity (1; slow falling 0.125, below 0 floats up).
+    pub const GRAVITY: &str = "core:gravity";
+    /// Share of knockback it shrugs off (0..1).
+    pub const KNOCKBACK_RESISTANCE: &str = "core:knockback_resistance";
+    /// Added to each of its melee hits (0; strength +3 a level).
+    pub const ATTACK_DAMAGE: &str = "core:attack_damage";
+    /// Share of damage taken off, after armor and the `DAMAGE` chain (0..1; resistance 0.2 a
+    /// level). What pierces invulnerability gets through.
+    pub const DAMAGE_RESISTANCE: &str = "core:damage_resistance";
+    /// Share of burning damage (`damage_cause::BURNING`) taken off (0..1; fire resistance 1).
+    pub const FIRE_RESISTANCE: &str = "core:fire_resistance";
+    /// Multiplier on how long what sets it on fire keeps it burning (1).
+    pub const BURNING_TIME: &str = "core:burning_time";
+    /// Multiplier on mining speed with its head in a liquid (0.2).
+    pub const SUBMERGED_MINING_SPEED: &str = "core:submerged_mining_speed";
+    /// Multiplier on mining speed off the ground (0.2).
+    pub const AIRBORNE_MINING_SPEED: &str = "core:airborne_mining_speed";
 }
 
 /// How an attribute modifier applies, like vanilla: ADD amounts sum onto the base, then times

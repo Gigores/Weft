@@ -84,9 +84,12 @@ pub struct LocalPlayer {
     /// Riding a body: its id and the position relative to it at the previous and the last
     /// step. Drawn on the body as shown, so a rider and its deck never drift apart.
     pub riding: Option<(u64, DVec3, DVec3)>,
-    /// Walking speed and jump multipliers from the server (attributes).
+    /// Walking speed and jump multipliers, step height and gravity multiplier from the server
+    /// (attributes).
     pub speed_mul: f64,
     pub jump_mul: f64,
+    pub step_height: f64,
+    pub gravity_mul: f64,
 }
 
 pub struct ClientEntity {
@@ -235,7 +238,7 @@ fn ride_step(
         let frame = physics::Frame {
             half_width: d.half_width,
             height: d.height,
-            step: physics::STEP_UP,
+            step: c.game.attributes[crate::registry::attr::STEP_HEIGHT as usize].default,
             gravity: if flies || k.is(crate::tag_bits::entity::NO_GRAVITY) { 0.0 } else { physics::gravity_per_tick(gravity) },
         };
         let mut pos = m.pos;
@@ -798,6 +801,8 @@ impl Client {
                 in_liquid: false,
                 climbing: false,
                 speed_mul: 1.0,
+                step_height: 0.6,
+                gravity_mul: 1.0,
                 jump_mul: 1.0,
             },
             joined: false,
@@ -1448,14 +1453,11 @@ impl Client {
             } else if refused {
                 self.breaking = None;
             } else if let Some(hit) = self.target {
-                let rate = c.mining_rate(
-                    hit.state,
-                    &self.held(),
-                    self.eye_liquid().is_some(),
-                    self.player.on_ground,
-                    self.attribute(crate::registry::attr::MINING_SPEED),
-                    self.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK),
-                );
+                use crate::registry::attr as a;
+                let speed = self.attribute(a::MINING_SPEED)
+                    * if self.eye_liquid().is_some() { self.attribute(a::SUBMERGED_MINING_SPEED) } else { 1.0 }
+                    * if self.player.on_ground { 1.0 } else { self.attribute(a::AIRBORNE_MINING_SPEED) };
+                let rate = c.mining_rate(hit.state, &self.held(), speed, self.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK));
                 let done = match self.breaking {
                     Some((f, p, v)) if (f, p) == (hit.frame, hit.origin) && self.breaking_part == hit.state => v,
                     _ => 0.0,
@@ -2215,6 +2217,8 @@ impl Client {
             self.player.speed_mul = self.attributes[a::MOVEMENT_SPEED as usize] as f64;
             self.player.jump_mul = self.attributes[a::JUMP_STRENGTH as usize] as f64;
             self.player.can_sprint = self.attributes[a::CAN_SPRINT as usize] >= 1.0;
+            (self.player.step_height, self.player.gravity_mul) =
+                (self.attributes[a::STEP_HEIGHT as usize] as f64, self.attributes[a::GRAVITY as usize] as f64);
             // Flight goes with what allowed it (a mode, a ring), which comes a tick after the mode;
             // a mod's flight without it stays.
             if could && !self.can_fly() && !self.mode.has(crate::tag_bits::game_mode::ALWAYS_FLY) {
@@ -2790,7 +2794,7 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
     let right = DVec3::new(cy, 0.0, -sy);
     // Vanilla's moveRelative input: normalized only when longer than 1.
     let wish = forward * fwd_in + right * side_in;
-    let g = physics::gravity_per_tick(gravity);
+    let g = physics::gravity_per_tick(gravity) * p.gravity_mul;
 
     let height = p.dims().height;
     let before = p.pos;
@@ -2823,7 +2827,7 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
         sprint: swimming,
         swim_look: swimming.then(|| (p.pitch as f64).sin()),
     };
-    let frame = physics::Frame { half_width: hw, height, step: physics::STEP_UP, gravity: g };
+    let frame = physics::Frame { half_width: hw, height, step: p.step_height, gravity: g };
     let w = physics::walk(c, block, bodies, 0, &mut p.pos, &mut p.vel, p.on_ground, &ctl, &frame);
     if w.jumped {
         p.jump_cooldown = 10;

@@ -300,10 +300,8 @@ impl Dim {
         let dy = pos.y - m.pos.y;
         m.moved = (pos - m.pos).with_y(0.0).length() as f32;
         (m.pos, m.yaw, m.vel, m.on_ground) = (pos, yaw, vel, on_ground);
-        let k = &c.game.entities[m.kind as usize];
         let fell = super::entity::track_fall(&mut m.fall, dy, on_ground, m.in_liquid);
-        let land = fell.and_then(|f| super::entity::fall_damage(k, f));
-        if let Some(amount) = land {
+        if let Some(amount) = fell.and_then(|f| self.fall_damage(c, mount, f)) {
             self.damage(c, mount, amount, 0, abi::damage_cause::FALL);
             self.riders_fall(c, mount, amount);
         }

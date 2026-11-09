@@ -1402,10 +1402,10 @@ impl Content {
     }
 
     /// The share of a block a player's mining does in a tick, which client and server each add up
-    /// as it goes: vanilla's five times as slow with the head in a liquid, and again off the
-    /// ground, and its slower rate without a tool that harvests it. All at once in creative or at
-    /// 1 and up, nothing for what can't be broken.
-    pub fn mining_rate(&self, state: u32, tool: &abi::ItemStack, head_wet: bool, on_ground: bool, speed: f32, creative: bool) -> f32 {
+    /// as it goes: `speed` its mining speed (attributes, with the head in a liquid and off the
+    /// ground counted), and vanilla's slower rate without a tool that harvests it. All at once in
+    /// creative or at 1 and up, nothing for what can't be broken.
+    pub fn mining_rate(&self, state: u32, tool: &abi::ItemStack, speed: f32, creative: bool) -> f32 {
         let s = &self.states[state as usize];
         if s.hardness < 0.0 {
             return 0.0;
@@ -1420,7 +1420,7 @@ impl Content {
             1.0
         };
         let secs = s.hardness * if self.harvests(state, tool) { 1.5 } else { 5.0 } / tool_speed;
-        let secs = secs * if head_wet { 5.0 } else { 1.0 } * if on_ground { 1.0 } else { 5.0 } / speed;
+        let secs = secs / speed;
         crate::world::TICK as f32 / secs
     }
 

@@ -30,6 +30,9 @@ pub struct Entity {
     pub walk: Option<Walk>,
     /// Jump strength attribute when its walk was set (1 = vanilla's).
     pub jump_mul: f32,
+    /// Its `STEP_HEIGHT` and `GRAVITY` attributes this tick, which physics goes by.
+    pub step_height: f64,
+    pub gravity_mul: f64,
     pub removed: bool,
     pub item: ItemStack,
     pub pickup_delay: u32,
@@ -156,6 +159,8 @@ impl Entity {
             hurt_cooldown: 0,
             walk: None,
             jump_mul: 1.0,
+            step_height: 0.6,
+            gravity_mul: 1.0,
             removed: false,
             item: ItemStack::EMPTY,
             pickup_delay: 0,
@@ -317,9 +322,6 @@ pub enum Told {
     Flying(bool),
     Selected(u32),
 }
-
-/// Falls up to this many blocks do no damage.
-pub const SAFE_FALL: f32 = 3.0;
 
 /// What a component of an entity of `kind` starts as: the kind's own value, or the component's.
 fn starting_value(c: &Content, kind: &crate::registry::EntityKind, comp: u32) -> Box<[u8]> {
@@ -662,11 +664,6 @@ pub fn splashes(was_in_liquid: bool, in_liquid: bool, falling: f64) -> bool {
     !was_in_liquid && in_liquid && falling > 0.1
 }
 
-/// What a fall from that high does to a kind, the same for players and mobs.
-pub fn fall_damage(kind: &crate::registry::EntityKind, fell: f32) -> Option<f32> {
-    (kind.is(ef::FALL_DAMAGE) && fell > SAFE_FALL).then(|| fell - SAFE_FALL)
-}
-
 /// What a step did besides moving: the fall it landed from, and whether a crushing body
 /// squeezed it into blocks.
 pub struct Stepped {
@@ -793,8 +790,8 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     let frame = physics::Frame {
         half_width: hw,
         height: h,
-        step: if e.item.is_empty() { physics::STEP_UP } else { 0.0 },
-        gravity: if k.is(ef::NO_GRAVITY) && !e.falls { 0.0 } else { physics::gravity_per_tick(gravity) },
+        step: if e.item.is_empty() { e.step_height } else { 0.0 },
+        gravity: if k.is(ef::NO_GRAVITY) && !e.falls { 0.0 } else { physics::gravity_per_tick(gravity) * e.gravity_mul },
     };
     let mut v = e.vel * DT;
     let r = physics::walk(c, block, bodies, e.id, &mut e.pos, &mut v, e.on_ground, &ctl, &frame);

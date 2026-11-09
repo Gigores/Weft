@@ -681,7 +681,6 @@ pub fn see_through(c: &Content, cube: &Cube) -> u16 {
 /// What an entity's move brought on it, applied after the parallel part.
 struct TickHit {
     id: u64,
-    land: Option<f32>,
     /// How far it fell before landing, and whether it fell into a liquid: for `fall_effects`.
     fell: Option<f32>,
     splash: bool,
@@ -1641,11 +1640,13 @@ impl Dim {
                 .id(abi::comp::ATTACK_DAMAGE)
                 .and_then(|id| c.components.get::<f32>(crate::components::ENTITY, kind, id))
         };
+        let bonus = self.attribute(c, attacker, crate::registry::attr::ATTACK_DAMAGE, false) as f32;
         let base = c
             .stack_value::<f32>(&held, c.ids.attack_damage)
             .filter(|_| !held.is_empty())
             .or_else(own)
-            .unwrap_or(1.0);
+            .unwrap_or(1.0)
+            + bonus;
         self.events
             .push(DimEvent::EntitySwing { id: attacker, off: false });
         let dmg = self.compute(c, abi::chain::ATTACK_DAMAGE, base as f64, &q, false) as f32;
@@ -1737,14 +1738,25 @@ impl Dim {
         )
     }
 
+    /// The damage a fall of `fell` blocks does to `id`: past its `SAFE_FALL`, by its
+    /// `FALL_DAMAGE_MULTIPLIER`; none for a kind that takes none.
+    pub fn fall_damage(&self, c: &Content, id: u64, fell: f32) -> Option<f32> {
+        let e = self.entities.get(id)?;
+        let safe = self.attribute(c, id, crate::registry::attr::SAFE_FALL, false) as f32;
+        let mul = self.attribute(c, id, crate::registry::attr::FALL_DAMAGE_MULTIPLIER, false) as f32;
+        (c.game.entities[e.kind as usize].is(ef::FALL_DAMAGE) && fell > safe)
+            .then(|| (fell - safe) * mul)
+            .filter(|&d| d > 0.0)
+    }
+
     /// What everyone near sees of a fall: dust where entity `id` landed from `fell` blocks up
     /// (vanilla's, from a fall that would hurt), and a splash where it fell into a liquid with
     /// one (`comp::SPLASH`, `comp::BUBBLE`).
     pub fn fall_effects(&mut self, c: &'static Content, id: u64, fell: Option<f32>, splash: bool) {
+        let safe = self.attribute(c, id, crate::registry::attr::SAFE_FALL, false) as f32;
         let Some(e) = self.entities.get(id) else { return };
         let (pos, w) = (e.pos, e.dims(c).half_width as f32);
         let mut bursts = Vec::new();
-        let safe = super::entity::SAFE_FALL;
         let under = self
             .get((pos - DVec3::Y * 0.2).floor().as_ivec3())
             .unwrap_or(AIR);
@@ -1836,6 +1848,15 @@ impl Dim {
         if crate::log::on(crate::log::Channel::Modifiers, log::Level::Debug) {
             log::debug!(target: "modifiers", "{}", super::extend::explanation());
         }
+        // What it resists comes off last; what pierces invulnerability gets through.
+        let amount = if def.has(df::PIERCES_INVULNERABLE) {
+            amount
+        } else {
+            let fire = if def.has(df::BURNING) { self.attribute(c, id, crate::registry::attr::FIRE_RESISTANCE, false) as f32 } else { 0.0 };
+            amount * (1.0 - self.attribute(c, id, crate::registry::attr::DAMAGE_RESISTANCE, false) as f32) * (1.0 - fire)
+        };
+        // What can't kill leaves half a heart.
+        let amount = if def.has(df::NOT_LETHAL) { amount.min(self.entities.get(id).map_or(0.0, |e| e.health - 1.0)) } else { amount };
         // While recovering only what goes beyond the last hit lands, and it doesn't knock.
         let last = self.entities.get(id).map_or(0.0, |e| e.last_hurt);
         let landing = if recovering { amount - last } else { amount };
@@ -1858,6 +1879,7 @@ impl Dim {
             let mut q = abi::Query { entity: id, other: source, cause, amount: amount as f64, ..abi::Query::DEFAULT };
             !self.ask(c, abi::action::DIE, &mut q)
         };
+        let resist = self.attribute(c, id, crate::registry::attr::KNOCKBACK_RESISTANCE, false);
         let Some(e) = self.entities.get_mut(id) else { return false };
         e.health = if spared { 1.0 } else { (e.health - amount).max(0.0) };
         e.last_hurt = if recovering { last + amount } else { amount };
@@ -1873,7 +1895,7 @@ impl Dim {
             if e.player {
                 knocked = Some(away.as_vec3().to_array());
             } else {
-                e.vel = crate::physics::knock(e.vel * crate::world::TICK, away, e.on_ground) * crate::world::TPS as f64;
+                e.vel = crate::physics::knock(e.vel * crate::world::TICK, away, e.on_ground, resist) * crate::world::TPS as f64;
             }
         }
         let (health, player, pos, kind, on_fire, height) = (e.health, e.player, e.pos, e.kind, e.fire > 0, e.height(c));
@@ -2409,6 +2431,21 @@ impl Dim {
         self.steer_mounts(c);
         self.choose_poses(c);
 
+        // What physics goes by of each body's attributes, a player's on its client.
+        let bodies: Vec<u64> = self
+            .entities
+            .list
+            .iter()
+            .filter(|e| !e.removed && !e.player && e.anchor.is_none())
+            .map(|e| e.id)
+            .collect();
+        for id in bodies {
+            let step = self.attribute(c, id, crate::registry::attr::STEP_HEIGHT, false);
+            let gravity = self.attribute(c, id, crate::registry::attr::GRAVITY, false);
+            if let Some(e) = self.entities.get_mut(id) {
+                (e.step_height, e.gravity_mul) = (step, gravity);
+            }
+        }
         let (here, now, gravity) = (self.id, self.time, c.dims[self.id as usize].gravity as f64);
         let players: Vec<DVec3> = self
             .entities
@@ -2480,7 +2517,7 @@ impl Dim {
                     return None;
                 }
                 let k = &c.game.entities[e.kind as usize];
-                let (mut land, mut fell, mut splash) = (None, None, false);
+                let (mut fell, mut splash) = (None, false);
                 let mut crushed = Vec::new();
                 // Players move on their client, bodies moved above; the rest here.
                 if !e.player && !k.is(ef::SOLID) {
@@ -2488,7 +2525,6 @@ impl Dim {
                     let s = step(c, e, gravity, &block, bodies);
                     crushed = s.crushed;
                     (fell, splash) = (s.land, super::entity::splashes(wet, e.in_liquid, falling));
-                    land = s.land.and_then(|fall| super::entity::fall_damage(k, fall));
                 }
                 // The liquids where the entity is now, and whether they burn; what sets it on fire
                 // keeps it burning.
@@ -2550,23 +2586,16 @@ impl Dim {
                         e.removed = true;
                     }
                 }
-                (land.is_some() || fell.is_some() || splash || burn || !met.is_empty()).then_some(TickHit {
-                    id: e.id,
-                    land,
-                    fell,
-                    splash,
-                    burn,
-                    met,
-                })
+                (fell.is_some() || splash || burn || !met.is_empty()).then_some(TickHit { id: e.id, fell, splash, burn, met })
             })
             .collect();
         for (i, push) in super::entity::soft_push(c, &self.entities.list) {
             self.entities.list[i].vel += push;
         }
         self.seat_riders(c);
-        for TickHit { id, land, fell, splash, burn, met } in hits {
+        for TickHit { id, fell, splash, burn, met } in hits {
             self.fall_effects(c, id, fell, splash);
-            if let Some(amount) = land {
+            if let Some(amount) = fell.and_then(|f| self.fall_damage(c, id, f)) {
                 self.damage(c, id, amount, 0, damage::FALL);
                 self.riders_fall(c, id, amount);
             }
@@ -2589,8 +2618,9 @@ impl Dim {
                 {
                     continue;
                 }
+                let burning = self.attribute(c, id, crate::registry::attr::BURNING_TIME, false);
                 if let Some(e) = self.entities.get_mut(id) {
-                    e.fire = e.fire.max(h.fire);
+                    e.fire = e.fire.max((h.fire as f64 * burning) as u32);
                 }
                 if let Some(cause) = h.cause {
                     self.damage(c, id, h.damage, 0, cause);
@@ -3113,11 +3143,15 @@ impl Dim {
         let Some(e) = self.entities.get(id) else { return 0.0 };
         let (wet, on_ground, creative) = (self.head_in_liquid(c, e), e.on_ground, e.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK));
         let tool = self.entities.held(id);
-        let speed = self.attribute(c, id, crate::registry::attr::MINING_SPEED, false) as f32;
+        let attr = |a| self.attribute(c, id, a, false) as f32;
+        use crate::registry::attr as a;
+        let speed = attr(a::MINING_SPEED)
+            * if wet { attr(a::SUBMERGED_MINING_SPEED) } else { 1.0 }
+            * if on_ground { 1.0 } else { attr(a::AIRBORNE_MINING_SPEED) };
         let state = self
             .in_frame(frame, |d| d.aimed_part(c, pos, part))
             .unwrap_or(AIR);
-        c.mining_rate(state, &tool, wet, on_ground, speed, creative)
+        c.mining_rate(state, &tool, speed, creative)
     }
 
     /// Pushes an entity, by blocks per second. Its client moves a player, so the push goes there.

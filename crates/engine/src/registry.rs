@@ -1324,6 +1324,17 @@ pub mod attr {
     pub const FOV: u32 = 9;
     pub const CAN_FLY: u32 = 10;
     pub const INVULNERABLE: u32 = 11;
+    pub const SAFE_FALL: u32 = 12;
+    pub const FALL_DAMAGE_MULTIPLIER: u32 = 13;
+    pub const STEP_HEIGHT: u32 = 14;
+    pub const GRAVITY: u32 = 15;
+    pub const KNOCKBACK_RESISTANCE: u32 = 16;
+    pub const ATTACK_DAMAGE: u32 = 17;
+    pub const DAMAGE_RESISTANCE: u32 = 18;
+    pub const FIRE_RESISTANCE: u32 = 19;
+    pub const BURNING_TIME: u32 = 20;
+    pub const SUBMERGED_MINING_SPEED: u32 = 21;
+    pub const AIRBORNE_MINING_SPEED: u32 = 22;
 }
 
 fn engine_attributes() -> Vec<RawEntry> {
@@ -1342,6 +1353,17 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::FOV, 1.0, 0.05, 8.0),
         (a::CAN_FLY, 0.0, 0.0, 1.0),
         (a::INVULNERABLE, 0.0, 0.0, 1.0),
+        (a::SAFE_FALL, 3.0, 0.0, 1024.0),
+        (a::FALL_DAMAGE_MULTIPLIER, 1.0, 0.0, 100.0),
+        (a::STEP_HEIGHT, 0.6, 0.0, 10.0),
+        (a::GRAVITY, 1.0, -8.0, 8.0),
+        (a::KNOCKBACK_RESISTANCE, 0.0, 0.0, 1.0),
+        (a::ATTACK_DAMAGE, 0.0, -1024.0, 1024.0),
+        (a::DAMAGE_RESISTANCE, 0.0, 0.0, 1.0),
+        (a::FIRE_RESISTANCE, 0.0, 0.0, 1.0),
+        (a::BURNING_TIME, 1.0, 0.0, 100.0),
+        (a::SUBMERGED_MINING_SPEED, 0.2, 0.0, 20.0),
+        (a::AIRBORNE_MINING_SPEED, 0.2, 0.0, 20.0),
     ]
     .iter()
     .map(|&(name, default, min, max)| {
