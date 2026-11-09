@@ -1107,7 +1107,7 @@ impl Server {
             .send(ToClient::Edits { dim: to, specs: dims[to as usize].edits.iter().map(|e| e.spec(c)).collect(), all: true });
         let d = &dims[to as usize];
         p.conn
-            .send(ToClient::Clock { dim: to, time: d.day_time(), weather: d.weather as u32, rate: p.sent_rate });
+            .send(ToClient::Clock { dim: to, time: d.day_time(), ticks: d.time, weather: d.weather as u32, rate: p.sent_rate });
         if to == c.void_dim && from != to as usize {
             p.conn
                 .send(ToClient::Show(crate::net::Shown::chat(void_note(c))));

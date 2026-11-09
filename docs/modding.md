@@ -306,6 +306,7 @@ Anywhere a block is named as text, `base:furnace[lit=true]` picks a state: in st
 - `places(&BLOCK)`
 - `handheld()`: held by its end and pointing ahead in third person, like a stick. `tool(..)` does it already, and so does the tag `handheld`
 - `wearable(&HEAD, inflate, texture)` for armor and anything else worn in an equipment slot
+- `light(14)`, `light_rgb(r, g, b)`: lights up around whoever holds or wears it, or where it lies. Every client draws that light itself, so it doesn't spawn-proof or grow anything. An item that places a block already gives that block's light
 - `two_handed()`, `one_handed_action(action)`, `use_priority(n)`: [what it does in the hands](models.md#items-in-the-hand)
 - `on_use`: what using it does. Before it runs anyone can say no to `actions::USE_ITEM`, and after it the same action's event tells every mod (testmod heals with base's food through it). `base_api::eat` is the base game's eating: `.set(&FOOD, ..).use_ticks(32).on_use(base_api::eat)`
 
@@ -345,6 +346,7 @@ Stacks with different data don't merge. `r.stack_component` says a component exi
 - `model(humanoid(..))`, or `r.set_model(&KIND, "thing")` for a Blockbench geo.json (any item's or entity's, also someone else's, `"#tag"` for many items)
 - `r.edit(&KIND)` changes any of this on someone else's kind, the engine's too (`r.edit(&PLAYER).attach(&MANA)`), and `r.replace(&KIND)` starts it over
 - `r.bone_model(..)`, `.wearable_model(..)` on an item: a model on a bone. `r.bone_motion`, `c.bone_turn`, `c.bone_position`: bones moving by themselves or by code (`docs/models.md`)
+- `light(..)`, `light_rgb(..)` and `light_at(x, y, z)` for where on it the light comes from (a lantern on its head). One mob's own light changes with `.attach(&LIGHT)` then `w.set_component(mob, &LIGHT, [r, g, b])`; effects give light too (`r.entity_effect(&E).light(..)`), and `shown_slots(&[0])` makes a kind's slots seen by everyone, glowing if what's there glows (a pedestal holding a torch)
 - `sound("hurt")`, `sound("death")`, `sound("ambient")`: files from `sounds/entity/<name>/`
 - `animations(..)`
 - `goals(..)` for AI (see `weft_sdk::ai`); `ai::melee()` with `.attack_damage(3.0)` and `.reach(1.3)` makes it hit like a player does (the reach is the `ENTITY_REACH` attribute, so a modifier lengthens a mob's arms the same as a player's; `w.in_reach(id, target)` is the test), so `question::ATTACK` and `chain::ATTACK_DAMAGE` (a strength effect, a peaceful zone) work on mobs too

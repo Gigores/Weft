@@ -822,7 +822,8 @@ impl EntityBuilder<'_> {
         self.push(&crate::component::MODIFIERS, m.0)
     }
     /// Every entity of this kind carries `component` (declared with `r.entity_component`, by any
-    /// mod), starting at its declared value; another mod's kind with `r.edit(&PLAYER).attach(..)`.
+    /// mod), starting at the kind's own value of it (`.set`), else its declared one; another mod's
+    /// kind with `r.edit(&PLAYER).attach(..)`.
     /// Not `.set`: that is one value of the kind itself, `.attach` gives each entity its own,
     /// which changes.
     pub fn attach<T: Value>(self, component: &Component<T>) -> Self {
@@ -878,6 +879,16 @@ impl EntityBuilder<'_> {
     /// it and their own motion stays relative to it, so a jump on a fast ship lands on the ship.
     pub fn carry_height(self, blocks: f32) -> Self {
         self.set(&comps::entity::CARRY_HEIGHT, blocks)
+    }
+    /// Where the light it gives comes from: blocks from its feet, +Z ahead, turned with it (a
+    /// lantern on its head). Its middle when not said, a block entity's block.
+    pub fn light_at(self, x: f32, y: f32, z: f32) -> Self {
+        self.set(&comps::entity::LIGHT_AT, [x, y, z])
+    }
+    /// Slots of its inventory everyone around sees (what a pedestal holds): their items give
+    /// their light, and clients read them as `core:shown` (`[u32]`, 0 empty).
+    pub fn shown_slots(self, slots: &[u32]) -> Self {
+        self.set(&comps::entity::SHOWN_SLOTS, slots.to_vec())
     }
     pub fn size(self, width: f32, height: f32) -> Self {
         self.set(&comps::entity::SIZE, abi::BodySize { width, height })

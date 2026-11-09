@@ -70,9 +70,10 @@ impl Client {
             ToClient::Edits { dim, specs, all } if dim == self.world.dim => fwd.push(terrain::In::Edits { specs, all }),
             ToClient::Signals { dim, frame, changes } if dim == self.world.dim => self.wires.power_changed(frame, &changes),
             ToClient::BodyGlow { dim, cells } if dim == self.world.dim => self.world.body_glow_changed(cells),
-            ToClient::Clock { dim, time, weather, rate } => {
+            ToClient::Clock { dim, time, ticks, weather, rate } => {
                 if dim == self.world.dim {
                     self.world.time = time;
+                    self.world.ticks = ticks;
                     self.since_time = 0.0;
                 }
                 self.weather_id = (weather as usize).min(content().game.weathers.len() - 1) as u16;
@@ -104,6 +105,7 @@ impl Client {
                 self.entity_components
                     .retain(|(e, _), _| !ids.iter().any(|g| g.0 == *e));
                 for (id, killed) in ids {
+                    self.showing_blocks.remove(&id);
                     // Killed mobs stay a moment for the death animation, taken items until
                     // they reach the taker.
                     match self.entities.get_mut(&id) {
@@ -258,6 +260,7 @@ impl Client {
         if dim != self.world.dim {
             self.reset_terrain(dim, fwd);
             self.entities.clear();
+            self.showing_blocks.clear();
             self.particles.clear();
             self.entity_components.clear();
         }
@@ -274,8 +277,8 @@ impl Client {
 
     fn spawn_entities(&mut self, list: Vec<crate::net::EntityView>) {
         for e in list {
-            self.entities
-                .insert(e.id, ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch, e.item));
+            let to = if content().game.is_block_entity(e.kind) { &mut self.showing_blocks } else { &mut self.entities };
+            to.insert(e.id, ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch, e.item));
         }
     }
 
