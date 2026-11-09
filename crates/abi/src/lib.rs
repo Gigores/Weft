@@ -658,11 +658,19 @@ pub mod comp {
     }
 
     /// An entity effect's `SHADER` (`str`, `shaders/entity_effect/<name>.wgsl`, its own name by
-    /// default; empty: none), `HAZARDS` (`[Hazard]`, `hazard_at::SELF`: poison), `MODIFIERS`
-    /// (`[Modifier]`: speed) and `LIGHT` while it is on; a condition's `CALL` (`callback`,
-    /// `ConditionArgs`).
+    /// default where that file is; empty: none), `HAZARDS` (`[Hazard]`, `hazard_at::SELF`: poison),
+    /// `MODIFIERS` (`[Modifier]`: speed) and `LIGHT` while it is on, each times its level unless
+    /// one is given for that level. A status effect, one its entity's player sees, has an `ICON`
+    /// (`str`, a texture) and a `COLOR` (`u32`, `0xRRGGBB`, of the swirls around who has it, none
+    /// without), tags `BENEFICIAL` or `HARMFUL`, and `INSTANT` for one that acts once when given
+    /// (healing) and doesn't stay. A condition's `CALL` (`callback`, `ConditionArgs`).
     pub const ENTITY_EFFECT_SHADER: &str = "entity_effect.shader";
     pub const ENTITY_EFFECT_HAZARDS: &str = "entity_effect.hazards";
+    pub const ENTITY_EFFECT_ICON: &str = "entity_effect.icon";
+    pub const ENTITY_EFFECT_COLOR: &str = "entity_effect.color";
+    pub const ENTITY_EFFECT_BENEFICIAL: &str = "entity_effect.beneficial";
+    pub const ENTITY_EFFECT_HARMFUL: &str = "entity_effect.harmful";
+    pub const ENTITY_EFFECT_INSTANT: &str = "entity_effect.instant";
     pub const CONDITION_CALL: &str = "condition.call";
 
     /// A sound event's: `FILES` (`[str]`, `sounds/<name>.ogg` or `.wav`, one picked at random),
@@ -1680,6 +1688,9 @@ crate::data! {
         pub fire: u32,
         pub every: u32,
         pub when: alloc::vec::Vec<alloc::string::String>,
+        /// An entity effect's: only at this level of it, as it is; 0, at every level, `damage`
+        /// times the level. Negative damage heals.
+        pub level: u32,
     }
 }
 
@@ -2584,6 +2595,16 @@ pub mod spawn_set {
     pub const PICKUP_DELAY: u32 = 4;
 }
 
+/// An effect on an entity (`Host::entity_effects`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EffectOn {
+    pub effect: u32,
+    /// 1 and up.
+    pub level: u32,
+    pub ticks_left: u32,
+}
+
 /// The engine's entity effects, registered first in this order.
 pub mod entity_effect {
     /// White, a creeper about to go off.
@@ -2634,6 +2655,9 @@ crate::data! {
         pub amount: f64,
         pub worn: bool,
         pub when: alloc::vec::Vec<alloc::string::String>,
+        /// An entity effect's: only at this level of it, as it is; 0, at every level, `amount`
+        /// times the level.
+        pub level: u32,
     }
 }
 
@@ -3628,7 +3652,9 @@ pub struct Host {
     /// Effect `effect` on an entity for `ticks` at `strength` (its shader's, for everyone who sees
     /// it, players coming along later too), with its hazards and modifiers; 0 ticks ends it.
     /// Several at once, one of each: giving one again replaces it.
-    pub entity_effect: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, effect: u32, strength: f32, ticks: u32),
+    pub entity_effect: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, effect: u32, level: u32, ticks: u32),
+    /// The effects on entity `id`, at most `cap` of them into `out`; returns how many it has.
+    pub entity_effects: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, out: *mut EffectOn, cap: u32) -> u32,
     /// Holds an entity in `pose` (players too: their client follows), or with `u32::MAX` lets
     /// it go back to what its movement makes. `yaw` (radians) keeps it facing that way and still
     /// while it holds, `NaN` leaves it free (a bed, against a pet that sits).

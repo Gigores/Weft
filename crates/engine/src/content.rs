@@ -154,6 +154,8 @@ pub struct SourceMod {
     pub amount: f64,
     pub worn: bool,
     pub when: Option<u32>,
+    /// An entity effect's: only at this level, as it is; 0 at every level, times the level.
+    pub level: u32,
 }
 
 /// What game modes, items, entity kinds and poses give by their `MODIFIERS`, by id.
@@ -184,6 +186,8 @@ pub struct Hazard {
     pub fire: u32,
     pub every: u32,
     pub when: Option<u32>,
+    /// An entity effect's: only at this level, as it is; 0 at every level, times the level.
+    pub level: u32,
 }
 
 /// A block rule (`abi::BlockRule`) resolved: its condition is in `Content::conds`.
@@ -2054,6 +2058,12 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
             }
         })
         .collect();
+    word_sets.entry("core:effects".into()).or_default().extend(
+        game.entity_effects
+            .iter()
+            .filter(|e| e.shown())
+            .map(|e| e.name.clone()),
+    );
     word_sets.entry("core:weathers".into()).or_default().extend(
         game.weathers
             .iter()
@@ -3028,7 +3038,7 @@ fn collect_word_sets(
     let mut all = vec![RawEntry::engine(WORDS, "core:gizmos").set(abi::comp::WORDS, gizmos)];
     // Filled from the game's own lists, once it is frozen.
     all.extend(
-        ["core:rules", "core:weathers", "core:game_modes"]
+        ["core:rules", "core:weathers", "core:game_modes", "core:effects"]
             .iter()
             .map(|n| RawEntry::engine(WORDS, n)),
     );
@@ -3245,7 +3255,7 @@ fn resolve_hazards(
             if cause.is_none() && !h.cause.is_empty() {
                 errors.push(format!("hazard: no damage cause {}", h.cause));
             }
-            out.push(Hazard { at: h.at, damage: h.damage, cause, fire: h.fire, every: h.every, when: conds.all(&h.when) });
+            out.push(Hazard { at: h.at, damage: h.damage, cause, fire: h.fire, every: h.every, when: conds.all(&h.when), level: h.level });
         }
         out
     };
@@ -3264,7 +3274,7 @@ fn resolve_hazards(
             let below = conds.all(&[format!("height(..{})", d.min_cube_y * 16 - 64)]);
             let void = Some(abi::damage_cause::VOID);
             d.hazards
-                .push(Hazard { at: at::SELF, damage: 4.0, cause: void, fire: 0, every: 10, when: below });
+                .push(Hazard { at: at::SELF, damage: 4.0, cause: void, fire: 0, every: 10, when: below, level: 0 });
         }
     }
     let hot = components.id(abi::comp::HOT);
@@ -3273,12 +3283,12 @@ fn resolve_hazards(
         if s.hazards.is_empty() && hot.is_some_and(|t| components.has(comps::BLOCK, i as u32, t)) {
             let lava = Some(abi::damage_cause::LAVA);
             s.hazards
-                .push(Hazard { at: at::INSIDE, damage: 4.0, cause: lava, fire: 300, every: 0, when: None });
+                .push(Hazard { at: at::INSIDE, damage: 4.0, cause: lava, fire: 300, every: 0, when: None, level: 0 });
         }
         if s.solid() && s.opacity >= 15 {
             let choke = Some(abi::damage_cause::SUFFOCATE);
             s.hazards
-                .push(Hazard { at: at::HEAD, damage: 1.0, cause: choke, fire: 0, every: 10, when: not_flying });
+                .push(Hazard { at: at::HEAD, damage: 1.0, cause: choke, fire: 0, every: 10, when: not_flying, level: 0 });
         }
     }
 }
@@ -3295,7 +3305,7 @@ fn resolve_source_mods(
     let mut resolve = |list: Vec<abi::Modifier>| -> Vec<SourceMod> {
         list.into_iter()
             .filter_map(|m| match game.attr_names.get(&m.attribute) {
-                Some(&attr) => Some(SourceMod { attr, op: m.op, amount: m.amount, worn: m.worn, when: conds.all(&m.when) }),
+                Some(&attr) => Some(SourceMod { attr, op: m.op, amount: m.amount, worn: m.worn, when: conds.all(&m.when), level: m.level }),
                 None => {
                     errors.push(format!("modifier: no attribute {}", m.attribute));
                     None

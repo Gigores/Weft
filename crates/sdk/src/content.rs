@@ -429,13 +429,46 @@ impl EntityEffectBuilder<'_> {
     pub fn unseen(self) -> Self {
         self.set_text(&crate::comps::entity_effect::SHADER, "")
     }
-    /// What it does to its entity while on (`Hazard::own(1.0, &MAGIC).every(25)`: poison).
+    /// What it does to its entity while on (`Hazard::own(1.0, &MAGIC).every(25)`: poison), its
+    /// damage times the level (negative heals); once when given if it is `instant`.
     pub fn hazard(self, h: crate::Hazard) -> Self {
         self.push(&crate::comps::entity_effect::HAZARDS, h.0)
     }
-    /// A modifier its entity has while it is on (`Modifier::add(&attribute::MOVEMENT_SPEED, 0.2)`).
+    /// `hazard` for `level` only, as it is: at that level the others don't count.
+    pub fn hazard_at(self, level: u32, mut h: crate::Hazard) -> Self {
+        h.0.level = level.max(1);
+        self.push(&crate::comps::entity_effect::HAZARDS, h.0)
+    }
+    /// A modifier its entity has while it is on (`Modifier::add(&attribute::MOVEMENT_SPEED, 0.2)`),
+    /// its amount times the level.
     pub fn modifier(self, m: crate::Modifier) -> Self {
         self.push(&crate::comps::entity_effect::MODIFIERS, m.0)
+    }
+    /// `modifier` for `level` only, as it is: at that level the others don't count (mining
+    /// fatigue's steep steps).
+    pub fn modifier_at(self, level: u32, mut m: crate::Modifier) -> Self {
+        m.0.level = level.max(1);
+        self.push(&crate::comps::entity_effect::MODIFIERS, m.0)
+    }
+    /// A status effect: its player sees it, by this icon (`textures/<icon>.png`, 18 pixels square
+    /// like vanilla's), on the HUD and beside the inventory, named `effect.<namespace>.<name>`
+    /// in lang.
+    pub fn icon(self, texture: &str) -> Self {
+        self.set_text(&crate::comps::entity_effect::ICON, texture)
+    }
+    /// Swirls of this color (`0xRRGGBB`) around who has it, as vanilla's potion effects.
+    pub fn color(self, rgb: u32) -> Self {
+        self.set(&crate::comps::entity_effect::COLOR, rgb)
+    }
+    pub fn beneficial(self) -> Self {
+        self.tag(abi::comp::ENTITY_EFFECT_BENEFICIAL)
+    }
+    pub fn harmful(self) -> Self {
+        self.tag(abi::comp::ENTITY_EFFECT_HARMFUL)
+    }
+    /// It acts once when given, its hazards times the level (healing), and doesn't stay.
+    pub fn instant(self) -> Self {
+        self.tag(abi::comp::ENTITY_EFFECT_INSTANT)
     }
 }
 

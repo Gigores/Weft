@@ -630,17 +630,6 @@ pub fn scattered_near(def: &crate::content::DimensionDef, c: &Content, seed: u64
     })
 }
 
-pub fn encode_effects(list: &[(u32, f32, u64)]) -> Box<[u8]> {
-    list.iter()
-        .flat_map(|(f, s, until)| {
-            f.to_le_bytes()
-                .into_iter()
-                .chain(s.to_le_bytes())
-                .chain(until.to_le_bytes())
-        })
-        .collect()
-}
-
 /// A timer on a dimension: when, the event and its value.
 pub type DimTimer = (u64, u32, Box<[u8]>);
 
@@ -1738,6 +1727,35 @@ impl Dim {
         )
     }
 
+    /// Effect `effect` on `id` at `level` for `ticks`, replacing the one it had (0 ticks ends it).
+    /// An instant one acts once, its hazards at that level, and doesn't stay.
+    pub fn give_effect(&mut self, c: &'static Content, id: u64, effect: u32, level: u32, ticks: u32) {
+        let Some(def) = c.game.entity_effects.get(effect as usize) else { return };
+        if self.entities.get(id).is_none() {
+            return;
+        }
+        let level = level.max(1);
+        if def.instant {
+            for h in def.hazards_at(level) {
+                if let Some(cause) = h.cause {
+                    self.damage(c, id, h.damage, 0, cause);
+                }
+            }
+            return;
+        }
+        let comp = c.game.fields.effect;
+        let mut list: Vec<_> = crate::world::effects_on(self.entities.comps.get(&(id, comp)).map(|b| &b[..]), self.time)
+            .filter(|f| f.id != effect)
+            .collect();
+        if ticks > 0 {
+            list.push(crate::world::OnEffect { id: effect, level, until: self.time + ticks as u64 });
+        }
+        self.entities
+            .comps
+            .insert((id, comp), crate::world::encode_effects(&list));
+        self.entities.dirty_comp.insert((id, comp));
+    }
+
     /// The damage a fall of `fell` blocks does to `id`: past its `SAFE_FALL`, by its
     /// `FALL_DAMAGE_MULTIPLIER`; none for a kind that takes none.
     pub fn fall_damage(&self, c: &Content, id: u64, fell: f32) -> Option<f32> {
@@ -2547,16 +2565,16 @@ impl Dim {
                         .map(|h| (0, *h)),
                 );
                 met.extend(crushed.drain(..).map(|h| (0, h)));
-                for (f, ..) in crate::world::effects_on(comps.get(&(e.id, c.game.fields.effect)).map(|b| &b[..]), now) {
+                for f in crate::world::effects_on(comps.get(&(e.id, c.game.fields.effect)).map(|b| &b[..]), now) {
                     let of = c
                         .game
                         .entity_effects
-                        .get(f as usize)
-                        .map_or(&[][..], |f| &f.hazards[..]);
+                        .get(f.id as usize)
+                        .map_or(Vec::new(), |d| d.hazards_at(f.level));
                     met.extend(
-                        of.iter()
+                        of.into_iter()
                             .filter(|h| h.at == abi::hazard_at::SELF)
-                            .map(|h| (0, *h)),
+                            .map(|h| (0, h)),
                     );
                 }
                 if e.mode.has(crate::tag_bits::game_mode::NOCLIP) {

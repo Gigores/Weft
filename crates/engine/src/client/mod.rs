@@ -142,7 +142,7 @@ pub struct ClientEntity {
     /// Arm swing progress 0..1 while swinging.
     pub arm_swing: Option<f32>,
     /// Every effect on it, its strength and the tick it ends (`ClientWorld::ticks`).
-    pub effects: Vec<(u32, f32, u64)>,
+    pub effects: Vec<crate::world::OnEffect>,
     /// The items its kind shows (`registry::SHOWN`), 0 empty.
     pub shown: Vec<u32>,
     /// Solid bodies: where the server had them at its last ticks (tick, position), oldest
@@ -294,14 +294,14 @@ impl ClientEntity {
         self.effects
             .iter()
             .filter(|f| {
-                f.2 > now
+                f.until > now
                     && c.game
                         .entity_effects
-                        .get(f.0 as usize)
+                        .get(f.id as usize)
                         .is_some_and(|d| !d.shader.is_empty())
             })
             .last()
-            .map(|f| (f.0, f.1))
+            .map(|f| (f.id, 1.0))
     }
 
     pub fn new(kind: u32, pos: DVec3, yaw: f32, pitch: f32, item: ItemStack) -> ClientEntity {

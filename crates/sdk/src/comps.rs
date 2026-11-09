@@ -104,6 +104,11 @@ pub mod entity_effect {
     pub static SHADER: Component<Text, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_SHADER);
     pub static HAZARDS: Component<Vec<crate::abi::Hazard>, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_HAZARDS);
     pub static MODIFIERS: Component<Vec<crate::abi::Modifier>, EntityEffect> = Component::named(crate::abi::comp::MODIFIERS);
+    pub static ICON: Component<Text, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_ICON);
+    pub static COLOR: Component<u32, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_COLOR);
+    pub static BENEFICIAL: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_BENEFICIAL);
+    pub static HARMFUL: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_HARMFUL);
+    pub static INSTANT: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_INSTANT);
 }
 
 /// What a sound event is made of (`abi::comp::sound`).

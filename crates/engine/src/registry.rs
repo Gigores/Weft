@@ -680,7 +680,7 @@ fn engine_components() -> Vec<RawEntry> {
         (USING, "u32", shown, vec![0; 4]),
         (SWAPS, "bytes", own | shown, Vec::new()),
         (LOOPING_ACTION, "bytes", shown, Vec::new()),
-        (EFFECT, "bytes", own, Vec::new()),
+        (EFFECT, "bytes", own | cf::SAVE, Vec::new()),
         (FORCED_POSE, "bytes", own | shown, Vec::new()),
         (RIDING, "bytes", own | shown | cf::SAVE, Vec::new()),
         (GAME_MODE, "u32", cf::SYNC_OWNER, vec![0; 4]),
@@ -1253,11 +1253,52 @@ pub struct EntityEffectDef {
     pub name: String,
     /// Empty: none.
     pub shader: String,
+    /// Named by its mod, not its own name by default: missing, it is a mistake.
+    pub shader_given: bool,
+    /// A status effect's (its player sees it): the texture of its icon; empty for none.
+    pub icon: String,
+    /// Of the swirls around who has it, `0xRRGGBB`; none without.
+    pub color: Option<u32>,
+    /// `effect_kind`: beneficial, harmful or neither.
+    pub kind: u8,
+    /// Acts once when given and doesn't stay.
+    pub instant: bool,
     /// As registered, then resolved at freeze.
     pub raw_hazards: Vec<abi::Hazard>,
     pub hazards: Vec<crate::content::Hazard>,
     /// Given off while it is on.
     pub light: [u8; 3],
+}
+
+/// Whether an entity effect is good for who has it (`EntityEffectDef::kind`).
+pub mod effect_kind {
+    pub const NEUTRAL: u8 = 0;
+    pub const BENEFICIAL: u8 = 1;
+    pub const HARMFUL: u8 = 2;
+}
+
+impl EntityEffectDef {
+    /// Its hazards at `level`: those given for that level, else the others times the level.
+    pub fn hazards_at(&self, level: u32) -> Vec<crate::content::Hazard> {
+        if self.hazards.iter().any(|h| h.level == level) {
+            return self
+                .hazards
+                .iter()
+                .filter(|h| h.level == level)
+                .copied()
+                .collect();
+        }
+        self.hazards
+            .iter()
+            .filter(|h| h.level == 0)
+            .map(|h| crate::content::Hazard { damage: h.damage * level as f32, ..*h })
+            .collect()
+    }
+
+    /// A status effect: its player sees it.
+    pub fn shown(&self) -> bool {
+        !self.icon.is_empty()
+    }
 }
 
 /// What natural spawning and despawning know of entities by category.
@@ -2064,6 +2105,20 @@ pub fn freeze(
                 .text(abi::comp::ENTITY_EFFECT_SHADER)
                 .unwrap_or(&e.name)
                 .to_string(),
+            shader_given: e.text(abi::comp::ENTITY_EFFECT_SHADER).is_some(),
+            icon: e
+                .text(abi::comp::ENTITY_EFFECT_ICON)
+                .unwrap_or_default()
+                .to_string(),
+            color: e.get::<u32>(abi::comp::ENTITY_EFFECT_COLOR),
+            kind: if e.has(abi::comp::ENTITY_EFFECT_HARMFUL) {
+                effect_kind::HARMFUL
+            } else if e.has(abi::comp::ENTITY_EFFECT_BENEFICIAL) {
+                effect_kind::BENEFICIAL
+            } else {
+                effect_kind::NEUTRAL
+            },
+            instant: e.has(abi::comp::ENTITY_EFFECT_INSTANT),
             raw_hazards: e.or(abi::comp::ENTITY_EFFECT_HAZARDS, Vec::new()),
             hazards: Vec::new(),
             light: e.or(abi::comp::LIGHT, [0; 3]),

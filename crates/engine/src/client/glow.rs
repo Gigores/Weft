@@ -45,8 +45,8 @@ pub fn entity_glow(
     let effects = e
         .effects
         .iter()
-        .filter(|f| f.2 > now)
-        .map(|f| f.0)
+        .filter(|f| f.until > now)
+        .map(|f| f.id)
         .chain(e.burning.then_some(weft_abi::entity_effect::BURNING));
     let light = effects
         .filter_map(|f| c.game.entity_effects.get(f as usize))

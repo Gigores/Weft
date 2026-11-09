@@ -178,6 +178,7 @@ pub static HOST: Host = Host {
     set_weather,
     weather_now,
     entity_effect,
+    entity_effects,
     entity_set_pose,
     reg_command_permission,
     player_permission,
@@ -2048,28 +2049,26 @@ unsafe extern "C" fn weather_now(w: *mut abi::WorldCtx) -> u32 {
     unsafe { dim(w).weather as u32 }
 }
 
-unsafe extern "C" fn entity_effect(w: *mut abi::WorldCtx, id: u64, effect: u32, strength: f32, ticks: u32) {
+unsafe extern "C" fn entity_effect(w: *mut abi::WorldCtx, id: u64, effect: u32, level: u32, ticks: u32) {
+    let c = content();
+    if effect as usize >= c.game.entity_effects.len() {
+        misuse("entity_effect", || format!("no entity effect {effect}"));
+        return;
+    }
+    unsafe { dim(w).give_effect(c, id, effect, level, ticks) }
+}
+
+unsafe extern "C" fn entity_effects(w: *mut abi::WorldCtx, id: u64, out: *mut abi::EffectOn, cap: u32) -> u32 {
     unsafe {
         let d = dim(w);
-        let c = content();
-        if effect as usize >= c.game.entity_effects.len() {
-            misuse("entity_effect", || format!("no entity effect {effect}"));
-            return;
-        }
-        if d.entities.get(id).is_none() {
-            return;
-        }
-        let comp = c.game.fields.effect;
-        let mut list: Vec<_> = crate::world::effects_on(d.entities.comps.get(&(id, comp)).map(|b| &b[..]), d.time)
-            .filter(|f| f.0 != effect)
+        let comp = content().game.fields.effect;
+        let list: Vec<abi::EffectOn> = crate::world::effects_on(d.entities.comps.get(&(id, comp)).map(|b| &b[..]), d.time)
+            .map(|f| abi::EffectOn { effect: f.id, level: f.level, ticks_left: f.until.saturating_sub(d.time).min(u32::MAX as u64) as u32 })
             .collect();
-        if ticks > 0 {
-            list.push((effect, strength.clamp(0.0, 1.0), d.time + ticks as u64));
+        for (i, e) in list.iter().take(cap as usize).enumerate() {
+            *out.add(i) = *e;
         }
-        d.entities
-            .comps
-            .insert((id, comp), crate::server::dim::encode_effects(&list));
-        d.entities.dirty_comp.insert((id, comp));
+        list.len() as u32
     }
 }
 

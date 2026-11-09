@@ -138,17 +138,48 @@ pub fn turned(v: DVec3, yaw: f32) -> DVec3 {
     right * v.x + DVec3::Y * v.y + ahead * v.z
 }
 
-/// The entity effects in an `EFFECT` component still on at `now` (`u64::MAX`: all): effect,
-/// strength, the tick it ends.
-pub fn effects_on(bytes: Option<&[u8]>, now: u64) -> impl Iterator<Item = (u32, f32, u64)> + '_ {
+/// An effect on an entity, as its `EFFECT` component holds it (16 bytes each).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OnEffect {
+    pub id: u32,
+    /// 1 and up.
+    pub level: u32,
+    /// The tick of its dimension it ends at.
+    pub until: u64,
+}
+
+/// The entity effects in an `EFFECT` component still on at `now` (`u64::MAX`: all).
+pub fn effects_on(bytes: Option<&[u8]>, now: u64) -> impl Iterator<Item = OnEffect> + '_ {
     bytes
         .unwrap_or_default()
         .chunks_exact(16)
         .map(|b| {
             let word = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
-            (word(0), f32::from_bits(word(4)), u64::from_le_bytes(b[8..16].try_into().unwrap()))
+            OnEffect { id: word(0), level: word(4).max(1), until: u64::from_le_bytes(b[8..16].try_into().unwrap()) }
         })
-        .filter(move |f| now == u64::MAX || f.2 > now)
+        .filter(move |f| now == u64::MAX || f.until > now)
+}
+
+pub fn encode_effects(list: &[OnEffect]) -> Box<[u8]> {
+    list.iter()
+        .flat_map(|f| {
+            f.id.to_le_bytes()
+                .into_iter()
+                .chain(f.level.to_le_bytes())
+                .chain(f.until.to_le_bytes())
+        })
+        .collect()
+}
+
+/// An entity's effects going with it to a dimension whose clock is `by` ticks ahead: they end
+/// as many ticks from now there as here.
+pub fn rebase_effects(comps: &mut [(u32, Box<[u8]>)], effect: u32, by: i64) {
+    for (_, v) in comps.iter_mut().filter(|(k, _)| *k == effect) {
+        let moved: Vec<OnEffect> = effects_on(Some(v), u64::MAX)
+            .map(|f| OnEffect { until: f.until.saturating_add_signed(by), ..f })
+            .collect();
+        *v = encode_effects(&moved);
+    }
 }
 
 #[inline]

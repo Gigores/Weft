@@ -1070,7 +1070,8 @@ impl Server {
             .entity_region(p.entity)
             .and_then(|r| r.entities.take(p.entity));
         let mut frame = None;
-        if let Some((mut e, inv, comps)) = taken {
+        if let Some((mut e, inv, mut comps)) = taken {
+            crate::world::rebase_effects(&mut comps, c.game.fields.effect, dims[to as usize].time as i64 - dims[from].time as i64);
             e.pos = pos;
             let id = e.id;
             let r = dims[to as usize].ensure_region(c, pos);
@@ -1313,7 +1314,7 @@ impl Server {
             return;
         }
         let Some(from) = self.dims[dim as usize].entity_region(id) else { return };
-        let Some((mut e, inv, comps)) = from.entities.take(id) else { return };
+        let Some((mut e, inv, mut comps)) = from.entities.take(id) else { return };
         // The blocks of a structure travel with its entity.
         let structure = from.bodies.remove(&id);
         let on_it: Vec<_> = from
@@ -1323,6 +1324,8 @@ impl Server {
             .filter_map(|b| from.entities.take(b))
             .collect();
         e.pos = pos;
+        let by = self.dims[to_dim as usize].time as i64 - self.dims[dim as usize].time as i64;
+        crate::world::rebase_effects(&mut comps, c.game.fields.effect, by);
         let r = self.dims[to_dim as usize].ensure_region(c, pos);
         r.entities.insert_with(c, e, inv, comps);
         if let Some(mut s) = structure {
@@ -1330,7 +1333,8 @@ impl Server {
             (s.cell, s.in_touch) = (None, false);
             r.bodies.insert(id, s);
         }
-        for (b, inv, comps) in on_it {
+        for (b, inv, mut comps) in on_it {
+            crate::world::rebase_effects(&mut comps, c.game.fields.effect, by);
             r.entities.insert_with(c, b, inv, comps);
         }
     }

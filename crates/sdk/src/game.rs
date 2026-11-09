@@ -380,16 +380,28 @@ impl World {
         unsafe { (host().weather_now)(self.raw()) }
     }
 
-    /// Effect `effect` on an entity for everyone who sees it, at `strength` (0..1) for
-    /// `ticks` (0 ends it): `w.entity_effect(id, &entity_effects::GLOW, 1.0, 200)`, or one of
-    /// your own (`Registry::entity_effect`). Several at once, one of each: giving one again replaces it.
-    pub fn entity_effect(&self, id: u64, effect: impl Into<crate::Id<crate::EntityEffect>>, strength: f32, ticks: u32) {
-        unsafe { (host().entity_effect)(self.raw(), id, effect.into().raw(), strength, ticks) }
+    /// Effect `effect` on an entity at `level` (1 and up) for `ticks` (0 ends it):
+    /// `w.entity_effect(id, &entity_effects::GLOW, 1, 200)`, or one of your own
+    /// (`Registry::entity_effect`). Several at once, one of each: giving one again replaces it.
+    /// An instant one acts once and doesn't stay.
+    pub fn entity_effect(&self, id: u64, effect: impl Into<crate::Id<crate::EntityEffect>>, level: u32, ticks: u32) {
+        unsafe { (host().entity_effect)(self.raw(), id, effect.into().raw(), level.max(1), ticks) }
+    }
+    /// The effects on `id`: which, at what level, for how many ticks yet.
+    pub fn effects(&self, id: u64) -> Vec<abi::EffectOn> {
+        let mut out = vec![abi::EffectOn::default(); 16];
+        let n = unsafe { (host().entity_effects)(self.raw(), id, out.as_mut_ptr(), out.len() as u32) } as usize;
+        if n > out.len() {
+            out.resize(n, abi::EffectOn::default());
+            unsafe { (host().entity_effects)(self.raw(), id, out.as_mut_ptr(), out.len() as u32) };
+        }
+        out.truncate(n);
+        out
     }
 
     /// A white flash on an entity for everyone who sees it (a creeper about to go off).
     pub fn flash(&self, id: u64) {
-        self.entity_effect(id, &crate::entity_effects::FLASH, 1.0, 2)
+        self.entity_effect(id, &crate::entity_effects::FLASH, 1, 2)
     }
 
     /// A player's `abi::permission` level: ask it before anything only some may do.

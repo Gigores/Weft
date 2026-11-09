@@ -343,7 +343,7 @@ impl EntityRenderer {
             .iter()
             .map(|d| {
                 let slot = effect_slots.slot(&d.shader);
-                if slot == 0 && !d.shader.is_empty() {
+                if slot == 0 && d.shader_given && !d.shader.is_empty() {
                     log::warn!("entity effect {}: no shader entity_effect/{}", d.name, d.shader);
                 }
                 slot

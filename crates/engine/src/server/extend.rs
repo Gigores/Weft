@@ -381,10 +381,19 @@ impl Dim {
             // Emptied, not removed: a removed component never reaches clients.
             self.entities
                 .comps
-                .insert((id, comp), super::dim::encode_effects(&on));
+                .insert((id, comp), crate::world::encode_effects(&on));
             self.entities.dirty_comp.insert((id, comp));
         }
-        from.extend(on.iter().flat_map(|f| s.effects.get(&f.0)).flatten());
+        // An effect's at its level: those given for it, else the others times the level.
+        for f in &on {
+            let all = s.effects.get(&f.id).map_or(&[][..], |v| &v[..]);
+            let exact = all.iter().any(|m| m.level == f.level);
+            from.extend(
+                all.iter()
+                    .filter(|m| if exact { m.level == f.level } else { m.level == 0 })
+                    .map(|m| SourceMod { amount: if exact { m.amount } else { m.amount * f.level as f64 }, ..*m }),
+            );
+        }
         from.extend(s.modes.get(&(mode.0 as u32)).into_iter().flatten());
         from.extend(s.poses.get(&(pose.0 as u32)).into_iter().flatten());
         let held = self.entities.held(id).item;

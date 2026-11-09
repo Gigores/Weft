@@ -1034,7 +1034,7 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(w.set_component(owner(w, cmd)?, &LIGHT, rgb).to_string())
     }),
     ("lit", "@entity <ticks:int>", |w, cmd, _, _| {
-        w.entity_effect(owner(w, cmd)?, &LIT, 1.0, int(cmd, "ticks")?);
+        w.entity_effect(owner(w, cmd)?, &LIT, 1, int(cmd, "ticks")?);
         Ok(String::new())
     }),
     ("mark", "<id:int> <value:int>", |w, cmd, _, _| {
@@ -1163,10 +1163,10 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok((w.in_liquid(p) as u32).to_string())
     }),
     // A hit from the player who runs it.
-    ("effect", "<id:int> <which:word> <strength:float> <ticks:int>", |w, cmd, _, _| {
+    ("effect", "<id:int> <which:word> <level:int> <ticks:int>", |w, cmd, _, _| {
         let name = word(cmd, "which")?;
         let id = EntityEffect::lookup(name).ok_or_else(|| format!("no entity effect {name}"))?;
-        w.entity_effect(int(cmd, "id")?, id, cmd.float("strength").unwrap_or(1.0) as f32, int(cmd, "ticks")?);
+        w.entity_effect(int(cmd, "id")?, id, int(cmd, "level")?, int(cmd, "ticks")?);
         Ok(String::new())
     }),
     ("hurt", "<id:int> <amount:float>", |w, cmd, player, _| {

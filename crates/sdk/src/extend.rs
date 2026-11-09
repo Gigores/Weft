@@ -519,7 +519,7 @@ pub struct Hazard(pub(crate) abi::Hazard);
 
 impl Hazard {
     fn of(at: u32, damage: f32, cause: &crate::DamageCause) -> Hazard {
-        Hazard(abi::Hazard { at, damage, cause: cause.name().to_string(), fire: 0, every: 0, when: Vec::new() })
+        Hazard(abi::Hazard { at, damage, cause: cause.name().to_string(), fire: 0, every: 0, when: Vec::new(), level: 0 })
     }
     /// Its box in the block's shape.
     pub fn inside(damage: f32, cause: &crate::DamageCause) -> Hazard {
