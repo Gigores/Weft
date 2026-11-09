@@ -57,8 +57,6 @@ pub struct Space {
     /// Light from bodies going through here: the cells they light from, each body's and in all.
     pub(super) body_lights: FxHashMap<u64, Vec<(IVec3, [u8; 3])>>,
     pub(super) body_light: FxHashMap<IVec3, [u8; 3]>,
-    /// Per entity: the cell it lights from and its light.
-    pub(super) entity_lights: FxHashMap<u64, (IVec3, [u8; 3])>,
     /// Cells of that which changed, for clients.
     pub(super) body_light_changes: Vec<(IVec3, [u8; 3])>,
     /// The world's light where a body's blocks are, by its cubes, and whether that is news.

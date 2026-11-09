@@ -935,8 +935,8 @@ pub trait Holds: WithComponents {
 impl Holds for ItemBuilder<'_> {}
 impl Holds for crate::EntityBuilder<'_> {}
 
-/// Light for things that aren't blocks: items (held, worn or dropped) and entity kinds. Blocks set
-/// `light` per state; an item that places a block gives that block's light.
+/// Light that moves with an entity: an item's (held, worn or dropped) or an entity kind's, drawn by
+/// clients alone. Blocks set `light` per state; an item that places a block gives that block's light.
 pub trait Glows: WithComponents {
     /// White light. 15 is full strength; more is allowed and reaches further.
     fn light(self, level: u8) -> Self {

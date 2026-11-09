@@ -2,6 +2,7 @@ pub mod camera;
 pub mod ctm;
 pub mod entity_render;
 pub mod gizmo;
+pub mod glow;
 pub mod lod;
 pub mod looks;
 pub mod mesher;
@@ -1707,6 +1708,7 @@ impl Client {
                 .tx
                 .send(terrain::In::View { center, radius: self.view_radius });
         }
+        self.update_glow(crate::content::content());
         // Enough jobs that meshing keeps up at 50 frames per second too (results are taken once
         // a frame), not only at hundreds.
         self.world
@@ -2239,6 +2241,37 @@ impl Client {
         }
     }
 
+    /// The light every entity gives off, from its middle (`glow`): the player's from what it holds
+    /// and wears, others' from what they show.
+    fn update_glow(&mut self, c: &crate::content::Content) {
+        use glow::entity_light;
+        let middle = |pos: DVec3, kind: u32| pos + DVec3::Y * (c.game.entities[kind as usize].size().height as f64 * 0.5);
+        let mut sources = Vec::new();
+        if !self.mode.has(crate::tag_bits::game_mode::HIDDEN) && !self.dead {
+            let mut own = vec![self.held(), crate::content::in_off_hand(c, &self.inventory)];
+            let w = &c.game.player_layout.worn;
+            own.extend_from_slice(
+                self.inventory
+                    .get(w.start as usize..w.end as usize)
+                    .unwrap_or_default(),
+            );
+            let kind = c.game.player_kind;
+            sources.push((middle(self.player.pos, kind), entity_light(c, kind, self.me.burning, &own)));
+        }
+        for e in self.entities.values().filter(|e| e.dying.is_none()) {
+            let mut shown: Vec<ItemStack> = [e.held, e.off_held]
+                .into_iter()
+                .chain(e.worn.iter().copied())
+                .filter(|&i| i != 0)
+                .map(|i| ItemStack::new(i, 1))
+                .collect();
+            shown.push(e.item);
+            sources.push((middle(e.pos, e.kind), entity_light(c, e.kind, e.burning, &shown)));
+        }
+        let eye = self.player.pos;
+        self.world.set_glow(c, eye, sources);
+    }
+
     /// Items the local player wears.
     pub fn worn(&self) -> Vec<u32> {
         let c = content();
@@ -2597,7 +2630,7 @@ impl Client {
         });
         let me = (alive && (self.camera_has(crate::tag_bits::camera::BODY) || hand.is_some())).then_some(&self.me);
         let world = &self.world;
-        let light = |p: IVec3| world.light(p);
+        let light = |p: IVec3| world.light_shown(p);
         let mut hand_late = std::mem::take(&mut self.hand_late);
         hand_late.clear();
         let mut cracks: Vec<entity_render::Crack> = self

@@ -637,9 +637,8 @@ const OPS: &[(&str, &str, Run)] = &[
     ("spawnlit", "<kind:entity> <pos:pos>", |w, cmd, _, _| {
         let p = pos(cmd, "pos")?;
         let e = w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5]);
-        let inv = w.inventory(p);
-        let mainhand = w.selected_slot(cmd.player());
-        inv.set(mainhand, RED_LAMP.stack(1));
+        let inv = w.inventory(e);
+        inv.set(w.selected_slot(e), RED_LAMP.stack(1));
         if let Some(offhand) = inv.find_group(OFF_HAND.name()) {
             offhand.set(0, BLUE_LAMP.stack(1));
         }

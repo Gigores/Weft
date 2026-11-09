@@ -813,31 +813,14 @@ impl Dim {
         if !lights.is_empty() {
             self.space.body_lights.insert(id, lights);
         }
-        self.relight_sources(c, touched);
-    }
-
-    /// Updates the light from non-block sources (body lamps, entities) in the `touched` cells.
-    /// Each cell takes the per-channel maximum of all sources, and the world is relit around the
-    /// cells whose result changed.
-    pub(super) fn relight_sources(&mut self, c: &'static Content, touched: Vec<IVec3>) {
-        let Space { cubes, body_light, body_lights, entity_lights, body_light_changes, light_dirty, .. } = &mut *self.space;
-        // Entity light per touched cell, gathered in a single pass.
-        let wanted: FxHashSet<IVec3> = touched.iter().copied().collect();
-        let mut from_entities: FxHashMap<IVec3, [u8; 3]> = FxHashMap::default();
-        for &(cell, l) in entity_lights
-            .values()
-            .filter(|(cell, _)| wanted.contains(cell))
-        {
-            let m = from_entities.entry(cell).or_insert([0; 3]);
-            *m = super::entity_light::brightest(*m, l);
-        }
+        let Space { cubes, body_light, body_lights, body_light_changes, light_dirty, .. } = &mut *self.space;
         let mut changed = Vec::new();
         for &cell in &touched {
             let all = body_lights
                 .values()
                 .flatten()
                 .filter(|l| l.0 == cell)
-                .fold(from_entities.get(&cell).copied().unwrap_or([0; 3]), |m, l| super::entity_light::brightest(m, l.1));
+                .fold([0u8; 3], |m, l| [m[0].max(l.1[0]), m[1].max(l.1[1]), m[2].max(l.1[2])]);
             let now = (all != [0; 3]).then_some(all);
             if now != body_light.get(&cell).copied() {
                 match now {
