@@ -51,7 +51,7 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .tag("spawn_biome")
         .set(&TREES, 0.025)
-        .set(&GRASS_COVER, 0.5)
+        .set(&GRASS_COVER, 0.7)
         .set(&TALL_GRASS_COVER, 0.2);
     r.biome(&FOREST)
         .humidity(0.25..)
@@ -181,7 +181,7 @@ pub fn register(r: &mut Registry) {
                 .named("mountains"),
         )
         // Biomes bring their climate and surface; rules only add where else they must hold.
-        .rule(BiomeRule::new("ocean").height(..=SEA))
+        .rule(BiomeRule::new("ocean").height(..=SEA - 2))
         .rule(
             BiomeRule::new("snowy_plains")
                 .named("snowy_coast")
@@ -327,11 +327,12 @@ fn decorate(g: &mut Gen) {
             let tall_grass_chance = TALL_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64;
             let grass_chance = GRASS_COVER.on_biome(b).unwrap_or(0.05) as f64;
             // What is under the lowest layer takes a look at the terrain: only if anything would grow.
-            if y == 0 && roll >= grass_chance.max(0.08) {
+            if y == 0 && roll >= grass_chance.max(0.08) && roll >= tall_grass_chance.max(0.08) {
                 continue;
             }
             let below = if y == 0 { g.surface_block(wx, wz) } else { g.get(x, y - 1, z) };
             if PLANT_SOIL.on_block(below) {
+                // roll ∈ [0; 0.012)
                 if roll < 0.012 {
                     let flower = FLOWERS
                         .on_biome(b)
@@ -339,6 +340,7 @@ fn decorate(g: &mut Gen) {
                     if flower != 0 {
                         g.set(x, y, z, flower);
                     }
+                // roll ∈ [0.012; tall_grass_chance)
                 } else if roll < tall_grass_chance {
                     let upper = TALL_TALL_GRASS.with(&[("half", "upper")]);
                     if y + 1 < 16 && g.get(x, y + 1, z) == 0 && upper != u32::MAX {
@@ -347,6 +349,7 @@ fn decorate(g: &mut Gen) {
                     } else {
                         g.set(x, y, z, TALL_GRASS.id());
                     }
+                // roll ∈ [tall_grass_chance; grass_chance)
                 } else if roll < grass_chance {
                     g.set(x, y, z, TALL_GRASS.id());
                 }
