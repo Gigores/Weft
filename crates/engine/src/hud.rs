@@ -1167,6 +1167,35 @@ pub fn item_tooltip(lang: &Lang, input: &crate::input::Input, stack: weft_abi::I
         let template = lang.get(if m.worn { "tooltip.modifier.worn" } else { "tooltip.modifier" });
         line(template, &[text::Arg::Text(format!("{:+}", m.amount)), attr], None, &mut out);
     }
+    // The effects it gives (a potion's), with their level and how long, as vanilla's.
+    let gifts = c
+        .components
+        .id(weft_abi::comp::GIVES_EFFECTS)
+        .and_then(|id| c.components.bytes(crate::components::ITEM, stack.item, id))
+        .and_then(weft_abi::data::from_bytes::<Vec<weft_abi::EffectGift>>)
+        .unwrap_or_default();
+    for g in gifts {
+        let Some(d) = c
+            .game
+            .entity_effect_names
+            .get(&g.effect)
+            .and_then(|&e| c.game.entity_effects.get(e as usize))
+        else {
+            continue;
+        };
+        let kind = match d.kind {
+            crate::registry::effect_kind::BENEFICIAL => "beneficial",
+            crate::registry::effect_kind::HARMFUL => "harmful",
+            _ => "neutral",
+        };
+        let key = format!("tooltip.effect.{kind}{}", if d.instant { ".instant" } else { "" });
+        let roman = ["", "", " II", " III", " IV", " V", " VI", " VII", " VIII", " IX", " X"];
+        let level = roman
+            .get(g.level as usize)
+            .map_or_else(|| format!(" {}", g.level), |s| s.to_string());
+        let name = text::Arg::Key(format!("effect.{}", d.name.replace(':', ".")));
+        line(lang.get(&key), &[name, text::Arg::Text(level), text::Arg::Text(effect_time(g.ticks as u64))], None, &mut out);
+    }
     let max = c.durability(&stack);
     if max > 0 {
         let damage = crate::stack::damage(&stack);

@@ -1387,6 +1387,7 @@ pub mod attr {
     pub const BURNING_TIME: u32 = 20;
     pub const SUBMERGED_MINING_SPEED: u32 = 21;
     pub const AIRBORNE_MINING_SPEED: u32 = 22;
+    pub const NIGHT_VISION: u32 = 23;
 }
 
 fn engine_attributes() -> Vec<RawEntry> {
@@ -1416,6 +1417,7 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::BURNING_TIME, 1.0, 0.0, 100.0),
         (a::SUBMERGED_MINING_SPEED, 0.2, 0.0, 20.0),
         (a::AIRBORNE_MINING_SPEED, 0.2, 0.0, 20.0),
+        (a::NIGHT_VISION, 0.0, 0.0, 1.0),
     ]
     .iter()
     .map(|&(name, default, min, max)| {

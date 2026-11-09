@@ -97,6 +97,8 @@ pub mod attribute {
     pub static SUBMERGED_MINING_SPEED: Attribute = Attribute::named(crate::abi::attribute::SUBMERGED_MINING_SPEED);
     /// Multiplier on mining speed off the ground (0.2).
     pub static AIRBORNE_MINING_SPEED: Attribute = Attribute::named(crate::abi::attribute::AIRBORNE_MINING_SPEED);
+    /// How much its player sees as if everything were lit (0..1).
+    pub static NIGHT_VISION: Attribute = Attribute::named(crate::abi::attribute::NIGHT_VISION);
 }
 
 /// An attribute modifier that comes with something (`.modifier(..)` on an item, a pose, an

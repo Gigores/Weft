@@ -548,6 +548,8 @@ pub struct Client {
     swing_since: f32,
     swing_held: ItemStack,
     /// This player's attributes, by id, as the server says.
+    /// The night vision attribute, eased over half a second (`Scene::light`).
+    night_vision: f32,
     pub(crate) attributes: Vec<f32>,
     /// What the server refused to have mined; the button let go or another block lifts it.
     refused_break: Option<(u64, IVec3)>,
@@ -867,6 +869,7 @@ impl Client {
             hand_height: 1.0,
             swing_since: 1000.0,
             swing_held: ItemStack::default(),
+            night_vision: 0.0,
             attributes: content()
                 .game
                 .attributes
@@ -1017,6 +1020,11 @@ impl Client {
         let moved = self.animate_player(input, dt);
         self.frame_dt = dt as f32;
         self.weather_effects(dt as f32);
+        // Night vision comes and goes over about half a second, not at once.
+        let night = self
+            .attribute(crate::registry::attr::NIGHT_VISION)
+            .clamp(0.0, 1.0);
+        self.night_vision += (night - self.night_vision) * (dt as f32 * 4.0).min(1.0);
         self.sync_me();
         let all = input.pressed("core:drop_all");
         if (all || input.pressed("core:drop")) && !self.mode.has(crate::tag_bits::game_mode::NO_INTERACT) {
@@ -2571,7 +2579,7 @@ impl Client {
             up: inv.transform_vector3(Vec3::Y).extend(0.0).to_array(),
             fog_color: self.fog_color(),
             params: [fog_start, fog_end, self.daylight(), crate::shaders::time()],
-            light: [content().dims[self.world.dim as usize].ambient as f32 / 15.0, self.brightness, ticks, 0.0],
+            light: [content().dims[self.world.dim as usize].ambient as f32 / 15.0, self.brightness, ticks, self.night_vision],
             sun: self.sun(),
         }
     }

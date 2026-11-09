@@ -4504,6 +4504,9 @@ pub mod attribute {
     pub const SUBMERGED_MINING_SPEED: &str = "core:submerged_mining_speed";
     /// Multiplier on mining speed off the ground (0.2).
     pub const AIRBORNE_MINING_SPEED: &str = "core:airborne_mining_speed";
+    /// How much its player sees as if everything were under the noon sky, lamps still adding
+    /// their warmth (0..1; the night vision effect 1).
+    pub const NIGHT_VISION: &str = "core:night_vision";
 }
 
 /// How an attribute modifier applies, like vanilla: ADD amounts sum onto the base, then times

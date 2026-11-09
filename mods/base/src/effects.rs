@@ -35,7 +35,6 @@ static MAGIC: DamageCause = DamageCause::named("magic");
 static POISONED: DamageCause = DamageCause::named("poison");
 static WITHERED: DamageCause = DamageCause::named("wither");
 
-static NIGHT_VISION_SCREEN: Shader = Shader::named("night_vision");
 static BLINDNESS_SCREEN: Shader = Shader::named("blindness");
 static NAUSEA_SCREEN: Shader = Shader::named("nausea");
 
@@ -136,7 +135,7 @@ pub fn register(r: &mut Registry) {
         .modifier(Modifier::add(&a::MAX_HEALTH, 4.0));
     status(r, &NIGHT_VISION, 0xC2FF66)
         .beneficial()
-        .screen(&NIGHT_VISION_SCREEN);
+        .modifier(Modifier::new(&a::NIGHT_VISION, op::SET, 1.0));
     status(r, &BLINDNESS, 0x1F1F23)
         .harmful()
         .screen(&BLINDNESS_SCREEN);
@@ -167,7 +166,9 @@ pub fn register(r: &mut Registry) {
     // The engine's glow becomes a status effect too.
     r.edit(&entity_effects::GLOW)
         .icon("mob_effect/glowing")
-        .color(0x94A061);
+        .color(0x94A061)
+        // Lights up all around, a torch's light, as if held.
+        .light_rgb(15, 13, 10);
 
     r.item(&GLASS_BOTTLE).tab(&crate::tabs::INGREDIENTS);
     // A potion each: vanilla's three minutes, an instant one at once.
