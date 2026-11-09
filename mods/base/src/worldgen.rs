@@ -20,6 +20,7 @@ pub static TREES: Component<f32> = Component::named("trees");
 pub static GRASS_COVER: Component<f32> = Component::named("grass");
 pub static TALL_GRASS_COVER: Component<f32> = Component::named("tall_grass");
 pub static BOULDER_COVER: Component<f32> = Component::named("boulder");
+pub static BUSH_COVER: Component<f32> = Component::named("bush");
 /// The logs of the trees a biome grows, with weights: `"base:birch_log:1 base:oak_log:4"`
 /// (oaks where unset).
 pub static TREE_KINDS: Component<BlockList> = Component::named("tree_kinds");
@@ -54,7 +55,8 @@ pub fn register(r: &mut Registry) {
         .set(&TREES, 0.025)
         .set(&GRASS_COVER, 0.7)
         .set(&TALL_GRASS_COVER, 0.2)
-        .set(&BOULDER_COVER, 0.01);
+        .set(&BOULDER_COVER, 0.01)
+        .set(&BUSH_COVER, 0.05);
     r.biome(&FOREST)
         .humidity(0.25..)
         .surface("grass", "dirt", 3)
@@ -239,8 +241,36 @@ pub fn register(r: &mut Registry) {
                 place_ball(&mut rng, dx, dy, dz);
             }
         });
+    r.scatter(&BUSH_SITES)
+        .cell(5)
+        .reach(3)
+        .density(&BUSH_COVER)
+        .shape(|s| place_bush(s, OAK_LEAVES.id(), OAK_LOG.id()));
     r.decoration(decorate);
 }
+
+pub fn place_bush(s: &mut Site, leaf: u32, stem: u32) {
+    let BlockPos { x, y, z } = s.pos();
+    let mut rng = Rng(s.random());
+    let bush_size = {
+        let mut result = rng.float() + 0.7;
+        if result < 1.0 { result = 1.0; }
+        result
+    };
+    s.put([x, y, z], stem);
+    let mut place_ball = |ox, oy, oz, size| {
+        for (dx, dy, dz) in sphere(size) {
+            s.put([ox + dx, oy + dy, oz + dz], leaf);
+        }
+    };
+    place_ball(x, y, z, bush_size);
+    if bush_size < 1.5 { return; }
+    let dx = x + (rng.float() * 2.0) as i32;
+    let dz = z + (rng.float() * 2.0) as i32;
+    place_ball(dx, y, dz, bush_size - 0.5);
+}
+
+static BUSH_SITES: Scatter = Scatter::named("bushes");
 
 pub fn sphere(radius: f32) -> impl Iterator<Item = (i32, i32, i32)> {
     let extent = radius.floor() as i32;
