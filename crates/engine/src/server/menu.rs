@@ -439,6 +439,8 @@ pub fn creative_to_hotbar(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, 
 
 /// The trash key over a slot: its stack goes to the player's trash, what was there gone.
 pub const TO_TRASH: u8 = 17;
+/// The other hand's key over a slot: swaps it with the other hand (vanilla's F).
+pub const OFF_HAND_SWAP: u8 = 18;
 
 /// Sorts the storage slot `slot` is in (`client_op::MENU_SORT`); `u32::MAX`: what the menu is
 /// opened on, else the player's main inventory.
@@ -456,15 +458,18 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
         }
         return;
     }
-    if (HOTBAR_SWAP..HOTBAR_SWAP + 9).contains(&button) {
-        let hot = (button - HOTBAR_SWAP) as u32;
-        if hot >= c.game.player_layout.hotbar {
+    if (HOTBAR_SWAP..HOTBAR_SWAP + 9).contains(&button) || button == OFF_HAND_SWAP {
+        let hot = button.wrapping_sub(HOTBAR_SWAP) as u32;
+        if button != OFF_HAND_SWAP && hot >= c.game.player_layout.hotbar {
             return;
         }
         let Some(h) = m
             .slots
             .iter()
-            .position(|s| s.owner == Owner::Player && s.index == hot)
+            .position(|s| match button {
+                OFF_HAND_SWAP => s.flags & sf::OFF_HAND != 0,
+                _ => s.owner == Owner::Player && s.index == hot,
+            })
             .map(|i| i as u32)
         else {
             return;
@@ -482,6 +487,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
             || !fits(c, &a, sb.item)
             || !fits(c, &b, sa.item)
             || sb.count > cap(c, &a, sb.item)
+            || sa.count > cap(c, &b, sa.item)
         {
             return;
         }
