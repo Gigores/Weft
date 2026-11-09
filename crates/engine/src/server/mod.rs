@@ -551,6 +551,11 @@ impl Server {
         // Every region of every dimension is independent: tick them all in parallel. A frozen
         // world only runs the ticks it is stepped.
         let runs = !self.frozen || self.steps > 0 || self.sprint.is_some();
+        // Hands go on while frozen for players, who still act.
+        for r in self.dims.iter_mut().flat_map(|d| &mut d.regions) {
+            r.finish_uses(c, !runs);
+            r.mine(c, !runs);
+        }
         self.steps -= (self.frozen && self.steps > 0) as u32;
         for d in self.dims.iter_mut().filter(|_| runs) {
             let mut groups: Vec<String> = self

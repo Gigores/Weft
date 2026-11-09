@@ -501,6 +501,7 @@ pub fn in_main_hand(c: &Content, kind: u32, inventory: &[weft_abi::ItemStack], s
     let main = inventory
         .get(selected as usize)
         .copied()
+        .filter(|_| selected < c.game.entities[kind as usize].hand_slots)
         .unwrap_or_default();
     if !main.is_empty() && !fits_one_hand(c, main.item) && !in_off_hand(c, kind, inventory).is_empty() {
         return weft_abi::ItemStack::EMPTY;

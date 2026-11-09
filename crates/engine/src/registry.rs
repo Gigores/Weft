@@ -119,6 +119,9 @@ pub struct EntityKind {
     pub worn: std::ops::Range<u32>,
     /// The slot of its second hand, after its equipment (the player's, and kinds that wear).
     pub off: Option<u32>,
+    /// How many of its first slots its main hand may be on (`Entity::selected`): the player's
+    /// hotbar, a wearing kind's own slots (one at least); 0 for a kind without hands.
+    pub hand_slots: u32,
     /// What its events sound and show (`entity_event`).
     pub effects: [crate::content::Fx; 4],
     /// Solid bodies: riders up to this high above it move with it.
@@ -1537,6 +1540,7 @@ fn bake_entity(e: &Entry) -> EntityKind {
         slots: 0,
         worn: 0..0,
         off: None,
+        hand_slots: 0,
         effects: [crate::content::Fx::NONE; 4],
         carry_height: e.or(k::CARRY_HEIGHT, 0.0),
         light_at: match e.get::<[f32; 3]>(k::LIGHT_AT) {
@@ -1640,7 +1644,8 @@ fn engine_entities() -> Vec<RawEntry> {
             .set(k::EYE, 1.62f32)
             .set(k::SLOT_GROUPS, groups)
             .set(abi::comp::ATTACK_SPEED, 4.0f32)
-            .tag(k::PICKS_UP),
+            .tag(k::PICKS_UP)
+            .tag(k::POSES),
         thing(ITEM, 0.25, 0.25),
         thing(FALLING, 0.98, 1.0).tag(k::SOLID),
         thing(MOVING, 1.0, 1.0)
@@ -2341,9 +2346,12 @@ fn lay_out_slots(
             .unwrap_or(0)
             .min(1 << 16);
         if k.name == PLAYER {
-            (k.slots, k.worn, k.off) = (g.player_layout.slots, g.player_layout.worn.clone(), g.player_layout.off);
+            (k.slots, k.worn, k.off, k.hand_slots) =
+                (g.player_layout.slots, g.player_layout.worn.clone(), g.player_layout.off, g.player_layout.hotbar);
         } else if k.flags & crate::tag_bits::entity::WEARS != 0 {
-            k.worn = k.slots..k.slots + g.player_layout.worn.len() as u32;
+            // Its own slots are what its hand holds from, one if it declared none.
+            k.hand_slots = k.slots.max(1);
+            k.worn = k.hand_slots..k.hand_slots + g.player_layout.worn.len() as u32;
             k.off = g.player_layout.off.map(|_| k.worn.end);
             k.slots = k.worn.end + k.off.is_some() as u32;
         }

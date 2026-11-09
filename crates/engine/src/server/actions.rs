@@ -138,8 +138,8 @@ impl Server {
                 }
             }
             ToServer::StopBreak => {
-                if let Some(e) = self.region(pi).and_then(|(r, id)| r.entities.get_mut(id)) {
-                    e.mining = None;
+                if let Some((r, id)) = self.region(pi) {
+                    r.stop_mining(id);
                 }
             }
             ToServer::StopUsing => {
@@ -249,45 +249,17 @@ impl Server {
                 let Some((r, entity)) = self.region(pi) else { return };
                 let (frame, pos) = r.landed_as(frame, pos);
                 let mining = r.entities.get_mut(entity).and_then(|e| e.mining.take());
-                let Some(e) = r.entities.get(entity) else { return };
-                let (eye, sel, creative) = (e.pos + DVec3::Y * e.eye(c), e.selected, e.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK));
-                let no_break = e.mode.has(crate::tag_bits::game_mode::NO_BREAK);
-                let reach = r.block_reach(c, entity);
                 let rate = r.mining_rate_of(c, entity, frame, pos, part);
                 let progress = mining
                     .filter(|m| m.frame == frame && m.pos == pos && m.part == part)
                     .map_or(0.0, |m| m.progress);
-                let mut refused = false;
-                let held = r.entities.held(entity);
-                let worn = r.with_space(c, frame, |d, o| {
-                    // Done by what the server added up, with room for lag: the client's word is
-                    // only that it is, and a modified one could say anything.
-                    let part = d.aimed_part(c, pos, part);
-                    let too_soon = rate < 1.0 && progress + 2.0 * rate < 0.7;
-                    let keeps = (creative && c.no_creative_break(held.item)) || no_break;
-                    let free = c
-                        .states
-                        .get(part as usize)
-                        .is_some_and(|s| s.hardness <= 0.0);
-                    let done = within(o.to_local(eye), pos, reach)
-                        && !too_soon
-                        && !keeps
-                        && d.break_piece(c, pos, part, face, hit, held, entity, !creative);
-                    // The client already shows air: a refused break sends the block back.
-                    if !done && d.get(pos).is_some() {
-                        d.resend_cell(pos);
-                        refused = true;
-                    }
-                    done && !free
-                });
-                if refused {
+                // Done by what the server added up, with room for lag: the client's word is only
+                // that it is, and a modified one could say anything.
+                let too_soon = rate < 1.0 && progress + 2.0 * rate < 0.7;
+                if r.break_mined(c, entity, frame, pos, part, face, hit, too_soon) {
                     self.players[pi]
                         .conn
                         .send(ToClient::BreakRefused { frame, pos });
-                }
-                let Some((r, _)) = self.region(pi) else { return };
-                if worn == Some(true) && !r.entities.held(entity).is_empty() {
-                    wear(c, r, entity, sel, 1);
                 }
             }
 
@@ -658,10 +630,14 @@ impl Dim {
         // An item that takes time starts here, and comes back through this when it is done.
         let ticks = crate::content::use_ticks(c, &held);
         if ticks > 0 && !finishing {
-            let done = self.time + ticks as u64;
-            if let Some(e) = self.entities.get_mut(entity) {
-                (e.using, e.use_done) = ((ticks, off_hand), Some((held.item, done, slot)));
+            let Some(e) = self.entities.get_mut(entity) else { return false };
+            // Asked again while at it (an AI asking every tick), it goes on.
+            if e.use_done
+                .is_some_and(|(item, _, s)| item == held.item && s == slot)
+            {
+                return true;
             }
+            (e.using, e.use_done) = ((ticks, off_hand), Some((held.item, ticks, slot)));
             self.events
                 .push(DimEvent::Using { entity, using: Some((ticks, off_hand)) });
             return true;
@@ -703,26 +679,29 @@ impl Dim {
         used
     }
 
-    /// Items held long enough take effect; another item in hand ends their use.
-    pub fn finish_uses(&mut self, c: &'static Content) {
-        let using: Vec<(u64, u32, u64, u32, u32, u32)> = self
+    /// One tick of using items: held long enough they take effect; another item in hand ends
+    /// their use. `players_only` while the world is frozen: players still act.
+    pub fn finish_uses(&mut self, c: &'static Content, players_only: bool) {
+        let using: Vec<(u64, u32, u32, u32, u32, u32)> = self
             .entities
             .list
             .iter()
-            .filter(|e| !e.removed)
+            .filter(|e| !e.removed && (e.player || !players_only))
             .filter_map(|e| {
                 e.use_done
-                    .map(|(item, done, slot)| (e.id, item, done, slot, e.selected, e.kind))
+                    .map(|(item, left, slot)| (e.id, item, left, slot, e.selected, e.kind))
             })
             .collect();
-        for (id, item, done, slot, selected, kind) in using {
+        for (id, item, left, slot, selected, kind) in using {
             let held = self.entities.inventory_slot(id, slot);
             let off = c.game.entities[kind as usize].off == Some(slot);
             if held.item != item || held.is_empty() || (!off && selected != slot) {
                 self.stop_using(id);
-            } else if self.time >= done {
+            } else if left <= 1 {
                 self.stop_using(id);
                 self.use_in_hand(c, id, slot, None, true);
+            } else if let Some(e) = self.entities.get_mut(id) {
+                e.use_done = Some((item, left - 1, slot));
             }
         }
     }
@@ -745,26 +724,35 @@ impl Dim {
     /// it may not (`actions::BREAK_BLOCK`), said now so it doesn't mine all that time for nothing.
     pub fn start_mining(&mut self, c: &'static Content, entity: u64, frame: u64, pos: IVec3, part: u32) -> bool {
         let held = self.entities.held(entity).item;
-        let refused = self.with_space(c, frame, |d, _| {
-            d.get(pos).is_some() && {
-                let state = d.aimed_part(c, pos, part);
-                !d.may_break(c, pos, state, held, entity)
-            }
+        let aimed = self.with_space(c, frame, |d, _| {
+            let state = d.aimed_part(c, pos, part);
+            (d.get(pos).is_none() || d.may_break(c, pos, state, held, entity)).then_some(state)
         });
         let Some(e) = self.entities.get_mut(entity) else { return false };
-        e.mining = (refused != Some(true)).then_some(super::entity::Mining { frame, pos, part, progress: 0.0 });
+        e.mining = match aimed {
+            Some(None) => None,
+            // What it stands for, as cracks are drawn by.
+            Some(Some(state)) if part == u32::MAX => Some(super::entity::Mining { frame, pos, part: state, progress: 0.0 }),
+            _ => Some(super::entity::Mining { frame, pos, part, progress: 0.0 }),
+        };
         e.mining.is_some()
     }
 
-    /// Mining goes on by what each one holds and where it is this tick. A player's client says
+    pub fn stop_mining(&mut self, id: u64) {
+        if let Some(e) = self.entities.get_mut(id) {
+            e.mining = None;
+        }
+    }
+
+    /// One tick of mining, by what each one holds and where it is now. A player's client says
     /// when it is done (`ToServer::Break`, checked against this); anything else breaks the block
-    /// when it gets there, within its reach, with what it holds, which wears.
-    pub fn mine(&mut self, c: &'static Content) {
+    /// when it gets there. `players_only` while the world is frozen: players still act.
+    pub fn mine(&mut self, c: &'static Content, players_only: bool) {
         let mining: Vec<(u64, super::entity::Mining, bool)> = self
             .entities
             .list
             .iter()
-            .filter(|e| !e.removed)
+            .filter(|e| !e.removed && (e.player || !players_only))
             .filter_map(|e| e.mining.map(|m| (e.id, m, e.player)))
             .collect();
         for (id, m, player) in mining {
@@ -775,24 +763,59 @@ impl Dim {
                 continue;
             }
             e.mining = None;
-            let (eye, slot) = (e.pos + DVec3::Y * e.eye(c), e.selected);
-            let (held, reach) = (self.entities.held(id), self.block_reach(c, id));
-            let broke = self.with_space(c, m.frame, |d, o| {
-                let eye = o.to_local(eye);
-                let to = eye - (m.pos.as_dvec3() + DVec3::splat(0.5));
-                // The face toward it, its middle hit.
-                let axis = to.abs().max_position();
-                let face = (axis * 2 + (to[axis] > 0.0) as usize) as u8;
-                let part = d.aimed_part(c, m.pos, m.part);
-                let hard = c
-                    .states
-                    .get(part as usize)
-                    .is_some_and(|s| s.hardness > 0.0);
-                (within(eye, m.pos, reach) && d.break_piece(c, m.pos, part, face, [0.5; 3], held, id, true)) && hard
-            });
-            if broke == Some(true) && !held.is_empty() {
-                wear(c, self, id, slot, 1);
-            }
+            // The face toward it, its middle hit.
+            let eye = e.pos + DVec3::Y * e.eye(c);
+            let to = self
+                .in_frame(m.frame, |d| d.place.to_local(eye))
+                .unwrap_or(eye)
+                - (m.pos.as_dvec3() + DVec3::splat(0.5));
+            let axis = to.abs().max_position();
+            let face = (axis * 2 + (to[axis] > 0.0) as usize) as u8;
+            self.break_mined(c, id, m.frame, m.pos, m.part, face, [0.5; 3], false);
         }
+    }
+
+    /// `entity` breaks what it mined: within its reach, unless its mode keeps blocks, what it
+    /// holds wearing for a block that took work. `too_soon`: refused anyway (a client saying it is
+    /// done before the server's count does). True when a block stays that it didn't break, which
+    /// is sent back to who already shows it gone.
+    #[allow(clippy::too_many_arguments)]
+    pub fn break_mined(
+        &mut self,
+        c: &'static Content,
+        entity: u64,
+        frame: u64,
+        pos: IVec3,
+        part: u32,
+        face: u8,
+        hit: [f32; 3],
+        too_soon: bool,
+    ) -> bool {
+        let Some(e) = self.entities.get(entity) else { return false };
+        let (eye, sel, creative) = (e.pos + DVec3::Y * e.eye(c), e.selected, e.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK));
+        let no_break = e.mode.has(crate::tag_bits::game_mode::NO_BREAK);
+        let (reach, held) = (self.block_reach(c, entity), self.entities.held(entity));
+        let mut refused = false;
+        let worn = self.with_space(c, frame, |d, o| {
+            let part = d.aimed_part(c, pos, part);
+            let keeps = (creative && c.no_creative_break(held.item)) || no_break;
+            let free = c
+                .states
+                .get(part as usize)
+                .is_some_and(|s| s.hardness <= 0.0);
+            let done = within(o.to_local(eye), pos, reach)
+                && !too_soon
+                && !keeps
+                && d.break_piece(c, pos, part, face, hit, held, entity, !creative);
+            if !done && d.get(pos).is_some() {
+                d.resend_cell(pos);
+                refused = true;
+            }
+            done && !free
+        });
+        if worn == Some(true) && !held.is_empty() {
+            wear(c, self, entity, sel, 1);
+        }
+        refused
     }
 }

@@ -947,6 +947,11 @@ impl EntityBuilder<'_> {
     pub fn equipment(self) -> Self {
         self.tag(abi::comp::entity::WEARS)
     }
+    /// It takes the poses the player does, by the keys its walk holds (`Walk`) and the poses'
+    /// conditions: crouches, swims lying down, crawls where nothing higher fits.
+    pub fn poses(self) -> Self {
+        self.tag(abi::comp::entity::POSES)
+    }
     /// It picks up the dropped items it touches into its inventory, as the player does.
     pub fn picks_up_items(self) -> Self {
         self.tag(abi::comp::entity::PICKS_UP)
@@ -2090,7 +2095,8 @@ impl Walk {
     pub fn sprint(self) -> Self {
         Walk { keys: self.keys | abi::walk::SPRINT, ..self }
     }
-    /// Flies, if its `attribute::CAN_FLY` is 1 or more (`.attribute(..)` on its kind, a modifier).
+    /// Takes off and flies, if its `attribute::CAN_FLY` is 1 or more (`.attribute(..)` on its
+    /// kind, a modifier); it comes down when it lands without `jump`, as a player does.
     pub fn fly(self) -> Self {
         Walk { keys: self.keys | abi::walk::FLY, ..self }
     }

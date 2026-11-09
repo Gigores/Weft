@@ -715,11 +715,12 @@ unsafe extern "C" fn entity_set(w: *mut abi::WorldCtx, id: u64, set: u32, s: *co
         if set & es::FIRE != 0 {
             e.fire = s.fire;
         }
-        if set & es::SELECTED != 0 && player {
-            e.selected = s
-                .selected
-                .min(c.game.player_layout.hotbar.saturating_sub(1));
-            told.push(Told::Selected(e.selected));
+        let hands = c.game.entities[e.kind as usize].hand_slots;
+        if set & es::SELECTED != 0 && hands > 0 {
+            e.selected = s.selected.min(hands - 1);
+            if player {
+                told.push(Told::Selected(e.selected));
+            }
         }
         // Only a respawn brings back the dead, and only damage kills: everything that follows
         // a death goes one way.
@@ -757,12 +758,17 @@ unsafe extern "C" fn entity_walk(w: *mut abi::WorldCtx, id: u64, dir: *const [f3
     unsafe {
         let (d, c) = (dim(w), content());
         let attr = |a| d.attribute(c, id, a, false) as f32;
-        let (mul, jump_mul, can_fly) =
-            (attr(crate::registry::attr::MOVEMENT_SPEED), attr(crate::registry::attr::JUMP_STRENGTH), attr(crate::registry::attr::CAN_FLY));
+        use crate::registry::attr as a;
+        let (mul, jump_mul, can_fly, can_sprint) = (attr(a::MOVEMENT_SPEED), attr(a::JUMP_STRENGTH), attr(a::CAN_FLY), attr(a::CAN_SPRINT));
         if let Some(e) = d.entities.get_mut(id).filter(|e| !e.player) {
+            // What it may not do, its keys don't do: as a hungry player's sprint key.
+            let keys = if can_sprint < 1.0 { keys & !abi::walk::SPRINT } else { keys };
             e.walk = Some(crate::server::entity::Walk { dir: *dir, speed: speed * mul, keys });
             e.jump_mul = jump_mul;
-            e.flying = keys & abi::walk::FLY != 0 && can_fly >= 1.0;
+            // It takes off with the key, and comes down when it may fly no more or lands.
+            if keys & abi::walk::FLY != 0 || can_fly < 1.0 {
+                e.flying = keys & abi::walk::FLY != 0 && can_fly >= 1.0;
+            }
         }
     }
 }
@@ -820,7 +826,10 @@ unsafe extern "C" fn entity_use_item(w: *mut abi::WorldCtx, id: u64, off: u32, t
     unsafe {
         let (d, c) = (dim(w), content());
         let Some(e) = d.entities.get(id) else { return 0 };
-        let slot = if off != 0 { c.game.entities[e.kind as usize].off } else { Some(e.selected) };
+        let inv = d.entities.inventories.get(&id).map_or(&[][..], |i| &i[..]);
+        // The main hand as `content::in_main_hand` has it: none while both are needed.
+        let main = !crate::content::in_main_hand(c, e.kind, inv, e.selected).is_empty();
+        let slot = if off != 0 { c.game.entities[e.kind as usize].off } else { main.then_some(e.selected) };
         let target = (!target.is_null()).then(|| (ip(target), face.min(5) as u8));
         slot.is_some_and(|slot| d.use_in_hand(c, id, slot, target, false)) as u32
     }
@@ -830,9 +839,7 @@ unsafe extern "C" fn entity_mine(w: *mut abi::WorldCtx, id: u64, pos: *const abi
     unsafe {
         let d = dim(w);
         if pos.is_null() {
-            if let Some(e) = d.entities.get_mut(id) {
-                e.mining = None;
-            }
+            d.stop_mining(id);
             return 1;
         }
         d.start_mining(content(), id, 0, ip(pos), u32::MAX) as u32

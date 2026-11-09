@@ -1337,6 +1337,10 @@ pub mod comp {
         /// Picks up the dropped items it touches into its inventory, as a player does (a zombie,
         /// an allay).
         pub const PICKS_UP: &str = "entity.picks_up";
+        /// Takes the poses a player does, by the keys its walk holds (`walk::*`) and the poses'
+        /// conditions: crouches, swims lying down, crawls where nothing higher fits. A cow
+        /// without it stands where it stands.
+        pub const POSES: &str = "entity.poses";
         /// Takes no fall damage, which every kind does otherwise.
         pub const NO_FALL_DAMAGE: &str = "entity.no_fall_damage";
         /// Others don't push it away, which every kind does otherwise.
@@ -2213,7 +2217,8 @@ pub mod walk {
     pub const SNEAK: u32 = 2;
     /// Faster, a longer jump, swims lying down in a liquid it swims in.
     pub const SPRINT: u32 = 4;
-    /// Flies, if its `core:can_fly` attribute is 1 or more.
+    /// Takes off and flies, if its `core:can_fly` attribute is 1 or more; it comes down when it
+    /// lands without `JUMP`, as a player does.
     pub const FLY: u32 = 8;
 }
 
@@ -2566,7 +2571,7 @@ pub mod entity_set {
     /// Players: flying, whether the game mode lets them or not (it stops on landing then).
     pub const FLYING: u32 = 32;
     pub const FIRE: u32 = 64;
-    /// Players: the hotbar slot in hand.
+    /// The slot in its main hand: a player's hotbar, a mob's own slots (`comp::entity::WEARS`).
     pub const SELECTED: u32 = 128;
     pub const PITCH: u32 = 256;
 }
@@ -2711,7 +2716,7 @@ pub struct EntityState {
     pub fall_distance: f32,
     /// Ticks it burns for yet.
     pub fire: u32,
-    /// Players: the hotbar slot in hand.
+    /// The slot in its main hand: a player's hotbar, a mob's own slots (`comp::entity::WEARS`).
     pub selected: u32,
     /// Distance walked this tick (hunger exhaustion); read on a client, the limb swing (0
     /// standing, 1 running) in the frame of what it stands on.
@@ -3305,9 +3310,9 @@ pub struct Host {
     /// player would hold (`walk::*`), which the same physics and poses answer.
     pub entity_walk: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, keys: u32),
     pub entity_damage: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, amount: f32, source: u64, cause: u32) -> u32,
-    /// `attacker` hits `target` like a player does: the `ATTACK` question, the `ATTACK_DAMAGE`
-    /// chain from the held item's (players) or the kind's `attack_damage`, and the attacker's
-    /// cooldown (mobs: once a second). Non-zero if the hit landed.
+    /// `attacker` hits `target` with what it holds: the `ATTACK` question, the `ATTACK_DAMAGE`
+    /// chain from the held item's damage (else the kind's `attack_damage`), as strong as its
+    /// swing is charged. Non-zero if the hit landed.
     pub entity_attack: unsafe extern "C" fn(world: *mut WorldCtx, attacker: u64, target: u64) -> u32,
     /// `id` uses what is in its main hand, or its other one (`off`), on the block at `target`
     /// (null: on nothing) from `face`, as a player's right click does. 1 if it did something

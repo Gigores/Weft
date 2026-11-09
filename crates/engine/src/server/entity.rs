@@ -41,8 +41,8 @@ pub struct Entity {
     pub selected: u32,
     /// Using what it holds: the ticks that takes, and whether in the other hand. Others see it.
     pub using: (u32, bool),
-    /// The item it is using, the tick that takes effect and the slot it is in.
-    pub use_done: Option<(u32, u64, u32)>,
+    /// The item it is using, the ticks left until it takes effect, and the slot it is in.
+    pub use_done: Option<(u32, u32, u32)>,
     /// The block it is breaking.
     pub mining: Option<Mining>,
     pub anchor: Option<IVec3>,
@@ -404,9 +404,13 @@ impl Entities {
 
     /// `insert` with the inventory and components it had (loaded, or moved from another region).
     pub fn insert_with(&mut self, c: &Content, e: Entity, inv: Option<Vec<ItemStack>>, comps: Vec<(u32, Box<[u8]>)>) {
-        let id = e.id;
+        let (id, slots) = (e.id, c.game.entities[e.kind as usize].slots as usize);
         self.insert(c, e);
-        if let Some(inv) = inv {
+        if let Some(mut inv) = inv {
+            // Saved before its kind had as many slots as now.
+            if inv.len() < slots {
+                inv.resize(slots, ItemStack::EMPTY);
+            }
             self.inventories.insert(id, inv);
         }
         let riding = c.game.fields.riding;
@@ -736,16 +740,24 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     let start = e.pos;
     let walk = e.walk.take();
     let has = |key: u32| walk.is_some_and(|w| w.has(key));
-    let (sprint, sneak) = (has(weft_abi::walk::SPRINT), has(weft_abi::walk::SNEAK));
+    let (sprint, sneak, up) = (has(weft_abi::walk::SPRINT), has(weft_abi::walk::SNEAK), has(weft_abi::walk::JUMP));
     let dir = walk.map_or(DVec3::ZERO, |w| DVec3::new(w.dir[0] as f64, 0.0, w.dir[1] as f64));
-    e.sprinting = sprint && !sneak && dir != DVec3::ZERO;
+    let using = e.use_done.is_some();
+    // As a player's: no sprint while using something, nor wading where it doesn't swim lying.
+    let swimming = e.in_liquid && e.pose.def().tilt != weft_abi::pose_tilt::UPRIGHT;
+    e.sprinting = sprint && !sneak && !using && dir != DVec3::ZERO && (e.flying || swimming || !e.in_liquid);
+    e.jumped = false;
     if e.flying {
-        let speed = walk.map_or(1.0, |w| w.speed as f64) * if sprint { 2.0 } else { 1.0 };
-        let f = physics::Flight { wish: dir, up: has(weft_abi::walk::JUMP), down: sneak, speed };
+        let speed = walk.map_or(1.0, |w| w.speed as f64) * if e.sprinting { 2.0 } else { 1.0 };
+        let f = physics::Flight { wish: dir, up, down: sneak, speed };
         let mut v = e.vel * DT;
-        physics::fly(c, block, bodies, e.id, &mut e.pos, &mut v, &mut e.on_ground, hw, h, &f, false);
+        // Down on the ground it stops flying, as a player does, unless it goes up again.
+        if physics::fly(c, block, bodies, e.id, &mut e.pos, &mut v, &mut e.on_ground, hw, h, &f, false) && !up {
+            e.flying = false;
+        }
         e.vel = v / DT;
         e.moved = (e.pos - start).with_y(0.0).length() as f32;
+        e.blocked = false;
         e.in_liquid = physics::around(c, block, e.pos, h).in_liquid;
         e.fall = 0.0;
         return out;
@@ -755,11 +767,19 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     // player's do.
     let mut ctl = physics::Control { swim: k.is(ef::SWIMS), ..Default::default() };
     if let Some(w) = walk {
-        let target = k.speed as f64 * w.speed as f64 * DT * e.pose.def().speed as f64 * if sprint { 1.3 } else { 1.0 };
+        // Using something (eating), at a fifth of the speed, as a player.
+        let slow = if using {
+            0.2
+        } else if e.sprinting {
+            1.3
+        } else {
+            1.0
+        };
+        let target = k.speed as f64 * w.speed as f64 * DT * e.pose.def().speed as f64 * slow;
         ctl.wish = dir;
         // Vanilla's ground friction keeps 0.546 of the speed a tick; this much a tick holds it.
         ctl.ground = target * (1.0 - 0.6 * 0.91);
-        ctl.air = if sprint { 0.026 } else { 0.02 };
+        ctl.air = if e.sprinting { 0.026 } else { 0.02 };
         ctl.careful = sneak;
         if w.has(weft_abi::walk::JUMP) {
             ctl.jump = physics::JUMP * e.jump_mul as f64;
@@ -767,7 +787,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
         }
         if e.sprinting {
             ctl.jump_boost = dir.normalize_or_zero() * 0.2;
-            ctl.sprint = e.in_liquid;
+            ctl.sprint = swimming;
         }
     }
     let frame = physics::Frame {

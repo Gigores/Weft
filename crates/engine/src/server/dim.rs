@@ -42,11 +42,11 @@ pub enum DimEvent {
         on: Option<crate::server::holder::Inv>,
         block: u32,
     },
-    /// `killer`: the kind of what did it.
     /// An entity died: a player (who respawns) or one with a name, which everyone hears of.
     Died {
         entity: u64,
         cause: u32,
+        /// The kind of what did it.
         killer: Option<u32>,
         /// Its own name; a player's comes from its session.
         name: Option<String>,
@@ -758,12 +758,14 @@ impl Dim {
             shown,
             ..
         } = c.game.fields;
-        // What lives has attributes; a dropped item or a block's entity none worth sending.
+        // What lives has attributes; a dropped item or a block's entity none worth sending. A
+        // player's go every tick (its client moves by them), the rest each at its tenth tick.
+        let now = self.time;
         let attrs: FxHashMap<u64, Vec<f32>> = self
             .entities
             .list
             .iter()
-            .filter(|e| e.is_body() && e.anchor.is_none())
+            .filter(|e| e.player || (e.is_body() && e.anchor.is_none() && (now + e.id) % 10 == 0))
             .map(|e| e.id)
             .collect::<Vec<_>>()
             .into_iter()
@@ -804,7 +806,14 @@ impl Dim {
                 continue;
             }
             let attrs = attrs.get(&e.id);
-            let max = attrs.map_or(0.0, |a| a[crate::registry::attr::MAX_HEALTH as usize]);
+            // Between its turns, the maximum it was sent.
+            let max_at = crate::registry::attr::MAX_HEALTH as usize;
+            let max = attrs.map(|a| a[max_at]).unwrap_or_else(|| {
+                comps
+                    .get(&(e.id, attributes))
+                    .and_then(|b| b.get(max_at * 4..max_at * 4 + 4))
+                    .map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()))
+            });
             let mut hp = [0u8; 8];
             hp[..4].copy_from_slice(&e.health.max(0.0).to_le_bytes());
             hp[4..].copy_from_slice(&max.to_le_bytes());
@@ -1614,9 +1623,8 @@ impl Dim {
     }
 
     /// A melee hit of `attacker` on `target`, the same for players and mobs: the `ATTACK`
-    /// question, then the `ATTACK_DAMAGE` chain from the held item's attack (players) or the
-    /// kind's `attack_damage` component (mobs, 1 without), then the damage. Mobs wait a second
-    /// between hits, like vanilla's; players are only held back by the target's hurt time.
+    /// question, then the `ATTACK_DAMAGE` chain from what it holds (else its kind's
+    /// `attack_damage`, 1 without), scaled by how charged its swing is, then the damage.
     pub fn attack(&mut self, c: &'static Content, attacker: u64, target: u64, held: ItemStack) -> bool {
         let (Some(me), Some(t)) = (self.entities.get(attacker), self.entities.get(target)) else { return false };
         if target == attacker || !t.is_body() {
@@ -1628,15 +1636,16 @@ impl Dim {
             return false;
         }
         // What it holds hits, else its bare hand: its kind's damage (a mob's), else 1.
-        let base = if held.item != 0 {
-            c.stack_value::<f32>(&held, c.ids.attack_damage)
-                .unwrap_or(1.0)
-        } else {
+        let own = || {
             c.components
                 .id(abi::comp::ATTACK_DAMAGE)
                 .and_then(|id| c.components.get::<f32>(crate::components::ENTITY, kind, id))
-                .unwrap_or(1.0)
         };
+        let base = c
+            .stack_value::<f32>(&held, c.ids.attack_damage)
+            .filter(|_| !held.is_empty())
+            .or_else(own)
+            .unwrap_or(1.0);
         self.events
             .push(DimEvent::EntitySwing { id: attacker, off: false });
         let dmg = self.compute(c, abi::chain::ATTACK_DAMAGE, base as f64, &q, false) as f32;
@@ -1716,7 +1725,7 @@ impl Dim {
         hit
     }
 
-    /// How charged a player's next swing is, 0..1.
+    /// How charged an entity's next swing is, 0..1.
     pub fn swing_strength(&self, c: &Content, id: u64, held: ItemStack) -> f32 {
         let Some(e) = self.entities.get(id) else { return 1.0 };
         crate::content::swing_charge(
@@ -1901,12 +1910,7 @@ impl Dim {
             // what it had open; everything else's falls here with its loot.
             if !player {
                 let by_player = self.entities.get(source).is_some_and(|s| s.player);
-                let tool = self
-                    .entities
-                    .get(source)
-                    .filter(|s| s.player)
-                    .map(|_| self.entities.held(source))
-                    .unwrap_or_default();
+                let tool = self.entities.held(source);
                 let ctx = crate::loot::Ctx { tool, by_player, on_fire: on_fire || def.has(df::BURNING), ..Default::default() };
                 for s in self.roll_loot(c, &k.name, &ctx, pos, source) {
                     self.spawn_item(c, pos + DVec3::Y * 0.5, s);
@@ -2401,8 +2405,6 @@ impl Dim {
             self.call(owner, cb, |w| abi::WorldTickArgs { world: w });
         }
         self.fire_timers(c);
-        self.finish_uses(c);
-        self.mine(c);
         self.navigation(c);
         self.steer_mounts(c);
         self.choose_poses(c);
@@ -2464,7 +2466,10 @@ impl Dim {
                 e.age += 1;
                 e.hurt_cooldown = e.hurt_cooldown.saturating_sub(1);
                 e.swing_ticks = e.swing_ticks.saturating_add(1);
-                if let Some(inv) = inventories.get(&e.id) {
+                if let Some(inv) = inventories
+                    .get(&e.id)
+                    .filter(|_| c.game.entities[e.kind as usize].hand_slots > 0)
+                {
                     e.notice_hand(crate::content::in_main_hand(c, e.kind, inv, e.selected));
                 }
                 if e.player {
@@ -2725,8 +2730,9 @@ impl Dim {
         }
     }
 
-    /// Every body but a player (whose client does it) takes its pose by the rules a player's
-    /// does: the keys its walk holds, the poses' conditions, room for it, a mod's held pose.
+    /// Every body with `POSES` but a player (whose client does it) takes its pose by the rules a
+    /// player's does: the keys its walk holds, the poses' conditions, room for it, a mod's held
+    /// pose.
     fn choose_poses(&mut self, c: &'static Content) {
         let forced_comp = c.game.fields.forced;
         let todo: Vec<u64> = self
@@ -2734,6 +2740,7 @@ impl Dim {
             .list
             .iter()
             .filter(|e| !e.player && e.is_body() && e.anchor.is_none() && e.alive())
+            .filter(|e| c.game.entities[e.kind as usize].is(crate::tag_bits::entity::POSES))
             .map(|e| e.id)
             .collect();
         for id in todo {
@@ -2752,17 +2759,20 @@ impl Dim {
             let block = super::space::CubeCells(&self.space.cubes);
             let swim_at = pos + DVec3::Y * if low { 0.1 } else { e.dims(c).eye };
             let in_liquid = crate::physics::liquid_at(c, &block, swim_at).is_some_and(|l| swims.get(l as usize) == Some(&true));
-            let body = crate::conditions::Body { in_liquid, flying: e.flying, sprinting: e.sprinting };
+            let flying = e.flying;
+            let sprints = walk.is_some_and(|w| w.has(abi::walk::SPRINT) && !w.has(abi::walk::SNEAK) && w.dir != [0.0; 2]);
             let fit: Vec<bool> = (0..c.game.poses.len() as u16)
                 .map(|p| {
                     let h = crate::physics::posed(size, crate::world::Pose(p)).height;
                     !crate::physics::collides(c, &block, crate::physics::Aabb::around(pos, hw - 1e-3, h))
                 })
                 .collect();
-            let ask = crate::conditions::Ask { pos, entity: id, body: Some(body), ..Default::default() };
             let pose = crate::world::Pose::choose(
                 forced,
                 |d, keys_too| {
+                    // A pose fallen back to goes without the keys, sprinting counted, as a player's.
+                    let body = crate::conditions::Body { in_liquid, flying, sprinting: sprints || !keys_too };
+                    let ask = crate::conditions::Ask { pos, entity: id, body: Some(body), ..Default::default() };
                     (!keys_too || d.key.is_empty() || walk.is_some_and(|w| w.holds(&d.key)))
                         && d.when
                             .is_none_or(|w| crate::conditions::on_server(self, c, w, &ask))
