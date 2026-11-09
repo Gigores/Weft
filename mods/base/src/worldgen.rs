@@ -19,6 +19,7 @@ static SUGAR_CANE_SOIL: Tag = Tag::named("sugar_cane_soil");
 pub static TREES: Component<f32> = Component::named("trees");
 pub static GRASS_COVER: Component<f32> = Component::named("grass");
 pub static TALL_GRASS_COVER: Component<f32> = Component::named("tall_grass");
+pub static BOULDER_COVER: Component<f32> = Component::named("boulder");
 /// The logs of the trees a biome grows, with weights: `"base:birch_log:1 base:oak_log:4"`
 /// (oaks where unset).
 pub static TREE_KINDS: Component<BlockList> = Component::named("tree_kinds");
@@ -52,7 +53,8 @@ pub fn register(r: &mut Registry) {
         .tag("spawn_biome")
         .set(&TREES, 0.025)
         .set(&GRASS_COVER, 0.7)
-        .set(&TALL_GRASS_COVER, 0.2);
+        .set(&TALL_GRASS_COVER, 0.2)
+        .set(&BOULDER_COVER, 0.05);
     r.biome(&FOREST)
         .humidity(0.25..)
         .surface("grass", "dirt", 3)
@@ -214,8 +216,34 @@ pub fn register(r: &mut Registry) {
             let Some(t) = tree_at(log, x, y, z, s.random() >> 32) else { return };
             tree_blocks(&t, |x, y, z, state, force| if force { s.put_force([x, y, z], state) } else { s.put([x, y, z], state) });
         });
+    r.scatter(&BOULDER_SITES)
+        .cell(5)
+        .reach(3)
+        .density(&BOULDER_COVER)
+        .shape(|s| {
+            let BlockPos { x, y, z } = s.pos();
+            for (dx, dy, dz) in sphere(1.5) {
+                s.put([x + dx, y + dy, z + dz], COBBLESTONE.id())
+            }
+        });
     r.decoration(decorate);
 }
+
+pub fn sphere(radius: f32) -> impl Iterator<Item = (i32, i32, i32)> {
+    let extent = radius.floor() as i32;
+    let limit = radius as f64 * radius as f64;
+    (-extent..=extent).flat_map(move |x| {
+        let x2 = x as f64 * x as f64;
+        (-extent..=extent).flat_map(move |y| {
+            let xy = x2 + y as f64 * y as f64;
+            (-extent..=extent)
+                .filter(move |&z| xy + z as f64 * z as f64 <= limit)
+                .map(move |z| (x, y, z))
+        })
+    })
+}
+
+static BOULDER_SITES: Scatter = Scatter::named("boulders");
 
 static TREE_SITES: Scatter = Scatter::named("trees");
 
