@@ -79,6 +79,13 @@ pub enum Request {
     Rebind(String, crate::input::Slots),
     ResetBinds,
     StartWorld(WorldMeta),
+    /// Into a world from its picture in the list, `picture` (a GUI texture) growing from `from`
+    /// (GUI pixels) to the whole window first.
+    EnterWorld {
+        world: WorldMeta,
+        picture: String,
+        from: crate::ui::Rect,
+    },
     /// Without asking about mods that are missing.
     StartWorldAnyway(WorldMeta),
     LeaveWorld,
@@ -87,6 +94,26 @@ pub enum Request {
     Respawn,
     SendChat(String),
 }
+
+/// A world's picture growing from its place in the list to the whole window, then held while the
+/// world loads behind it and faded into it: going into the world as into the picture.
+struct Entering {
+    picture: String,
+    /// Where it was, GUI pixels.
+    from: crate::ui::Rect,
+    started: Instant,
+    /// The world, started once the picture fills the window.
+    world: Option<WorldMeta>,
+    /// When the world was there to be seen.
+    shown: Option<Instant>,
+}
+
+/// Seconds the HUD takes to come in when the world is there.
+const HUD_FADE: f32 = 0.5;
+
+/// Seconds the picture takes to fill the window, and to fade into the world.
+const ENTER_GROW: f32 = 0.35;
+const ENTER_FADE: f32 = 0.4;
 
 /// What UI actions and bindings can see and change.
 pub struct Ctx<'a> {
@@ -229,6 +256,17 @@ pub(crate) struct Running {
     pub(crate) stats: Stats,
     /// F1: the world alone, until a screen opens or F1 again.
     hud_off: bool,
+    /// The folder of the world played on this machine, for its picture in the list.
+    world_dir: Option<PathBuf>,
+    /// The world's picture being taken this frame, before the pause screen opens: where it goes,
+    /// and `hud_off` as it was.
+    preview_shot: Option<(PathBuf, bool)>,
+    /// Going into a world from its picture in the list (`Request::EnterWorld`).
+    entering: Option<Entering>,
+    /// When the world around the player was first loaded, the HUD coming in from then.
+    seen_since: Option<Instant>,
+    /// The HUD's quads among the cached ones.
+    hud_quads: std::ops::Range<usize>,
     reload_requested: bool,
     /// The settings in effect, and the config changes seen (`apply_settings`).
     applied: Applied,
@@ -475,6 +513,11 @@ impl App {
                 ..Default::default()
             },
             hud_off: false,
+            world_dir: None,
+            preview_shot: None,
+            entering: None,
+            seen_since: None,
+            hud_quads: 0..0,
             reload_requested: false,
             packs_pending: false,
             applied: Applied { packs: packs_now, ..Default::default() },
@@ -671,6 +714,7 @@ impl Running {
         ) {
             Ok(mut client) => {
                 client.sent = load_chat_history(&self.settings.run_dir);
+                self.world_dir = Some(meta.dir.clone());
                 self.game = Some(Game { client, server: Some(server) });
                 self.screens.clear();
                 self.hud.invalidate();
@@ -686,6 +730,22 @@ impl Running {
         }
     }
 
+    /// Opens the pause screen over play. In a world of this machine the frame first goes without
+    /// the HUD and is kept as the world's picture in the list: the last it was seen.
+    fn pause(&mut self) {
+        match self.world_dir.clone() {
+            Some(dir) if !self.shot_pending && self.preview_shot.is_none() => {
+                self.preview_shot = Some((dir.join("preview.png"), self.hud_off));
+                self.hud_off = true;
+                self.quads_dirty = true;
+                self.gpu.request_capture();
+                self.shot_pending = true;
+            }
+            Some(_) => {}
+            None => self.open(screens::engine("core:pause")),
+        }
+    }
+
     fn leave_world(&mut self) {
         self.leave_world_silent();
         self.screens.clear();
@@ -693,6 +753,7 @@ impl Running {
     }
 
     fn leave_world_silent(&mut self) {
+        self.world_dir = None;
         if let Some(mut g) = self.game.take() {
             if g.server.is_none() {
                 // A remote server's synced settings were in force; back to our own.
@@ -797,6 +858,14 @@ impl Running {
                         self.start_world(meta);
                     } else {
                         self.open(Box::new(saves::MissingMods { world: meta, missing }));
+                    }
+                }
+                Request::EnterWorld { world, picture, from } => {
+                    let missing = world.missing_mods(content());
+                    if missing.is_empty() {
+                        self.entering = Some(Entering { picture, from, started: Instant::now(), world: Some(world), shown: None });
+                    } else {
+                        self.open(Box::new(saves::MissingMods { world, missing }));
                     }
                 }
                 Request::StartWorldAnyway(meta) => self.start_world(meta),
@@ -1598,7 +1667,7 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) if !self.opts.automated => {
                 r.input.release_all();
                 if r.game.is_some() && r.screens.is_empty() {
-                    r.open(screens::engine("core:pause"));
+                    r.pause();
                 }
                 r.set_capture(false);
             }
@@ -1721,6 +1790,7 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
     client_events(r);
     world_keys(r);
     handle_disconnect(r);
+    enter_world(r);
     end_input(r);
     refresh_hud(r);
     r.poll_bindings();
@@ -1814,7 +1884,7 @@ fn escape(r: &mut Running, requests: &mut Vec<Request>) {
     } else if r.screens.len() > 1 || (r.game.is_some() && !r.screens.is_empty()) {
         requests.push(Request::Close);
     } else if r.game.is_some() && r.screens.is_empty() {
-        r.open(screens::engine("core:pause"));
+        r.pause();
     }
 }
 
@@ -2142,12 +2212,14 @@ fn build_ui_quads(r: &mut Running, scale: f32) {
     let preview_tex = r.preview_tex;
     let mut layers: Vec<&Ui> = Vec::new();
     let mut animated = Vec::new();
+    let mut hud_quads = 0..0;
     let hud = r
         .game
         .as_ref()
         .is_some_and(|g| g.client.camera_has(crate::tag_bits::camera::HUD))
         || !r.screens.is_empty();
-    if r.game.is_some() && hud && !hud_hidden() && !(r.hud_off && r.screens.is_empty()) {
+    let with_hud = r.game.is_some() && hud && !hud_hidden() && !(r.hud_off && r.screens.is_empty());
+    if with_hud {
         layers.push(&r.hud.ui);
     }
     // Only the top screen shows, like vanilla: the ones under it are not drawn through its
@@ -2169,6 +2241,9 @@ fn build_ui_quads(r: &mut Running, scale: f32) {
         };
         let base = all.len();
         r.ui.build(&mut *r.gpu, &r.assets, ui, &r.look, scale, game, &mut custom);
+        if with_hud && std::ptr::eq(ui, &r.hud.ui) {
+            hud_quads = base..base + r.ui.quads.len();
+        }
         all.append(&mut r.ui.quads);
         animated.extend(r.ui.animated.drain(..).map(|mut a| {
             a.quads = a.quads.start + base..a.quads.end + base;
@@ -2177,6 +2252,7 @@ fn build_ui_quads(r: &mut Running, scale: f32) {
     }
     r.ui_cached = all;
     r.ui_animated = animated;
+    r.hud_quads = hud_quads;
     r.previews = previews;
 }
 
@@ -2185,6 +2261,20 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
     r.ui.quads.clear();
     r.ui.quads.extend_from_slice(&r.ui_cached);
     crate::ui::render::animate(&mut r.ui.quads, &r.ui_animated);
+    // The HUD comes in once the world is there, not before it.
+    let shown = r
+        .seen_since
+        .map_or(0.0, |t| (t.elapsed().as_secs_f32() / HUD_FADE).min(1.0));
+    if shown < 1.0 {
+        for q in
+            r.ui.quads
+                .get_mut(r.hud_quads.clone())
+                .into_iter()
+                .flatten()
+        {
+            q.color = (q.color & !0xFF) | ((q.color & 0xFF) as f32 * shown) as u32;
+        }
+    }
     if let Some(g) = &mut r.game {
         g.client.collect_gizmos();
         let cl = &mut g.client;
@@ -2246,6 +2336,7 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
         let rect = crate::ui::Rect { x: p.x - 9.0 * scale, y: p.y - 9.0 * scale, w: 18.0 * scale, h: 18.0 * scale };
         crate::hud::stack_icon(&mut r.ui, &r.textures, rect, cursor, scale, text_unit);
     }
+    draw_entering(r, info, scale);
 }
 
 /// The player's own model, if `skins/avatar` has one: a Blockbench geometry and its picture, and
@@ -2398,6 +2489,20 @@ fn report_frame(r: &mut Running, dt: f64) {
 
 fn save_screenshot(r: &mut Running) {
     r.shot_pending = false;
+    if let Some((path, hud)) = r.preview_shot.take() {
+        if let Some(cap) = r.gpu.take_capture() {
+            let (rgba, w, h) = shrink(&cap.rgba, cap.width, cap.height, PREVIEW_WIDTH);
+            if let Err(e) = crate::assets::encode_png(&path, w, h, &rgba) {
+                log::warn!("world picture {}: {e}", path.display());
+            }
+        }
+        r.hud_off = hud;
+        r.quads_dirty = true;
+        if r.game.is_some() && r.screens.is_empty() {
+            r.open(screens::engine("core:pause"));
+        }
+        return;
+    }
     if let Some(cap) = r.gpu.take_capture() {
         // The player's own (F2) says where it went; a mod's knows.
         let own = r.shot_path.is_none();
@@ -2430,6 +2535,92 @@ fn save_screenshot(r: &mut Running) {
             api::store_image(id, cap.width, cap.height, cap.rgba);
         }
     }
+}
+
+/// Going into a world from its picture (`Entering`): the world starts once the picture fills the
+/// window, which goes when the world is loaded around the player.
+fn enter_world(r: &mut Running) {
+    if r.game.is_none() {
+        r.seen_since = None;
+    } else if r.seen_since.is_none() && r.load_state().0 {
+        r.seen_since = Some(Instant::now());
+    }
+    let Some(e) = &mut r.entering else { return };
+    if e.world.is_some() && e.started.elapsed().as_secs_f32() >= ENTER_GROW {
+        let world = e.world.take().unwrap();
+        r.start_world(world);
+        if r.game.is_none() {
+            r.entering = None;
+        }
+        return;
+    }
+    if e.world.is_none() {
+        if r.game.is_none() {
+            r.entering = None;
+            return;
+        }
+        let loaded = r.load_state().0;
+        let e = r.entering.as_mut().unwrap();
+        if e.shown.is_none() && loaded {
+            e.shown = Some(Instant::now());
+        }
+        if e.shown
+            .is_some_and(|t| t.elapsed().as_secs_f32() >= ENTER_FADE)
+        {
+            r.entering = None;
+        }
+    }
+}
+
+/// The picture of `Entering` over everything: from its place in the list to the window, eased
+/// out, then fading.
+fn draw_entering(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
+    let Some(e) = &r.entering else { return };
+    let grow = (e.started.elapsed().as_secs_f32() / ENTER_GROW).min(1.0);
+    let k = 1.0 - (1.0 - grow).powi(3);
+    let alpha = 1.0
+        - e.shown
+            .map_or(0.0, |t| (t.elapsed().as_secs_f32() / ENTER_FADE).min(1.0));
+    let (w, h) = (info.width as f32, info.height as f32);
+    let f = crate::ui::Rect { x: e.from.x * scale, y: e.from.y * scale, w: e.from.w * scale, h: e.from.h * scale };
+    let rect = crate::ui::Rect { x: f.x * (1.0 - k), y: f.y * (1.0 - k), w: f.w + (w - f.w) * k, h: f.h + (h - f.h) * k };
+    let picture = e.picture.clone();
+    if let Some((idx, ..)) = r.ui.texture(&mut *r.gpu, &r.assets, &picture) {
+        r.ui.image(rect, idx, [0.0, 0.0, 1.0, 1.0], 0xFFFFFF00 | (alpha * 255.0) as u32);
+    }
+}
+
+/// Pixels across a world's picture in the list.
+const PREVIEW_WIDTH: u32 = 384;
+
+/// `rgba` (`w` x `h`) made `to` wide, each pixel the average of those it covers.
+fn shrink(rgba: &[u8], w: u32, h: u32, to: u32) -> (Vec<u8>, u32, u32) {
+    if w <= to || h == 0 {
+        return (rgba.to_vec(), w, h);
+    }
+    let th = (h as u64 * to as u64 / w as u64).max(1) as u32;
+    let mut out = vec![0u8; (to * th * 4) as usize];
+    for y in 0..th {
+        let (y0, y1) = (y * h / th, ((y + 1) * h / th).max(y * h / th + 1));
+        for x in 0..to {
+            let (x0, x1) = (x * w / to, ((x + 1) * w / to).max(x * w / to + 1));
+            let mut sum = [0u32; 4];
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let i = ((sy * w + sx) * 4) as usize;
+                    for c in 0..4 {
+                        sum[c] += rgba[i + c] as u32;
+                    }
+                }
+            }
+            let n = (y1 - y0) * (x1 - x0);
+            let o = ((y * to + x) * 4) as usize;
+            for c in 0..4 {
+                out[o + c] = (sum[c] / n) as u8;
+            }
+        }
+    }
+    (out, to, th)
 }
 
 fn count_fps(r: &mut Running) {

@@ -86,6 +86,19 @@ pub enum Slicing {
 /// GUI texture names starting with this are a skin file's face (`screens::face_texture`).
 pub const FACE: &str = "skin_face:";
 
+/// GUI texture names starting with this are a picture on disk, `file:<path>|<anything>`: what
+/// follows the `|` (its time of change) makes a new picture a new name.
+pub const FILE: &str = "file:";
+
+/// The GUI texture name of picture `path` as it is now, `None` if there is none.
+pub fn file_texture(path: &std::path::Path) -> Option<String> {
+    let changed = std::fs::metadata(path).ok()?.modified().ok()?;
+    let stamp = changed
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    Some(format!("{FILE}{}|{stamp}", path.display()))
+}
+
 /// The 8x8 face of a skin (64x64 or 64x32), its hat layer drawn over it.
 fn face_of(skin: &crate::assets::Image) -> Option<Vec<u8>> {
     if skin.width < 64 || skin.height < 16 {
@@ -353,6 +366,18 @@ impl UiRenderer {
                     self.owned.push(t);
                     (gpu.texture_index(t), 8, 8)
                 });
+            self.textures.insert(name.to_string(), loaded);
+            return loaded;
+        }
+        if let Some(file) = name.strip_prefix(FILE) {
+            let path = file.rsplit_once('|').map_or(file, |(p, _)| p);
+            let loaded = crate::assets::decode_png_file(std::path::Path::new(path)).map(|(w, h, rgba)| {
+                let t = gpu
+                    .create_texture(&TextureDesc { width: w, height: h, mips: 1, format: Format::Rgba8Srgb, render_target: false }, "file");
+                gpu.write_texture(t, 0, &rgba);
+                self.owned.push(t);
+                (gpu.texture_index(t), w, h)
+            });
             self.textures.insert(name.to_string(), loaded);
             return loaded;
         }

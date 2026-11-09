@@ -693,84 +693,34 @@ impl Screen for WorldSelect {
         "core:worlds"
     }
 
+    /// Like the title screen: the buttons down a bar on the left, the worlds as pictures filling
+    /// the rest, each with its name and game mode; the rest of what is known of it in its tooltip.
     fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
         let worlds = list(&cx.settings.saves_dir());
         let selected = worlds
             .iter()
             .position(|w| self.selected.as_ref() == Some(&w.dir));
-        frame(ui, cx, "world.select", |ui| {
-            // The list takes whatever height is left and scrolls; the buttons below always show.
-            let list = ui.panel(
-                "panel",
-                Style::default()
-                    .pad(8.0)
-                    .gap(4.0)
-                    .stretch()
-                    .w(300.0)
-                    .h(0.0)
-                    .grow()
-                    .min_h(60.0)
-                    .scroll(),
-                |ui| {
-                    if worlds.is_empty() {
-                        label(ui, cx, "world.empty", &[], "dim");
-                    }
-                    for (i, w) in worlds.iter().enumerate() {
-                        let when = format_age(now_secs().saturating_sub(w.last_played));
-                        let info = cx.t(
-                            "world.info",
-                            &[
-                                Arg::Text(
-                                    w.dir
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
-                                        .into(),
-                                ),
-                                Arg::Text(when),
-                            ],
-                        );
-                        let (name, dir) = (w.name.clone(), w.dir.clone());
-                        let b = ui.button(
-                            "button",
-                            Style::default().pad(4.0).stretch().gap(2.0),
-                            Rc::new(move |c: &mut Ctx| {
-                                if let Some(s) = c.screen::<WorldSelect>() {
-                                    s.selected = Some(dir.clone());
-                                }
-                                c.requests.push(Request::Rebuild);
-                            }),
-                            |ui| {
-                                ui.text(text::plain(&name), "button");
-                                ui.text(info, "dim");
-                            },
-                        );
-                        if let Kind::Button { selected: s, .. } = &mut ui.nodes[b].kind {
-                            *s = selected == Some(i);
-                        }
-                        let world = w.clone();
-                        ui.on_double_click(b, Rc::new(move |c: &mut Ctx| c.requests.push(Request::StartWorld(world.clone()))));
-                        ui.set_id(b, &format!("world:{i}"));
-                    }
-                },
-            );
-            ui.set_id(list, "worlds");
-            ui.container(Style::row().gap(6.0), |ui| {
+        ui.root_style(Style::default().stretch());
+        ui.panel("background", Style::row().grow().stretch(), |ui| {
+            ui.panel("sidebar", Style::default().w(180.0).pad(12.0).gap(4.0).stretch(), |ui| {
+                let t = label(ui, cx, "world.select", &[], "title");
+                if let Some(t) = ui.text_mut(t) {
+                    t.wrap = false;
+                }
+                ui.spacer();
                 let sel = selected.and_then(|i| worlds.get(i)).cloned();
-                let play = button(ui, cx, "world.play", &[], 145.0, move |c| {
+                let play = button(ui, cx, "world.play", &[], 156.0, move |c| {
                     if let Some(w) = &sel {
-                        c.requests.push(Request::StartWorld(w.clone()));
+                        enter(c, w);
                     }
                 });
                 if let Kind::Button { enabled, .. } = &mut ui.nodes[play].kind {
                     *enabled = selected.is_some();
                 }
                 ui.set_id(play, "play");
-                button(ui, cx, "world.create", &[], 145.0, |c| c.requests.push(Request::Screen("core:create_world".into())));
-            });
-            ui.container(Style::row().gap(6.0), |ui| {
+                button(ui, cx, "world.create", &[], 156.0, |c| c.requests.push(Request::Screen("core:create_world".into())));
                 let sel = selected.and_then(|i| worlds.get(i)).cloned();
-                let del = button(ui, cx, "world.delete", &[], 145.0, move |c| {
+                let del = button(ui, cx, "world.delete", &[], 156.0, move |c| {
                     if let Some(w) = &sel {
                         c.requests
                             .push(Request::Open(Box::new(ConfirmDelete { world: w.clone() })));
@@ -780,12 +730,123 @@ impl Screen for WorldSelect {
                     *enabled = selected.is_some();
                 }
                 let dir = cx.settings.run_dir.join("saves");
-                let open = button(ui, cx, "world.folder", &[], 70.0, move |_| crate::packs::open_folder(&dir));
+                let open = button(ui, cx, "world.folder", &[], 156.0, move |_| crate::packs::open_folder(&dir));
                 ui.set_id(open, "saves_folder");
-                button(ui, cx, "menu.back", &[], 70.0, |c| c.requests.push(Request::Close));
+                ui.add(Kind::Container { class: None }, Style::default().h(6.0));
+                button(ui, cx, "menu.back", &[], 156.0, |c| c.requests.push(Request::Close));
             });
+            // As many pictures to a row as fit.
+            let free = cx.size.x - 180.0 - 2.0 * 12.0;
+            let columns = (((free + TILE_GAP) / (TILE_W + TILE_GAP)).floor() as usize).max(1);
+            let list = ui.container(
+                Style::default()
+                    .grow()
+                    .pad(12.0)
+                    .gap(TILE_GAP)
+                    .self_align(crate::ui::Align::Stretch)
+                    .scroll(),
+                |ui| {
+                    if worlds.is_empty() {
+                        label(ui, cx, "world.empty", &[], "dim");
+                    }
+                    for (row, line) in worlds.chunks(columns).enumerate() {
+                        ui.container(Style::row().gap(TILE_GAP), |ui| {
+                            for (k, w) in line.iter().enumerate() {
+                                let i = row * columns + k;
+                                tile(ui, cx, w, i, selected == Some(i));
+                            }
+                        });
+                    }
+                },
+            );
+            ui.set_id(list, "worlds");
         });
     }
+}
+
+/// A world's tile in the list, across.
+const TILE_W: f32 = 136.0;
+const TILE_GAP: f32 = 6.0;
+
+/// The picture a world shows in the list: the last frame it was seen in, else a question mark.
+fn picture(w: &WorldMeta) -> String {
+    crate::ui::render::file_texture(&w.dir.join("preview.png")).unwrap_or_else(|| "core:gui/world_unknown".into())
+}
+
+/// Into the world, its picture growing from where it is in the list.
+fn enter(c: &mut Ctx, w: &WorldMeta) {
+    let i = list_index(c, w);
+    let from = c
+        .top
+        .as_ref()
+        .and_then(|t| {
+            t.ui.find(&format!("picture:{i}"))
+                .map(|n| t.ui.nodes[n].rect)
+        })
+        .unwrap_or_default();
+    c.requests
+        .push(Request::EnterWorld { world: w.clone(), picture: picture(w), from });
+}
+
+/// Where `w` is in the list as built (its picture's id).
+fn list_index(c: &Ctx, w: &WorldMeta) -> usize {
+    list(&c.settings.saves_dir())
+        .iter()
+        .position(|x| x.dir == w.dir)
+        .unwrap_or(0)
+}
+
+/// World `w`, `i`-th in the list: its picture over its name and game mode, selected with a
+/// click, played with two.
+fn tile(ui: &mut Ui, cx: &BuildCx, w: &WorldMeta, i: usize, selected: bool) {
+    let dir = w.dir.clone();
+    let b = ui.button(
+        "button",
+        Style::default().w(TILE_W).pad(4.0).gap(2.0),
+        Rc::new(move |c: &mut Ctx| {
+            if let Some(s) = c.screen::<WorldSelect>() {
+                s.selected = Some(dir.clone());
+            }
+            c.requests.push(Request::Rebuild);
+        }),
+        |ui| {
+            let p = ui.add(
+                Kind::Image { texture: picture(w), color: 0xFFFFFFFF },
+                Style::default()
+                    .w(TILE_W - 8.0)
+                    .h((TILE_W - 8.0) * 9.0 / 16.0),
+            );
+            ui.set_id(p, &format!("picture:{i}"));
+            let name = ui.text(text::plain(&w.name), "button");
+            if let Some(t) = ui.text_mut(name) {
+                t.wrap = false;
+            }
+            let key = format!("gamemode.{}", w.game_mode.name());
+            let mut chars = cx.lang.get(&key).chars();
+            let mode: String = chars
+                .next()
+                .map(|f| f.to_uppercase().chain(chars).collect())
+                .unwrap_or_default();
+            ui.text(text::plain(&mode), "dim");
+        },
+    );
+    if let Kind::Button { selected: s, .. } = &mut ui.nodes[b].kind {
+        *s = selected;
+    }
+    let world = w.clone();
+    ui.on_double_click(b, Rc::new(move |c: &mut Ctx| enter(c, &world)));
+    ui.set_id(b, &format!("world:{i}"));
+    let when = format_age(now_secs().saturating_sub(w.last_played));
+    let folder: String = w
+        .dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into();
+    let mut tip = cx.t("world.info", &[Arg::Text(folder), Arg::Text(when)]);
+    tip.push(text::Span::text("\n", None));
+    tip.extend(cx.t("world.cheats", &[on_off(w.cheats)]));
+    ui.nodes[b].tooltip = Some(tip);
 }
 
 /// The `i`-th game mode, the engine's first.

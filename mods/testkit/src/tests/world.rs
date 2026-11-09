@@ -40,7 +40,7 @@ pub async fn missing_dimension(t: T) -> R {
     t.screen("core:worlds").await?;
     t.frames(2).await?;
     // A click lasts 50 ms; buttons act on release.
-    t.click_ui(&format!("text:{name} |"), 0);
+    t.click_ui(&format!("text:{name}"), 0);
     t.secs(0.2).await?;
     t.click_ui("id:play", 0);
     t.screen("core:missing_mods").await?;

@@ -1599,7 +1599,7 @@ pub async fn cell_parts(t: T) -> R {
     t.c().menu_open(&screens::WORLDS);
     t.screen("core:worlds").await?;
     t.frames(2).await?;
-    t.click_ui(&format!("text:{name} |"), 0);
+    t.click_ui(&format!("text:{name}"), 0);
     t.secs(0.2).await?;
     t.click_ui("id:play", 0);
     t.until("joined again", std::time::Duration::from_secs(60), |t| t.flag(client::client_flags::JOINED))
