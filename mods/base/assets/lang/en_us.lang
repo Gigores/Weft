@@ -357,3 +357,11 @@ storage.base.sort = Sort
 storage.base.deposit = Put away nearby
 storage.base.trash = Trash
     Hotkey: {key:core:trash}
+item.base.bush_stem = Bush Stem
+block.base.bush_stem = Bush Stem
+item.base.raspberry_leaves = Raspberry Leaves
+block.base.raspberry_leaves = Raspberry Leaves
+item.base.snowberry_leaves = Snowberry Leaves
+block.base.snowberry_leaves = Snowberry Leaves
+item.base.raspberry = Raspberry
+item.base.snowberry = Snowberry

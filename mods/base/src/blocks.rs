@@ -302,6 +302,14 @@ pub fn register(r: &mut Registry) {
     log(r, &OAK_LOG, "oak", "oak_leaves", false);
     log(r, &BIRCH_LOG, "birch", "birch_leaves", false);
     log(r, &SPRUCE_LOG, "spruce", "spruce_leaves", true);
+    r.block(&BUSH_STEM)
+        .sound_group("grass")
+        .hardness(0.2)
+        .cutout()
+        .light_opacity(1)
+        .signal_blocker()
+        .mined_by("shears", tool_tier::HAND)
+        .tab(&crate::tabs::NATURAL);
     for (h, wood) in [(&OAK_PLANKS, "oak"), (&BIRCH_PLANKS, "birch"), (&SPRUCE_PLANKS, "spruce")] {
         r.block(h)
             .sound_group("wood")
@@ -318,6 +326,32 @@ pub fn register(r: &mut Registry) {
     leaves(r, &OAK_LEAVES, "leaves_oak");
     leaves(r, &BIRCH_LEAVES, "leaves_birch");
     leaves(r, &SPRUCE_LEAVES, "leaves_spruce");
+    r.block(&RASPBERRY_LEAVES)
+        .sound_group("grass")
+        .prop("berried", ["false", "true"])
+        .hardness(0.2)
+        .cutout()
+        .light_opacity(1)
+        .tag("leaves")
+        .signal_blocker()
+        .mined_by("shears", tool_tier::HAND)
+        .tab(&crate::tabs::NATURAL)
+        .texture("raspberry_leaves_berried")
+        .states(|p, s| s.texture(if p.is("berried", "true") { "raspberry_leaves_berried" } else { "raspberry_leaves" }))
+        .on_use(|u| pick_berries(u, &crate::items::RASPBERRY));
+    r.block(&SNOWBERRY_LEAVES)
+        .sound_group("grass")
+        .prop("berried", ["false", "true"])
+        .hardness(0.2)
+        .cutout()
+        .light_opacity(1)
+        .tag("leaves")
+        .signal_blocker()
+        .mined_by("shears", tool_tier::HAND)
+        .tab(&crate::tabs::NATURAL)
+        .texture("snowberry_leaves_berried")
+        .states(|p, s| s.texture(if p.is("berried", "true") { "snowberry_leaves_berried" } else { "raspberry_leaves" }))
+        .on_use(|u| pick_berries(u, &crate::items::SNOWBERRY));
 
     // Vanilla numbers: water steps every 5 ticks and reaches 7 blocks, lava every 30 and 3.
     // Players swim in water; what they wear may add more (`SWIMS_IN` on an item).
@@ -443,38 +477,6 @@ pub fn register(r: &mut Registry) {
         .hardness(0.3)
         .drops_nothing()
         .tab(&crate::tabs::BUILDING);
-    r.block(&BUSH_STEM)
-        .sound_group("grass")
-        .hardness(0.2)
-        .cutout()
-        .light_opacity(1)
-        .signal_blocker()
-        .mined_by("shears", tool_tier::HAND)
-        .tab(&crate::tabs::NATURAL);
-    r.block(&RASPBERRY_LEAVES)
-        .sound_group("grass")
-        .prop("berried", ["false", "true"])
-        .hardness(0.2)
-        .cutout()
-        .light_opacity(1)
-        .tag("leaves")
-        .signal_blocker()
-        .mined_by("shears", tool_tier::HAND)
-        .tab(&crate::tabs::NATURAL)
-        .states(|p, s| s.texture(if p.is("berried", "true") { "raspberry_leaves_berried" } else { "raspberry_leaves" }))
-        .on_use(|u| pick_berries(u, &crate::items::RASPBERRY));
-    r.block(&SNOWBERRY_LEAVES)
-        .sound_group("grass")
-        .prop("berried", ["false", "true"])
-        .hardness(0.2)
-        .cutout()
-        .light_opacity(1)
-        .tag("leaves")
-        .signal_blocker()
-        .mined_by("shears", tool_tier::HAND)
-        .tab(&crate::tabs::NATURAL)
-        .states(|p, s| s.texture(if p.is("berried", "true") { "snowberry_leaves_berried" } else { "raspberry_leaves" }))
-        .on_use(|u| pick_berries(u, &crate::items::SNOWBERRY));
 
     for (name, col) in [("red", [0u8, 12, 12]), ("green", [12, 0, 12]), ("blue", [12, 12, 0])] {
         r.block(Block::generated(format!("{name}_stained_glass")))
