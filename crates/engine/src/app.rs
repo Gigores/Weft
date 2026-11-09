@@ -95,16 +95,15 @@ pub enum Request {
     SendChat(String),
 }
 
-/// A world's picture growing from its place in the list to the whole window, then held while the
-/// world loads behind it and faded into it: going into the world as into the picture.
+/// A world's picture growing from its place in the list to the whole window while the world
+/// loads under the list, then faded into the world, playable from then on: going into the world
+/// as into the picture.
 struct Entering {
     picture: String,
     /// Where it was, GUI pixels.
     from: crate::ui::Rect,
     started: Instant,
-    /// The world, started once the picture fills the window.
-    world: Option<WorldMeta>,
-    /// When the world was there to be seen.
+    /// When the picture filled the window and the world took over.
     shown: Option<Instant>,
 }
 
@@ -116,7 +115,7 @@ const HUD_FADE: f32 = 0.5;
 
 /// Seconds the picture takes to fill the window, and to fade into the world.
 const ENTER_GROW: f32 = 0.35;
-const ENTER_FADE: f32 = 0.4;
+const ENTER_FADE: f32 = 0.3;
 
 /// What UI actions and bindings can see and change.
 pub struct Ctx<'a> {
@@ -686,6 +685,12 @@ impl Running {
     }
 
     fn start_world(&mut self, meta: WorldMeta) {
+        self.start_world_under(meta, false);
+    }
+
+    /// `start_world`, with `under` the screens staying over it for now (going into a world from
+    /// its picture: it loads while the picture grows).
+    fn start_world_under(&mut self, meta: WorldMeta, under: bool) {
         log::info!("opening world '{}' (seed {})", meta.name, meta.seed);
         if meta.format != saves::SAVE_FORMAT {
             log::error!("world '{}' was saved in format {}, this build reads {}", meta.name, meta.format, saves::SAVE_FORMAT);
@@ -719,10 +724,12 @@ impl Running {
                 client.sent = load_chat_history(&self.settings.run_dir);
                 self.world_dir = Some(meta.dir.clone());
                 self.game = Some(Game { client, server: Some(server) });
-                self.screens.clear();
                 self.hud.invalidate();
                 self.quads_dirty = true;
-                self.set_capture(true);
+                if !under {
+                    self.screens.clear();
+                    self.set_capture(true);
+                }
             }
             Err(e) => {
                 log::error!("{e}");
@@ -865,8 +872,13 @@ impl Running {
                 }
                 Request::EnterWorld { world, picture, from } => {
                     let missing = world.missing_mods(content());
-                    if missing.is_empty() {
-                        self.entering = Some(Entering { picture, from, started: Instant::now(), world: Some(world), shown: None });
+                    if self.entering.is_some() || self.game.is_some() {
+                    } else if missing.is_empty() {
+                        self.entering = Some(Entering { picture, from, started: Instant::now(), shown: None });
+                        self.start_world_under(world, true);
+                        if self.game.is_none() {
+                            self.entering = None;
+                        }
                     } else {
                         self.open(Box::new(saves::MissingMods { world, missing }));
                     }
@@ -2556,29 +2568,23 @@ fn enter_world(r: &mut Running) {
         r.seen_since = Some(Instant::now());
     }
     let Some(e) = &mut r.entering else { return };
-    if e.world.is_some() && e.started.elapsed().as_secs_f32() >= ENTER_GROW {
-        let world = e.world.take().unwrap();
-        r.start_world(world);
-        if r.game.is_none() {
-            r.entering = None;
-        }
+    if r.game.is_none() {
+        r.entering = None;
         return;
     }
-    if e.world.is_none() {
-        if r.game.is_none() {
-            r.entering = None;
-            return;
-        }
-        let near = r.seen_since.is_some();
-        let e = r.entering.as_mut().unwrap();
-        if e.shown.is_none() && near {
-            e.shown = Some(Instant::now());
-        }
-        if e.shown
-            .is_some_and(|t| t.elapsed().as_secs_f32() >= ENTER_FADE)
-        {
-            r.entering = None;
-        }
+    // The picture fills the window: the list goes and the world is played, loaded as far as
+    // it got; the rest comes in as it does anyway.
+    if e.shown.is_none() && e.started.elapsed().as_secs_f32() >= ENTER_GROW {
+        e.shown = Some(Instant::now());
+        r.screens.clear();
+        r.quads_dirty = true;
+        r.set_capture(true);
+        return;
+    }
+    if e.shown
+        .is_some_and(|t| t.elapsed().as_secs_f32() >= ENTER_FADE)
+    {
+        r.entering = None;
     }
 }
 
