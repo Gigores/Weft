@@ -245,11 +245,19 @@ pub fn register(r: &mut Registry) {
         .cell(5)
         .reach(3)
         .density(&BUSH_COVER)
-        .shape(|s| place_bush(s, OAK_LEAVES.id(), OAK_LOG.id()));
+        .shape(|s| place_bush(
+            s,
+            |r| if r.float() < 0.5 {
+                RASPBERRY_LEAVES.id()
+            } else {
+                RASPBERRY_LEAVES.with(&[("berried", "true")])
+            },
+            BUSH_STEM.id())
+        );
     r.decoration(decorate);
 }
 
-pub fn place_bush(s: &mut Site, leaf: u32, stem: u32) {
+pub fn place_bush(s: &mut Site, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
     let BlockPos { x, y, z } = s.pos();
     let mut rng = Rng(s.random());
     let bush_size = {
@@ -258,16 +266,16 @@ pub fn place_bush(s: &mut Site, leaf: u32, stem: u32) {
         result
     };
     s.put([x, y, z], stem);
-    let mut place_ball = |ox, oy, oz, size| {
+    let mut place_ball = |mut rng: &mut Rng, ox, oy, oz, size| {
         for (dx, dy, dz) in sphere(size) {
-            s.put([ox + dx, oy + dy, oz + dz], leaf);
+            s.put([ox + dx, oy + dy, oz + dz], leaf(&mut rng));
         }
     };
-    place_ball(x, y, z, bush_size);
+    place_ball(&mut rng, x, y, z, bush_size);
     if bush_size < 1.5 { return; }
     let dx = x + (rng.float() * 2.0) as i32;
     let dz = z + (rng.float() * 2.0) as i32;
-    place_ball(dx, y, dz, bush_size - 0.5);
+    place_ball(&mut rng, dx, y, dz, bush_size - 0.5);
 }
 
 static BUSH_SITES: Scatter = Scatter::named("bushes");
