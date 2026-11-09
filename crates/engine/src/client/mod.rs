@@ -946,6 +946,7 @@ impl Client {
     pub fn swing_strength(&self) -> f32 {
         crate::content::swing_charge(
             content(),
+            self.me.kind,
             &self.swing_held,
             self.swing_since * self.tick_rate as f32,
             self.attribute(crate::registry::attr::ATTACK_SPEED),
@@ -953,7 +954,7 @@ impl Client {
     }
 
     pub fn held(&self) -> ItemStack {
-        crate::content::in_main_hand(content(), &self.inventory, self.selected as u32)
+        crate::content::in_main_hand(content(), self.me.kind, &self.inventory, self.selected as u32)
     }
 
     /// What the main hand shows: from the eyes the old stack, until the hand has gone down with it.
@@ -962,7 +963,7 @@ impl Client {
     }
 
     pub fn off_held(&self) -> ItemStack {
-        crate::content::in_off_hand(content(), &self.inventory)
+        crate::content::in_off_hand(content(), self.me.kind, &self.inventory)
     }
 
     /// Starts the terrain over for dimension `dim` (joined, or moved to another dimension).
@@ -2262,7 +2263,7 @@ impl Client {
         let (now, light) = (self.ticks(), c.ids.light.unwrap_or(u32::MAX));
         let mut sources = Vec::new();
         if !self.mode.has(crate::tag_bits::game_mode::HIDDEN) && !self.dead {
-            let mut own = vec![self.held(), crate::content::in_off_hand(c, &self.inventory)];
+            let mut own = vec![self.held(), self.off_held()];
             let w = &c.game.player_layout.worn;
             own.extend_from_slice(
                 self.inventory

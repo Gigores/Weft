@@ -25,7 +25,7 @@ tag_bits! {
     }
     particle of particle { COLLIDE, FULLBRIGHT, TRANSLUCENT, SHRINK }
     config of config { RESTART_REQUIRED, PERCENT }
-    entity of entity { NO_GRAVITY, SWIMS, SOLID, KINEMATIC, RIDERS_FALL, WEARS } [
+    entity of entity { NO_GRAVITY, SWIMS, SOLID, KINEMATIC, RIDERS_FALL, WEARS, PICKS_UP } [
         /// What every kind does unless a tag in `OFF` takes it away.
         pub const FALL_DAMAGE: u32 = 1 << 20;
         pub const PUSHABLE: u32 = 1 << 21;

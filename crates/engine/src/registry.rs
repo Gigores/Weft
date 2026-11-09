@@ -117,6 +117,8 @@ pub struct EntityKind {
     /// Its equipment slots in that inventory (`entity_flags::WEARS`, the player's): never filled
     /// by pickups, worn on the model. Laid out at freeze.
     pub worn: std::ops::Range<u32>,
+    /// The slot of its second hand, after its equipment (the player's, and kinds that wear).
+    pub off: Option<u32>,
     /// What its events sound and show (`entity_event`).
     pub effects: [crate::content::Fx; 4],
     /// Solid bodies: riders up to this high above it move with it.
@@ -680,7 +682,7 @@ fn engine_components() -> Vec<RawEntry> {
         (RIDING, "bytes", own | shown | cf::SAVE, Vec::new()),
         (GAME_MODE, "u32", cf::SYNC_OWNER, vec![0; 4]),
         (PERMISSION, "u32", cf::SYNC_OWNER, vec![0; 4]),
-        (ATTRIBUTES, "bytes", cf::SYNC_OWNER, Vec::new()),
+        (ATTRIBUTES, "bytes", own, Vec::new()),
         (SIMULATED, "u64", cf::SAVE, vec![0; 8]),
     ] {
         all.push(entity(name, schema, flags, default));
@@ -1343,7 +1345,7 @@ fn engine_attributes() -> Vec<RawEntry> {
         let e = RawEntry::engine(abi::entry_kind::ATTRIBUTE, name)
             .set(abi::comp::attribute::DEFAULT, default)
             .set(abi::comp::attribute::RANGE, [min, max]);
-        // How many hearts players have is the world's to say.
+        // How many hearts players (and kinds that don't say) have is the world's to say.
         if name == a::MAX_HEALTH { e.tag(abi::comp::attribute::RULE) } else { e }
     })
     .collect()
@@ -1534,6 +1536,7 @@ fn bake_entity(e: &Entry) -> EntityKind {
         values: Vec::new(),
         slots: 0,
         worn: 0..0,
+        off: None,
         effects: [crate::content::Fx::NONE; 4],
         carry_height: e.or(k::CARRY_HEIGHT, 0.0),
         light_at: match e.get::<[f32; 3]>(k::LIGHT_AT) {
@@ -1635,7 +1638,9 @@ fn engine_entities() -> Vec<RawEntry> {
     vec![
         kind(PLAYER, 0.6, 1.8)
             .set(k::EYE, 1.62f32)
-            .set(k::SLOT_GROUPS, groups),
+            .set(k::SLOT_GROUPS, groups)
+            .set(abi::comp::ATTACK_SPEED, 4.0f32)
+            .tag(k::PICKS_UP),
         thing(ITEM, 0.25, 0.25),
         thing(FALLING, 0.98, 1.0).tag(k::SOLID),
         thing(MOVING, 1.0, 1.0)
@@ -2336,10 +2341,11 @@ fn lay_out_slots(
             .unwrap_or(0)
             .min(1 << 16);
         if k.name == PLAYER {
-            k.worn = g.player_layout.worn.clone();
+            (k.slots, k.worn, k.off) = (g.player_layout.slots, g.player_layout.worn.clone(), g.player_layout.off);
         } else if k.flags & crate::tag_bits::entity::WEARS != 0 {
             k.worn = k.slots..k.slots + g.player_layout.worn.len() as u32;
-            k.slots = k.worn.end;
+            k.off = g.player_layout.off.map(|_| k.worn.end);
+            k.slots = k.worn.end + k.off.is_some() as u32;
         }
     }
     // Menus showing equipment get a group per slot: what the entity the menu is on wears, or the

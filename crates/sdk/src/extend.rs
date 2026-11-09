@@ -737,8 +737,8 @@ crate::entry::entry_builder!(
 );
 
 impl AttributeBuilder<'_> {
-    /// Players' base of it is a world rule named like it (`/rule`), with its default and range;
-    /// `/attribute` sets one player's apart.
+    /// The base of it for kinds that don't set their own (the player) is a world rule named like
+    /// it (`/rule`), with its default and range; `/attribute` sets one entity's apart.
     pub fn rule(self) -> Self {
         use crate::WithComponents;
         self.tag(abi::comp::attribute::RULE)

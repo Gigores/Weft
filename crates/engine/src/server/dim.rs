@@ -33,10 +33,13 @@ pub enum DimEvent {
         block: u32,
     },
     /// `killer`: the kind of what did it.
+    /// An entity died: a player (who respawns) or one with a name, which everyone hears of.
     Died {
-        player: u64,
+        entity: u64,
         cause: u32,
         killer: Option<u32>,
+        /// Its own name; a player's comes from its session.
+        name: Option<String>,
     },
     SetPermission {
         player: u64,
@@ -745,31 +748,23 @@ impl Dim {
             shown,
             ..
         } = c.game.fields;
-        let players: Vec<u64> = self
+        // What lives has attributes; a dropped item or a block's entity none worth sending.
+        let attrs: FxHashMap<u64, Vec<f32>> = self
             .entities
             .list
             .iter()
-            .filter(|e| e.player && !e.removed)
-            .map(|e| e.id)
-            .collect();
-        let attrs: FxHashMap<u64, Vec<u8>> = players
-            .iter()
-            .map(|&id| {
-                let all = (0..c.game.attributes.len() as u32)
-                    .flat_map(|a| (self.attribute(c, id, a, false) as f32).to_le_bytes())
-                    .collect();
-                (id, all)
-            })
-            .collect();
-        let maxes: Vec<(u64, f32)> = self
-            .entities
-            .list
-            .iter()
-            .filter(|e| e.player && !e.removed)
+            .filter(|e| e.is_body() && e.anchor.is_none())
             .map(|e| e.id)
             .collect::<Vec<_>>()
             .into_iter()
-            .map(|id| (id, self.max_health(c, id)))
+            .map(|id| {
+                (
+                    id,
+                    (0..c.game.attributes.len() as u32)
+                        .map(|a| self.attribute(c, id, a, false) as f32)
+                        .collect(),
+                )
+            })
             .collect();
         let Entities { list, comps, inventories, .. } = &mut self.entities;
         for e in list.iter().filter(|e| e.seen(c)) {
@@ -798,7 +793,8 @@ impl Dim {
             if e.anchor.is_some() {
                 continue;
             }
-            let max = maxes.iter().find(|m| m.0 == e.id).map_or(0.0, |m| m.1);
+            let attrs = attrs.get(&e.id);
+            let max = attrs.map_or(0.0, |a| a[crate::registry::attr::MAX_HEALTH as usize]);
             let mut hp = [0u8; 8];
             hp[..4].copy_from_slice(&e.health.max(0.0).to_le_bytes());
             hp[4..].copy_from_slice(&max.to_le_bytes());
@@ -820,21 +816,21 @@ impl Dim {
                     .collect()
             });
             put(comps, riding, &rides);
+            if let Some(a) = attrs {
+                let bytes: Vec<u8> = a.iter().flat_map(|v| v.to_le_bytes()).collect();
+                put(comps, attributes, &bytes);
+            }
+            if let Some(inv) = inventories.get(&e.id) {
+                let item = crate::content::in_main_hand(c, e.kind, inv, e.selected);
+                put(comps, held, &(if item.is_empty() { 0 } else { item.item }).to_le_bytes());
+                let off = crate::content::in_off_hand(c, e.kind, inv);
+                put(comps, off_held, &(if off.is_empty() { 0 } else { off.item }).to_le_bytes());
+            }
+            let use_value = e.using.0 | (e.using.1 as u32) << 31;
+            put(comps, using, &use_value.to_le_bytes());
             if e.player {
                 put(comps, game_mode, &(e.mode.0 as u32).to_le_bytes());
                 put(comps, permission, &e.permission.to_le_bytes());
-                if let Some(a) = attrs.get(&e.id) {
-                    put(comps, attributes, a);
-                }
-                let inv = inventories.get(&e.id).map_or(&[][..], |i| &i[..]);
-                let item = crate::content::in_main_hand(c, inv, e.selected);
-                let item = if item.is_empty() { 0 } else { item.item };
-                put(comps, held, &item.to_le_bytes());
-                let off = crate::content::in_off_hand(c, inv);
-                let off = if off.is_empty() { 0 } else { off.item };
-                put(comps, off_held, &off.to_le_bytes());
-                let use_value = e.using.0 | (e.using.1 as u32) << 31;
-                put(comps, using, &use_value.to_le_bytes());
             }
         }
     }
@@ -1613,43 +1609,27 @@ impl Dim {
     /// between hits, like vanilla's; players are only held back by the target's hurt time.
     pub fn attack(&mut self, c: &'static Content, attacker: u64, target: u64, held: ItemStack) -> bool {
         let (Some(me), Some(t)) = (self.entities.get(attacker), self.entities.get(target)) else { return false };
-        if target == attacker || !t.is_body() || me.attack_cooldown > 0 {
+        if target == attacker || !t.is_body() {
             return false;
         }
-        let (kind, player) = (me.kind, me.player);
+        let kind = me.kind;
         let mut q = abi::Query { entity: attacker, other: target, item: held.item, ..abi::Query::DEFAULT };
         if !self.ask(c, abi::question::ATTACK, &mut q) {
             return false;
         }
+        // What it holds hits, else its bare hand: its kind's damage (a mob's), else 1.
         let base = if held.item != 0 {
             c.stack_value::<f32>(&held, c.ids.attack_damage)
                 .unwrap_or(1.0)
-        } else if player {
-            1.0
         } else {
             c.components
                 .id(abi::comp::ATTACK_DAMAGE)
                 .and_then(|id| c.components.get::<f32>(crate::components::ENTITY, kind, id))
                 .unwrap_or(1.0)
         };
-        if !player {
-            // A second a hit unless its kind says otherwise.
-            let own = c
-                .ids
-                .attack_speed
-                .and_then(|id| c.components.get::<f32>(crate::components::ENTITY, kind, id))
-                .unwrap_or(1.0);
-            let per_second = own * self.attribute(c, attacker, crate::registry::attr::ATTACK_SPEED, false) as f32;
-            if let Some(e) = self.entities.get_mut(attacker) {
-                e.attack_cooldown = (crate::world::TPS as f32 / per_second.max(0.05)) as _;
-            }
-        }
         self.events
             .push(DimEvent::EntitySwing { id: attacker, off: false });
         let dmg = self.compute(c, abi::chain::ATTACK_DAMAGE, base as f64, &q, false) as f32;
-        if !player {
-            return self.damage(c, target, dmg, attacker, damage::ATTACK);
-        }
         // Modern's swing: charged by time since the last, and only a full one crits or knocks. It
         // may have changed what it holds since the last tick looked.
         if let Some(me) = self.entities.get_mut(attacker) {
@@ -1727,13 +1707,14 @@ impl Dim {
     }
 
     /// How charged a player's next swing is, 0..1.
-    pub fn swing_strength(&self, c: &Content, player: u64, held: ItemStack) -> f32 {
-        let Some(e) = self.entities.get(player) else { return 1.0 };
+    pub fn swing_strength(&self, c: &Content, id: u64, held: ItemStack) -> f32 {
+        let Some(e) = self.entities.get(id) else { return 1.0 };
         crate::content::swing_charge(
             c,
+            e.kind,
             &held,
             e.swing_ticks as f32,
-            self.attribute(c, player, crate::registry::attr::ATTACK_SPEED, false) as f32,
+            self.attribute(c, id, crate::registry::attr::ATTACK_SPEED, false) as f32,
         )
     }
 
@@ -1895,6 +1876,19 @@ impl Dim {
         }
         if health <= 0.0 {
             self.emit_engine(c, abi::action::DIE, &abi::Death { entity: id, source: source, kind, cause, pos: pos.to_array().into() });
+            let killer = self.entities.get(source).map(|s| s.kind);
+            let name = self
+                .entities
+                .comps
+                .get(&(id, c.game.name_comp))
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .filter(|n| !n.is_empty());
+            if player || name.is_some() {
+                self.events
+                    .push(DimEvent::Died { entity: id, cause, killer, name });
+            }
+            // A player's inventory is the server's to drop (`core:keep_inventory`), after it closes
+            // what it had open; everything else's falls here with its loot.
             if !player {
                 let by_player = self.entities.get(source).is_some_and(|s| s.player);
                 let tool = self
@@ -1907,12 +1901,7 @@ impl Dim {
                 for s in self.roll_loot(c, &k.name, &ctx, pos, source) {
                     self.spawn_item(c, pos + DVec3::Y * 0.5, s);
                 }
-            }
-            if player {
-                let killer = self.entities.get(source).map(|s| s.kind);
-                self.events
-                    .push(DimEvent::Died { player: id, cause, killer });
-            } else {
+                self.drop_inventory(c, id);
                 self.entities.remove(id);
             }
         }
@@ -2462,11 +2451,10 @@ impl Dim {
                 e.age += 1;
                 e.hurt_cooldown = e.hurt_cooldown.saturating_sub(1);
                 e.swing_ticks = e.swing_ticks.saturating_add(1);
-                e.attack_cooldown = e.attack_cooldown.saturating_sub(1);
+                if let Some(inv) = inventories.get(&e.id) {
+                    e.notice_hand(crate::content::in_main_hand(c, e.kind, inv, e.selected));
+                }
                 if e.player {
-                    let inv = inventories.get(&e.id).map_or(&[][..], |i| &i[..]);
-                    let held = crate::content::in_main_hand(c, inv, e.selected);
-                    e.notice_hand(held);
                     // Mods saw it this tick; the next `Move` tells of the next.
                     e.jumped = false;
                 }
@@ -2724,13 +2712,13 @@ impl Dim {
         }
     }
 
-    /// Item entities: merge neighbors, get picked up by players.
+    /// Item entities: merge neighbors, get picked up by what picks up (`PICKS_UP`).
     fn items(&mut self, c: &'static Content) {
-        let players: Vec<(u64, DVec3)> = self
+        let takers: Vec<(u64, DVec3)> = self
             .entities
             .list
             .iter()
-            .filter(|e| e.player && !e.removed && e.alive() && !e.mode.has(crate::tag_bits::game_mode::HIDDEN))
+            .filter(|e| e.is_body() && e.alive() && c.game.entities[e.kind as usize].is(crate::tag_bits::entity::PICKS_UP))
             .map(|e| (e.id, e.pos))
             .collect();
         // Who is next to whom, once a merge is due: everyone asking everyone was the one thing
@@ -2762,10 +2750,10 @@ impl Dim {
             }
             let stack = e.item;
             // The nearest one that has room, not just the first in reach.
-            let takers = players
+            let near = takers
                 .iter()
                 .filter(|(_, pp)| (*pp + DVec3::Y * 0.5 - pos).length_squared() < 2.25);
-            if let Some(&(pid, _)) = takers
+            if let Some(&(pid, _)) = near
                 .filter(|(p, _)| self.entities.can_insert(c, *p, stack))
                 .min_by(|a, b| {
                     (a.1 - pos)
@@ -2787,7 +2775,7 @@ impl Dim {
                         .copied()
                         .unwrap_or(u32::MAX);
                     self.sound(pickup, pos, 1.0, 0.0);
-                    self.emit_engine(c, abi::action::PICKUP_ITEM, &abi::Pickup { player: pid, stack: ItemStack { count: taken, ..stack } });
+                    self.emit_engine(c, abi::action::PICKUP_ITEM, &abi::Pickup { entity: pid, stack: ItemStack { count: taken, ..stack } });
                 }
                 if let Some(e) = self.entities.get_mut(id) {
                     if rest.is_empty() {
@@ -3070,13 +3058,13 @@ impl Dim {
         }
     }
 
-    /// One melee hit, with what a player holds, which wears from it. Mobs hit with their kind's damage.
+    /// One melee hit with what the attacker holds, which wears from it.
     pub fn melee(&mut self, c: &'static Content, attacker: u64, target: u64) -> bool {
-        let Some((player, slot)) = self.entities.get(attacker).map(|e| (e.player, e.selected)) else { return false };
-        let held = if player { self.entities.held(attacker) } else { ItemStack::EMPTY };
+        let Some(slot) = self.entities.get(attacker).map(|e| e.selected) else { return false };
+        let held = self.entities.held(attacker);
         let hit = self.attack(c, attacker, target, held);
         // Bare hands wear nothing, whatever sits in the slot doing nothing.
-        if hit && player && !held.is_empty() {
+        if hit && !held.is_empty() {
             super::actions::wear(c, self, attacker, slot, c.stack_value::<u32>(&held, c.ids.wear_per_hit).unwrap_or(2));
         }
         hit

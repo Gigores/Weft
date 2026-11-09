@@ -468,9 +468,8 @@ pub fn fits_one_hand(c: &Content, item: u32) -> bool {
 }
 
 /// What is in the other hand.
-pub fn in_off_hand(c: &Content, inventory: &[weft_abi::ItemStack]) -> weft_abi::ItemStack {
-    c.game
-        .player_layout
+pub fn in_off_hand(c: &Content, kind: u32, inventory: &[weft_abi::ItemStack]) -> weft_abi::ItemStack {
+    c.game.entities[kind as usize]
         .off
         .and_then(|o| inventory.get(o as usize))
         .copied()
@@ -479,27 +478,27 @@ pub fn in_off_hand(c: &Content, inventory: &[weft_abi::ItemStack]) -> weft_abi::
 
 /// What the main hand really holds: an item that needs both hands does nothing while the other
 /// holds something, and shows as an empty hand. It stays in the hotbar.
-pub fn in_main_hand(c: &Content, inventory: &[weft_abi::ItemStack], selected: u32) -> weft_abi::ItemStack {
+pub fn in_main_hand(c: &Content, kind: u32, inventory: &[weft_abi::ItemStack], selected: u32) -> weft_abi::ItemStack {
     let main = inventory
         .get(selected as usize)
         .copied()
         .unwrap_or_default();
-    if !main.is_empty() && !fits_one_hand(c, main.item) && !in_off_hand(c, inventory).is_empty() {
+    if !main.is_empty() && !fits_one_hand(c, main.item) && !in_off_hand(c, kind, inventory).is_empty() {
         return weft_abi::ItemStack::EMPTY;
     }
     main
 }
 
 /// What goes first on a right click: the higher `use_priority`, the main hand when equal.
-pub fn hands_in_order(c: &Content, inventory: &[weft_abi::ItemStack], selected: u32) -> Vec<u32> {
-    let main = in_main_hand(c, inventory, selected);
-    let off = in_off_hand(c, inventory);
+pub fn hands_in_order(c: &Content, kind: u32, inventory: &[weft_abi::ItemStack], selected: u32) -> Vec<u32> {
+    let main = in_main_hand(c, kind, inventory, selected);
+    let off = in_off_hand(c, kind, inventory);
     let prio = |s: &weft_abi::ItemStack| c.stack_value::<i32>(s, c.ids.use_priority).unwrap_or(0);
     let mut out = Vec::with_capacity(2);
     if !main.is_empty() {
         out.push(selected);
     }
-    if let (Some(o), false) = (c.game.player_layout.off, off.is_empty()) {
+    if let (Some(o), false) = (c.game.entities[kind as usize].off, off.is_empty()) {
         if !main.is_empty() && prio(&off) > prio(&main) {
             out.insert(0, o);
         } else {
@@ -509,16 +508,24 @@ pub fn hands_in_order(c: &Content, inventory: &[weft_abi::ItemStack], selected: 
     out
 }
 
-/// Full swings per second with a stack in hand.
-pub fn swings_per_second(c: &Content, held: &weft_abi::ItemStack) -> f32 {
+/// Full swings per second of entity kind `kind` with `held`: the item's, else the kind's own
+/// (`comp::ATTACK_SPEED` on it: the player's 4, a mob's pace), else 1.
+pub fn swings_per_second(c: &Content, kind: u32, held: &weft_abi::ItemStack) -> f32 {
+    let own = || {
+        c.ids
+            .attack_speed
+            .and_then(|id| c.components.get::<f32>(crate::components::ENTITY, kind, id))
+    };
     c.stack_value::<f32>(held, c.ids.attack_speed)
-        .unwrap_or(4.0)
+        .filter(|_| !held.is_empty())
+        .or_else(own)
+        .unwrap_or(1.0)
 }
 
 /// How charged a swing is after that many ticks, 0..1. Client and server have to agree, with
 /// `speed` the `core:attack_speed` attribute.
-pub fn swing_charge(c: &Content, held: &weft_abi::ItemStack, ticks: f32, speed: f32) -> f32 {
-    ((ticks + 0.5) * swings_per_second(c, held) * speed / crate::world::TPS as f32).clamp(0.0, 1.0)
+pub fn swing_charge(c: &Content, kind: u32, held: &weft_abi::ItemStack, ticks: f32, speed: f32) -> f32 {
+    ((ticks + 0.5) * swings_per_second(c, kind, held) * speed / crate::world::TPS as f32).clamp(0.0, 1.0)
 }
 
 /// What a block's tint goes on, on one face of it, wherever that is drawn.

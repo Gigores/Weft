@@ -231,9 +231,10 @@ impl World {
     pub fn damage(&self, id: u64, amount: f32, source: u64, cause: impl Into<Id<crate::DamageCause>>) -> bool {
         unsafe { (host().entity_damage)(self.raw(), id, amount, source, cause.into().raw()) != 0 }
     }
-    /// `id` hits `target` the way players do: other mods can forbid it (`question::ATTACK`) or
-    /// change it (`chain::ATTACK_DAMAGE`). A player hits with what it holds, which wears; a mob
-    /// with its kind's `.attack_damage(..)`, at its `.attack_speed(..)`. True if it landed.
+    /// `id` hits `target` with what it holds, which wears, or bare handed with its kind's
+    /// `.attack_damage(..)`, as strong as its swing is charged (`swing_strength`, by its
+    /// `.attack_speed(..)` when bare handed). Other mods can forbid it (`question::ATTACK`) or
+    /// change it (`chain::ATTACK_DAMAGE`). True if it landed.
     pub fn attack(&self, id: u64, target: u64) -> bool {
         unsafe { (host().entity_attack)(self.raw(), id, target) != 0 }
     }
@@ -249,9 +250,9 @@ impl World {
         let pos = pos.into();
         unsafe { (host().in_liquid)(self.raw(), &pos) != 0 }
     }
-    /// How charged a player's next swing is, 0..1, with what it holds now.
-    pub fn swing_strength(&self, player: u64) -> f32 {
-        unsafe { (host().entity_swing_strength)(self.raw(), player) }
+    /// How charged `id`'s next swing is, 0..1, with what it holds now.
+    pub fn swing_strength(&self, id: u64) -> f32 {
+        unsafe { (host().entity_swing_strength)(self.raw(), id) }
     }
     /// The value of `c` on any holder: an entity, a block's entity, a stack in a slot.
     pub fn component<T: Value>(&self, h: impl Into<Holder>, c: &Component<T>) -> Option<T> {
@@ -922,6 +923,10 @@ impl EntityBuilder<'_> {
     /// slot's name in `w.inventory(id)` reaches them.
     pub fn equipment(self) -> Self {
         self.tag(abi::comp::entity::WEARS)
+    }
+    /// It picks up the dropped items it touches into its inventory, as the player does.
+    pub fn picks_up_items(self) -> Self {
+        self.tag(abi::comp::entity::PICKS_UP)
     }
     /// Damage of its melee hits (`World::attack`), like an item's.
     pub fn attack_damage(self, damage: f32) -> Self {

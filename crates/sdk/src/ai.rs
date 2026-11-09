@@ -494,14 +494,14 @@ pub fn watch_player(range: f64) -> impl Goal {
     }
 }
 
-/// Hits its `target` when it is in reach (`World::in_reach`: the kind's `.reach(..)`, an
-/// attribute modifiers change) with `World::attack`, which keeps the pace. Never takes over:
-/// chasing goes on.
+/// Hits its `target` with a full swing (`World::swing_strength`) when it is in reach
+/// (`World::in_reach`: the kind's `.reach(..)`, an attribute modifiers change) with
+/// `World::attack`. Never takes over: chasing goes on.
 pub fn melee() -> impl Goal {
     move |w: &World, id: u64, st: &EntityState| {
         let reach = w.attribute(id, &crate::attribute::ENTITY_REACH);
         if let Some((p, _)) = target(w, id, st, reach + st.size.width as f64 + 2.0) {
-            if w.in_reach(id, p) {
+            if w.in_reach(id, p) && w.swing_strength(id) >= 1.0 {
                 w.attack(id, p);
             }
         }
@@ -521,7 +521,7 @@ pub fn melee_within(reach: f64) -> impl Goal {
                 eye.z.clamp(ps.pos.z - half, ps.pos.z + half),
             );
             let d2 = (near - eye).length_squared();
-            if d2 <= reach * reach {
+            if d2 <= reach * reach && w.swing_strength(id) >= 1.0 {
                 w.attack(id, p);
             }
         }

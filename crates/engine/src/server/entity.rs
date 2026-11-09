@@ -26,8 +26,6 @@ pub struct Entity {
     pub health: f32,
     pub age: u64,
     pub hurt_cooldown: u32,
-    /// Ticks until it may attack again (mobs).
-    pub attack_cooldown: u32,
     /// AI steering requested this tick: direction, speed factor, jump.
     pub walk: Option<([f32; 2], f32, bool)>,
     /// Jump strength attribute when its walk was set (1 = vanilla's).
@@ -118,7 +116,6 @@ impl Entity {
             health,
             age: 0,
             hurt_cooldown: 0,
-            attack_cooldown: 0,
             walk: None,
             jump_mul: 1.0,
             removed: false,
@@ -307,7 +304,7 @@ impl Entities {
         let c = crate::content::content();
         self.get(id)
             .zip(self.inventories.get(&id))
-            .map_or_else(Default::default, |(e, i)| crate::content::in_main_hand(c, i, e.selected))
+            .map_or_else(Default::default, |(e, i)| crate::content::in_main_hand(c, e.kind, i, e.selected))
     }
 
     pub fn get(&self, id: u64) -> Option<&Entity> {
@@ -338,11 +335,6 @@ impl Entities {
             self.inventories
                 .entry(id)
                 .or_insert_with(|| vec![ItemStack::EMPTY; kind.slots as usize]);
-        }
-        if e.player {
-            self.inventories
-                .entry(id)
-                .or_insert_with(|| vec![ItemStack::EMPTY; c.game.player_layout.slots as usize]);
         }
         if let Some(a) = e.anchor {
             self.anchors
@@ -560,8 +552,8 @@ impl Entities {
         let max = c.max_stack(stack.item);
         // Pickups never go into equipment.
         let Some(e) = self.get(owner) else { return stack };
-        let off = c.game.player_layout.off.filter(|_| e.player);
-        let worn = c.game.entities[e.kind as usize].worn.clone();
+        let k = &c.game.entities[e.kind as usize];
+        let (off, worn) = (k.off, k.worn.clone());
         let Some(inv) = self.inventories.get_mut(&owner) else { return stack };
         for (_, s) in inv
             .iter_mut()

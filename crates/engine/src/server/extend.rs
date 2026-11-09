@@ -199,18 +199,17 @@ impl Dim {
 }
 
 impl Dim {
-    /// A player's base of an attribute that is a rule is the rule's (`comp::attribute::RULE`).
+    /// Its kind's own base of an attribute, else the world's rule if the attribute is one
+    /// (`comp::attribute::RULE`), else the attribute's default.
     fn base_attribute(&self, c: &Content, entity: u64, attr: u32) -> Option<f64> {
         let e = self.entities.get(entity)?;
-        if let Some(rule) = c.game.attr_rules[attr as usize].filter(|_| e.player) {
-            return Some(crate::config::get(rule));
-        }
         let def = &c.game.attributes[attr as usize];
         let own = def.comp.and_then(|id| {
             c.components
                 .get::<f64>(crate::components::ENTITY, e.kind, id)
         });
-        Some(own.unwrap_or(def.default))
+        let rule = c.game.attr_rules[attr as usize].map(crate::config::get);
+        Some(own.or(rule).unwrap_or(def.default))
     }
 
     fn modifiers_of(&self, c: &Content, entity: u64) -> Vec<AttrMod> {

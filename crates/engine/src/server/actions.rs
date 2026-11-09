@@ -43,11 +43,11 @@ impl Server {
     /// The hands to try, in order, for the player's right click.
     fn hands(&mut self, c: &'static Content, pi: usize) -> Vec<u32> {
         self.region(pi).map_or(Vec::new(), |(r, id)| {
-            let sel = r.entities.get(id).map_or(0, |e| e.selected);
+            let Some(e) = r.entities.get(id) else { return Vec::new() };
             r.entities
                 .inventories
                 .get(&id)
-                .map_or(Vec::new(), |i| crate::content::hands_in_order(c, i, sel))
+                .map_or(Vec::new(), |i| crate::content::hands_in_order(c, e.kind, i, e.selected))
         })
     }
 

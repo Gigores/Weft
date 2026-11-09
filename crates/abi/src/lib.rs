@@ -779,8 +779,8 @@ pub mod comp {
     pub mod attribute {
         pub const DEFAULT: &str = "attribute.default";
         pub const RANGE: &str = "attribute.range";
-        /// Tag: players' base of it is a world rule named like it (`/rule`), `DEFAULT` and
-        /// `RANGE` its own; `/attribute` sets one player's apart.
+        /// Tag: the base of it for kinds that don't set their own is a world rule named like it
+        /// (`/rule`), `DEFAULT` and `RANGE` its own; `/attribute` sets one entity's apart.
         pub const RULE: &str = "attribute.rule";
     }
 
@@ -1334,6 +1334,9 @@ pub mod comp {
         /// Has the equipment slots (`Registry::equipment_slot`) the player has, after its own:
         /// armor on a zombie, shown on its model and counted like a player's.
         pub const WEARS: &str = "entity.wears";
+        /// Picks up the dropped items it touches into its inventory, as a player does (a zombie,
+        /// an allay).
+        pub const PICKS_UP: &str = "entity.picks_up";
         /// Takes no fall damage, which every kind does otherwise.
         pub const NO_FALL_DAMAGE: &str = "entity.no_fall_damage";
         /// Others don't push it away, which every kind does otherwise.
@@ -1376,7 +1379,8 @@ pub mod comp {
     pub const ATTACK_DAMAGE: &str = "attack_damage";
     /// Item: ticks of holding the use button before it takes effect (food 32); slows while held.
     pub const USE_TICKS: &str = "use_ticks";
-    /// Item: full swings per second (a sword 1.6). An empty hand does 4.
+    /// Item: full swings per second (a sword 1.6). On an entity kind, its bare hand's (the
+    /// player 4); 1 when neither says.
     pub const ATTACK_SPEED: &str = "attack_speed";
     /// Item: a full swing standing on the ground also hits what stands next to the target.
     pub const SWEEPS: &str = "sweeps";
@@ -4233,11 +4237,11 @@ impl ChatMessage {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pickup {
-    pub player: u64,
+    pub entity: u64,
     pub stack: ItemStack,
 }
 impl Schema for Pickup {
-    const SCHEMA: &'static str = "{player:u64,stack:{item:u32,count:u32,data:u32}}";
+    const SCHEMA: &'static str = "{entity:u64,stack:{item:u32,count:u32,data:u32}}";
 }
 
 #[repr(C)]
@@ -4265,7 +4269,8 @@ pub mod action {
     pub const CHAT: &str = "core:chat";
     /// `DimensionChange`. `entity` about to change dimension to `dim`.
     pub const ENTER_DIMENSION: &str = "core:enter_dimension";
-    /// `Pickup`. `entity` (a player) picking up `item` (count in `amount`), `other` the item entity.
+    /// `Pickup`. `entity` (what has `comp::entity::PICKS_UP`) picking up `item` (count in
+    /// `amount`), `other` the item entity.
     pub const PICKUP_ITEM: &str = "core:pickup_item";
     /// `Hurt`, sent after armor and every modifier. Asked with `entity` about to be hurt by
     /// `other` for `amount` of `cause`, before the damage chain.

@@ -740,27 +740,28 @@ impl Server {
                         self.open_menu(c, pi, menu, on, block);
                     }
                 }
-                DimEvent::Died { player, cause, killer } => {
+                DimEvent::Died { entity, cause, killer, name } => {
                     let Server { players, dims, .. } = self;
-                    if let Some(p) = players.iter_mut().find(|p| p.entity == player) {
+                    let mut name = name;
+                    if let Some(p) = players.iter_mut().find(|p| p.entity == entity) {
                         // The menu first: what is on the cursor and in the crafting grid goes
                         // back to the inventory, and falls with the rest.
-                        if let Some(r) = dims[p.dim as usize].entity_region(player) {
+                        if let Some(r) = dims[p.dim as usize].entity_region(entity) {
                             if let Some(m) = p.menu.take() {
-                                menu::close(m, r, c, player);
+                                menu::close(m, r, c, entity);
                                 p.conn.send(ToClient::CloseMenu);
                             }
-                            // check keep_inventory rule
-                            // if not enabled, drop inventory on the ground
-                            let keep_inventory = crate::config::get(c.game.keep_inventory) != 0.0;
-                            if !keep_inventory {
-                                r.drop_inventory(c, player);
+                            if crate::config::get(c.game.keep_inventory) == 0.0 {
+                                r.drop_inventory(c, entity);
                             }
                         }
                         p.deaths += 1;
                         p.conn.send(ToClient::Died);
                         log::info!("{} died", p.name);
-                        let line = death_message(c, cause, killer, p.name.clone());
+                        name = Some(p.name.clone());
+                    }
+                    if let Some(name) = name {
+                        let line = death_message(c, cause, killer, name);
                         for q in players.iter_mut().filter(|q| q.joined) {
                             q.conn
                                 .send(ToClient::Show(crate::net::Shown::chat(line.clone())));
