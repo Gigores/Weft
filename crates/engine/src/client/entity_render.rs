@@ -1168,6 +1168,17 @@ impl EntityRenderer {
             if far2 > 160.0 * 160.0 {
                 continue;
             }
+            // Invisible to everyone else.
+            let hidden = e.effects.iter().any(|f| {
+                f.until > now
+                    && c.game
+                        .entity_effects
+                        .get(f.id as usize)
+                        .is_some_and(|d| d.hides)
+            });
+            if hidden && id != self.local {
+                continue;
+            }
             // Out of the view it has nothing to show. What it may have on goes by its model's reach.
             if id != self.local && !e.item.is_empty() {
                 if !planes.iter().all(|p| p.dot(base.extend(1.0)) > -1.5) {

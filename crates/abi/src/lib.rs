@@ -663,7 +663,10 @@ pub mod comp {
     /// one is given for that level. A status effect, one its entity's player sees, has an `ICON`
     /// (`str`, a texture) and a `COLOR` (`u32`, `0xRRGGBB`, of the swirls around who has it, none
     /// without), tags `BENEFICIAL` or `HARMFUL`, and `INSTANT` for one that acts once when given
-    /// (healing) and doesn't stay. A condition's `CALL` (`callback`, `ConditionArgs`).
+    /// (healing) and doesn't stay. `SCREEN` (`str`, `shaders/post/<name>.wgsl`) is laid over
+    /// what its player sees while it has it (night vision), its strength fading the last second;
+    /// `HIDES` keeps its entity from being drawn for others (invisibility). A condition's `CALL`
+    /// (`callback`, `ConditionArgs`).
     pub const ENTITY_EFFECT_SHADER: &str = "entity_effect.shader";
     pub const ENTITY_EFFECT_HAZARDS: &str = "entity_effect.hazards";
     pub const ENTITY_EFFECT_ICON: &str = "entity_effect.icon";
@@ -671,6 +674,8 @@ pub mod comp {
     pub const ENTITY_EFFECT_BENEFICIAL: &str = "entity_effect.beneficial";
     pub const ENTITY_EFFECT_HARMFUL: &str = "entity_effect.harmful";
     pub const ENTITY_EFFECT_INSTANT: &str = "entity_effect.instant";
+    pub const ENTITY_EFFECT_SCREEN: &str = "entity_effect.screen";
+    pub const ENTITY_EFFECT_HIDES: &str = "entity_effect.hides";
     pub const CONDITION_CALL: &str = "condition.call";
 
     /// A sound event's: `FILES` (`[str]`, `sounds/<name>.ogg` or `.wav`, one picked at random),
@@ -4137,6 +4142,8 @@ pub mod particle {
     pub const SPLASH: &str = "core:splash";
     /// Falling from a ceiling with water above it.
     pub const DRIP: &str = "core:drip";
+    /// Swirls around who has an entity effect with a color, tinted by it.
+    pub const EFFECT: &str = "core:effect";
 }
 
 /// Values are copied out before the call and written back after it (changes of synced

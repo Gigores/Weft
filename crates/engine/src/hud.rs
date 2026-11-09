@@ -21,6 +21,7 @@ pub const TAG_HOTBAR: u32 = 1;
 #[derive(Clone, Copy)]
 enum Part {
     Hotbar,
+    Effects,
     HeldName,
     Crosshair,
     PlayerList,
@@ -35,6 +36,62 @@ enum Part {
     Mod(weft_abi::ModId, weft_abi::Callback),
 }
 pub const TAG_CROSSHAIR: u32 = 2;
+/// A status effect's icon in its frame (`data` the effect), fading its last ten seconds.
+pub const TAG_EFFECT: u32 = 3;
+
+/// The status effects the local player has now, beneficial ones first: effect, level, ticks left.
+pub fn shown_effects(client: &Client) -> Vec<(u32, u32, u64)> {
+    let c = content();
+    let now = client.ticks();
+    let mut v: Vec<(u32, u32, u64)> = client
+        .me
+        .effects
+        .iter()
+        .filter(|f| {
+            f.until > now
+                && c.game
+                    .entity_effects
+                    .get(f.id as usize)
+                    .is_some_and(|d| d.shown())
+        })
+        .map(|f| (f.id, f.level, f.until - now))
+        .collect();
+    v.sort_by_key(|f| (c.game.entity_effects[f.0 as usize].kind == crate::registry::effect_kind::HARMFUL, f.0));
+    v
+}
+
+/// Effect `effect`'s icon in its frame, 24 GUI pixels square.
+pub fn effect_icon(ui: &mut Ui, effect: u32) -> crate::ui::NodeId {
+    let n = ui.add(Kind::Custom { tag: TAG_EFFECT, data: effect as u64 }, Style::default().size(24.0, 24.0));
+    ui.nodes[n].icon = content()
+        .game
+        .entity_effects
+        .get(effect as usize)
+        .map(|d| d.icon.clone());
+    n
+}
+
+/// `effect.base.speed II`: its name in lang and its level past the first in roman numerals.
+pub fn effect_name(lang: &Lang, effect: u32, level: u32) -> Vec<text::Span> {
+    let c = content();
+    let name = c
+        .game
+        .entity_effects
+        .get(effect as usize)
+        .map_or("", |d| d.name.as_str());
+    let key = format!("effect.{}", name.replace(':', "."));
+    let roman = ["", "", " II", " III", " IV", " V", " VI", " VII", " VIII", " IX", " X"];
+    let level = roman
+        .get(level as usize)
+        .map_or_else(|| format!(" {level}"), |s| s.to_string());
+    text::rich(&format!("{}{level}", text::escape(lang.get(&key))), lang, None)
+}
+
+/// Ticks as `m:ss`, `**:**` past an hour as vanilla's.
+pub fn effect_time(ticks: u64) -> String {
+    let secs = ticks / crate::world::TPS as u64;
+    if secs >= 3600 { "**:**".into() } else { format!("{}:{:02}", secs / 60, secs % 60) }
+}
 
 /// A player's say on one element (`config/hud.txt`): its place in an anchor's flow or a free spot,
 /// and whether it shows.
@@ -326,6 +383,11 @@ impl Hud {
         // Tab, and only over the game: in the chat it completes.
         let list_shown = input.captured && input.held("core:player_list");
         let chat = crate::settings::chat_look();
+        // Which status effects show, at what level, in the same number as the texts.
+        let shown_steps = shown_effects(client).iter().fold(shown_steps, |h, f| {
+            h.wrapping_mul(31)
+                .wrapping_add((f.0 as u64) << 8 | f.1 as u64)
+        });
         let key = (
             debug,
             chat_visible,
@@ -367,6 +429,7 @@ impl Hud {
         // Everything on the overlay, the engine's elements placed like the mods'.
         let mut all: Vec<(String, String, i32, Part)> = vec![
             ("core:hotbar".into(), a::HOTBAR.into(), 0, Part::Hotbar),
+            ("core:effects".into(), a::TOP_RIGHT.into(), 0, Part::Effects),
             ("core:held_name".into(), a::ABOVE_HOTBAR.into(), 0, Part::HeldName),
             ("core:crosshair".into(), CENTER.into(), 0, Part::Crosshair),
             ("core:player_list".into(), CENTER.into(), 2, Part::PlayerList),
@@ -450,6 +513,28 @@ impl Hud {
                 });
             }
             Part::Crosshair => drop(ui.add(Kind::Custom { tag: TAG_CROSSHAIR, data: 0 }, Style::default().size(9.0, 9.0))),
+            Part::Effects => {
+                // Beneficial ones in a row, harmful ones in the row under it, as vanilla's.
+                let all = shown_effects(client);
+                ui.container(Style::default().gap(1.0).align(align), |ui| {
+                    for harmful in [false, true] {
+                        let row: Vec<_> = all
+                            .iter()
+                            .filter(|f| {
+                                (content().game.entity_effects[f.0 as usize].kind == crate::registry::effect_kind::HARMFUL) == harmful
+                            })
+                            .collect();
+                        if row.is_empty() {
+                            continue;
+                        }
+                        ui.container(Style::row().gap(1.0), |ui| {
+                            for f in row {
+                                effect_icon(ui, f.0);
+                            }
+                        });
+                    }
+                });
+            }
             Part::PlayerList if list_shown || editing => {
                 let mut style = Style::default().pad(4.0).gap(1.0);
                 style.at = Some([0.0, 12.0 - ui.size.y / 2.0, 0.5, 0.0]);
@@ -909,6 +994,24 @@ pub fn draw_custom(
 ) {
     match tag {
         TAG_CROSSHAIR => loaded(ren, look, "crosshair", r, scale),
+        TAG_EFFECT => {
+            loaded(ren, look, "effect", r, scale);
+            let left = client
+                .and_then(|cl| shown_effects(cl).into_iter().find(|f| f.0 as u64 == data))
+                .map_or(0, |f| f.2);
+            // Its last ten seconds it fades in and out, faster as it ends.
+            let alpha = if left > 200 {
+                1.0
+            } else {
+                let t = left as f32 / crate::world::TPS as f32;
+                0.6 + 0.4 * (t * std::f32::consts::PI * (1.0 + (10.0 - t) / 3.0)).cos()
+            };
+            if let Some(t) = icon {
+                let s = 18.0 * scale;
+                let a = (alpha.clamp(0.0, 1.0) * 255.0) as u32;
+                ren.image(Rect { x: r.x + (r.w - s) / 2.0, y: r.y + (r.h - s) / 2.0, w: s, h: s }, t, [0.0, 0.0, 1.0, 1.0], 0xFFFFFF00 | a);
+            }
+        }
         TAG_HOTBAR => {
             let Some(client) = client else { return };
             let selected = client.selected as u64 == data;

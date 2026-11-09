@@ -109,6 +109,8 @@ pub mod entity_effect {
     pub static BENEFICIAL: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_BENEFICIAL);
     pub static HARMFUL: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_HARMFUL);
     pub static INSTANT: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_INSTANT);
+    pub static SCREEN: Component<Text, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_SCREEN);
+    pub static HIDES: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_HIDES);
 }
 
 /// What a sound event is made of (`abi::comp::sound`).

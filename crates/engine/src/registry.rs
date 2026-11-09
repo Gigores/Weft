@@ -1263,6 +1263,10 @@ pub struct EntityEffectDef {
     pub kind: u8,
     /// Acts once when given and doesn't stay.
     pub instant: bool,
+    /// A screen shader its player sees through while it has it; empty for none.
+    pub screen: String,
+    /// Its entity isn't drawn for others.
+    pub hides: bool,
     /// As registered, then resolved at freeze.
     pub raw_hazards: Vec<abi::Hazard>,
     pub hazards: Vec<crate::content::Hazard>,
@@ -2119,6 +2123,11 @@ pub fn freeze(
                 effect_kind::NEUTRAL
             },
             instant: e.has(abi::comp::ENTITY_EFFECT_INSTANT),
+            screen: e
+                .text(abi::comp::ENTITY_EFFECT_SCREEN)
+                .unwrap_or_default()
+                .to_string(),
+            hides: e.has(abi::comp::ENTITY_EFFECT_HIDES),
             raw_hazards: e.or(abi::comp::ENTITY_EFFECT_HAZARDS, Vec::new()),
             hazards: Vec::new(),
             light: e.or(abi::comp::LIGHT, [0; 3]),
@@ -2788,6 +2797,17 @@ fn engine_particles() -> Vec<RawEntry> {
         kind(k::BUBBLE, one("bubble"), [[0.5, 1.5], [0.05, 0.1]], [-4.0, 0.85], white, 0)
             .set(p::RULES, rule(pe::LEAVE_LIQUID, pt::DIE, "")),
         kind(k::SPLASH, one("splash"), [[0.2, 0.5], [0.08, 0.14]], [16.0, 0.98], white, pf::COLLIDE),
+        // Rising swirls around who has an effect, tinted by the effect's color.
+        kind(
+            k::EFFECT,
+            (0..8)
+                .map(|i| format!("core:particle/effect_{}", 7 - i))
+                .collect(),
+            [[0.8, 1.4], [0.08, 0.12]],
+            [-0.6, 0.96],
+            white,
+            0,
+        ),
         // Splashes where it lands, as vanilla's falling drip turns into a landing one.
         kind(k::DRIP, one("drip"), [[0.8, 1.2], [0.04, 0.06]], [16.0, 0.98], white, 0)
             .set(p::RULES, rule(pe::LAND, pt::BECOME_STILL, k::SPLASH)),

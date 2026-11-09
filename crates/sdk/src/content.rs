@@ -470,6 +470,16 @@ impl EntityEffectBuilder<'_> {
     pub fn instant(self) -> Self {
         self.tag(abi::comp::ENTITY_EFFECT_INSTANT)
     }
+    /// What its player sees goes through this screen shader while it has it
+    /// (`shaders/post/<name>.wgsl`, `PostPixel`): night vision, blindness.
+    pub fn screen(self, shader: &crate::Shader) -> Self {
+        let name = shader.name().to_string();
+        self.set_text(&crate::comps::entity_effect::SCREEN, &name)
+    }
+    /// Its entity isn't drawn for anyone else while it has it (invisibility).
+    pub fn hides(self) -> Self {
+        self.tag(abi::comp::ENTITY_EFFECT_HIDES)
+    }
 }
 
 /// What falls from the sky, rain's numbers unless set.

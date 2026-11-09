@@ -1215,7 +1215,7 @@ impl UiRenderer {
             }
             Kind::Custom { tag, data } => {
                 // What engine-drawn nodes use, loaded for `draw_loaded`.
-                for class in ["slot", "hotbar", "hotbar_selected", "slot_highlight", "well", "crosshair"] {
+                for class in ["slot", "hotbar", "hotbar_selected", "slot_highlight", "well", "crosshair", "effect"] {
                     if let Some(name) = look.texture(class, "") {
                         if let Some(t) = self.texture(gpu, assets, &name) {
                             self.declared_slicing(assets, &name, [t.1 as f32, t.2 as f32]);

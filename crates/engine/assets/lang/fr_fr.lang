@@ -519,3 +519,4 @@ hud.options.line.help = Aide
 chat.screenshot = Capture d'écran enregistrée : {0}, {1}
 chat.screenshot.picture = ouvrir l'image
 chat.screenshot.folder = ouvrir le dossier
+effect.time = {color:gray}{0}

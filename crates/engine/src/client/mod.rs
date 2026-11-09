@@ -1789,6 +1789,54 @@ impl Client {
         self.rng.float()
     }
 
+    /// Swirls of its effects' colors rising around an entity, a few a second as vanilla's; the
+    /// local player's only where its body shows.
+    fn effect_swirls(&mut self, id: u64, pos: DVec3, dims: physics::Dims, dt: f32) {
+        let c = content();
+        let me = id == self.player_id;
+        if me && !self.camera_has(crate::tag_bits::camera::BODY) {
+            return;
+        }
+        let now = self.ticks();
+        let e = if me { Some(&self.me) } else { self.entities.get(&id) };
+        let colors: Vec<u32> = e
+            .into_iter()
+            .flat_map(|e| &e.effects)
+            .filter(|f| f.until > now)
+            .filter_map(|f| {
+                c.game
+                    .entity_effects
+                    .get(f.id as usize)
+                    .and_then(|d| d.color)
+            })
+            .collect();
+        let Some(kind) = c
+            .game
+            .particle_names
+            .get(weft_abi::particle::EFFECT)
+            .copied()
+        else {
+            return;
+        };
+        if colors.is_empty() || self.chance() >= dt * 8.0 {
+            return;
+        }
+        let rgb = colors[(self.chance() * colors.len() as f32) as usize % colors.len()];
+        let (hw, h) = (dims.half_width as f32, dims.height as f32);
+        self.particles.spawn(
+            &weft_abi::ParticleBurst {
+                kind,
+                pos: (pos + DVec3::Y * (dims.height * 0.5)).to_array().into(),
+                count: 1,
+                spread: [hw, h * 0.5, hw].into(),
+                velocity: [0.0, 0.3, 0.0].into(),
+                color: rgb,
+                ..weft_abi::ParticleBurst::DEFAULT
+            },
+            &self.world,
+        );
+    }
+
     fn sprint_dust(&mut self, pos: DVec3, vel: DVec3, half_width: f32, dt: f32) {
         let c = content();
         let under = self
@@ -2027,6 +2075,7 @@ impl Client {
             let (sin, cos) = (body_yaw as f64).sin_cos();
             self.sprint_dust(pos, DVec3::new(-sin, 0.0, -cos) * 0.28, dims.half_width as f32, a.dt);
         }
+        self.effect_swirls(a.entity, pos, dims, a.dt);
         // Bubbles from the eyes under a liquid that has them.
         let eye = pos + DVec3::Y * dims.eye;
         let bubble = physics::liquid_at(c, &world::SeenCells { world: &self.world, air_if_missing: false }, eye).and_then(|l| {
@@ -2473,7 +2522,7 @@ impl Client {
     }
 
     /// Ticks the dimension ran by now, what entity effects end by.
-    fn ticks(&self) -> u64 {
+    pub fn ticks(&self) -> u64 {
         self.world.ticks + self.since_time as u64
     }
 

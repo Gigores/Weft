@@ -479,3 +479,4 @@ hud.options.line.help = Справка
 chat.screenshot = Скриншот сохранён: {0}, {1}
 chat.screenshot.picture = открыть картинку
 chat.screenshot.folder = открыть папку
+effect.time = {color:gray}{0}

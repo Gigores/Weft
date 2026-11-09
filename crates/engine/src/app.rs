@@ -202,6 +202,8 @@ pub(crate) struct Running {
     textures: GameTextures,
     ui: UiRenderer,
     post: crate::post::Post,
+    /// The screen shaders the local player's effects turned on (`EntityEffectDef::screen`).
+    effect_screens: Vec<String>,
     audio: Option<crate::audio::Audio>,
     screens: Vec<(Box<dyn Screen>, Ui)>,
     hud: Hud,
@@ -437,6 +439,7 @@ impl App {
             textures,
             ui,
             post,
+            effect_screens: Vec::new(),
             audio: crate::audio::Audio::new().map(|mut a| {
                 a.muted = self.opts.automated;
                 a
@@ -2245,6 +2248,7 @@ fn record_passes(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
         .as_ref()
         .map_or([0.02, 0.02, 0.03, 1.0], |g| g.client.fog_color());
     // Screen effects need the world in an image they can read.
+    effect_screens(r);
     let post = r.post.on() && r.game.is_some();
     let world_target = if post { Target::Texture(r.post.scene_target(&mut *r.gpu, info.width, info.height)) } else { Target::Surface };
     if let Some(g) = &mut r.game {
@@ -2399,4 +2403,32 @@ fn load_chat_history(run_dir: &std::path::Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The screen shaders of the local player's effects on, fading out their last second; those of
+/// effects it no longer has off.
+fn effect_screens(r: &mut Running) {
+    let c = content();
+    let wanted: Vec<(String, f32)> = r.game.as_ref().map_or(Vec::new(), |g| {
+        let now = g.client.ticks();
+        g.client
+            .me
+            .effects
+            .iter()
+            .filter(|f| f.until > now)
+            .filter_map(|f| {
+                let d = c.game.entity_effects.get(f.id as usize)?;
+                (!d.screen.is_empty()).then(|| (d.screen.clone(), ((f.until - now) as f32 / crate::world::TPS as f32).min(1.0)))
+            })
+            .collect()
+    });
+    for name in std::mem::take(&mut r.effect_screens) {
+        if !wanted.iter().any(|w| w.0 == name) {
+            r.post.set(&name, 0.0);
+        }
+    }
+    for (name, strength) in wanted {
+        r.post.set(&name, strength);
+        r.effect_screens.push(name);
+    }
 }
