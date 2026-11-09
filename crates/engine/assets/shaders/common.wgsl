@@ -6,6 +6,11 @@ var<private> UVS: array<vec2<f32>, 4> = array<vec2<f32>, 4>(vec2(0.0, 1.0), vec2
 var<private> TRI: array<u32, 6> = array<u32, 6>(0u, 1u, 2u, 0u, 2u, 3u);
 var<private> SHADE: array<f32, 6> = array<f32, 6>(0.6, 0.6, 0.5, 1.0, 0.8, 0.8);
 
+// `SHADE` blended for any unit normal.
+fn normal_shade(n: vec3<f32>) -> f32 {
+    return n.x * n.x * 0.6 + n.z * n.z * 0.8 + n.y * n.y * select(0.5, 1.0, n.y > 0.0);
+}
+
 // How far into the fog a point at `dist` is, 0..1.
 fn fog_amount(dist: f32, start: f32, end: f32) -> f32 {
     if dist <= start {
