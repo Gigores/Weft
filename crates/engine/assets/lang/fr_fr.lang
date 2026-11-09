@@ -403,6 +403,7 @@ command.gamemode.unknown = aucun mode de jeu {0}
 gamemode.survival = survie
 gamemode.creative = créatif
 gamemode.spectator = spectateur
+gamemode.hardcore = extrême
 command.heal.done = soigné
 command.effect.given = effet appliqué
 command.effect.cleared = effets retirés

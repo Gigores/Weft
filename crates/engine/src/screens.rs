@@ -104,7 +104,7 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         "core:title" => Box::new(Title),
         "core:pause" => Box::new(Pause),
         "core:settings" | "core:video" | "core:accessibility" | "core:chat_settings" | "core:sound" => {
-            Box::new(ConfigScreen { shown: Shown::Page(name) })
+            Box::new(ConfigScreen { shown: Shown::Page(name), cheats: None })
         }
         "core:language" => Box::new(LanguageScreen),
         "core:controls" => Box::new(Controls::default()),
@@ -116,7 +116,7 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         "core:multiplayer" => Box::new(crate::net::screens::Multiplayer::default()),
         "core:resource_packs" => Box::new(crate::packs::ResourcePacks::default()),
         "core:shader_packs" => Box::new(crate::packs::ShaderPacks),
-        "core:world_rules" => Box::new(ConfigScreen { shown: Shown::World }),
+        "core:world_rules" => Box::new(ConfigScreen { shown: Shown::World, cheats: None }),
         "core:hud_editor" => Box::new(crate::hud_editor::HudEditor::default()),
         "core:debug_options" => Box::new(crate::hud_editor::DebugOptions),
         "core:tags" => Box::new(crate::game_screens::TagList::default()),
@@ -288,7 +288,7 @@ impl Screen for ModList {
                     .any(|d| on_config_screen(d, &Shown::Mod(id.clone())));
                 let b = button(ui, cx, "mods.settings", &[], 120.0, move |c| {
                     c.requests
-                        .push(Request::Open(Box::new(ConfigScreen { shown: Shown::Mod(id.clone()) })))
+                        .push(Request::Open(Box::new(ConfigScreen { shown: Shown::Mod(id.clone()), cheats: None })))
                 });
                 if let Kind::Button { enabled, .. } = &mut ui.nodes[b].kind {
                     *enabled = has_settings;
@@ -627,7 +627,7 @@ impl Screen for ModSettings {
                 let ns = ns.to_string();
                 button(ui, cx, "settings.mods.entry", &[name], 220.0, move |c| {
                     c.requests
-                        .push(Request::Open(Box::new(ConfigScreen { shown: Shown::Mod(ns.clone()) })))
+                        .push(Request::Open(Box::new(ConfigScreen { shown: Shown::Mod(ns.clone()), cheats: None })))
                 });
             }
             button(ui, cx, "menu.done", &[], 200.0, |c| c.requests.push(Request::Close));
@@ -839,6 +839,8 @@ fn config_rows(ui: &mut Ui, cx: &BuildCx, page: &str) {
 /// Settings built from their declarations: toggles, sliders, choices.
 pub struct ConfigScreen {
     pub shown: Shown,
+    /// A world being made: its cheats, toggled first among its rules.
+    pub cheats: Option<Rc<std::cell::Cell<bool>>>,
 }
 
 impl Screen for ConfigScreen {
@@ -881,6 +883,12 @@ impl Screen for ConfigScreen {
                     .min_h(40.0)
                     .scroll(),
                 |ui| {
+                    if let Some(cheats) = &self.cheats {
+                        let (on, set) = (cheats.clone(), cheats.clone());
+                        let b =
+                            bound_button(ui, 300.0, move || ("world.cheats".into(), vec![on_off(on.get())]), move |_| set.set(!set.get()));
+                        ui.nodes[b].style.self_align = Some(crate::ui::Align::Stretch);
+                    }
                     let mut listed: Vec<_> = c
                         .game
                         .configs

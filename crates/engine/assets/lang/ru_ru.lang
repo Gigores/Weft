@@ -363,6 +363,7 @@ command.gamemode.unknown = нет режима игры {0}
 gamemode.survival = выживание
 gamemode.creative = творческий
 gamemode.spectator = наблюдатель
+gamemode.hardcore = хардкор
 command.heal.done = здоровье восстановлено
 command.effect.given = эффект наложен
 command.effect.cleared = эффекты сняты

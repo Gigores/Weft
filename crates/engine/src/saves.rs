@@ -831,7 +831,11 @@ fn tile(ui: &mut Ui, cx: &BuildCx, w: &WorldMeta, i: usize, selected: bool) {
             if let Some(t) = ui.text_mut(name) {
                 t.wrap = false;
             }
-            let key = format!("gamemode.{}", w.game_mode.name());
+            let hardcore = w
+                .configs
+                .iter()
+                .any(|(n, v)| n == "core:lives" && *v == 1.0);
+            let key = if hardcore { "gamemode.hardcore".to_string() } else { format!("gamemode.{}", w.game_mode.name()) };
             let mut chars = cx.lang.get(&key).chars();
             let mode: String = chars
                 .next()
@@ -857,6 +861,11 @@ fn tile(ui: &mut Ui, cx: &BuildCx, w: &WorldMeta, i: usize, selected: bool) {
     tip.push(text::Span::text("\n", None));
     tip.extend(cx.t("world.cheats", &[on_off(w.cheats)]));
     ui.nodes[b].tooltip = Some(tip);
+}
+
+/// The name shown for choice `i` of the world screen: a game mode, or past them hardcore.
+fn mode_key(i: usize, modes: usize) -> String {
+    if i >= modes { "gamemode.hardcore".into() } else { format!("gamemode.{}", game_mode(i).name()) }
 }
 
 /// The `i`-th game mode, the engine's first.
@@ -902,18 +911,29 @@ impl Screen for CreateWorld {
                 let seed = ui.add(Kind::input("", 32), Style::default().h(18.0).stretch());
                 ui.set_id(seed, "seed");
             });
+            // Every game mode, then hardcore: survival with one life and no cheats.
             let modes = crate::world::GameMode::all().count();
-            let mode = self.mode.clone();
-            let shown = self.mode.clone();
+            let (mode, shown, cheats) = (self.mode.clone(), self.mode.clone(), self.cheats.clone());
             bound_button(
                 ui,
                 260.0,
-                move || ("world.game_mode".into(), vec![Arg::Key(format!("gamemode.{}", game_mode(shown.get()).name()))]),
-                move |_| mode.set((mode.get() + 1) % modes),
+                move || ("world.game_mode".into(), vec![Arg::Key(mode_key(shown.get(), modes))]),
+                move |_| {
+                    let next = (mode.get() + 1) % (modes + 1);
+                    mode.set(next);
+                    // Creative and spectator come with cheats, as vanilla's.
+                    let m = game_mode(next);
+                    cheats.set(next < modes && (m == crate::world::GameMode::CREATIVE || m == crate::world::GameMode::SPECTATOR));
+                },
             );
-            let (cheats, shown) = (self.cheats.clone(), self.cheats.clone());
-            bound_button(ui, 260.0, move || ("world.cheats".into(), vec![on_off(shown.get())]), move |_| cheats.set(!cheats.get()));
-            button(ui, cx, "world.rules", &[], 260.0, |c| c.requests.push(Request::Screen("core:world_rules".into())));
+            let cheats = self.cheats.clone();
+            button(ui, cx, "world.rules", &[], 260.0, move |c| {
+                c.requests
+                    .push(Request::Open(Box::new(crate::screens::ConfigScreen {
+                        shown: crate::screens::Shown::World,
+                        cheats: Some(cheats.clone()),
+                    })))
+            });
             ui.container(Style::row().gap(6.0), |ui| {
                 let (mode, cheats) = (self.mode.clone(), self.cheats.clone());
                 button(ui, cx, "world.create", &[], 120.0, move |c| {
@@ -921,7 +941,15 @@ impl Screen for CreateWorld {
                     let seed = parse_seed(&c.input_text("seed").unwrap_or_default());
                     let name = if name.trim().is_empty() { "World".to_string() } else { name.trim().to_string() };
                     let mut meta = create(&c.settings.saves_dir(), &name, seed);
-                    (meta.game_mode, meta.cheats, meta.configs) = (game_mode(mode.get()), cheats.get(), crate::config::world_values());
+                    let modes = crate::world::GameMode::all().count();
+                    let hardcore = mode.get() >= modes;
+                    if hardcore {
+                        if let Some(lives) = crate::config::by_name("core:lives") {
+                            crate::config::set(lives, 1.0);
+                        }
+                    }
+                    let picked = if hardcore { crate::world::GameMode::SURVIVAL } else { game_mode(mode.get()) };
+                    (meta.game_mode, meta.cheats, meta.configs) = (picked, cheats.get() && !hardcore, crate::config::world_values());
                     meta.save();
                     c.requests.push(Request::StartWorldAnyway(meta));
                 });
