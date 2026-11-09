@@ -1529,6 +1529,94 @@ impl Client {
         (at - cell.as_dvec3()).as_vec3().to_array()
     }
 
+    /// The held block used on `hit`, shown placed at once where the server will put it
+    /// (`Dim::place_clicked`, `Dim::place`), as vanilla's client does: placing doesn't wait for the
+    /// server, nor does the player fall into the cell meanwhile. Only what is sure here: a block
+    /// alone in its cell, in one cell, held up by nothing, into air or what it replaces, not into
+    /// the player. The server sends the cell back as it is either way. Where it went.
+    fn predict_place(&mut self, hit: &Hit, at: [f32; 3], look: [f32; 3], sneak: bool) -> Option<IVec3> {
+        use crate::content::{AIR, Then, When};
+        let c = content();
+        let held = self.held();
+        let state = c
+            .items
+            .get(held.item as usize)
+            .and_then(|i| i.block)
+            .filter(|_| hit.frame == 0 && !held.is_empty() && !self.mode.has(crate::tag_bits::game_mode::NO_PLACE))?;
+        // A block that takes the click itself goes first.
+        let clicked = c.block_of(hit.state);
+        if (clicked.cb.on_use.is_some() || clicked.opens.is_some()) && (!sneak || clicked.sneak_use == weft_abi::sneak_use::ALWAYS) {
+            return None;
+        }
+        let replaceable = |s: u32| c.states[s as usize].flags & bf::REPLACEABLE != 0;
+        let cell = |p: IVec3| -> Option<Vec<u32>> {
+            let main = self.world.block_or_air(p)?;
+            Some(
+                std::iter::once(main)
+                    .chain(self.world.extras(p).iter().copied())
+                    .filter(|&s| s != AIR)
+                    .collect(),
+            )
+        };
+        let replacing = replaceable(self.world.block(hit.block)) && cell(hit.block)?.iter().all(|&s| replaceable(s));
+        let (axis, up) = ((hit.face / 2) as usize, hit.face % 2 == 1);
+        let mut point = at;
+        point[axis] = if replacing { if up { 1e-3 } else { 1.0 - 1e-3 } } else { at[axis] + if up { 1e-3 } else { -1e-3 } };
+        // Into the clicked cell's own room (a slab's other half): the server's to work out.
+        if !replacing && (0.0..1.0).contains(&point[axis]) {
+            return None;
+        }
+        let normal = crate::world::DIRS[hit.face as usize];
+        let (p, local) =
+            if replacing { (hit.block, point) } else { (hit.block + normal, std::array::from_fn(|a| point[a] - normal[a] as f32)) };
+        let def = c.block_of(state);
+        let mut chosen = def.first_state;
+        if let Some((owner, cb)) = def.cb.placement {
+            let mut args = weft_abi::PlaceArgs {
+                pos: p.to_array().into(),
+                face: hit.face as u32,
+                look,
+                state: def.first_state,
+                first: def.first_state,
+                hit: local,
+                placed: 0,
+            };
+            crate::host::invoke(owner, cb, &mut args);
+            chosen = args.state;
+            if !(def.first_state..def.first_state + def.states).contains(&chosen) {
+                return None;
+            }
+        }
+        let st = &c.states[chosen as usize];
+        let held_up = st
+            .rules
+            .iter()
+            .any(|r| matches!(r.when, When::Neighbor(_)) && matches!(r.then, Then::Break | Then::Shed(_)));
+        if !st.cells.is_empty() || held_up {
+            return None;
+        }
+        if cell(p)?
+            .iter()
+            .any(|&s| !replaceable(s) || c.states[s as usize].liquid.is_some() || c.states[s as usize].block == st.block)
+        {
+            return None;
+        }
+        let mut shape = Vec::new();
+        physics::boxes(c, chosen, &mut shape);
+        let d = self.player.dims();
+        let me = physics::Aabb::around(self.player.pos, d.half_width, d.height);
+        let at = p.as_dvec3();
+        if shape
+            .iter()
+            .any(|b| physics::Aabb { min: at + DVec3::new(b[0], b[1], b[2]), max: at + DVec3::new(b[3], b[4], b[5]) }.intersects(&me))
+        {
+            return None;
+        }
+        self.world.set_block(p, chosen);
+        self.world.set_extras(p, Vec::new());
+        Some(p)
+    }
+
     fn use_held(&mut self, input: &Input, dt: f64, look: DVec3, send_look: &mut LookOnce) {
         if let Some((left, _)) = &mut self.using {
             *left = (*left - dt as f32 * self.tick_rate as f32).max(0.0);
@@ -1543,14 +1631,17 @@ impl Client {
             } else if let Some(hit) = self.target {
                 let sneak = input.held("core:sneak");
                 let at = self.hit_point(&hit, hit.block);
+                let look = look.as_vec3().to_array();
+                let placed = self.predict_place(&hit, at, look, sneak);
                 self.conn.send(ToServer::Use {
                     pos: hit.block,
                     part: hit.state,
                     face: hit.face,
-                    look: look.as_vec3().to_array(),
+                    look,
                     hit: at,
                     sneak,
                     frame: hit.frame,
+                    placed,
                 });
             } else {
                 self.conn.send(ToServer::UseItem { target: None });

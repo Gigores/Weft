@@ -66,6 +66,8 @@ pub fn all() -> Vec<TestDef> {
         gameplay::cell_parts,
         gameplay::hitboxes,
         gameplay::replaced_plants_drop,
+        gameplay::placing_ahead,
+        gameplay::hoe_tills,
         gameplay::swimming,
         gameplay::attack_charge,
         gameplay::permissions,

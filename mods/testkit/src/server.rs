@@ -33,6 +33,8 @@ pub static PROTECT_GOLD: Config<bool> = Config::named("protect_gold");
 pub static HALF_DAMAGE: Config<bool> = Config::named("half_damage");
 /// Mobs may not attack while it is on.
 pub static PEACE: Config<bool> = Config::named("peace");
+/// Nobody places blocks while it is on: what the client can't know before the server says.
+pub static NO_PLACING: Config<bool> = Config::named("no_placing");
 static DRILL: Block = Block::named("drill");
 /// Registered, then changed by `r.edit` (the `edits` test).
 /// Testmod's, edited here: an edit wins whichever mod loads first.
@@ -236,6 +238,8 @@ pub fn register(r: &mut Registry) {
     r.config(&NO_HURT).bool(false).world();
     r.config(&NO_USE).bool(false).world();
     r.config(&CHAT_HOOKS).bool(false).world();
+    r.config(&NO_PLACING).bool(false).world();
+    r.before_event(&actions::PLACE_BLOCK, |_| if NO_PLACING.get() { Verdict::Deny } else { Verdict::Abstain });
     r.before_event(&actions::CHAT, |q| if CHAT_HOOKS.get() && q.text() == "forbidden" { Verdict::Deny } else { Verdict::Abstain });
     r.chat_format(|f| {
         if CHAT_HOOKS.get() {

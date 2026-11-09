@@ -262,8 +262,14 @@ impl Server {
                 }
             }
 
-            ToServer::Use { pos, part, face, look, hit, sneak, frame } => {
+            ToServer::Use { pos, part, face, look, hit, sneak, frame, placed } => {
                 let Some((r, _)) = self.region(pi) else { return };
+                // What the client shows there is set right at the end of the tick, placed or not.
+                if let Some(p) = placed.filter(|_| frame == 0) {
+                    if r.get(p).is_some() {
+                        r.resend_cell(p);
+                    }
+                }
                 let (frame, pos) = r.landed_as(frame, pos);
                 let Some((r, entity)) = self.region(pi) else { return };
                 let Some(e) = r.entities.get(entity) else { return };

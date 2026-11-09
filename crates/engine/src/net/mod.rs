@@ -417,8 +417,9 @@ messages! {
         Break { pos: IVec3, part: u32, face: u8, hit: [f32; 3], frame: u64 },
         /// Right click on a block: the block reacts first (chests), otherwise the held item is used or
         /// placed against the clicked face. `frame` like `Break`'s; `look` in world space.
-        /// `hit`: where on the block, from its corner.
-        Use { pos: IVec3, part: u32, face: u8, look: [f32; 3], hit: [f32; 3], sneak: bool, frame: u64 },
+        /// `hit`: where on the block, from its corner. `placed`: the cell the client already
+        /// shows the held block in, sent back as it really is whatever happens.
+        Use { pos: IVec3, part: u32, face: u8, look: [f32; 3], hit: [f32; 3], sneak: bool, frame: u64, placed: Option<IVec3> },
         UseItem { target: Option<(IVec3, u8)> },
         Select(u32),
         Attack(u64),

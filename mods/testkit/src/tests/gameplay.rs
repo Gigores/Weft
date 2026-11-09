@@ -1778,6 +1778,52 @@ pub async fn respawn(t: T) -> R {
     Ok(())
 }
 
+/// A placed block shows at once, before the server says (so a player falling past it lands on
+/// it), and goes again when the server refuses for a reason the client can't know (a mod's).
+pub async fn placing_ahead(t: T) -> R {
+    t.flat().await?;
+    let cell = add(t.feet(), [2, 0, 0]);
+    let floor = add(cell, [0, -1, 0]);
+    t.op("put me 0 stone 4").await?;
+    t.c().select_slot(0);
+    t.cmd("/rule testkit:no_placing 1").await?;
+    t.secs(0.2).await?;
+    t.look_at(floor);
+    t.frames(2).await?;
+    t.press("core:use");
+    let stone = |t: &T| {
+        t.c()
+            .block(cell)
+            .is_some_and(|s| Block::named("base:stone").is(s))
+    };
+    t.until("the stone shown at once", Duration::from_secs(1), stone)
+        .await?;
+    t.until("taken back where it can't go", Duration::from_secs(2), |t| t.c().block(cell) == Some(0))
+        .await?;
+    t.check_eq(t.slot("me", 0).await?.1, 4, "no stone spent");
+    t.cmd("/rule testkit:no_placing 0").await?;
+    Ok(())
+}
+
+/// A hoe tills what is tillable (any mod's hoe: it is the hoe's use), and nothing else.
+pub async fn hoe_tills(t: T) -> R {
+    t.flat().await?;
+    let soil = add(t.feet(), [2, -1, 0]);
+    let stone = add(t.feet(), [-2, -1, 0]);
+    t.set(stone, "stone").await?;
+    t.op("put me 0 wood_hoe 1").await?;
+    t.c().select_slot(0);
+    for p in [soil, stone] {
+        t.look_at(p);
+        t.frames(2).await?;
+        t.press("core:use");
+        t.secs(0.3).await?;
+    }
+    t.check_eq(t.block(soil).await?, "base:farmland".to_string(), "the grass tilled");
+    t.check_eq(t.block(stone).await?, "base:stone".to_string(), "stone left as it is");
+    Ok(())
+}
+
 /// Placing a block over a plant replaces it and drops what it would when broken, except in
 /// creative.
 pub async fn replaced_plants_drop(t: T) -> R {
