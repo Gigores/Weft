@@ -127,6 +127,8 @@ pub struct ClientEntity {
     pub dying: Option<f32>,
     /// Walk distance at which its next step sounds.
     pub next_step: f32,
+    /// Seconds until what it mines knocks again.
+    pub knock: f32,
     /// Action the server started: name, age it started at, looping.
     pub action: Option<(String, f32, bool)>,
     /// How a player holds itself: its box and how the model stands.
@@ -331,6 +333,7 @@ impl ClientEntity {
             dying: None,
             vehicle: None,
             next_step: 0.0,
+            knock: 0.0,
             action: None,
             pose: Pose::STAND,
             sprinting: false,
@@ -586,13 +589,10 @@ pub struct Client {
     /// particles, then cracks, gizmo fills and the hand.
     late: CommandList,
     hand_late: CommandList,
-    /// Seconds until the next dust piece from the block being hit, and until its next knock.
+    /// Seconds until the next dust piece from the block being hit.
     hit_dust: f32,
-    hit_sound: f32,
     /// Sounds to play this frame (from the server and from here).
     pub sounds: Vec<crate::audio::Play>,
-    /// Own walk distance at which the next step sounds.
-    next_step: f32,
     rng: weft_noise::Rng,
     pub dead: bool,
     /// The weather the server says it is (`registry::WeatherDef`).
@@ -850,9 +850,7 @@ impl Client {
             late: CommandList::default(),
             hand_late: CommandList::default(),
             hit_dust: 0.0,
-            hit_sound: 0.0,
             sounds: Vec::new(),
-            next_step: 0.0,
             rng: weft_noise::Rng(0x9E37_79B9_7F4A_7C15),
             drag: None,
             sweep: Vec::new(),
@@ -1019,7 +1017,6 @@ impl Client {
         self.select_slot(input);
         self.ease_camera(input, dt);
         let moved = self.animate_player(input, dt);
-        self.body_particles(dt as f32);
         self.frame_dt = dt as f32;
         self.weather_effects(dt as f32);
         self.sync_me();
@@ -1042,7 +1039,10 @@ impl Client {
         self.animate_entities(dt);
         self.chip_block(dt);
         self.particles.update(dt as f32);
-        self.creature_sounds(dt as f32, moved);
+        // Its steps go by how far it walks on the ground (`entity_effects`).
+        if self.player.on_ground && !self.player.flying && !self.mode.has(crate::tag_bits::game_mode::HIDDEN) {
+            self.me.walked += moved;
+        }
         self.me.hurt = (self.me.hurt - dt as f32).max(0.0);
         self.dead_for = self.dead.then(|| self.dead_for.unwrap_or(0.0) + dt as f32);
         self.hotbar = self.inventory[..content().game.player_layout.hotbar as usize]
@@ -1787,42 +1787,6 @@ impl Client {
         self.rng.float()
     }
 
-    /// What the player's own moving kicks up: a landing's dust, a sprint's, a splash going into
-    /// water and bubbles while under it.
-    /// Bubbles from the eyes under a liquid that has them; a fall's dust and splash come from
-    /// the server, a sprint's from `sprint_dust`, for everyone near.
-    fn body_particles(&mut self, dt: f32) {
-        let c = content();
-        let pos = self.player.pos;
-        if self.me.sprinting {
-            self.sprint_dust(pos, self.player.vel, self.player.size.width / 2.0, dt);
-        }
-        let bubble = self.eye_liquid().and_then(|l| {
-            let state = c.liquids[l as usize].first_state;
-            let id = c.components.id(weft_abi::comp::BUBBLE)?;
-            c.game
-                .particle_names
-                .get(c.components.text(crate::components::BLOCK, state, id)?)
-                .copied()
-        });
-        if let Some(kind) = bubble.filter(|_| self.chance() < dt * 1.5) {
-            let at = pos + DVec3::Y * self.player.eye;
-            self.particles.spawn(
-                &weft_abi::ParticleBurst {
-                    kind,
-                    pos: at.to_array().into(),
-                    count: 2,
-                    spread: [0.2, 0.1, 0.2].into(),
-                    speed: 0.5,
-                    ..weft_abi::ParticleBurst::DEFAULT
-                },
-                &self.world,
-            );
-        }
-    }
-
-    /// Vanilla's `spawnSprintParticle`: now and then a bit of the ground under a sprinter, thrown
-    /// back and up. `vel` in blocks per tick.
     fn sprint_dust(&mut self, pos: DVec3, vel: DVec3, half_width: f32, dt: f32) {
         let c = content();
         let under = self
@@ -1978,9 +1942,10 @@ impl Client {
         }
     }
 
-    /// The engine's cosmetics of one entity, its kind's client tick unless a mod gave it one:
-    /// steps by distance walked, idle noises about every twelve seconds (vanilla's ambient
-    /// timer), and a puff of smoke when its death animation ends (vanilla's 20 poof particles).
+    /// The engine's cosmetics of one entity, the local player's too: steps by distance walked,
+    /// the knock of what it mines, a sprint's dust, bubbles from its eyes under a liquid, idle
+    /// noises about every twelve seconds (vanilla's ambient timer), and a puff of smoke when its
+    /// death animation ends (vanilla's 20 poof particles).
     pub fn entity_effects(&mut self, a: &weft_abi::ClientEntityArgs) {
         use crate::audio::Play;
         use crate::content::block_event;
@@ -2012,8 +1977,31 @@ impl Client {
         if a.dying >= 0.0 {
             return;
         }
-        let Some(e) = self.entities.get_mut(&a.entity) else { return };
-        if a.walked >= e.next_step {
+        let me = a.entity == self.player_id;
+        // What it mines knocks every four ticks, as vanilla's does.
+        let mining = if me {
+            self.target
+                .filter(|h| {
+                    self.breaking
+                        .is_some_and(|(f, p, _)| (f, p) == (h.frame, h.origin))
+                })
+                .map(|h| {
+                    (
+                        self.frame_place(h.frame)
+                            .to_world(h.origin.as_dvec3() + DVec3::splat(0.5)),
+                        h.state,
+                    )
+                })
+        } else {
+            self.others_mining
+                .iter()
+                .find(|m| m.0 == a.entity)
+                .map(|m| (m.1.as_dvec3() + DVec3::splat(0.5), self.world.block_or_air(m.1).unwrap_or(0)))
+        };
+        let Some(e) = (if me { Some(&mut self.me) } else { self.entities.get_mut(&a.entity) }) else { return };
+        let mut sounds = Vec::new();
+        if a.walked > e.next_step {
+            // Vanilla: a step every 1/0.6 blocks walked, the first as it sets off.
             e.next_step = a.walked + 1.6;
             let sound = if k.effects[entity_event::STEP].sound != u32::MAX {
                 k.effects[entity_event::STEP].sound
@@ -2022,70 +2010,48 @@ impl Client {
                     .block_or_air((pos - DVec3::Y * 0.2).floor().as_ivec3())
                     .map_or(u32::MAX, |s| c.states[s as usize].effects[block_event::STEP].sound)
             };
-            if sound != u32::MAX {
-                self.sounds
-                    .push(Play { sound, pos: Some(pos), volume: 0.2, pitch: 0.0 });
-            }
+            sounds.push(Play { sound, pos: Some(pos), volume: 0.25, pitch: 0.0 });
         }
-        if e.sprinting {
+        e.knock -= a.dt;
+        if let Some((at, state)) = mining.filter(|_| e.knock <= 0.0) {
+            e.knock = 0.2;
+            sounds.push(Play { sound: c.states[state as usize].effects[block_event::HIT].sound, pos: Some(at), volume: 0.4, pitch: 0.0 });
+        }
+        let (sprinting, body_yaw, dims) = (e.sprinting, e.body_yaw, e.dims());
+        self.sounds
+            .extend(sounds.into_iter().filter(|p| p.sound != u32::MAX));
+        if sprinting {
             // Vanilla's sprint, about 0.28 blocks a tick, the way the body faces.
-            let (sin, cos) = (e.body_yaw as f64).sin_cos();
-            let (vel, hw) = (DVec3::new(-sin, 0.0, -cos) * 0.28, e.dims().half_width as f32);
-            self.sprint_dust(pos, vel, hw, a.dt);
+            let (sin, cos) = (body_yaw as f64).sin_cos();
+            self.sprint_dust(pos, DVec3::new(-sin, 0.0, -cos) * 0.28, dims.half_width as f32, a.dt);
         }
-        let Some(e) = self.entities.get(&a.entity) else { return };
-        let eye = e.dims().eye;
+        // Bubbles from the eyes under a liquid that has them.
+        let eye = pos + DVec3::Y * dims.eye;
+        let bubble = physics::liquid_at(c, &world::SeenCells { world: &self.world, air_if_missing: false }, eye).and_then(|l| {
+            let state = c.liquids[l as usize].first_state;
+            let id = c.components.id(weft_abi::comp::BUBBLE)?;
+            c.game
+                .particle_names
+                .get(c.components.text(crate::components::BLOCK, state, id)?)
+                .copied()
+        });
+        if let Some(kind) = bubble.filter(|_| self.chance() < a.dt * 1.5) {
+            self.particles.spawn(
+                &weft_abi::ParticleBurst {
+                    kind,
+                    pos: eye.to_array().into(),
+                    count: 2,
+                    spread: [0.2, 0.1, 0.2].into(),
+                    speed: 0.5,
+                    ..weft_abi::ParticleBurst::DEFAULT
+                },
+                &self.world,
+            );
+        }
         if k.effects[entity_event::AMBIENT].sound != u32::MAX && self.chance() < a.dt / 12.0 {
-            self.sounds.push(Play {
-                sound: k.effects[entity_event::AMBIENT].sound,
-                pos: Some(pos + DVec3::Y * eye),
-                volume: 1.0,
-                pitch: 0.0,
-            });
+            self.sounds
+                .push(Play { sound: k.effects[entity_event::AMBIENT].sound, pos: Some(eye), volume: 1.0, pitch: 0.0 });
         }
-    }
-
-    /// The player's own steps and the knock of the block being mined; decided here, nothing
-    /// travels for them.
-    fn creature_sounds(&mut self, dt: f32, moved: f32) {
-        use crate::audio::Play;
-        use crate::content::block_event;
-        let c = content();
-        let below = |w: &world::ClientWorld, p: DVec3| {
-            w.block_or_air((p - DVec3::Y * 0.2).floor().as_ivec3())
-                .map_or(u32::MAX, |s| c.states[s as usize].effects[block_event::STEP].sound)
-        };
-        if self.player.on_ground && !self.player.flying && !self.mode.has(crate::tag_bits::game_mode::HIDDEN) {
-            self.next_step -= moved;
-            if self.next_step <= 0.0 {
-                // Vanilla: a step every 1/0.6 blocks walked.
-                self.next_step = 1.6;
-                let sound = below(&self.world, self.player.pos);
-                self.sounds
-                    .push(Play { sound, pos: Some(self.player.pos), volume: 0.25, pitch: 0.0 });
-            }
-        }
-        self.hit_sound -= dt;
-        if let Some(hit) = self.target.filter(|h| {
-            self.breaking
-                .is_some_and(|(f, p, _)| (f, p) == (h.frame, h.origin))
-        }) {
-            if self.hit_sound <= 0.0 {
-                // Vanilla knocks every four ticks while mining.
-                self.hit_sound = 0.2;
-                let sound = c.states[hit.state as usize].effects[block_event::HIT].sound;
-                self.sounds.push(Play {
-                    sound,
-                    pos: Some(
-                        self.frame_place(hit.frame)
-                            .to_world(hit.origin.as_dvec3() + DVec3::splat(0.5)),
-                    ),
-                    volume: 0.4,
-                    pitch: 0.0,
-                });
-            }
-        }
-        self.sounds.retain(|p| p.sound != u32::MAX);
     }
 
     /// What the ears need from the camera this frame.
@@ -2436,7 +2402,7 @@ impl Client {
         let me = &mut self.me;
         (me.yaw, me.target_yaw, me.pitch) = (self.player.yaw, self.player.yaw, self.player.pitch);
         (me.worn, me.held, me.off_held, me.using) = (worn, held, off_held, using);
-        (me.arm_swing, me.swing_off, me.pose, me.walked) = (self.hand_swing, self.hand_swing_off, self.player.pose, me.walk);
+        (me.arm_swing, me.swing_off, me.pose) = (self.hand_swing, self.hand_swing_off, self.player.pose);
         me.sprinting = self.player.sprinting && self.player.on_ground;
         me.age = self.start.elapsed().as_secs_f32();
         self.player.swims_in = crate::content::swims_in(content(), self.me.kind, &self.worn());

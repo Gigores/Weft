@@ -1216,10 +1216,8 @@ impl Running {
             .map(|(&id, e)| e.args(id, dt))
             .collect();
         for mut a in all.into_iter().chain([mine]) {
-            if a.entity != mine.entity {
-                if let Some(g) = &mut self.game {
-                    g.client.entity_effects(&a);
-                }
+            if let Some(g) = &mut self.game {
+                g.client.entity_effects(&a);
             }
             for &(owner, cb) in &c.game.entities[a.kind as usize].frames {
                 let mut v = self.frame_view();
