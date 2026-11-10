@@ -126,6 +126,7 @@ pub fn register(r: &mut Registry) {
     for m in &MATERIALS {
         // `.tool(kind)` tags it `tools/<kind>`; `<kind>s/<material>` picks its recipe.
         let tool = |r: &mut Registry, kind: &str, damage: f32, speed: f32| {
+            if kind == "shears" && m.level < tool_tier::IRON && m.name != "gold" { return; }
             let b = r
                 .item(Item::generated(format!("{}_{kind}", m.name)))
                 .tool(kind, m.level)
@@ -139,6 +140,8 @@ pub fn register(r: &mut Registry) {
                 .tab(if kind == "sword" { &crate::tabs::COMBAT } else { &crate::tabs::TOOLS });
             if kind == "sword" {
                 b.sweeps().no_creative_break();
+            } else {
+                b.tag(&format!("tools/{}", m.name));
             }
         };
         tool(r, "pickaxe", 2.0 + m.damage, 1.2);
@@ -154,6 +157,7 @@ pub fn register(r: &mut Registry) {
         };
         tool(r, "axe", axe_damage, axe_speed);
         tool(r, "hoe", 1.0, hoe_speed);
+        tool(r, "shears", 1.0, 1.0);
     }
 
     // Points per piece, head to feet, as in modern.

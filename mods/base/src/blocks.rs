@@ -129,7 +129,7 @@ fn berry_leaves(
         .states(|p, s| s.texture(if p.is("berried", "true") { texture_berried } else { texture }))
         .on_use(move |u| pick_berries(u, item));
     r.loot(handle)
-        // .pool(Pool::new().when(Cond::tool("tools/shears")).item(handle.name()))
+        .pool(Pool::new().when(Cond::tool("#tools/shears")).item(handle.name()))
         .pool(Pool::new().when(Cond::state("berried=true")).items(item.name(), 1, 2));
 }
 
