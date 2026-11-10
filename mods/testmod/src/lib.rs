@@ -245,7 +245,7 @@ fn init(r: &mut Registry) {
             Slots::single()
                 .accepts("#fuel")
                 .input()
-                .tooltip("testmod.fuel_slot")
+                .tooltip("block.testmod.fuel_slot")
                 .holder(),
         )
         .player_inventory()
