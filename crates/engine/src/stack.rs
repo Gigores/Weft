@@ -117,11 +117,30 @@ fn condition_texture(c: &crate::content::Content, stack: &ItemStack) -> Option<&
     t
 }
 
-/// `layers` text as (texture name, tint 0xRRGGBB) pairs, white where none is given.
+/// `layers` text as (texture name, tint 0xRRGGBB) pairs, white where none is given. A layer
+/// tinted by a kind takes the kind's default color: what an item shows away from any biome.
 pub fn parse_layers(spec: &str) -> Vec<(&str, u32)> {
+    let kind = |k: &str| {
+        crate::content::try_content()
+            .and_then(|c| c.tint_kinds.iter().find(|t| t.0 == k))
+            .map_or(0xFF_FFFF, |t| t.1)
+    };
     weft_abi::layers(spec)
-        .map(|(name, tint)| (name, tint.unwrap_or(0xFF_FFFF)))
+        .map(|l| {
+            let tint = l.tint.unwrap_or(0xFF_FFFF);
+            match l.kind {
+                Some(k) => (l.name, multiply(tint, kind(k))),
+                None => (l.name, tint),
+            }
+        })
         .collect()
+}
+
+/// Two 0xRRGGBB colors multiplied.
+fn multiply(a: u32, b: u32) -> u32 {
+    [16, 8, 0]
+        .iter()
+        .fold(0, |out, s| out | ((a >> s & 255) * (b >> s & 255) / 255) << s)
 }
 
 /// The stack's own name, if a player gave it one.

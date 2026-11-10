@@ -2941,6 +2941,7 @@ impl Client {
             hand,
             textures,
             &light,
+            &|p: IVec3| self.world.biome_at(p),
             &scene,
             scene_buf,
             self.target

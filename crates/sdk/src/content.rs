@@ -1165,6 +1165,7 @@ impl Registry {
             drops: None,
             item: true,
             item_texture: String::new(),
+            picked: faces::ALL,
             facing: None,
             sides: None,
             signal: None,
@@ -1430,6 +1431,44 @@ fn last_box(ops: &mut [Pending], f: impl FnOnce(&mut abi::ModelBox)) {
 /// Per-state settings, used directly and through `BlockBuilder::states`.
 pub struct State<'a> {
     ops: &'a mut Vec<Pending>,
+    /// The faces `layer`, `tint` and `tint_kind` go on (`faces`).
+    picked: u8,
+    /// Its block's faces, which a state's own start from.
+    block_faces: &'a [String; 6],
+}
+
+impl<'a> State<'a> {
+    fn new(ops: &'a mut Vec<Pending>, block_faces: &'a [String; 6]) -> State<'a> {
+        State { ops, picked: faces::ALL, block_faces }
+    }
+    fn picked(&mut self) -> &mut u8 {
+        &mut self.picked
+    }
+    fn own_faces(&self) -> [String; 6] {
+        self.block_faces.clone()
+    }
+}
+
+/// A block's faces as bits, -X, +X, -Y, +Y, -Z, +Z (`abi::FACE_DIRS`).
+mod faces {
+    pub const WEST: u8 = 1;
+    pub const EAST: u8 = 2;
+    pub const BOTTOM: u8 = 4;
+    pub const TOP: u8 = 8;
+    pub const NORTH: u8 = 16;
+    pub const SOUTH: u8 = 32;
+    pub const SIDES: u8 = WEST | EAST | NORTH | SOUTH;
+    pub const ALL: u8 = 63;
+}
+
+/// `face`'s (`LAYERS` text) top layer tinted, by a color or a kind or both.
+fn top_layer(face: &mut String, tint: Option<u32>, kind: Option<&str>) {
+    let mut layers: Vec<abi::Layer> = abi::layers(face).collect();
+    if let Some(top) = layers.last_mut() {
+        top.tint = tint.or(top.tint);
+        top.kind = kind.or(top.kind);
+    }
+    *face = abi::layers_text(layers);
 }
 
 macro_rules! state_setters {
@@ -1466,24 +1505,98 @@ macro_rules! state_setters {
             let t = abi::ModelTexture { name: name.trim_start_matches('#').to_string(), texture: crate::asset("block", texture) };
             self.push(&bc::MODEL_TEXTURES, t)
         }
-        /// Same texture on every face, relative names are under `block/`.
+        /// Every face shows this picture (relative names are under `block/`; without any:
+        /// `block/<name>`), and every face is picked: what `layer`, `tint` and `tint_kind` go on.
+        /// The other presets pick some faces the same way, the last one said wins:
+        /// `.texture("dirt").top("grass_top").tint_kind(&tints::GRASS).sides("dirt").layer("grass_side_overlay").tint_kind(&tints::GRASS)`.
         pub fn texture(self, t: &str) -> Self {
+            self.pick(faces::ALL, t)
+        }
+        pub fn top(self, t: &str) -> Self {
+            self.pick(faces::TOP, t)
+        }
+        pub fn bottom(self, t: &str) -> Self {
+            self.pick(faces::BOTTOM, t)
+        }
+        /// Top and bottom: a log's rings, a furnace's top.
+        pub fn ends(self, t: &str) -> Self {
+            self.pick(faces::TOP | faces::BOTTOM, t)
+        }
+        /// The four around.
+        pub fn sides(self, t: &str) -> Self {
+            self.pick(faces::SIDES, t)
+        }
+        /// Toward the north, where `.facing(..)` turns its front: a furnace's.
+        pub fn front(self, t: &str) -> Self {
+            self.pick(faces::NORTH, t)
+        }
+        pub fn back(self, t: &str) -> Self {
+            self.pick(faces::SOUTH, t)
+        }
+        pub fn north(self, t: &str) -> Self {
+            self.pick(faces::NORTH, t)
+        }
+        pub fn south(self, t: &str) -> Self {
+            self.pick(faces::SOUTH, t)
+        }
+        pub fn west(self, t: &str) -> Self {
+            self.pick(faces::WEST, t)
+        }
+        pub fn east(self, t: &str) -> Self {
+            self.pick(faces::EAST, t)
+        }
+        /// One more picture on top of the picked faces' (relative names under `block/`): the
+        /// green over a grass block's sides, an ore's stones over stone. Each layer is drawn by
+        /// itself over the one under it, with its own animation and connected textures.
+        pub fn layer(self, t: &str) -> Self {
             let t = crate::asset("block", t);
-            self.set(&bc::TEXTURES, std::array::from_fn(|_| t.clone()))
+            self.change_faces(|face| {
+                if !face.is_empty() {
+                    face.push(' ');
+                }
+                face.push_str(&t);
+            })
         }
-        /// Top, sides, bottom.
-        pub fn textures(self, top: &str, side: &str, bottom: &str) -> Self {
-            let (t, si, b) = (crate::asset("block", top), crate::asset("block", side), crate::asset("block", bottom));
-            self.set(&bc::TEXTURES, [si.clone(), si.clone(), b, t, si.clone(), si])
+        /// The picked faces' top layer multiplied by `0xRRGGBB`: one picture, many colors
+        /// (wool). A tinted copy of the picture is made as the game loads, every frame of it and
+        /// its connected tiles too, so it costs nothing to draw.
+        pub fn tint(self, color: u32) -> Self {
+            self.change_faces(|face| top_layer(face, Some(color & 0xFF_FFFF), None))
         }
-        /// Faces in -X, +X, -Y, +Y, -Z, +Z order.
-        pub fn faces(self, f: [&str; 6]) -> Self {
-            self.set(&bc::TEXTURES, std::array::from_fn(|i| crate::asset("block", f[i])))
+        /// The picked faces' top layer colored by the biome the block stands in (`tints::GRASS`,
+        /// `FOLIAGE`, `WATER` or a mod's own `TintKind`), and an item of it by the kind's
+        /// default. Each layer its own, any kind and in any order.
+        pub fn tint_kind(self, kind: &TintKind) -> Self {
+            self.change_faces(|face| top_layer(face, None, Some(kind.name())))
         }
-        /// `front` to the north (where `.facing(..)` turns it), `side` around it and `top` above
-        /// and below: a furnace.
-        pub fn front_faces(self, side: &str, top: &str, front: &str) -> Self {
-            self.faces([side, side, top, top, front, side])
+        fn pick(mut self, which: u8, t: &str) -> Self {
+            let t = crate::asset("block", t);
+            *self.picked() = which;
+            self.change_faces(|face| *face = t.clone())
+        }
+        /// Its faces as they are so far, the picked ones changed by `f`.
+        fn change_faces(mut self, mut f: impl FnMut(&mut String)) -> Self {
+            let which = *self.picked();
+            let last = self
+                .pending()
+                .iter()
+                .rposition(|p| p.name == bc::TEXTURES.name() && p.op == abi::value_op::SET);
+            let mut faces: [String; 6] = last
+                .and_then(|i| abi::data::from_bytes(&self.pending()[i].bytes))
+                .unwrap_or_else(|| self.own_faces());
+            for (i, face) in faces.iter_mut().enumerate() {
+                if which & 1 << i != 0 {
+                    f(face);
+                }
+            }
+            match last {
+                Some(i) => self.pending()[i].bytes = abi::data::bytes_of(&faces),
+                None => {
+                    let v = bc::TEXTURES.raw_value(&faces);
+                    self.pending().push(v);
+                }
+            }
+            self
         }
         /// Quarter turns of each face's picture, -X, +X, -Y, +Y, -Z, +Z: a log lying on its side
         /// turns its bark along it. For a cube; boxes have `turned`.
@@ -1554,15 +1667,6 @@ macro_rules! state_setters {
         pub fn climbable(self) -> Self {
             self.tag(abi::comp::block::CLIMBABLE)
         }
-        /// Colored by the biome it stands in: `tints::GRASS`, `FOLIAGE`, `WATER` or a mod's own
-        /// kind (`Registry::tint_kind`).
-        pub fn tint(self, kind: &TintKind) -> Self {
-            self.set_text(&c::TINT, kind.name())
-        }
-        /// `tint` on the top face only (grass blocks: the sides carry their own color).
-        pub fn tint_top(self, kind: &TintKind) -> Self {
-            self.tint(kind).set(&c::TINT_FACES, 1 << 3)
-        }
         pub fn friction(self, f: f32) -> Self {
             self.set(&c::FRICTION, f)
         }
@@ -1582,13 +1686,30 @@ macro_rules! state_setters {
         }
         /// `model_box` with its own textures and texel rectangles (u0, v0, u1, v1, 0..16) per face
         /// in -X, +X, -Y, +Y, -Z, +Z order, as a model file's element has; `UV_FROM_BOX` takes it
-        /// from where the box is, `UV_NO_FACE` leaves a face out.
+        /// from where the box is, `UV_NO_FACE` leaves a face out. An empty texture is the block's
+        /// own on that side, with its layers and tint.
         pub fn model_box_faces(self, min: [f32; 3], max: [f32; 3], faces: [(&str, [f32; 4]); 6]) -> Self {
-            let textures = std::array::from_fn(|i| crate::asset("block", faces[i].0));
+            let textures = std::array::from_fn(|i| if faces[i].0.is_empty() { String::new() } else { crate::asset("block", faces[i].0) });
             self.add_box(min, max, textures, faces.map(|f| f.1))
         }
+        /// The model box just added drawn without the shading by side, like a cross plant (a
+        /// model file's `shade: false`): a tall plant's panels.
+        pub fn unshaded(mut self) -> Self {
+            let last = self
+                .pending()
+                .iter_mut()
+                .rev()
+                .find(|p| p.name == abi::comp::block::BOXES && p.op == abi::value_op::PUSH);
+            if let Some(p) = last
+                && let Some(mut b) = abi::data::from_bytes::<abi::ModelBox>(&p.bytes)
+            {
+                b.flat = true;
+                p.bytes = abi::data::bytes_of(&b);
+            }
+            self
+        }
         fn add_box(self, min: [f32; 3], max: [f32; 3], textures: [String; 6], uv: [[f32; 4]; 6]) -> Self {
-            let b = abi::ModelBox { min, max, textures, uv, turn: [0; 6], tilt: abi::BoxTilt::NONE };
+            let b = abi::ModelBox { min, max, textures, uv, turn: [0; 6], tilt: abi::BoxTilt::NONE, flat: false };
             self.push(&bc::BOXES, b)
                 .set(&bc::MODEL, BlockModel::Boxes as u32)
         }
@@ -1690,6 +1811,26 @@ type StateLook = Box<dyn for<'s> FnOnce(State<'s>) -> State<'s>>;
 
 /// A block being registered or changed (`r.edit(&X)`: what it sets goes on every state on top of
 /// what is there, `state_where` on some; `.prop(..)` adds a property).
+impl BlockBuilder<'_> {
+    fn picked(&mut self) -> &mut u8 {
+        &mut self.picked
+    }
+    fn own_faces(&self) -> [String; 6] {
+        let own = crate::asset("block", &self.e.name);
+        std::array::from_fn(|_| own.clone())
+    }
+    /// Its faces as set so far, which its states' own start from.
+    fn faces_now(&self) -> [String; 6] {
+        self.e
+            .ops
+            .iter()
+            .rev()
+            .find(|p| p.name == bc::TEXTURES.name() && p.op == abi::value_op::SET)
+            .and_then(|p| abi::data::from_bytes(&p.bytes))
+            .unwrap_or_else(|| self.own_faces())
+    }
+}
+
 pub struct BlockBuilder<'a> {
     reg: &'a mut Registry,
     e: crate::entry::Entry,
@@ -1707,6 +1848,8 @@ pub struct BlockBuilder<'a> {
     drops: Option<(String, u32)>,
     item: bool,
     item_texture: String,
+    /// The faces `layer`, `tint` and `tint_kind` go on (`faces`).
+    picked: u8,
     facing: Option<(crate::Facings, crate::Toward)>,
     /// `on_sides`: the sides it may lie on.
     pub(crate) sides: Option<crate::Facings>,
@@ -2165,7 +2308,7 @@ impl<'a> BlockBuilder<'a> {
             .set(&bc::MODEL, BlockModel::Wire as u32)
             .cutout()
             .hardness(0.0)
-            .sides(crate::Facings::ALL, false)
+            .lying_on(crate::Facings::ALL, false)
     }
 
     fn signal_props(mut self, kind: u32, levels: u32, attach: bool, front: bool) -> Self {
@@ -2314,12 +2457,13 @@ impl BlockBuilder<'_> {
                 .push(element(&bc::PROPS, &p, abi::value_op::PUSH, ""));
         }
         // A part per combination of its own properties' values, from `.states(..)` and its signal.
+        let block_faces = self.faces_now();
         let looks = self.looks.take();
         let (signal, turns) = (self.signal, self.turns);
         if looks.is_some() || signal.is_some() || turns.is_some() {
             for p in state_combinations(&self.props) {
                 let mut ops = Vec::new();
-                let mut s = State { ops: &mut ops };
+                let mut s = State::new(&mut ops, &block_faces);
                 if let Some(o) = turns
                     .map(|f| f(&p))
                     .filter(|o| *o != crate::Orientation::NONE)
@@ -2339,7 +2483,7 @@ impl BlockBuilder<'_> {
         }
         for (key, f) in std::mem::take(&mut self.keyed) {
             let mut ops = Vec::new();
-            f(State { ops: &mut ops });
+            f(State::new(&mut ops, &block_faces));
             self.e.parts.push((key, ops));
         }
         let attaches = signal.is_some_and(|b| b.attaches);
@@ -3684,8 +3828,8 @@ mod order_tests {
     #[test]
     fn a_state_knows_its_turn() {
         let f = crate::Orientation::new(crate::Dir::Down, crate::Dir::South);
-        let mut ops = Vec::new();
-        let s = State { ops: &mut ops }
+        let (mut ops, faces) = (Vec::new(), Default::default());
+        let s = State::new(&mut ops, &faces)
             .orientation(f)
             .model_box([0.0; 3], [16.0, 16.0, 1.0]);
         assert_eq!(s.turn(), f);

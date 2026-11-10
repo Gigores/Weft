@@ -442,24 +442,39 @@ pub fn composite_texture(parts: [&LoadedTexture; 4]) -> LoadedTexture {
 }
 
 /// Pictures one over the other, the first at the bottom, each multiplied by its tint
-/// (0xRRGGBB): what a stack with `layers` shows. All are scaled to the biggest.
+/// (0xRRGGBB): what a stack with `layers` shows, and a block face of several. All are scaled to
+/// the biggest; a layer's glow mask glows where it shows, and covers what glows under it.
 pub fn layered_texture(parts: &[(&LoadedTexture, u32)]) -> LoadedTexture {
     let size = parts.iter().map(|p| p.0.size).max().unwrap_or(16);
     let mut out = vec![0u8; (size * size * 4) as usize];
+    let glows = parts
+        .iter()
+        .any(|p| p.0.glow.first().is_some_and(Option::is_some));
+    let mut glow = vec![0u8; if glows { (size * size) as usize } else { 0 }];
     for (p, tint) in parts {
         let Some(rgba) = p.frames.first().and_then(|f| f.first()) else { continue };
         let from = scale_nearest(rgba, p.size, size);
+        let own_glow = p.glow.first().and_then(Option::as_ref);
         let t = [(tint >> 16) & 255, (tint >> 8) & 255, tint & 255];
-        for (o, s) in out.chunks_exact_mut(4).zip(from.chunks_exact(4)) {
+        for (i, (o, s)) in out
+            .chunks_exact_mut(4)
+            .zip(from.chunks_exact(4))
+            .enumerate()
+        {
             let a = s[3] as u32;
             for k in 0..3 {
                 let c = s[k] as u32 * t[k] / 255;
                 o[k] = ((c * a + o[k] as u32 * (255 - a)) / 255) as u8;
             }
             o[3] = (a + o[3] as u32 * (255 - a) / 255) as u8;
+            if glows {
+                let (x, y) = (i as u32 % size, i as u32 / size);
+                let g = own_glow.map_or(0, |m| m[((y * p.size / size) * p.size + x * p.size / size) as usize] as u32);
+                glow[i] = ((g * a + glow[i] as u32 * (255 - a)) / 255) as u8;
+            }
         }
     }
-    LoadedTexture { size, frames: vec![mip_chain(out, size)], glow: vec![None], anim: None }
+    LoadedTexture { size, frames: vec![mip_chain(out, size)], glow: vec![glows.then_some(glow)], anim: None }
 }
 
 /// Fingerprint of the files a texture is made of (image, `.anim`, glow masks): changes when any of

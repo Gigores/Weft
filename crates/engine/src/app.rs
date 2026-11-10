@@ -1823,6 +1823,16 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
         r.gpu.destroy_texture(r.depth.0);
         r.depth = make_depth(&mut *r.gpu, info.width, info.height);
     }
+    // Block items in slots take the colors of the biome the player is in.
+    let biome = r.game.as_ref().and_then(|g| {
+        g.client
+            .world
+            .biome_at(g.client.player.pos.floor().as_ivec3())
+    });
+    if biome != r.ui.biome {
+        r.ui.biome = biome;
+        r.quads_dirty = true;
+    }
     if r.quads_dirty {
         build_ui_quads(r, scale);
     }

@@ -140,7 +140,7 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
     if hidden(lo, lo + vec3<f32>(16.0)) {
         return;
     }
-    if (e.bucket & 2u) != 0u {
+    if (e.bucket & 4u) != 0u {
         put_draw(e.bucket, rel, e.start, e.counts[0]);
         atomicAdd(&faces_drawn.count, e.counts[0]);
         return;

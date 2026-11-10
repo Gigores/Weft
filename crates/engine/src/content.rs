@@ -24,12 +24,22 @@ pub struct ModelBox {
     pub turn: [u8; 6],
     /// Origin in block units.
     pub tilt: weft_abi::BoxTilt,
+    /// No shading by side (`abi::ModelBox::flat`).
+    pub flat: bool,
 }
 
 impl ModelBox {
     /// A whole cube showing these textures.
     pub fn whole(textures: [u32; 6]) -> ModelBox {
-        ModelBox { min: [0.0; 3], max: [1.0; 3], textures, uv: [weft_abi::UV_FROM_BOX; 6], turn: [0; 6], tilt: weft_abi::BoxTilt::NONE }
+        ModelBox {
+            min: [0.0; 3],
+            max: [1.0; 3],
+            textures,
+            uv: [weft_abi::UV_FROM_BOX; 6],
+            turn: [0; 6],
+            tilt: weft_abi::BoxTilt::NONE,
+            flat: false,
+        }
     }
 
     /// Turned with its block (`abi::Turn`), pictures and all: a face taking its picture from where
@@ -43,7 +53,7 @@ impl ModelBox {
         let (textures, uv, turn) = (turned_faces(t, self.textures), turned_faces(t, uv), turned_pictures(t, self.turn));
         let tilt =
             weft_abi::BoxTilt { origin: t.point(self.tilt.origin, 1.0), axis: t.vector_f(self.tilt.axis), degrees: self.tilt.degrees };
-        ModelBox { min, max, textures, uv, turn, tilt }
+        ModelBox { min, max, textures, uv, turn, tilt, flat: self.flat }
     }
 }
 
@@ -555,18 +565,62 @@ pub fn swing_charge(c: &Content, kind: u32, held: &weft_abi::ItemStack, ticks: f
     ((ticks + 0.5) * swings_per_second(c, kind, held) * speed / crate::world::TPS as f32).clamp(0.0, 1.0)
 }
 
-/// What a block's tint goes on, on one face of it, wherever that is drawn.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct FacePaint {
-    pub base_tinted: bool,
-    pub overlay_tinted: bool,
+/// One picture of a face as drawn: a texture (a plain one, or `name#RRGGBB`, its tinted copy)
+/// and the tint kind it takes from the biome (its index + 1, 0 none).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FaceLayer {
+    pub tex: u32,
+    pub tint: u8,
 }
 
-/// `has_overlay`: the face's texture has an `_overlay` over it, which takes the whole tint (a grass
-/// side's green, on dirt).
-pub fn face_paint(s: &StateInfo, face: usize, has_overlay: bool) -> FacePaint {
-    let tints = s.tint != 0;
-    FacePaint { base_tinted: tints && !has_overlay && s.tint_faces & (1 << face) != 0, overlay_tinted: tints && has_overlay }
+/// The picture a texture name is a tinted copy of and the color: `name#RRGGBB`, one layer
+/// without a kind. A copy is made of every frame and of its connected tiles.
+pub fn tinted_copy(name: &str) -> Option<(&str, u32)> {
+    let mut all = abi::layers(name);
+    match (all.next(), all.next()) {
+        (Some(l), None) if l.kind.is_none() => l.tint.map(|t| (l.name, t & 0xFF_FFFF)),
+        _ => None,
+    }
+}
+
+/// Every texture's layers (`Content::layers`): a face's `LAYERS` text of several pictures or
+/// tinted by a kind is one per layer, a fixed tint going to its tinted copy; anything else is
+/// itself.
+fn face_layers(textures: &mut Interner, kinds: &[(String, u32)], errors: &mut Vec<String>) -> Vec<Box<[FaceLayer]>> {
+    let own = |i: usize| -> Box<[FaceLayer]> { Box::new([FaceLayer { tex: i as u32, tint: 0 }]) };
+    let n = textures.list.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let name = textures.list[i].clone();
+        let layers: Vec<abi::Layer> = abi::layers(&name).collect();
+        if layers.len() < 2 && layers.iter().all(|l| l.kind.is_none()) {
+            out.push(own(i));
+            continue;
+        }
+        let list: Vec<FaceLayer> = layers
+            .iter()
+            .map(|l| {
+                let tint = l
+                    .kind
+                    .map_or(0, |k| match kinds.iter().position(|t| t.0 == k) {
+                        Some(p) => (p + 1) as u8,
+                        None => {
+                            let why = format!("texture {name}: no tint kind {k}");
+                            if !errors.contains(&why) {
+                                errors.push(why);
+                            }
+                            0
+                        }
+                    });
+                let leaf = abi::layers_text([abi::Layer { kind: None, ..*l }]);
+                FaceLayer { tex: textures.id(&leaf), tint }
+            })
+            .collect();
+        out.push(list.into_boxed_slice());
+    }
+    let len = textures.list.len();
+    out.extend((n..len).map(own));
+    out
 }
 
 /// A block state's events, by `StateInfo::effects` index (`abi::comp::EFFECTS` names them).
@@ -1075,6 +1129,8 @@ pub struct Content {
     /// Every texture by name (`<ns>:block/..`, `<ns>:item/..`, `<ns>:particle/..`); blocks, items
     /// and particles hold ids into it, and the client loads this one list.
     pub textures: Vec<String>,
+    /// Per texture id: the layers it is drawn as (`layers`).
+    pub face_layers: Vec<Box<[FaceLayer]>>,
     /// Block breaking stages, ids into `textures`.
     pub crack_textures: [u32; 10],
     /// Animated flames drawn around burning entities.
@@ -1130,6 +1186,26 @@ pub(crate) fn set(c: Content) {
 }
 
 /// Color (0xRRGGBB) of a tint kind on items, which have no biome: the kind's default.
+impl Content {
+    /// The layers texture `tex` is drawn as, bottom first, one by one: itself for most, a face's
+    /// several pictures or one tinted by a kind otherwise.
+    pub fn layers(&self, tex: u32) -> &[FaceLayer] {
+        self.face_layers.get(tex as usize).map_or(&[], |l| l)
+    }
+
+    /// The color (`0xRRGGBB`) of tint kind `kind` (`FaceLayer::tint`, 0 none: white) in biome
+    /// `biome`, the kind's default without one: the same for the world, a hand and a slot.
+    pub fn kind_color(&self, kind: u8, biome: Option<u16>) -> u32 {
+        let Some(i) = (kind as usize).checked_sub(1) else { return 0xFF_FFFF };
+        biome
+            .and_then(|b| self.biomes.get(b as usize))
+            .and_then(|b| b.tints.get(i))
+            .or(self.tint_kinds.get(i).map(|k| &k.1))
+            .copied()
+            .unwrap_or(0xFF_FFFF)
+    }
+}
+
 pub fn item_tint(tint: u8) -> u32 {
     (tint as usize)
         .checked_sub(1)
@@ -2158,6 +2234,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
     );
     check_loot_smelting(&loot, &game, &mut errors);
     resolve_effects(&mut states, &mut game, &block_defs, &components, &mut errors);
+    let face_layers = face_layers(&mut textures, &tint_kinds, &mut errors);
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -2210,6 +2287,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
         source_mods,
         tool_classes,
         textures: textures.list,
+        face_layers,
         crack_textures,
         fire_texture,
         commands,
@@ -2332,9 +2410,8 @@ fn number_items(
         let (ns, path) = e.name.split_once(':').unwrap_or(("core", &e.name));
         let own = format!("{ns}:item/{path}");
         let spec = e.text(abi::comp::LAYERS).unwrap_or(&own);
-        let mut parts: Vec<(String, Option<u32>)> = abi::layers(spec)
-            .map(|(name, tint)| (name.to_string(), tint))
-            .collect();
+        let kinds: Vec<abi::Layer> = abi::layers(spec).collect();
+        let mut parts: Vec<(String, abi::Layer)> = kinds.iter().map(|l| (l.name.to_string(), *l)).collect();
         for (texture, _) in &mut parts {
             for (_, pairs) in retextures
                 .iter()
@@ -2351,8 +2428,11 @@ fn number_items(
         {
             *texture = "core:item/spawn_egg".into();
         }
-        let layers = (parts.len() > 1 || parts.iter().any(|p| p.1.is_some()))
-            .then(|| abi::layers_text(parts.iter().map(|(name, tint)| (name.as_str(), *tint))));
+        let layers = (parts.len() > 1
+            || parts
+                .iter()
+                .any(|p| p.1.tint.is_some() || p.1.kind.is_some()))
+        .then(|| abi::layers_text(parts.iter().map(|(name, l)| abi::Layer { name, ..*l })));
         let mut icon = match parts.first() {
             Some((texture, _)) => textures.id(texture),
             None if block.is_some() => u32::MAX,

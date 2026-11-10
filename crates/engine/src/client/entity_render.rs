@@ -90,6 +90,8 @@ struct Carry {
     holder: usize,
     what: Carrying,
     lit: u32,
+    /// The biome its holder is in.
+    biome: Option<u16>,
     age: f32,
     id: u64,
 }
@@ -172,7 +174,7 @@ pub struct EntityRenderer {
     item_pipe: PipelineId,
     hand_item_pipe: PipelineId,
     /// Boxes of each item's model, (first, count), by item and its stack's `layers` if any.
-    item_models: FxHashMap<(u32, Option<&'static str>), (u32, u32)>,
+    item_models: FxHashMap<(u32, Option<&'static str>, Option<u16>), (u32, u32)>,
     item_boxes: Vec<GpuBox>,
     item_buf: Option<(BufferId, u32, usize)>,
     item_generation: u64,
@@ -648,14 +650,19 @@ impl EntityRenderer {
         })
     }
 
-    /// The opaque pixels of a stack's sprite, read the first time it is held or dropped.
+    /// The opaque pixels of a stack's sprites, read the first time it is held or dropped.
     fn load_sprite(&mut self, assets: &Assets, stack: &ItemStack) {
-        let Some(name) = sprite_name(stack) else { return };
+        for name in sprite_names(stack) {
+            self.load_sprite_named(assets, name);
+        }
+    }
+
+    fn load_sprite_named(&mut self, assets: &Assets, name: String) {
         if self.sprites.contains_key(&name) {
             return;
         }
-        // Its own pictures one over the other, as its icon shows them.
-        let img = match crate::stack::layers(stack) {
+        // A stack's own pictures one over the other, as its icon shows them.
+        let img = match name.strip_prefix("layers:") {
             Some(spec) => {
                 let parts: Vec<(String, u32)> = crate::stack::parse_layers(spec)
                     .into_iter()
@@ -702,43 +709,54 @@ impl EntityRenderer {
     }
 
     /// An item's model as boxes in the unit cube, made once: a block item's shape, else its
-    /// sprite one texel thick (flat when the sprite could not be read). (first box, count).
-    fn item_model(&mut self, textures: &GameTextures, stack: &ItemStack) -> Option<(u32, u32)> {
+    /// sprite one texel thick (flat when the sprite could not be read). (first box, count). A
+    /// block's layers tinted by a kind take its colors in `biome`, where the item is.
+    fn item_model(&mut self, textures: &GameTextures, stack: &ItemStack, biome: Option<u16>) -> Option<(u32, u32)> {
+        let c = content();
+        let looks = super::looks::current();
         let (item, layers) = (stack.item, crate::stack::layers(stack));
-        if let Some(&m) = self.item_models.get(&(item, layers)) {
+        let draw = looks.item_draw(c, item);
+        let biome = if matches!(draw, ItemDraw::Block(_)) { biome } else { None };
+        if let Some(&m) = self.item_models.get(&(item, layers, biome)) {
             return Some(m);
         }
-        let c = content();
         let first = self.item_boxes.len();
         let white = Vec4::new(1.0, 1.0, 1.0, 0.0);
-        let looks = super::looks::current();
-        let mut sprite_color = white;
-        let sprite = match looks.item_draw(c, item) {
+        // Pictures drawn as sprites, bottom first: texture and color.
+        let sprites: Vec<(u32, Vec4)> = match draw {
             ItemDraw::Model(model) => {
-                boxes_shape(&mut self.item_boxes, textures, Mat4::IDENTITY, model, &c.states[0], white);
-                None
+                boxes_shape(&mut self.item_boxes, textures, Mat4::IDENTITY, model, &c.states[0], None, white);
+                Vec::new()
             }
-            ItemDraw::Icon(t) => Some(layers.map_or(t, |l| textures.layered(l))),
+            ItemDraw::Icon(t) => vec![(layers.map_or(t, |l| textures.layered(l)), white)],
             ItemDraw::Block(state) => {
                 let s = &c.states[state as usize];
-                let sprite = looks.block_sprite(state, s);
-                if sprite.is_none() {
-                    boxes_shape(&mut self.item_boxes, textures, Mat4::IDENTITY, &looks.block_shape(state, s), s, white);
+                match looks.block_sprite(state, s) {
+                    Some(t) => super::mesher::face_layers(c, s, t, 0)
+                        .iter()
+                        .map(|l| {
+                            let [r, g, b, _] = (c.kind_color(l.tint, biome) << 8)
+                                .to_be_bytes()
+                                .map(|v| v as f32 / 255.0);
+                            (l.tex, Vec4::new(r, g, b, 0.0))
+                        })
+                        .collect(),
+                    None => {
+                        boxes_shape(&mut self.item_boxes, textures, Mat4::IDENTITY, &looks.block_shape(state, s), s, biome, white);
+                        Vec::new()
+                    }
                 }
-                if crate::content::face_paint(s, 0, false).base_tinted {
-                    let [r, g, b, _] = (crate::content::item_tint(s.tint) << 8)
-                        .to_be_bytes()
-                        .map(|v| v as f32 / 255.0);
-                    sprite_color = Vec4::new(r, g, b, 0.0);
-                }
-                sprite
             }
             ItemDraw::Nothing => return None,
         };
-        if let Some(t) = sprite {
+        let names = sprite_names(stack);
+        for (k, (t, color)) in sprites.into_iter().enumerate() {
             let l = textures.texture(t);
-            match sprite_name(stack)
-                .and_then(|n| self.sprites.get(&n))
+            // A layer over another is a hair thicker, so it covers it on both sides.
+            let more = k as f32 * 0.002;
+            match names
+                .get(k)
+                .and_then(|n| self.sprites.get(n))
                 .and_then(|s| s.as_ref())
             {
                 Some(sp) => {
@@ -746,22 +764,22 @@ impl EntityRenderer {
                     // Only the outline: a side face against a neighboring pixel would fight
                     // with it. Mode 4: every face takes the color of this one texel.
                     for &(x, y, hidden) in &sp.pixels {
-                        let m = Mat4::from_translation(Vec3::new(x as f32 / n, 1.0 - (y as f32 + 1.0) / n, 7.5 / 16.0))
-                            * Mat4::from_scale(Vec3::new(1.0 / n, 1.0 / n, 1.0 / 16.0));
+                        let m = Mat4::from_translation(Vec3::new(x as f32 / n, 1.0 - (y as f32 + 1.0) / n, 7.5 / 16.0 - more))
+                            * Mat4::from_scale(Vec3::new(1.0 / n, 1.0 / n, 1.0 / 16.0 + 2.0 * more));
                         self.item_boxes.push(GpuBox {
                             rows: rows(m),
                             uvo: [(x as f32 + 0.5) / n, (y as f32 + 0.5) / n, 0.0, 0.0],
-                            color: sprite_color.to_array(),
+                            color: color.to_array(),
                             ids: [0, box_mode::TEXEL, l, hidden],
                             ..Default::default()
                         });
                     }
                 }
                 None => {
-                    let m = Mat4::from_translation(Vec3::new(0.0, 0.0, 0.5)) * Mat4::from_scale(Vec3::new(1.0, 1.0, 0.0));
+                    let m = Mat4::from_translation(Vec3::new(0.0, 0.0, 0.5 + more)) * Mat4::from_scale(Vec3::new(1.0, 1.0, 0.0));
                     self.item_boxes.push(GpuBox {
                         rows: rows(m),
-                        color: sprite_color.to_array(),
+                        color: color.to_array(),
                         ids: [0, box_mode::FACES, l | l << 16, l | l << 16],
                         ids2: [l | l << 16, 0, 0, 0],
                         ..Default::default()
@@ -770,7 +788,7 @@ impl EntityRenderer {
             }
         }
         let m = (first as u32, (self.item_boxes.len() - first) as u32);
-        self.item_models.insert((item, layers), m);
+        self.item_models.insert((item, layers, biome), m);
         Some(m)
     }
 
@@ -1115,6 +1133,7 @@ impl EntityRenderer {
         hand: Option<Hand>,
         textures: &GameTextures,
         light: &impl Fn(IVec3) -> u32,
+        biome: &impl Fn(IVec3) -> Option<u16>,
         scene: &Scene,
         scene_buf: BufferId,
         target: Option<(Hit, DVec3)>,
@@ -1195,6 +1214,7 @@ impl EntityRenderer {
                 }
             }
             let lit = shade(e.pos + DVec3::Y * 0.5);
+            let here = biome(e.pos.floor().as_ivec3());
             // The effect a mod put on it, else the red of a recent hit; boxes only show the red.
             let hurt = (e.hurt / 0.5).clamp(0.0, 1.0);
             let shader_effect = e.shader_effect(now, |id| self.effect_slots.get(id as usize).is_some_and(|&s| s != 0));
@@ -1204,7 +1224,7 @@ impl EntityRenderer {
                 None => (0, 0.0),
             };
             if !e.item.is_empty() {
-                self.pose_ground_item(id, e, base, lit, effect, hurt, textures, &mut posed, &mut instances);
+                self.pose_ground_item(id, e, base, lit, here, effect, hurt, textures, &mut posed, &mut instances);
                 continue;
             }
             let look = e.look();
@@ -1318,7 +1338,7 @@ impl EntityRenderer {
             let from = self.models.clips.len() as u32;
             self.models.clips.extend_from_slice(clips.all());
             posed.push(Posed { id, kind, lod, root, pitch, head_yaw, clips: (from, self.models.clips.len() as u32), layers, layer_count });
-            let carry = |what| Carry { holder: posed.len() - 1, what, lit, age: e.age, id };
+            let carry = |what| Carry { holder: posed.len() - 1, what, lit, biome: here, age: e.age, id };
             if !sleeping {
                 for (item, off) in [(e.held, false), (e.off_held, true)] {
                     if item != 0 {
@@ -1430,6 +1450,7 @@ impl EntityRenderer {
         e: &ClientEntity,
         base: Vec3,
         lit: u32,
+        biome: Option<u16>,
         effect: (u32, f32),
         hurt: f32,
         textures: &GameTextures,
@@ -1466,7 +1487,7 @@ impl EntityRenderer {
                 layers,
                 layer_count: 1,
             });
-        } else if let Some(m) = self.item_model(textures, &e.item) {
+        } else if let Some(m) = self.item_model(textures, &e.item, biome) {
             instances.push((run_key(m), item_instance(ground_transform(base, e.age, e.item.item), m.0, hurt, lit)));
         }
     }
@@ -1777,7 +1798,7 @@ impl EntityRenderer {
     ) -> (Vec<(GpuBox, u32)>, Vec<(u32, u32, Instance)>) {
         let mut hand_items: Vec<(GpuBox, u32)> = Vec::new();
         let mut own_items: Vec<(u32, u32, Instance)> = Vec::new();
-        for Carry { holder, what, lit, age, id } in carried {
+        for Carry { holder, what, lit, biome, age, id } in carried {
             let at = firsts[holder];
             let parts = self
                 .models
@@ -1806,7 +1827,7 @@ impl EntityRenderer {
                         }
                     };
                     if model.is_none() {
-                        if let Some(m) = self.item_model(textures, &stack) {
+                        if let Some(m) = self.item_model(textures, &stack, biome) {
                             let display = self.models.displays.get(&item).copied();
                             let inst = item_instance(held_transform(arm, item, off, display), m.0, 0.0, lit);
                             if own {
@@ -1967,61 +1988,70 @@ fn run_key(m: (u32, u32)) -> u64 {
     (m.0 as u64) << 32 | m.1 as u64
 }
 
-/// Texture a held item is drawn from as a solid sprite: its own `layers`, its icon, or the
-/// texture of a plant block.
-fn sprite_name(stack: &ItemStack) -> Option<String> {
+/// Pictures a held item is drawn from as solid sprites, bottom first: its own `layers` (one, made
+/// of them), its icon, or the layers of a plant block's face.
+fn sprite_names(stack: &ItemStack) -> Vec<String> {
     if let Some(spec) = crate::stack::layers(stack) {
-        return Some(format!("layers:{spec}"));
+        return vec![format!("layers:{spec}")];
     }
     let c = content();
     let looks = super::looks::current();
-    let t = match looks.item_draw(c, stack.item) {
-        ItemDraw::Icon(t) => t,
-        ItemDraw::Block(state) => looks.block_sprite(state, &c.states[state as usize])?,
-        _ => return None,
+    let name = |t: u32| -> Option<String> {
+        let n = looks.texture_name(c, t)?;
+        // A tinted copy's outline is its picture's.
+        Some(
+            crate::content::tinted_copy(n)
+                .map_or(n, |(of, _)| of)
+                .to_string(),
+        )
     };
-    looks.texture_name(c, t).map(str::to_string)
+    match looks.item_draw(c, stack.item) {
+        ItemDraw::Icon(t) => name(t).into_iter().collect(),
+        ItemDraw::Block(state) => {
+            let s = &c.states[state as usize];
+            let Some(t) = looks.block_sprite(state, s) else { return Vec::new() };
+            super::mesher::face_layers(c, s, t, 0)
+                .iter()
+                .filter_map(|l| name(l.tex))
+                .collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
-/// Model boxes (a block's, or an item's from its file) in the unit cube `m` maps, tinted like
-/// `s` (an item's own boxes pass air: no tint).
+/// Model boxes (a block's, or an item's from its file) in the unit cube `m` maps, each face's
+/// layers one over the other as in the world, a kind's in `biome` (an item's own boxes pass air).
 fn boxes_shape(
     out: &mut Vec<GpuBox>,
     textures: &GameTextures,
     m: Mat4,
     boxes: &[crate::content::ModelBox],
     s: &crate::content::StateInfo,
+    biome: Option<u16>,
     color: Vec4,
 ) {
-    let tint = crate::content::item_tint(s.tint) & 0xff_ffff;
+    let c = content();
     for b in boxes {
         for d in 0..6 {
             let Some((corners, uv)) = super::mesher::box_face(b, d) else { continue };
             let (n, shade) = super::mesher::face_look(&corners);
+            let shade = if b.flat { 1.0 } else { shade };
             let [p0, p1, _, p3] = corners.map(Vec3::from_array);
-            let overlay = textures
-                .overlays
-                .get(b.textures[d] as usize)
-                .filter(|&&o| o != 0)
-                .map(|o| o - 1);
-            let mut face = |texture: u32, tinted: bool, lift: f32| {
+            for (k, l) in super::mesher::face_layers(c, s, b.textures[d], d)
+                .iter()
+                .enumerate()
+            {
+                // Each layer over the one before, just outside it.
+                let lift = k as f32 * 0.002;
                 let place = Mat4::from_cols((p1 - p0).extend(0.0), (p3 - p0).extend(0.0), Vec4::ZERO, (p0 + n * lift).extend(1.0));
                 out.push(GpuBox {
                     rows: rows(m * place),
                     dims: [shade, 0.0, 0.0, 0.0],
                     uvo: uv.map(|v| v / 16.0),
                     color: color.to_array(),
-                    ids: [0, box_mode::QUAD, textures.texture(texture), 0],
-                    ids2: [0, 0, tinted as u32, tint],
+                    ids: [0, box_mode::QUAD, textures.texture(l.tex), 0],
+                    ids2: [0, 0, (l.tint != 0) as u32, c.kind_color(l.tint, biome)],
                 });
-            };
-            let paint = crate::content::face_paint(s, d, overlay.is_some());
-            // Faces the block tints take the tint here, not from a tinted copy drawn on top (the
-            // untinted faces would show through cutout holes and at the edges).
-            face(b.textures[d], paint.base_tinted, 0.0);
-            // The part of a face over it (a grass side's green), just outside it.
-            if let Some(o) = overlay {
-                face(o, paint.overlay_tinted, 0.002);
             }
         }
     }

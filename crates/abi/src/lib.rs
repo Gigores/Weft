@@ -1153,8 +1153,9 @@ pub mod comp {
     /// state: a tag per `block_flags` (`FLAGS`) and `NOT_SOLID`; `LIGHT_FILTER` (`[u8;3]`,
     /// absorption on top of the opacity, colored glass), `LIGHT_OPACITY` (`u8`, light it takes
     /// away, 15 for an opaque one, else 0), `LAYER` (`u32`, `RenderLayer`: cutout for boxes, else
-    /// opaque), `MODEL` (`u32`, `BlockModel`, a cube), `TEXTURES` (`[str;6]`, by face,
-    /// `<ns>:block/<name>`), `TURNS` (`[u8;6]`, quarter turns of a cube's face pictures), `BOXES`
+    /// opaque), `MODEL` (`u32`, `BlockModel`, a cube), `TEXTURES` (`[str;6]`, by face, each
+    /// `LAYERS` text, `<ns>:block/<name>`; layers tinted by a kind take its biome color, which
+    /// gives the state its `TINT` and `TINT_FACES`), `TURNS` (`[u8;6]`, quarter turns of a cube's face pictures), `BOXES`
     /// (`[ModelBox]`), `HITBOX` (`[[f32;6]]`, min and max in sixteenths: what stops a walker if it
     /// is solid and what the crosshair picks; none: the boxes, else a plant's cross, else the
     /// whole block) and `OUTLINE` (likewise, what is outlined and cracked when it isn't the
@@ -1483,10 +1484,10 @@ pub mod comp {
     /// drawn by clients alone: it lights what players see, not the world.
     pub const LIGHT: &str = "light";
     /// Block: a tint kind by name (`tint`: `core:grass`, `core:foliage`, `core:water` or a mod's
-    /// own), colored by the biome.
+    /// own), colored by the biome. Set by the engine from the faces' layers (`Layer::kind`).
     pub const TINT: &str = "tint";
-    /// Block: faces the tint applies to (`u8`, a bit per face in -X, +X, -Y, +Y, -Z, +Z order;
-    /// all by default).
+    /// Block: faces the tint applies to (`u8`, a bit per face in -X, +X, -Y, +Y, -Z, +Z order),
+    /// from the faces' layers too.
     pub const TINT_FACES: &str = "tint_faces";
     /// The own name of one stack or block entity (UTF-8), as a player gave it: shown instead of
     /// the item's or block's, and carried from the stack to the placed block and back.
@@ -1504,10 +1505,11 @@ pub mod comp {
     pub const INVENTORY: &str = "inventory";
     /// Stack component the engine keeps: what an item with `inventory` holds.
     pub const CONTENTS: &str = "contents";
-    /// How an item and its stacks look: pictures one over the other, the first at the bottom
-    /// (a tool made of parts: handle, head, binding; a plain item is one). Text: texture names,
-    /// space separated, each with `#RRGGBB` to tint it if wanted. On the item (`entry_kind::ITEM`)
-    /// it is every stack's; a stack's own replaces it.
+    /// How an item and its stacks look, and each face of a block (`block::TEXTURES`): pictures
+    /// one over the other, the first at the bottom (a tool made of parts: handle, head, binding;
+    /// a grass block's side: dirt and the green over it; a plain one is one). Text: texture
+    /// names, space separated, each tinted as `Layer` says. On the item (`entry_kind::ITEM`) it is
+    /// every stack's; a stack's own replaces it.
     pub const LAYERS: &str = "layers";
     /// Item shown on the wearer's model: `Worn`, plus `worn_texture: str` in the wearer's skin layout.
     pub const WORN: &str = "worn";
@@ -1676,6 +1678,8 @@ crate::data! {
         /// Per face quarter turns of the picture (`FACE_CORNERS`).
         pub turn: [u8; 6],
         pub tilt: BoxTilt,
+        /// Drawn without the shading by side, as cross plants are (a model file's `shade: false`).
+        pub flat: bool,
     }
 }
 
@@ -1801,25 +1805,51 @@ pub fn matcher_terms(text: &str) -> impl Iterator<Item = &str> {
     .filter(|t| !t.is_empty())
 }
 
-/// `comp::LAYERS` text as (texture name, tint `0xRRGGBB` if it has one), the bottom first.
-pub fn layers(text: &str) -> impl Iterator<Item = (&str, Option<u32>)> {
-    text.split_whitespace().map(|l| match l.rsplit_once('#') {
-        Some((name, hex)) => (name, u32::from_str_radix(hex, 16).ok()),
-        None => (l, None),
+/// One picture of `comp::LAYERS` text: `name`, `name#RRGGBB` (multiplied by that color),
+/// `name@kind` (by a tint kind's color: a block's by the biome it stands in, an item's by the
+/// kind's default), or both, `name#RRGGBB@kind`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Layer<'a> {
+    pub name: &'a str,
+    pub tint: Option<u32>,
+    pub kind: Option<&'a str>,
+}
+
+impl<'a> Layer<'a> {
+    pub fn plain(name: &'a str) -> Layer<'a> {
+        Layer { name, tint: None, kind: None }
+    }
+}
+
+/// `comp::LAYERS` text as its layers, the bottom first.
+pub fn layers(text: &str) -> impl Iterator<Item = Layer<'_>> {
+    text.split_whitespace().map(|l| {
+        let (l, kind) = match l.split_once('@') {
+            Some((l, kind)) => (l, Some(kind)),
+            None => (l, None),
+        };
+        match l.rsplit_once('#') {
+            Some((name, hex)) => Layer { name, tint: u32::from_str_radix(hex, 16).ok(), kind },
+            None => Layer { name: l, tint: None, kind },
+        }
     })
 }
 
-/// (texture name, tint) pairs as `comp::LAYERS` text, as `layers` reads it.
-pub fn layers_text<'a>(layers: impl IntoIterator<Item = (&'a str, Option<u32>)>) -> alloc::string::String {
+/// Layers as `comp::LAYERS` text, as `layers` reads it.
+pub fn layers_text<'a>(layers: impl IntoIterator<Item = Layer<'a>>) -> alloc::string::String {
     use core::fmt::Write;
     let mut text = alloc::string::String::new();
-    for (name, tint) in layers {
+    for l in layers {
         if !text.is_empty() {
             text.push(' ');
         }
-        text.push_str(name);
-        if let Some(t) = tint {
+        text.push_str(l.name);
+        if let Some(t) = l.tint {
             let _ = write!(text, "#{:06X}", t & 0xFF_FFFF);
+        }
+        if let Some(k) = l.kind {
+            text.push('@');
+            text.push_str(k);
         }
     }
     text

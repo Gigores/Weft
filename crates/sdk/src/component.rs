@@ -676,7 +676,7 @@ pub trait StackData: Sized {
 /// at the bottom, each tinted or not. The same for an item (`ItemBuilder::layer`) and a stack
 /// (`with_layers`).
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct Layers(pub(crate) Vec<(String, Option<u32>)>);
+pub struct Layers(pub(crate) Vec<(String, Option<u32>, Option<String>)>);
 
 impl Layers {
     pub fn new() -> Layers {
@@ -684,7 +684,7 @@ impl Layers {
     }
     /// One more picture on top (under `item/`, `"other:x"` another mod's).
     pub fn layer(mut self, texture: &str) -> Layers {
-        self.0.push((crate::asset("item", texture), None));
+        self.0.push((crate::asset("item", texture), None, None));
         self
     }
     /// Tints the layer just added `0xRRGGBB` (multiplied: white parts take the color).
@@ -694,17 +694,29 @@ impl Layers {
         }
         self
     }
+    /// Tints the layer just added by a tint kind's default color (`tints::GRASS`): an item
+    /// looking like the block it places away from any biome.
+    pub fn tint_kind(mut self, kind: &crate::TintKind) -> Layers {
+        if let Some(last) = self.0.last_mut() {
+            last.2 = Some(kind.name().to_string());
+        }
+        self
+    }
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
     pub(crate) fn text(&self) -> String {
-        abi::layers_text(self.0.iter().map(|(name, tint)| (name.as_str(), *tint)))
+        abi::layers_text(
+            self.0
+                .iter()
+                .map(|(name, tint, kind)| abi::Layer { name, tint: *tint, kind: kind.as_deref() }),
+        )
     }
     /// From `text` (full names, as `text` gives them).
     pub(crate) fn parse(text: &str) -> Layers {
         Layers(
             abi::layers(text)
-                .map(|(name, tint)| (name.to_string(), tint))
+                .map(|l| (l.name.to_string(), l.tint, l.kind.map(str::to_string)))
                 .collect(),
         )
     }
@@ -829,6 +841,8 @@ pub static HARDNESS: Component<f32> = Component::named(abi::comp::HARDNESS);
 pub static FRICTION: Component<f32> = Component::named(abi::comp::FRICTION);
 pub static DRAG: Component<f32> = Component::named(abi::comp::DRAG);
 pub static LIGHT: Component<[u8; 3]> = Component::named(abi::comp::LIGHT);
+/// A block's tint kind and the sides it is on, to read: the engine sets them from its faces'
+/// layers (`tint_kind`).
 pub static TINT: Component<TintRef> = Component::named(abi::comp::TINT);
 pub static TINT_FACES: Component<u8> = Component::named(abi::comp::TINT_FACES);
 pub static SPREADS_TO: Component<Matcher> = Component::named(abi::comp::SPREADS_TO);

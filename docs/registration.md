@@ -52,7 +52,7 @@ Block-level components (`comps::block`):
 | `RETEXTURE` | `[Retexture]` | none | texture renamed on its states and item (`.retexture`) |
 | `SHAPES_OF` | `ShapesOf` | none | makes it a template (`r.shapes_of`) |
 
-Shared components it carries per state: `HARDNESS` (`f32`, 1; `.hardness`, `.unbreakable`), `LIGHT` (`[u8;3]`; `.light`, `.light_rgb`), `FRICTION` (0.6), `DRAG` (1), `TINT` and `TINT_FACES` (`.tint`, `.tint_top`), `HARVEST_LEVEL` (`.mined_by`), `LOOT_ROLLS`, `SPREADS_TO` and the other spread ones (`.spreads`, `.spread_reach`), `AMBIENT_PARTICLE`, `SHADER`, `SOUND` (`.sound_group`).
+Shared components it carries per state: `HARDNESS` (`f32`, 1; `.hardness`, `.unbreakable`), `LIGHT` (`[u8;3]`; `.light`, `.light_rgb`), `FRICTION` (0.6), `DRAG` (1), `TINT` and `TINT_FACES` (from the faces' layers, `.tint_kind`), `HARVEST_LEVEL` (`.mined_by`), `LOOT_ROLLS`, `SPREADS_TO` and the other spread ones (`.spreads`, `.spread_reach`), `AMBIENT_PARTICLE`, `SHADER`, `SOUND` (`.sound_group`).
 
 Tags it carries: `mineable/<class>` (`.mined_by`), `tab/<tab>` (`.tab`), `plantable` (`.plant`), and anything you tag.
 
@@ -76,7 +76,7 @@ Per-state components (`comps::block`):
 | `LIGHT_OPACITY` | `u8` | 15 opaque, else 0 | light it takes away (`.light_opacity`) |
 | `LAYER` | `u32` (`RenderLayer`) | cutout for boxes, else opaque | `.cutout`, `.translucent` |
 | `MODEL` | `u32` (`BlockModel`) | cube | `.plant`, `.air`, boxes |
-| `TEXTURES` | `[str;6]` | `<ns>:block/<name>` | `.texture`, `.textures`, `.faces`, `.front_faces` |
+| `TEXTURES` | `[str;6]` | `<ns>:block/<name>` | by face, each `LAYERS` text: `.texture`, `.top`, `.sides`.., `.layer`, `.tint`, `.tint_kind` |
 | `TURNS` | `[u8;6]` | none | quarter turns of a cube's faces (`.face_turns`) |
 | `BOXES` | `[ModelBox]` | none | `.model_box`, `.model_box_faces` |
 | `TURN` | `u8` (`abi::Turn`) | none | how all of its model is turned (`.orientation`, by itself with `.facing`, `.axis`, `attach` and `front`) |
