@@ -4825,6 +4825,12 @@ pub mod attribute {
     pub const ATTACK_KNOCKBACK: &str = "core:attack_knockback";
     /// Ticks after a hurt in which a weaker one doesn't land (10).
     pub const HURT_COOLDOWN: &str = "core:hurt_cooldown";
+    /// Multiplier on how much it pushes itself in the air (1): a light mob that steers well.
+    pub const AIR_CONTROL: &str = "core:air_control";
+    /// Multiplier on how slippery the ground under it is (1, at most nearly 1 a tick kept): skates.
+    pub const SLIPPERINESS: &str = "core:slipperiness";
+    /// Multiplier on how fast it goes up and down ladders and vines (1).
+    pub const CLIMB_SPEED: &str = "core:climb_speed";
     /// Share of damage taken off, after armor and the `DAMAGE` chain (0..1; resistance 0.2 a
     /// level). What pierces invulnerability gets through.
     pub const DAMAGE_RESISTANCE: &str = "core:damage_resistance";

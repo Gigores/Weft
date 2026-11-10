@@ -433,6 +433,8 @@ pub struct Game {
     pub rules_locked: u32,
     /// Config id of `core:keep_inventory`.
     pub keep_inventory: u32,
+    /// Config id of `core:max_entity_cramming`.
+    pub max_cramming: u32,
     /// Config id of `core:simulation_distance`.
     pub simulation_distance: u32,
     /// (owner, component, system) in mod order.
@@ -1424,6 +1426,9 @@ pub mod attr {
     pub const SWEEPING_DAMAGE_RATIO: u32 = 27;
     pub const ATTACK_KNOCKBACK: u32 = 28;
     pub const HURT_COOLDOWN: u32 = 29;
+    pub const AIR_CONTROL: u32 = 30;
+    pub const SLIPPERINESS: u32 = 31;
+    pub const CLIMB_SPEED: u32 = 32;
 }
 
 fn engine_attributes() -> Vec<RawEntry> {
@@ -1460,6 +1465,9 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::SWEEPING_DAMAGE_RATIO, 0.0, 0.0, 1024.0),
         (a::ATTACK_KNOCKBACK, 0.0, 0.0, 16.0),
         (a::HURT_COOLDOWN, 10.0, 0.0, 1024.0),
+        (a::AIR_CONTROL, 1.0, 0.0, 16.0),
+        (a::SLIPPERINESS, 1.0, 0.0, 2.0),
+        (a::CLIMB_SPEED, 1.0, 0.0, 16.0),
     ]
     .iter()
     .map(|&(name, default, min, max)| {
@@ -2120,6 +2128,7 @@ pub fn freeze(
     g.rules_locked = g.config_names["core:rules_locked"];
     g.mob_spawning = g.config_names["core:mob_spawning"];
     g.keep_inventory = g.config_names["core:keep_inventory"];
+    g.max_cramming = g.config_names["core:max_entity_cramming"];
     g.simulation_distance = g.config_names["core:simulation_distance"];
     (g.categories, _) = tables.bake(kind(ek::ENTITY_CATEGORY), ek::ENTITY_CATEGORY, mod_name, errors, |e, _| bake_category(e));
     for k in g

@@ -84,15 +84,11 @@ pub struct LocalPlayer {
     /// Riding a body: its id and the position relative to it at the previous and the last
     /// step. Drawn on the body as shown, so a rider and its deck never drift apart.
     pub riding: Option<(u64, DVec3, DVec3)>,
-    /// Walking speed and jump multipliers, step height and gravity multiplier from the server
-    /// (attributes).
+    /// Walking speed and jump multipliers, and what the rest of its attributes say of how it
+    /// moves, from the server.
     pub speed_mul: f64,
     pub jump_mul: f64,
-    pub step_height: f64,
-    pub gravity_mul: f64,
-    /// `SWIM_SPEED` and `FLYING_SPEED`.
-    pub swim_mul: f64,
-    pub fly_mul: f64,
+    pub moves: physics::Moves,
 }
 
 pub struct ClientEntity {
@@ -242,8 +238,8 @@ fn ride_step(
         let frame = physics::Frame {
             half_width: d.half_width,
             height: d.height,
-            step: c.game.attributes[crate::registry::attr::STEP_HEIGHT as usize].default,
             gravity: if flies || k.is(crate::tag_bits::entity::NO_GRAVITY) { 0.0 } else { physics::gravity_per_tick(gravity) },
+            moves: physics::Moves::default(),
         };
         let mut pos = m.pos;
         let r = physics::walk(c, block, bodies, mount, &mut pos, &mut drive.vel, drive.on_ground, &ctl, &frame);
@@ -803,11 +799,8 @@ impl Client {
                 in_liquid: false,
                 climbing: false,
                 speed_mul: 1.0,
-                step_height: 0.6,
-                gravity_mul: 1.0,
                 jump_mul: 1.0,
-                swim_mul: 1.0,
-                fly_mul: 1.0,
+                moves: physics::Moves::default(),
             },
             joined: false,
             player_id: 0,
@@ -2384,10 +2377,7 @@ impl Client {
             self.player.speed_mul = self.attributes[a::MOVEMENT_SPEED as usize] as f64;
             self.player.jump_mul = self.attributes[a::JUMP_STRENGTH as usize] as f64;
             self.player.can_sprint = self.attributes[a::CAN_SPRINT as usize] >= 1.0;
-            (self.player.step_height, self.player.gravity_mul) =
-                (self.attributes[a::STEP_HEIGHT as usize] as f64, self.attributes[a::GRAVITY as usize] as f64);
-            (self.player.swim_mul, self.player.fly_mul) =
-                (self.attributes[a::SWIM_SPEED as usize] as f64, self.attributes[a::FLYING_SPEED as usize] as f64);
+            self.player.moves = physics::Moves::of(|a| self.attributes[a as usize] as f64);
             // Flight goes with what allowed it (a mode, a ring), which comes a tick after the mode;
             // a mod's flight without it stays.
             if could && !self.can_fly() && !self.mode.has(crate::tag_bits::game_mode::ALWAYS_FLY) {
@@ -2972,13 +2962,13 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
     let right = DVec3::new(cy, 0.0, -sy);
     // Vanilla's moveRelative input: normalized only when longer than 1.
     let wish = forward * fwd_in + right * side_in;
-    let g = physics::gravity_per_tick(gravity) * p.gravity_mul;
+    let g = physics::gravity_per_tick(gravity) * p.moves.gravity;
 
     let height = p.dims().height;
     let before = p.pos;
 
     if p.flying || p.noclip {
-        let f = physics::Flight { wish, up: jump, down: sneak, speed: p.fly_speed as f64 * p.fly_mul * if sprint { 2.0 } else { 1.0 } };
+        let f = physics::Flight { wish, up: jump, down: sneak, speed: p.fly_speed as f64 * p.moves.fly * if sprint { 2.0 } else { 1.0 } };
         // Flying creative players stop flying when they come down onto the ground.
         if physics::fly(c, block, bodies, 0, &mut p.pos, &mut p.vel, &mut p.on_ground, hw, height, &f, p.noclip) {
             p.flying = false;
@@ -2998,7 +2988,7 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
         wish,
         ground: if sprint { 0.13 } else { 0.1 } * p.speed_mul,
         air: if sprint { 0.026 } else { 0.02 },
-        liquid: physics::SWIM * p.swim_mul,
+        liquid: physics::SWIM * p.moves.swim,
         jump: if jump && p.jump_cooldown == 0 { physics::JUMP * p.jump_mul } else { 0.0 },
         jump_boost: if sprint { forward * 0.2 } else { DVec3::ZERO },
         swim: jump,
@@ -3006,7 +2996,7 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
         sprint: swimming,
         swim_look: swimming.then(|| (p.pitch as f64).sin()),
     };
-    let frame = physics::Frame { half_width: hw, height, step: p.step_height, gravity: g };
+    let frame = physics::Frame { half_width: hw, height, gravity: g, moves: p.moves };
     let w = physics::walk(c, block, bodies, 0, &mut p.pos, &mut p.vel, p.on_ground, &ctl, &frame);
     if w.jumped {
         p.jump_cooldown = 10;

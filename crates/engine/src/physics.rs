@@ -853,15 +853,51 @@ pub struct Control {
 /// Vanilla's acceleration in liquids.
 pub const SWIM: f64 = 0.02;
 
-/// The walker's box and the world's pull.
+/// The walker's box, the world's pull, and what its attributes say of how it moves.
 #[derive(Clone, Copy)]
 pub struct Frame {
     pub half_width: f64,
     pub height: f64,
-    /// Blocks it walks up without jumping (0.6).
-    pub step: f64,
     /// Blocks per tick squared.
     pub gravity: f64,
+    pub moves: Moves,
+}
+
+/// What a body's attributes say of how it moves, the same on its client and the server.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Moves {
+    /// Blocks it walks up without jumping (0.6).
+    pub step: f64,
+    /// Multipliers (1): on its dimension's gravity, its own push in liquids, its flight, its push
+    /// in the air, how slippery the ground is under it, its climbing.
+    pub gravity: f64,
+    pub swim: f64,
+    pub fly: f64,
+    pub air: f64,
+    pub slip: f64,
+    pub climb: f64,
+}
+
+impl Default for Moves {
+    fn default() -> Self {
+        Moves { step: 0.6, gravity: 1.0, swim: 1.0, fly: 1.0, air: 1.0, slip: 1.0, climb: 1.0 }
+    }
+}
+
+impl Moves {
+    /// From its attributes, by id.
+    pub fn of(mut attr: impl FnMut(u32) -> f64) -> Moves {
+        use crate::registry::attr as a;
+        Moves {
+            step: attr(a::STEP_HEIGHT),
+            gravity: attr(a::GRAVITY),
+            swim: attr(a::SWIM_SPEED),
+            fly: attr(a::FLYING_SPEED),
+            air: attr(a::AIR_CONTROL),
+            slip: attr(a::SLIPPERINESS),
+            climb: attr(a::CLIMB_SPEED),
+        }
+    }
 }
 
 pub struct Walked {
@@ -894,10 +930,12 @@ pub fn walk(
         .liquid(c, feet)
         .or(block.main(feet))
         .map_or(1.0, |s| c.states[s as usize].drag as f64);
+    // Never quite all of the speed kept, however slippery it is made.
     let slip_at = |y: f64| {
-        block
+        let ground = block
             .main(IVec3::new(feet.x, (y - 0.5).floor() as i32, feet.z))
-            .map_or(0.6, |s| c.states[s as usize].friction as f64)
+            .map_or(0.6, |s| c.states[s as usize].friction as f64);
+        (ground * f.moves.slip).min(0.999)
     };
     let accelerate = |vel: &mut DVec3, k: f64| {
         let len2 = ctl.wish.length_squared();
@@ -922,7 +960,7 @@ pub fn walk(
         }
     } else {
         let slip = slip_at(pos.y);
-        let accel = if on_ground { ctl.ground * (0.216 / (slip * slip * slip)) } else { ctl.air };
+        let accel = if on_ground { ctl.ground * (0.216 / (slip * slip * slip)) } else { ctl.air * f.moves.air };
         if ctl.jump > 0.0 && on_ground {
             vel.y = ctl.jump;
             *vel += ctl.jump_boost;
@@ -930,9 +968,10 @@ pub fn walk(
         }
         accelerate(vel, accel * drag);
         if climbing {
-            vel.x = vel.x.clamp(-0.15, 0.15);
-            vel.z = vel.z.clamp(-0.15, 0.15);
-            vel.y = vel.y.max(if ctl.careful { 0.0 } else { -0.15 });
+            let most = 0.15 * f.moves.climb;
+            vel.x = vel.x.clamp(-most, most);
+            vel.z = vel.z.clamp(-most, most);
+            vel.y = vel.y.max(if ctl.careful { 0.0 } else { -most });
         }
     }
     // Careful at an edge (vanilla's sneaking): each horizontal component is cut back in 0.05
@@ -958,7 +997,7 @@ pub fn walk(
         }
     }
     let before = *pos;
-    let r = move_box_with(c, block, bodies, skip, *pos, f.half_width, f.height, *vel, if on_ground { f.step } else { 0.0 });
+    let r = move_box_with(c, block, bodies, skip, *pos, f.half_width, f.height, *vel, if on_ground { f.moves.step } else { 0.0 });
     *pos = r.pos;
     for i in 0..3 {
         if r.hit[i] {
@@ -966,7 +1005,7 @@ pub fn walk(
         }
     }
     if (r.hit[0] || r.hit[2] || ctl.jump > 0.0) && climbing {
-        vel.y = 0.2;
+        vel.y = 0.2 * f.moves.climb;
     }
     if liquid {
         let keep = if ctl.sprint { 0.9 } else { 0.8 };

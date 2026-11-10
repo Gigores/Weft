@@ -2565,16 +2565,10 @@ impl Dim {
             .map(|e| e.id)
             .collect();
         for id in bodies {
-            use crate::registry::attr as a;
-            let (step, gravity, safe, swim, fly) = (
-                self.attribute(c, id, a::STEP_HEIGHT, false),
-                self.attribute(c, id, a::GRAVITY, false),
-                self.attribute(c, id, a::SAFE_FALL, false),
-                self.attribute(c, id, a::SWIM_SPEED, false),
-                self.attribute(c, id, a::FLYING_SPEED, false),
-            );
+            let moves = crate::physics::Moves::of(|a| self.attribute(c, id, a, false));
+            let safe = self.attribute(c, id, crate::registry::attr::SAFE_FALL, false) as f32;
             if let Some(e) = self.entities.get_mut(id) {
-                (e.step_height, e.gravity_mul, e.safe_fall, e.swim_mul, e.fly_mul) = (step, gravity, safe as f32, swim, fly);
+                (e.moves, e.safe_fall) = (moves, safe);
             }
         }
         let (here, now, gravity) = (self.id, self.time, c.dims[self.id as usize].gravity as f64);
@@ -2723,8 +2717,19 @@ impl Dim {
                 (fell.is_some() || splash || burn || !met.is_empty()).then_some(TickHit { id: e.id, fell, splash, burn, met })
             })
             .collect();
-        for (i, push) in super::entity::soft_push(c, &self.entities.list) {
+        let cram = crate::config::get(c.game.max_cramming) as u32;
+        let mut crammed = Vec::new();
+        for (i, push, too_many) in super::entity::soft_push(c, &self.entities.list, cram) {
             self.entities.list[i].vel += push;
+            if too_many {
+                crammed.push(self.entities.list[i].id);
+            }
+        }
+        // Vanilla's: a quarter of the ticks, 6 a time.
+        for id in crammed {
+            if self.random() % 4 == 0 {
+                self.damage(c, id, &abi::Damage::new(6.0, damage::CRAMMING));
+            }
         }
         self.seat_riders(c);
         for TickHit { id, fell, splash, burn, met } in hits {

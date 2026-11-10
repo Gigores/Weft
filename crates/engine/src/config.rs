@@ -417,6 +417,8 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:occlusion_culling", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:allow_avatars", ck::BOOL, 1.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
         number("core:keep_inventory", ck::BOOL, 0.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
+        // Vanilla's: more than this many pushing on one hurt it (0: never).
+        rule("core:max_entity_cramming", ck::INT, 24.0, 0.0, 1000.0),
         // Deaths a player has before staying a spectator (0: no end); 1 is hardcore.
         rule("core:lives", ck::INT, 0.0, 0.0, 100.0),
         // Set when the world is made, nobody changes the rules after.

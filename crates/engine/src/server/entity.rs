@@ -30,12 +30,8 @@ pub struct Entity {
     pub walk: Option<Walk>,
     /// Jump strength attribute when its walk was set (1 = vanilla's).
     pub jump_mul: f32,
-    /// Its `STEP_HEIGHT`, `GRAVITY`, `SWIM_SPEED` and `FLYING_SPEED` attributes this tick, which
-    /// physics goes by.
-    pub step_height: f64,
-    pub gravity_mul: f64,
-    pub swim_mul: f64,
-    pub fly_mul: f64,
+    /// What its attributes say of how it moves this tick, which physics goes by.
+    pub moves: physics::Moves,
     /// Its `SAFE_FALL` this tick: how far its paths go down at once.
     pub safe_fall: f32,
     pub removed: bool,
@@ -179,10 +175,7 @@ impl Entity {
             hurt_cooldown: 0,
             walk: None,
             jump_mul: 1.0,
-            step_height: 0.6,
-            gravity_mul: 1.0,
-            swim_mul: 1.0,
-            fly_mul: 1.0,
+            moves: physics::Moves::default(),
             safe_fall: 3.0,
             removed: false,
             removal: 0,
@@ -769,7 +762,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     e.sprinting = sprint && !sneak && !using && dir != DVec3::ZERO && (e.flying || swimming || !e.in_liquid);
     e.jumped = false;
     if e.flying {
-        let speed = walk.map_or(1.0, |w| w.speed as f64) * e.fly_mul * if e.sprinting { 2.0 } else { 1.0 };
+        let speed = walk.map_or(1.0, |w| w.speed as f64) * e.moves.fly * if e.sprinting { 2.0 } else { 1.0 };
         let f = physics::Flight { wish: dir, up, down: sneak, speed };
         let mut v = e.vel * DT;
         // Down on the ground it stops flying, as a player does, unless it goes up again.
@@ -786,7 +779,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     // The step players take, in blocks per tick: a mob walks at its target speed on plain
     // ground, faster on ice, slower in lava, and climbs ladders it walks into. Its keys do what a
     // player's do.
-    let mut ctl = physics::Control { swim: k.is(ef::SWIMS), liquid: physics::SWIM * e.swim_mul, ..Default::default() };
+    let mut ctl = physics::Control { swim: k.is(ef::SWIMS), liquid: physics::SWIM * e.moves.swim, ..Default::default() };
     if let Some(w) = walk {
         // Using something (eating), at a fifth of the speed, as a player.
         let slow = if using {
@@ -814,8 +807,8 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     let frame = physics::Frame {
         half_width: hw,
         height: h,
-        step: if e.item.is_empty() { e.step_height } else { 0.0 },
-        gravity: if k.is(ef::NO_GRAVITY) && !e.falls { 0.0 } else { physics::gravity_per_tick(gravity) * e.gravity_mul },
+        gravity: if k.is(ef::NO_GRAVITY) && !e.falls { 0.0 } else { physics::gravity_per_tick(gravity) * e.moves.gravity },
+        moves: physics::Moves { step: if e.item.is_empty() { e.moves.step } else { 0.0 }, ..e.moves },
     };
     let mut v = e.vel * DT;
     let r = physics::walk(c, block, bodies, e.id, &mut e.pos, &mut v, e.on_ground, &ctl, &frame);
@@ -840,11 +833,12 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
 
 /// Soft bodies (`PUSHABLE`) overlapping each other drift apart like vanilla mobs: a push of up
 /// to 1 block/s per neighbor. `pushers` may push without being pushed (players move on their
-/// clients). Returns the velocity change per entity.
-/// Vanilla's `maxEntityCramming`.
-const MAX_CRAMMING: u32 = 24;
-
-pub fn soft_push(c: &Content, list: &[Entity]) -> Vec<(usize, DVec3)> {
+/// clients). Returns the velocity change per entity, and whether `cram` or more pushed on it
+/// (`core:max_entity_cramming`, 0: never).
+pub fn soft_push(c: &Content, list: &[Entity], cram: u32) -> Vec<(usize, DVec3, bool)> {
+    // Each mob feels at most this many others, so a thousand in one spot cost a thousand times
+    // that, not a million pairs.
+    let most = cram.max(24);
     let soft = |e: &Entity| {
         let k = &c.game.entities[e.kind as usize];
         k.is(ef::PUSHABLE) && !k.is(ef::SOLID) && e.is_body() && e.alive()
@@ -863,14 +857,12 @@ pub fn soft_push(c: &Content, list: &[Entity]) -> Vec<(usize, DVec3)> {
         .filter_map(|(i, e)| {
             let (cx, cz) = ((e.pos.x / 2.0).floor() as i32, (e.pos.z / 2.0).floor() as i32);
             let mut push = DVec3::ZERO;
-            // Each mob feels at most this many others (vanilla's cramming limit), so a thousand in
-            // one spot cost a thousand times that, not a million pairs.
             let (mut felt, mut looked) = (0, 0);
             'near: for dz in -1..=1 {
                 for dx in -1..=1 {
                     for &j in cells.get(&(cx + dx, cz + dz)).into_iter().flatten() {
                         looked += 1;
-                        if felt == MAX_CRAMMING || looked > 4 * MAX_CRAMMING {
+                        if felt == most || looked > 4 * most {
                             break 'near;
                         }
                         let o = &list[j];
@@ -886,7 +878,7 @@ pub fn soft_push(c: &Content, list: &[Entity]) -> Vec<(usize, DVec3)> {
                     }
                 }
             }
-            (push != DVec3::ZERO).then_some((i, push * crate::world::TPS as f64))
+            (push != DVec3::ZERO).then_some((i, push * crate::world::TPS as f64, cram > 0 && felt >= cram))
         })
         .collect()
 }
