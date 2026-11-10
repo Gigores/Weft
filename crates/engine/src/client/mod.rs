@@ -1029,6 +1029,8 @@ impl Client {
 
     pub fn close_menu(&mut self) {
         self.drag = None;
+        self.sweep.clear();
+        self.picking.clear();
         if self.menu.take().is_some() {
             self.conn.send(ToServer::CloseMenu);
         }

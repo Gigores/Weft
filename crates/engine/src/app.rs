@@ -938,6 +938,7 @@ impl Running {
     /// Mouse and keyboard for the top screen.
     fn screen_input(&mut self, scale: f32, requests: &mut Vec<Request>) {
         let cursor = self.input.cursor / scale;
+        let menu_screen = self.screens.last().is_some_and(|(s, _)| s.shows_menu());
         let Some((screen, ui)) = self.screens.last_mut() else { return };
         let mut ctx = Ctx {
             settings: &mut self.settings,
@@ -952,7 +953,12 @@ impl Running {
             self.quads_dirty = true;
             return;
         }
-        if self.input.scroll != 0.0 && ui.scroll_at(cursor, self.input.scroll) {
+        // The wheel over a slot moves items (`menu_input`), not the panel behind it.
+        let over_slot = menu_screen
+            && ui
+                .hit(cursor)
+                .is_some_and(|h| matches!(ui.nodes[h].kind, Kind::Custom { tag: crate::client::modui::TAG_SLOT, .. }));
+        if self.input.scroll != 0.0 && !over_slot && ui.scroll_at(cursor, self.input.scroll) {
             self.quads_dirty = true;
         }
         // A scroll bar takes the mouse before anything under it.
@@ -973,7 +979,6 @@ impl Running {
             ui.hovered = hovered;
             self.quads_dirty = true;
         }
-        let menu_screen = self.screens.last().is_some_and(|(s, _)| s.shows_menu());
         if menu_screen {
             self.menu_input(hovered, cursor);
         }
@@ -1010,10 +1015,21 @@ impl Running {
             // Pressing with a stack on the cursor starts a drag; releasing over one slot is
             // a plain click, over several it spreads the stack.
             let holding = g.client.menu.as_ref().is_some_and(|m| !m.cursor.is_empty());
-            use crate::server::menu::{CLONE, GATHER, HOTBAR_SWAP, OFF_HAND_SWAP, PICK_SAME, THROW, THROW_ALL, TO_TRASH};
+            use crate::server::menu::{
+                CLONE, GATHER, HOTBAR_SWAP, OFF_HAND_SWAP, PICK_SAME, THROW, THROW_ALL, TO_TRASH, WHEEL_DOWN, WHEEL_UP,
+            };
             let typing = ui
                 .focused
                 .is_some_and(|f| matches!(ui.nodes[f].kind, Kind::Input { .. }));
+            // The wheel over a slot (Mouse Tweaks'): a notch up brings an item in from the other
+            // side, down sends one there; with shift a stack.
+            if let Some(s) = slot.filter(|_| self.input.scroll != 0.0) {
+                let button = if self.input.scroll > 0.0 { WHEEL_UP } else { WHEEL_DOWN };
+                for _ in 0..(self.input.scroll.abs().round() as u32).max(1) {
+                    g.client
+                        .send(net::ToServer::Click { slot: s, button, shift });
+                }
+            }
             for button in [0u8, 1] {
                 if self.input.pressed_button(button) {
                     let inside = ui
@@ -1102,7 +1118,9 @@ impl Running {
             }
             if let Some((button, slots)) = &mut g.client.drag {
                 if self.input.held_button(*button) {
-                    if let Some(s) = slot.filter(|s| !slots.contains(s)) {
+                    // A right-button drag leaves one more each time it comes back onto a slot.
+                    let again = |s: &u32| if *button == 1 { slots.last() != Some(s) } else { !slots.contains(s) };
+                    if let Some(s) = slot.filter(again) {
                         slots.push(s);
                         self.quads_dirty = true;
                     }
