@@ -101,11 +101,23 @@ fn leaves(r: &mut Registry, handle: &'static Block, tex: &str) {
         .mined_by("shears", tool_tier::HAND)
         .tab(&crate::tabs::NATURAL);
     // Vanilla: a sapling one time in 20, oak leaves an apple one time in 200.
-    let table = r
+    let mut table = r
         .loot(handle)
-        .pool(Pool::new().when(Cond::chance(0.05)).item("sapling"));
+        .pool(Pool::new().when(Cond::tool("#tools/shears")).item(handle.name()));
+    let no_shears = !Cond::tool("#tools/shears");
+    table = table.pool(
+        Pool::new()
+            .when(no_shears.clone())
+            .when(Cond::chance(0.05))
+            .item("sapling"),
+    );
     if std::ptr::eq(handle, &OAK_LEAVES) {
-        table.pool(Pool::new().when(Cond::chance(0.005)).item("apple"));
+        table.pool(
+            Pool::new()
+                .when(no_shears)
+                .when(Cond::chance(0.005))
+                .item("apple"),
+        );
     }
 }
 fn berry_leaves(
