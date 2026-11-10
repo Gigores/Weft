@@ -326,6 +326,10 @@ impl Dim {
     /// The first block along a ray from `from` (in this dimension's frame: a body's blocks when
     /// asked from them), bodies included when asked from the world.
     pub fn ray(&self, c: &Content, from: DVec3, dir: DVec3, max: f64, liquids: bool) -> Option<crate::physics::Hit> {
+        // Asked from a body's blocks, it looks along those.
+        if self.frame != 0 {
+            return crate::physics::pick(c, &*self.space, &[], from, dir, max, liquids);
+        }
         let structures: Vec<(u64, crate::physics::Transform, &dyn crate::physics::Blocks)> = self
             .bodies
             .iter()
@@ -335,10 +339,6 @@ impl Dim {
                     .map(|b| (sid, crate::physics::Transform::of(b.pos), &**s as &dyn crate::physics::Blocks))
             })
             .collect();
-        // Asked from a body's blocks, it looks along those.
-        if self.frame != 0 {
-            return crate::physics::pick(c, &*self.space, &[], from, dir, max, liquids);
-        }
         crate::physics::pick(c, &*self.space, &structures, from, dir, max, liquids)
     }
 }

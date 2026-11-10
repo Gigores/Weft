@@ -43,11 +43,19 @@ impl Dim {
         }
         if flags & abi::ray::ENTITIES != 0 {
             let reach = best.map_or(max, |b| b.distance);
+            // Only what stands near the line's box is looked at closely: no mob is wider than this.
+            const WIDEST: f64 = 4.0;
+            let (to, world_from) = (self.place.to_world(from + dir * reach), self.place.to_world(from));
+            let (lo, hi) = (world_from.min(to) - DVec3::splat(WIDEST), world_from.max(to) + DVec3::splat(WIDEST));
             let mut near: Option<(f64, u8, u64, Aabb)> = None;
             for e in &self.entities.list {
-                // A body with blocks is hit by those; projectiles fly past each other.
+                if e.pos.cmplt(lo).any() || e.pos.cmpgt(hi).any() {
+                    continue;
+                }
+                // A body with blocks is hit by those; projectiles fly past each other; the dead are
+                // hit no more.
                 let projectile = c.game.entities[e.kind as usize].projectile.is_some();
-                if e.removed || !e.is_body() || projectile || skip.contains(&e.id) || self.bodies.contains_key(&e.id) {
+                if e.removed || !e.is_body() || !e.alive() || projectile || skip.contains(&e.id) || self.bodies.contains_key(&e.id) {
                     continue;
                 }
                 let b = e.aabb(c);
@@ -92,9 +100,8 @@ impl Dim {
                     .map(|p| (e.id, p))
             })
             .collect();
-        let gravity = c.dims[self.id as usize].gravity as f64;
+        let gravity = crate::physics::gravity_per_tick(c.dims[self.id as usize].gravity as f64);
         for (id, p) in flying {
-            let gravity = gravity * self.attribute(c, id, crate::registry::attr::GRAVITY, false);
             let Some(e) = self.entities.get_mut(id) else { continue };
             if e.stuck > 0 {
                 e.stuck += 1;
@@ -103,6 +110,8 @@ impl Dim {
                 }
                 continue;
             }
+            let gravity = gravity * self.attribute(c, id, crate::registry::attr::GRAVITY, false);
+            let Some(e) = self.entities.get(id) else { continue };
             let v = e.vel * crate::world::TICK;
             let speed = v.length();
             let (pos, owner) = (self.place.to_local(e.pos), e.owner);

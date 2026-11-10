@@ -22,6 +22,7 @@ static VALUE: Chain = Chain::named("value");
 static LATE: Step = Step::named("late");
 static EARLY: Step = Step::named("early");
 static MAY: Question = Question::named("may");
+static HALF_STEP: Phase = Phase::named("half_step");
 /// Shared with everyone who sees the entity, for the sync test.
 pub static MARK: Component<u32> = Component::named("testkit:mark");
 /// Server-side stack data that is not saved either.
@@ -272,6 +273,10 @@ pub fn register(r: &mut Registry) {
     // Registered out of order: phases and `before` decide, not who came first.
     r.modify(&VALUE, &phase::MULTIPLY, |m| m.value *= 2.0);
     r.modify(&VALUE, &phase::ADD, |m| m.value += 3.0);
+    // A phase of its own goes right after multiply, before rules.
+    r.modify(&VALUE, &phase::RULES, |m| m.value *= 3.0);
+    r.phase(&HALF_STEP, &phase::MULTIPLY);
+    r.modify(&VALUE, &HALF_STEP, |m| m.value += 0.5);
     r.step(&LATE)
         .on(&VALUE)
         .phase(&phase::OVERRIDE)

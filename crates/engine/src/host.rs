@@ -66,6 +66,7 @@ pub static HOST: Host = Host {
     entity_swing_strength,
     entity_use_item,
     entity_key,
+    entity_release_use,
     entity_mine,
     component,
     player_count,
@@ -606,8 +607,8 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
     let dim = unsafe { dim(w) };
     let pos = crate::world::dvec(d.pos);
     // Items are their stack: nothing to spawn for an empty one.
-    let id = if is_item { dim.spawn_item(c, pos, d.stack) } else { dim.spawn_by(c, kind, pos, d.cause) };
-    if let Some(e) = dim.entities.get_mut(id) {
+    // How it starts, set before anyone is asked about it.
+    let init = |e: &mut crate::server::entity::Entity| {
         use abi::spawn_set as s;
         if d.set & s::VELOCITY != 0 && crate::world::dvec(d.velocity).is_finite() {
             e.vel = crate::world::dvec(d.velocity);
@@ -619,8 +620,15 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
             e.pickup_delay = d.pickup_delay;
         }
         e.owner = d.owner;
+    };
+    if is_item {
+        let id = dim.spawn_item(c, pos, d.stack);
+        if let Some(e) = dim.entities.get_mut(id) {
+            init(e);
+        }
+        return id;
     }
-    id
+    dim.spawn_by(c, kind, pos, d.cause, init)
 }
 
 unsafe extern "C" fn entity_despawn(w: *mut abi::WorldCtx, id: u64) {
@@ -842,6 +850,10 @@ unsafe extern "C" fn entity_use_item(w: *mut abi::WorldCtx, id: u64, off: u32, t
     }
 }
 
+unsafe extern "C" fn entity_release_use(w: *mut abi::WorldCtx, id: u64) {
+    unsafe { dim(w).release_use(content(), id) }
+}
+
 unsafe extern "C" fn entity_key(w: *mut abi::WorldCtx, player: u64, key: Str, out: *mut abi::KeyState) {
     unsafe {
         let (d, c) = (dim(w), content());
@@ -854,7 +866,11 @@ unsafe extern "C" fn entity_key(w: *mut abi::WorldCtx, player: u64, key: Str, ou
                 .find(|k| k.0 == id as u32)
                 .map(|k| k.1)
         });
-        *out = abi::KeyState { held: since.is_some() as u32, held_ticks: since.map_or(0, |s| (d.time - s) as u32), ..Default::default() };
+        *out = abi::KeyState {
+            held: since.is_some() as u32,
+            held_ticks: since.map_or(0, |s| d.time.saturating_sub(s) as u32),
+            ..Default::default()
+        };
     }
 }
 

@@ -142,22 +142,12 @@ impl Server {
                     r.stop_mining(id);
                 }
             }
-            ToServer::StopUsing => {
-                if let Some((r, entity)) = self.region(pi) {
-                    r.release_use(c, entity);
-                }
-            }
             ToServer::Keys { down, up } => {
                 let Some((r, entity)) = self.region(pi) else { return };
                 let now = r.time;
                 let mut told = Vec::new();
                 if let Some(e) = r.entities.get_mut(entity) {
-                    for key in up.into_iter().filter(|&k| (k as usize) < c.game.keys.len()) {
-                        if let Some(i) = e.keys.iter().position(|k| k.0 == key) {
-                            let (_, since) = e.keys.swap_remove(i);
-                            told.push(abi::KeyChange { player: entity, key, down: 0, held_ticks: (now - since) as u32, pad: 0 });
-                        }
-                    }
+                    // Downs first: a tap comes down and up in one message.
                     for key in down
                         .into_iter()
                         .filter(|&k| (k as usize) < c.game.keys.len())
@@ -167,6 +157,26 @@ impl Server {
                             told.push(abi::KeyChange { player: entity, key, down: 1, held_ticks: 0, pad: 0 });
                         }
                     }
+                    for key in up.into_iter().filter(|&k| (k as usize) < c.game.keys.len()) {
+                        if let Some(i) = e.keys.iter().position(|k| k.0 == key) {
+                            let (_, since) = e.keys.swap_remove(i);
+                            told.push(abi::KeyChange {
+                                player: entity,
+                                key,
+                                down: 0,
+                                held_ticks: now.saturating_sub(since) as u32,
+                                pad: 0,
+                            });
+                        }
+                    }
+                }
+                // Letting go of the use button is the end of using what it held (a bow shoots).
+                let use_key = c.game.keys.iter().position(|k| k.name == "core:use");
+                if told
+                    .iter()
+                    .any(|k| k.down == 0 && Some(k.key as usize) == use_key)
+                {
+                    r.release_use(c, entity);
                 }
                 for k in told {
                     r.emit_engine(c, abi::event::KEY, &k);
@@ -483,9 +493,14 @@ impl Server {
                 let spawn = self.dims[c.spawn_dim as usize].spawn_point(c);
                 self.change_dim(c, pi, c.spawn_dim, spawn);
                 if let Some((r, entity)) = self.region(pi) {
-                    r.entities.reset_components(c, entity);
                     // A death ends every effect, as vanilla's.
                     let effect = c.game.fields.effect;
+                    let had: Vec<_> = crate::world::effects_on(r.entities.comps.get(&(entity, effect)).map(|b| &b[..]), r.time).collect();
+                    for f in had {
+                        let end = abi::EffectChange { entity, effect: f.id, level: f.level, ticks: 0, pad: 0 };
+                        r.emit_engine(c, abi::event::EFFECT_ENDED, &end);
+                    }
+                    r.entities.reset_components(c, entity);
                     r.entities.comps.insert((entity, effect), Box::default());
                     r.entities.dirty_comp.insert((entity, effect));
                     // The game mode's modifiers went with the rest.
@@ -603,6 +618,15 @@ impl Server {
                     }
                     if let Some(s) = storage {
                         save_player(&s.lock(), p, r);
+                    }
+                    // What it held it lets go of as it leaves.
+                    let held = r
+                        .entities
+                        .get(p.entity)
+                        .map_or(Vec::new(), |e| e.keys.clone());
+                    for (key, since) in held {
+                        let up = abi::KeyChange { player: p.entity, key, down: 0, held_ticks: r.time.saturating_sub(since) as u32, pad: 0 };
+                        r.emit_engine(c, abi::event::KEY, &up);
                     }
                     r.entities.remove(p.entity, abi::removal::LEFT);
                 }

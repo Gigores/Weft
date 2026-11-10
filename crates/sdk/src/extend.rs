@@ -124,6 +124,9 @@ pub mod chain {
     pub static HEAL: Chain = Chain::named(crate::abi::chain::HEAL);
     /// What a projectile does to what it hits, from its damage: times its speed, rounded up.
     pub static PROJECTILE_DAMAGE: Chain = Chain::named(crate::abi::chain::PROJECTILE_DAMAGE);
+    /// What a fall does, from how far (`amount`): past `SAFE_FALL`, times
+    /// `FALL_DAMAGE_MULTIPLIER`. Hay or a trampoline is a step reading what is under the faller.
+    pub static FALL_DAMAGE: Chain = Chain::named(crate::abi::chain::FALL_DAMAGE);
 }
 
 /// Attributes the engine reads.
@@ -1188,7 +1191,7 @@ impl World {
     }
 
     /// Breaks a block as if mined with `tool` by `player` (0 = nobody), with its loot when
-    /// `drops`. False if nothing broke or an interceptor said no.
+    /// `drops`. False if nothing broke or the question said no.
     pub fn break_block(&self, pos: impl Into<BlockPos>, tool: ItemStack, player: u64, drops: bool) -> bool {
         let pos = pos.into();
         unsafe { (host().break_block)(self.raw(), &pos, tool, player, drops as u32) != 0 }

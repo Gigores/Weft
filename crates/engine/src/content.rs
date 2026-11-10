@@ -957,6 +957,7 @@ pub struct Ids {
     /// Tag: held like a tool in third person.
     pub handheld: Option<u32>,
     pub energy: Option<u32>,
+    pub modifiers: Option<u32>,
 }
 
 /// What lighting and meshing read of a state for every block they pass, packed tight: a
@@ -1435,47 +1436,50 @@ impl Content {
         crate::world::TICK as f32 / secs
     }
 
-    /// The attribute modifiers a stack gives while held or worn: its own `MODIFIERS` (an
-    /// enchanted sword's, resolved once per kind of stack, their conditions compiled at run time),
-    /// else its item's.
-    pub fn stack_modifiers(&self, s: &abi::ItemStack) -> Vec<(SourceMod, Option<Arc<crate::conditions::Expr>>)> {
+    /// The attribute modifiers a stack gives while held or worn, each with its condition: its own
+    /// `MODIFIERS` (an enchanted sword's, resolved once per kind of stack, their conditions
+    /// compiled at run time), else its item's.
+    pub fn each_stack_modifier(&self, s: &abi::ItemStack, mut f: impl FnMut(&SourceMod, Option<&Arc<crate::conditions::Expr>>)) {
         type Resolved = Arc<[(SourceMod, Option<Arc<crate::conditions::Expr>>)]>;
         static OWN: std::sync::LazyLock<parking_lot::RwLock<FxHashMap<u32, Resolved>>> = std::sync::LazyLock::new(Default::default);
         let own = self
-            .components
-            .id(abi::comp::MODIFIERS)
+            .ids
+            .modifiers
+            .filter(|_| s.data != 0)
             .and_then(|id| crate::stack::value(s.data, id));
         let Some(bytes) = own else {
-            return self
-                .source_mods
-                .items
-                .get(&s.item)
-                .map_or_else(Vec::new, |v| v.iter().map(|m| (*m, None)).collect());
+            for m in self.source_mods.items.get(&s.item).into_iter().flatten() {
+                f(m, None);
+            }
+            return;
         };
-        if let Some(r) = OWN.read().get(&s.data) {
-            return r.to_vec();
+        let known = OWN.read().get(&s.data).cloned();
+        let resolved = known.unwrap_or_else(|| {
+            let list = abi::data::from_bytes::<Vec<abi::Modifier>>(bytes).unwrap_or_default();
+            let steps = &self.game.steps;
+            let resolved: Resolved = list
+                .iter()
+                .filter_map(|m| {
+                    let attr = *self.game.attr_names.get(&m.attribute)?;
+                    let step = *steps
+                        .names
+                        .get(if m.step.is_empty() { abi::step::ADD } else { &m.step })?;
+                    let phase = match m.phase.as_str() {
+                        "" => steps.defs[step as usize].phase,
+                        p => *steps.phase_names.get(p)?,
+                    };
+                    let when = (!m.when.is_empty())
+                        .then(|| self.condition(&m.when.join(" & ")))
+                        .flatten();
+                    Some((SourceMod { attr, step, phase, amount: m.amount, worn: m.worn, when: None, level: 0 }, when))
+                })
+                .collect();
+            OWN.write().insert(s.data, resolved.clone());
+            resolved
+        });
+        for (m, when) in resolved.iter() {
+            f(m, when.as_ref());
         }
-        let list = abi::data::from_bytes::<Vec<abi::Modifier>>(bytes).unwrap_or_default();
-        let steps = &self.game.steps;
-        let resolved: Resolved = list
-            .iter()
-            .filter_map(|m| {
-                let attr = *self.game.attr_names.get(&m.attribute)?;
-                let step = *steps
-                    .names
-                    .get(if m.step.is_empty() { abi::step::ADD } else { &m.step })?;
-                let phase = match m.phase.as_str() {
-                    "" => steps.defs[step as usize].phase,
-                    p => *steps.phase_names.get(p)?,
-                };
-                let when = (!m.when.is_empty())
-                    .then(|| self.condition(&m.when.join(" & ")))
-                    .flatten();
-                Some((SourceMod { attr, step, phase, amount: m.amount, worn: m.worn, when: None, level: 0 }, when))
-            })
-            .collect();
-        OWN.write().insert(s.data, resolved.clone());
-        resolved.to_vec()
     }
 
     /// Mining the block with `tool` (empty: the hand) harvests it: it needs no tool, or this
@@ -2705,6 +2709,7 @@ fn component_ids(components: &Components) -> Ids {
         max_stack: id(abi::comp::MAX_STACK),
         durability: id(abi::comp::DURABILITY),
         attack_damage: id(abi::comp::ATTACK_DAMAGE),
+        modifiers: id(abi::comp::MODIFIERS),
         mining_speed: id(abi::comp::MINING_SPEED),
         tool_level: id(abi::comp::TOOL_LEVEL),
         use_priority: id(abi::comp::USE_PRIORITY),

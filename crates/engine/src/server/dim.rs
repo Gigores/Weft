@@ -1674,6 +1674,8 @@ impl Dim {
                 });
             }
         }
+        // Asked before the knock below ends a sprint.
+        let sweeps = self.ask_or(c, abi::question::SWEEP, &q, false);
         let extra = self.attribute_for(c, crate::registry::attr::ATTACK_KNOCKBACK, &q, false);
         if extra > 0.0 {
             let away = (self.entities.get(target).map_or(pos, |t| t.pos) - pos)
@@ -1686,7 +1688,7 @@ impl Dim {
                 self.events.push(DimEvent::StopSprint { player: attacker });
             }
         }
-        if self.ask_or(c, abi::question::SWEEP, &q, false) {
+        if sweeps {
             let sweep = self.compute(c, abi::chain::SWEEP_DAMAGE, dmg as f64, &q, false) as f32;
             let center = self.entities.get(target).map_or(pos, |t| t.pos);
             let near: Vec<u64> = self
@@ -1785,27 +1787,20 @@ impl Dim {
         let comp = c.game.fields.effect;
         let mut ended = Vec::new();
         let mut ticking: FxHashMap<u32, (Vec<u64>, Vec<u32>)> = FxHashMap::default();
-        let ids: Vec<u64> = self
-            .entities
-            .list
-            .iter()
-            .filter(|e| !e.removed)
-            .map(|e| e.id)
-            .collect();
-        for id in ids {
-            let Some(bytes) = self.entities.comps.get_mut(&(id, comp)) else { continue };
-            let all = crate::world::effects_on(Some(&bytes[..]), u64::MAX).collect::<Vec<_>>();
-            let (on, off): (Vec<_>, Vec<_>) = all.into_iter().partition(|f| f.until > self.time);
-            if !off.is_empty() {
-                *bytes = crate::world::encode_effects(&on);
-                ended.push((id, off));
-            }
-            for f in on {
+        let (entities, now) = (&mut self.entities, self.time);
+        for id in entities.list.iter().filter(|e| !e.removed).map(|e| e.id) {
+            let Some(bytes) = entities.comps.get_mut(&(id, comp)) else { continue };
+            for f in crate::world::effects_on(Some(&bytes[..]), now) {
                 if c.game.entity_effects[f.id as usize].on_tick.is_some() {
                     let t = ticking.entry(f.id).or_default();
                     t.0.push(id);
                     t.1.push(f.level);
                 }
+            }
+            if crate::world::effects_on(Some(&bytes[..]), u64::MAX).any(|f| f.until <= now) {
+                let (on, off): (Vec<_>, Vec<_>) = crate::world::effects_on(Some(&bytes[..]), u64::MAX).partition(|f| f.until > now);
+                *bytes = crate::world::encode_effects(&on);
+                ended.push((id, off));
             }
         }
         for (id, off) in ended {
@@ -1828,15 +1823,11 @@ impl Dim {
         }
     }
 
-    /// The damage a fall of `fell` blocks does to `id`: past its `SAFE_FALL`, by its
-    /// `FALL_DAMAGE_MULTIPLIER`; none for a kind that takes none.
+    /// The damage a fall of `fell` blocks does to `id` (`chain::FALL_DAMAGE`), if any.
     pub fn fall_damage(&mut self, c: &'static Content, id: u64, fell: f32) -> Option<f32> {
-        let kind = self.entities.get(id)?.kind;
-        let safe = self.attribute(c, id, crate::registry::attr::SAFE_FALL, false) as f32;
-        let mul = self.attribute(c, id, crate::registry::attr::FALL_DAMAGE_MULTIPLIER, false) as f32;
-        (c.game.entities[kind as usize].is(ef::FALL_DAMAGE) && fell > safe)
-            .then(|| (fell - safe) * mul)
-            .filter(|&d| d > 0.0)
+        self.entities.get(id)?;
+        let q = abi::Query { entity: id, amount: fell as f64, ..abi::Query::DEFAULT };
+        Some(self.compute(c, abi::chain::FALL_DAMAGE, fell as f64, &q, false) as f32).filter(|&d| d > 0.0)
     }
 
     /// What everyone near sees of a fall: dust where entity `id` landed from `fell` blocks up
@@ -2100,13 +2091,12 @@ impl Dim {
         self.entities.compact();
     }
 
-    /// `spawn` asked first (`action::SPAWN`, `cause` a `spawn_cause`) and told after: 0 when
-    /// refused.
-    pub fn spawn_by(&mut self, c: &'static Content, kind: u32, pos: DVec3, cause: u32) -> u64 {
+    /// `spawn`, set up by `init` (its owner, speed), then asked (`action::SPAWN`, `cause` a
+    /// `spawn_cause`) and told after: 0 when refused.
+    pub fn spawn_by(&mut self, c: &'static Content, kind: u32, pos: DVec3, cause: u32, init: impl FnOnce(&mut Entity)) -> u64 {
         let id = self.spawn(c, kind, pos);
-        if id == 0 {
-            return 0;
-        }
+        let Some(e) = self.entities.get_mut(id) else { return 0 };
+        init(e);
         let at = self
             .place
             .to_local(self.entities.get(id).map_or(pos, |e| e.pos));
@@ -2472,9 +2462,11 @@ impl Dim {
                 }
                 let n = rule.group[0] + (self.rng.next() % (rule.group[1] - rule.group[0] + 1) as u64) as u32;
                 for _ in 0..n {
-                    self.spawn_by(c, rule.entity, DVec3::new(x as f64 + 0.5, y as f64, z as f64 + 0.5), abi::spawn_cause::NATURAL);
+                    let at = DVec3::new(x as f64 + 0.5, y as f64, z as f64 + 0.5);
+                    if self.spawn_by(c, rule.entity, at, abi::spawn_cause::NATURAL, |_| {}) != 0 {
+                        count[rule.category as usize] += 1;
+                    }
                 }
-                count[rule.category as usize] += n;
             }
         }
     }

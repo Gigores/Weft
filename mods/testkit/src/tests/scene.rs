@@ -43,7 +43,7 @@ async fn chained(t: T, o: [i32; 3]) -> R {
         ("damage_chain", 1),
         ("loot_tables", 2),
         ("tool_tiers", 3),
-        ("interceptor", 4),
+        ("refused_break", 4),
         ("watcher_sync", 5),
         ("facing_states", 6),
     ] {
@@ -53,7 +53,7 @@ async fn chained(t: T, o: [i32; 3]) -> R {
             1 => damage_chain(&s).await,
             2 => loot_tables(&s).await,
             3 => tool_tiers(&s, o).await,
-            4 => interceptor(&s, add(o, [0, 0, 12])).await,
+            4 => refused_break(&s, add(o, [0, 0, 12])).await,
             5 => watcher_sync(&s, add(o, [12, 0, 0])).await,
             _ => facing_states(&s).await,
         };
@@ -419,8 +419,8 @@ async fn tool_tiers(t: &T, o: [i32; 3]) -> R {
     Ok(())
 }
 
-/// An interceptor refuses breaking gold while its rule is on.
-async fn interceptor(t: &T, p: [i32; 3]) -> R {
+/// A step answers no to breaking gold while its rule is on.
+async fn refused_break(t: &T, p: [i32; 3]) -> R {
     t.set(p, "gold_block").await?;
     t.cmd("/rule testkit:protect_gold 1").await?;
     let refused = t.op(&format!("break {} diamond_pickaxe", at(p))).await?;

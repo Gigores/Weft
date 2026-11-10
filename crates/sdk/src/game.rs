@@ -310,6 +310,11 @@ impl World {
     pub fn use_item(&self, id: u64, off_hand: bool) -> bool {
         unsafe { (host().entity_use_item)(self.raw(), id, off_hand as u32, std::ptr::null(), 0) != 0 }
     }
+    /// `id` lets go of what it is using, as a player's use button going up: a drawn bow shoots
+    /// (`on_release`, after how long it was held).
+    pub fn release_item(&self, id: u64) {
+        unsafe { (host().entity_release_use)(self.raw(), id) }
+    }
     /// `use_item` on the block at `pos`, from `face` (-X, +X, -Y, +Y, -Z, +Z): a bucket filled.
     pub fn use_item_on(&self, id: u64, off_hand: bool, pos: impl Into<BlockPos>, face: u32) -> bool {
         let pos = pos.into();
@@ -1062,9 +1067,10 @@ impl EntityBuilder<'_> {
     pub fn picks_up_items(self) -> Self {
         self.tag(abi::comp::entity::PICKS_UP)
     }
-    /// Damage of its melee hits (`World::attack`), like an item's.
+    /// Damage of its bare handed melee hits (`World::attack`): its `attribute::ATTACK_DAMAGE`
+    /// base, what it holds of it taking over.
     pub fn attack_damage(self, damage: f32) -> Self {
-        self.set(&crate::component::ATTACK_DAMAGE, damage)
+        self.attribute(&crate::attribute::ATTACK_DAMAGE, damage as f64)
     }
     /// Its melee hits per second (1), like an item's; `attribute::ATTACK_SPEED` multiplies it.
     pub fn attack_speed(self, per_second: f32) -> Self {

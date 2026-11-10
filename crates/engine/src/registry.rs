@@ -2075,6 +2075,11 @@ pub fn freeze(
     let phases = crate::steps::order_phases(&phases, errors);
     let (steps, _) = tables.bake(kind(ek::STEP), ek::STEP, mod_name, errors, |e, _| e.clone());
     g.steps = crate::steps::freeze(phases, &steps, step_order, errors);
+    g.steps.attributes = g
+        .attributes
+        .iter()
+        .map(|a| g.steps.chains.get(&a.name).cloned().unwrap_or_default())
+        .collect();
     // The settings, with a binding per key.
     let keys: Vec<(String, String)> = g
         .keys

@@ -90,6 +90,25 @@ pub fn encode_mods(m: &[AttrMod]) -> Box<[u8]> {
     b.into_boxed_slice()
 }
 
+/// An entity going to a dimension whose clock is `by` ticks ahead: what it keeps by world time
+/// (its effects' ends, its modifiers' ends, when its keys went down) is as far from now there.
+pub(super) fn rebase_clock(c: &Content, e: &mut super::entity::Entity, comps: &mut [(u32, Box<[u8]>)], by: i64) {
+    crate::world::rebase_effects(comps, c.game.fields.effect, by);
+    for (_, v) in comps
+        .iter_mut()
+        .filter(|(k, _)| *k == c.game.modifiers_comp)
+    {
+        let mods: Vec<AttrMod> = decode_mods(v)
+            .into_iter()
+            .map(|m| AttrMod { until: if m.until == 0 { 0 } else { m.until.saturating_add_signed(by).max(1) }, ..m })
+            .collect();
+        *v = encode_mods(&mods);
+    }
+    for k in &mut e.keys {
+        k.1 = k.1.saturating_add_signed(by);
+    }
+}
+
 impl Dim {
     /// Queues an event value for the end of the tick; values of the wrong size are refused.
     pub fn emit(&mut self, c: &Content, event: u32, bytes: &[u8]) {
@@ -150,19 +169,24 @@ impl Dim {
 
     /// `ask` starting from `default` where nobody says either way.
     pub fn ask_or(&mut self, c: &'static Content, question: &str, q: &abi::Query, default: bool) -> bool {
-        self.run(c, question, if default { 1.0 } else { 0.0 }, q, &[], false) != 0.0
+        let list = Self::chain_steps(c, question);
+        self.run(c, question, list, if default { 1.0 } else { 0.0 }, q, &[], false) != 0.0
     }
 
     /// Runs value chain `chain` from `base`; with `explain` the steps go to `explanation`.
     pub fn compute(&mut self, c: &'static Content, chain: &str, base: f64, q: &abi::Query, explain: bool) -> f64 {
-        self.run(c, chain, base, q, &[], explain)
+        self.run(c, chain, Self::chain_steps(c, chain), base, q, &[], explain)
     }
 
-    /// A chain's own steps and `extra` ones (what an entity has on it), phase by phase: in each,
-    /// the chain's first, then the extra in their order.
-    fn run(&mut self, c: &'static Content, chain: &str, base: f64, q: &abi::Query, extra: &[Extra], explain: bool) -> f64 {
+    fn chain_steps<'a>(c: &'a Content, chain: &str) -> &'a [u32] {
+        c.game.steps.chains.get(chain).map_or(&[], |v| &v[..])
+    }
+
+    /// A chain's own steps (`list`) and `extra` ones (what an entity has on it), phase by phase:
+    /// in each, the chain's first, then the extra in their order.
+    #[allow(clippy::too_many_arguments)]
+    fn run(&mut self, c: &'static Content, chain: &str, list: &[u32], base: f64, q: &abi::Query, extra: &[Extra], explain: bool) -> f64 {
         let steps = &c.game.steps;
-        let list = steps.chains.get(chain).map_or(&[][..], |v| &v[..]);
         let mut text = explain.then(|| format!("{chain}: {base}"));
         let mut value = base;
         if !list.is_empty() || !extra.is_empty() {
@@ -218,15 +242,13 @@ impl Dim {
 
     /// Its kind's own base of an attribute, else the world's rule if the attribute is one
     /// (`comp::attribute::RULE`), else the attribute's default.
-    fn base_attribute(&self, c: &Content, entity: u64, attr: u32) -> Option<f64> {
-        let e = self.entities.get(entity)?;
+    fn base_attribute(c: &Content, kind: u32, attr: u32) -> f64 {
         let def = &c.game.attributes[attr as usize];
-        let own = def.comp.and_then(|id| {
-            c.components
-                .get::<f64>(crate::components::ENTITY, e.kind, id)
-        });
+        let own = def
+            .comp
+            .and_then(|id| c.components.get::<f64>(crate::components::ENTITY, kind, id));
         let rule = c.game.attr_rules[attr as usize].map(crate::config::get);
-        Some(own.or(rule).unwrap_or(def.default))
+        own.or(rule).unwrap_or(def.default)
     }
 
     /// What is saved on an entity: what its sources give first (`keep_sources`), then its own.
@@ -248,10 +270,9 @@ impl Dim {
 
     /// The steps an entity has on attribute `attr`: its kind's, then what is saved on it; with
     /// `explain` whose each is.
-    fn attribute_steps(&self, c: &Content, entity: u64, attr: u32, explain: bool) -> Vec<Extra> {
+    fn attribute_steps(&self, c: &Content, kind: u32, entity: u64, attr: u32, explain: bool) -> Vec<Extra> {
         let steps = &c.game.steps;
         let def = &c.game.attributes[attr as usize];
-        let kind = self.entities.get(entity).map_or(u32::MAX, |e| e.kind);
         let mut out: Vec<Extra> = c
             .source_mods
             .kinds
@@ -288,9 +309,25 @@ impl Dim {
     /// `attribute` of `q.entity` with more said about what it is for (whom a hit goes at).
     pub fn attribute_for(&mut self, c: &'static Content, attr: u32, q: &abi::Query, explain: bool) -> f64 {
         let def = &c.game.attributes[attr as usize];
-        let Some(base) = self.base_attribute(c, q.entity, attr) else { return def.default };
-        let extra = self.attribute_steps(c, q.entity, attr, explain);
-        let v = self.run(c, &def.name, base, q, &extra, explain);
+        let Some(kind) = self.entities.get(q.entity).map(|e| e.kind) else { return def.default };
+        let base = Self::base_attribute(c, kind, attr);
+        let list = &c.game.steps.attributes[attr as usize];
+        // Most bodies have nothing on most attributes, read every tick: just the base.
+        let saved = self
+            .entities
+            .comps
+            .contains_key(&(q.entity, c.game.modifiers_comp));
+        let of_kind = || {
+            c.source_mods
+                .kinds
+                .get(&kind)
+                .is_some_and(|l| l.iter().any(|m| m.when.is_none() && m.attr == attr))
+        };
+        if !explain && list.is_empty() && !saved && !of_kind() {
+            return base.clamp(def.min, def.max);
+        }
+        let extra = self.attribute_steps(c, kind, q.entity, attr, explain);
+        let v = self.run(c, &def.name, list, base, q, &extra, explain);
         let clamped = v.clamp(def.min, def.max);
         if explain && clamped != v {
             set_explanation(format!("{}, kept to {clamped}", explanation()));
@@ -384,33 +421,31 @@ impl Dim {
                 .map(|m| (*m, 1, None)),
         );
         let held = self.entities.held(id);
-        from.extend(
-            c.stack_modifiers(&held)
-                .into_iter()
-                .filter(|m| !m.0.worn)
-                .map(|(m, when)| (m, 1, when)),
-        );
+        c.each_stack_modifier(&held, |m, when| {
+            if !m.worn {
+                from.push((*m, 1, when.cloned()));
+            }
+        });
         let worn = c.game.entities[kind as usize].worn.clone();
-        let stacks: Vec<_> = self
-            .entities
-            .inventories
-            .get(&id)
+        let inv = self.entities.inventories.get(&id);
+        for st in inv
             .and_then(|i| i.get(worn.start as usize..worn.end as usize))
-            .map_or_else(Vec::new, |s| s.to_vec());
-        for st in &stacks {
-            from.extend(
-                c.stack_modifiers(st)
-                    .into_iter()
-                    .filter(|m| m.0.worn)
-                    .map(|(m, when)| (m, 1, when)),
-            );
+            .into_iter()
+            .flatten()
+        {
+            c.each_stack_modifier(st, |m, when| {
+                if m.worn {
+                    from.push((*m, 1, when.cloned()));
+                }
+            });
         }
-        let ours = |m: &AttrMod| m.id == SOURCE;
-        if from.is_empty() && !self.modifiers_of(c, id).iter().any(ours) {
+        let key = (id, c.game.modifiers_comp);
+        if from.is_empty() && !self.entities.comps.contains_key(&key) {
             return;
         }
         let ask = crate::conditions::Ask { pos, entity: id, body: Some(body), ..Default::default() };
-        let mut now: Vec<AttrMod> = Vec::new();
+        // (attribute, step, phase, number) of each, by hash as saved.
+        let mut now: Vec<(u64, u64, u64, f64)> = Vec::new();
         for (m, times, when) in from {
             let holds = match (m.when, when) {
                 (Some(w), _) => crate::conditions::on_server(self, c, w, &ask),
@@ -422,23 +457,32 @@ impl Dim {
             }
             let step = &c.game.steps.defs[m.step as usize];
             let phase = if m.phase == step.phase { 0 } else { crate::registry::name_hash(&c.game.steps.phases[m.phase as usize]) };
-            let one = AttrMod {
-                attr: c.game.attributes[m.attr as usize].hash,
-                step: step.hash,
-                phase,
-                amount: m.amount,
-                until: 0,
-                id: SOURCE.into(),
-            };
+            let one = (c.game.attributes[m.attr as usize].hash, step.hash, phase, m.amount);
             now.extend(std::iter::repeat_n(one, times.min(MAX_LEVELS) as usize));
         }
-        let mods = self.modifiers_of(c, id);
-        let had: Vec<&AttrMod> = mods.iter().filter(|m| ours(m)).collect();
-        if had.len() == now.len() && had.iter().zip(&now).all(|(a, b)| *a == b) {
+        // Unchanged, as on nearly every tick: nothing decoded, nothing written.
+        let (mut at, mut same) = (0, true);
+        if let Some(b) = self.entities.comps.get(&key) {
+            each_mod(b, |m, by| {
+                if by == SOURCE.as_bytes() {
+                    same &= m.until == 0 && now.get(at) == Some(&(m.attr, m.step, m.phase, m.amount));
+                    at += 1;
+                }
+            });
+        }
+        if same && at == now.len() {
             return;
         }
-        now.extend(mods.into_iter().filter(|m| !ours(m)));
-        self.put_modifiers(c, id, &now);
+        let mut mods: Vec<AttrMod> = now
+            .into_iter()
+            .map(|(attr, step, phase, amount)| AttrMod { attr, step, phase, amount, until: 0, id: SOURCE.into() })
+            .collect();
+        mods.extend(
+            self.modifiers_of(c, id)
+                .into_iter()
+                .filter(|m| m.id != SOURCE),
+        );
+        self.put_modifiers(c, id, &mods);
     }
 
     /// The only maximum health there is: the attribute (the kind's value plus modifiers).

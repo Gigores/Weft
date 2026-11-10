@@ -123,7 +123,7 @@ pub async fn mining_and_wear(t: T) -> R {
         .until("dirt picked up", Duration::from_secs(5), |t| (0..36).any(|i| t.c().inventory_slot(i).item == d))
         .await;
     t.check(got.is_ok(), "digging dirt by hand gave nothing");
-    // A break an interceptor refuses puts the block back on the client too.
+    // A break the question refuses puts the block back on the client too.
     let gold = add(f, [-2, 0, 0]);
     t.set(gold, "gold_block").await?;
     t.op("put me 1 diamond_pickaxe 1").await?;
@@ -1959,8 +1959,6 @@ pub async fn swimming(t: T) -> R {
     Ok(())
 }
 
-/// Modern combat: a hit right after the last does a fraction, a charged one all of it, and a
-/// stronger hit during the target's recovery still adds the difference.
 /// A projectile hits what its whole way through a tick crosses, however fast: a pig fifteen blocks
 /// a tick doesn't slip through; one into a wall sticks at the face it met, and stays.
 pub async fn projectiles(t: T) -> R {
@@ -2003,6 +2001,16 @@ pub async fn projectiles(t: T) -> R {
     t.secs(1.0).await?;
     let still = num(&t.op(&format!("entity {arrow}")).await?, 3);
     t.check_eq(still, at, "and it stays");
+
+    // Shot up at a block a tick it slows as vanilla's arrow does: half a second on, some seven
+    // blocks higher.
+    let (ux, uz) = (f[0] as f64 - 4.5, f[2] as f64 + 0.5);
+    let up = t
+        .op(&format!("shoot base:arrow {ux} {y} {uz} 0 20 0"))
+        .await?;
+    t.secs(0.5).await?;
+    let height = num(&t.op(&format!("entity {up}")).await?, 2) - y;
+    t.check((4.0..11.0).contains(&height), format!("an arrow shot up climbs and slows: {height:.2} blocks"));
     Ok(())
 }
 
@@ -2029,6 +2037,8 @@ pub async fn bow_and_keys(t: T) -> R {
     Ok(())
 }
 
+/// Modern combat: a hit right after the last does a fraction, a charged one all of it, and a
+/// stronger hit during the target's recovery still adds the difference.
 pub async fn attack_charge(t: T) -> R {
     t.flat().await?;
     t.op("put me 0 iron_sword 1").await?;

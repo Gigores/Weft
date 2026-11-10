@@ -44,11 +44,15 @@ pub struct Steps {
     /// Phase names in the order they run.
     pub phases: Vec<String>,
     pub phase_names: FxHashMap<String, u32>,
+    /// By the hash of its name, what saved modifiers keep.
+    pub phase_hashes: FxHashMap<u64, u32>,
     pub defs: Vec<StepDef>,
     pub names: FxHashMap<String, u32>,
     pub hashes: FxHashMap<u64, u32>,
     /// By chain, the steps every computation of it runs, in order.
     pub chains: FxHashMap<String, Vec<u32>>,
+    /// The same for each attribute, by id: they are computed every tick by every body.
+    pub attributes: Vec<Vec<u32>>,
 }
 
 impl Steps {
@@ -57,10 +61,7 @@ impl Steps {
     }
 
     pub fn phase_of_hash(&self, hash: u64) -> Option<u32> {
-        self.phases
-            .iter()
-            .position(|p| crate::registry::name_hash(p) == hash)
-            .map(|i| i as u32)
+        self.phase_hashes.get(&hash).copied()
     }
 }
 
@@ -87,22 +88,15 @@ fn fixed_dimension(d: &mut Dim, c: &'static Content, _: &abi::Query, s: &mut Cal
     }
 }
 
-/// What a melee hit's attacker holds of what `q.item` says (its stack, data and all, while it
-/// still holds it), else its kind's own `attack_damage`: the base of its `ATTACK_DAMAGE`.
+/// What the attacker holds takes over its `ATTACK_DAMAGE` base: the stack `q.item` says (data
+/// and all while it still holds it), else what is in its hand.
 fn weapon(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
-    let Some(e) = d.entities.get(q.entity) else { return };
     let held = d.entities.held(q.entity);
-    let stack = if held.item == q.item { held } else { abi::ItemStack::new(q.item, 1) };
-    let own = || {
-        c.components.id(abi::comp::ATTACK_DAMAGE).and_then(|id| {
-            c.components
-                .get::<f32>(crate::components::ENTITY, e.kind, id)
-        })
-    };
+    let stack = if q.item == 0 || held.item == q.item { held } else { abi::ItemStack::new(q.item, 1) };
     let from_item = c
         .stack_value::<f32>(&stack, c.ids.attack_damage)
         .filter(|_| !stack.is_empty());
-    if let Some(v) = from_item.or_else(own) {
+    if let Some(v) = from_item {
         s.value = v as f64;
     }
 }
@@ -214,6 +208,15 @@ fn hurt_cooldown(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc)
     }
 }
 
+/// Past its `SAFE_FALL`, times its `FALL_DAMAGE_MULTIPLIER`; none for a kind that takes none.
+fn safe_fall(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+    let Some(kind) = d.entities.get(q.entity).map(|e| e.kind) else { return };
+    let safe = d.attribute(c, q.entity, crate::registry::attr::SAFE_FALL, false);
+    let mul = d.attribute(c, q.entity, crate::registry::attr::FALL_DAMAGE_MULTIPLIER, false);
+    let takes = c.game.entities[kind as usize].is(crate::tag_bits::entity::FALL_DAMAGE);
+    s.value = if takes { (s.value - safe).max(0.0) * mul } else { 0.0 };
+}
+
 /// Vanilla's arrow: its damage times its speed, rounded up.
 fn by_speed(_: &mut Dim, _: &'static Content, q: &abi::Query, s: &mut Calc) {
     s.value = (s.value * q.amount).ceil();
@@ -244,11 +247,12 @@ pub const NATIVE: &[(&str, Option<&str>, &str, Native)] = &[
     ("core:sweep_damage", Some(abi::chain::SWEEP_DAMAGE), abi::phase::BASE, sweep_damage),
     ("core:sprint_knockback", Some(abi::attribute::ATTACK_KNOCKBACK), abi::phase::ADD, sprint_knockback),
     ("core:immune", Some(abi::action::HURT), abi::phase::BASE, immune),
-    ("core:resistance", Some(abi::chain::DAMAGE), abi::phase::MULTIPLY, resistance),
+    ("core:resistance", Some(abi::chain::DAMAGE), abi::phase::FINAL, resistance),
     ("core:not_lethal", Some(abi::chain::DAMAGE), abi::phase::FINAL, not_lethal),
     ("core:hurt_cooldown", Some(abi::question::RECOVERING), abi::phase::BASE, hurt_cooldown),
     ("core:effect_immune", Some(abi::action::EFFECT), abi::phase::BASE, effect_immune),
     ("core:by_speed", Some(abi::chain::PROJECTILE_DAMAGE), abi::phase::BASE, by_speed),
+    ("core:safe_fall", Some(abi::chain::FALL_DAMAGE), abi::phase::BASE, safe_fall),
 ];
 
 /// The engine's phases and steps as entries, before every mod's.
@@ -277,34 +281,38 @@ pub fn engine_entries(kind: u32) -> Vec<RawEntry> {
     }
 }
 
-/// Phases in order: each right after the one it names, after the ones that named it before.
+/// Phases in order: each right after the one it names, after the ones that named it before
+/// (and theirs), ahead of the engine's next.
 pub fn order_phases(entries: &[Entry], errors: &mut Vec<String>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    // How many came in right after each, so a later one goes past them.
-    let mut after_count: FxHashMap<String, usize> = FxHashMap::default();
-    let mut left: Vec<&Entry> = entries.iter().collect();
-    while !left.is_empty() {
-        let before = left.len();
-        left.retain(|e| match e.text(abi::comp::phase::AFTER).filter(|a| !a.is_empty()) {
-            None => {
-                out.push(e.name.clone());
-                false
-            }
-            Some(a) => match out.iter().position(|p| p == a) {
-                Some(at) => {
-                    let n = after_count.entry(a.to_string()).or_default();
-                    out.insert(at + 1 + *n, e.name.clone());
-                    *n += 1;
-                    false
-                }
-                None => true,
-            },
-        });
-        if left.len() == before {
-            for e in left {
-                errors.push(format!("phase {}: no phase {} to come after", e.name, e.text(abi::comp::phase::AFTER).unwrap_or("")));
-            }
-            break;
+    fn after(e: &Entry) -> Option<&str> {
+        e.text(abi::comp::phase::AFTER).filter(|a| !a.is_empty())
+    }
+    let known: FxHashMap<&str, ()> = entries.iter().map(|e| (e.name.as_str(), ())).collect();
+    let mut children: FxHashMap<&str, Vec<&Entry>> = FxHashMap::default();
+    let mut roots = Vec::new();
+    for e in entries {
+        match after(e) {
+            Some(a) if known.contains_key(a) => children.entry(a).or_default().push(e),
+            Some(a) => errors.push(format!("phase {}: no phase {a} to come after", e.name)),
+            None => roots.push(e),
+        }
+    }
+    // A mod's phase goes right after the one it names, the engine's own next one after it.
+    for list in children.values_mut() {
+        list.sort_by_key(|e| e.owner == crate::registry::ENGINE);
+    }
+    let mut out = Vec::new();
+    let mut stack: Vec<&Entry> = roots.into_iter().rev().collect();
+    while let Some(e) = stack.pop() {
+        if out.contains(&e.name) {
+            continue;
+        }
+        out.push(e.name.clone());
+        stack.extend(children.get(e.name.as_str()).into_iter().flatten().rev());
+    }
+    for e in entries.iter().filter(|e| !out.contains(&e.name)) {
+        if after(e).is_some_and(|a| known.contains_key(a)) {
+            errors.push(format!("phase {} comes after itself through others", e.name));
         }
     }
     out
@@ -327,7 +335,12 @@ pub fn freeze(phases: Vec<String>, entries: &[Entry], order_file: &str, errors: 
         .enumerate()
         .map(|(i, p)| (p.clone(), i as u32))
         .collect();
-    let mut out = Steps { phases, phase_names, ..Default::default() };
+    let phase_hashes = phases
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (crate::registry::name_hash(p), i as u32))
+        .collect();
+    let mut out = Steps { phases, phase_names, phase_hashes, ..Default::default() };
     let mut found = Vec::new();
     for e in entries {
         let phase = e.text(s::PHASE).unwrap_or(abi::phase::ADD);
@@ -369,6 +382,8 @@ pub fn freeze(phases: Vec<String>, entries: &[Entry], order_file: &str, errors: 
         let mut list = order_chain(&out, &chain, &steps, errors);
         if let Some(wanted) = hand.get(&chain) {
             apply_hand_order(&out, &mut list, wanted, &chain, errors);
+            // A hand order reorders inside a phase, never across.
+            list.sort_by_key(|&s| out.defs[s as usize].phase);
         }
         out.chains.insert(chain, list);
     }

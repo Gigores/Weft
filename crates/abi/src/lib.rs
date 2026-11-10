@@ -3637,6 +3637,9 @@ pub struct Host {
     /// (null: on nothing) from `face`, as a player's right click does. 1 if it did something
     /// or started to (eating takes time; it goes on while the hand holds the item).
     pub entity_use_item: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, off: u32, target: *const BlockPos, face: u32) -> u32,
+    /// `id` lets go of what it is using, as a player letting go of the use button: its
+    /// `comp::item::ON_RELEASE` hears after how long (a skeleton's bow).
+    pub entity_release_use: unsafe extern "C" fn(world: *mut WorldCtx, id: u64),
     /// What a player holds of action `key` on the server (`held`, `held_ticks`; `pressed` and
     /// `released` are its client's): what its client last said.
     pub entity_key: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, key: Str, out: *mut KeyState),
@@ -3885,7 +3888,7 @@ pub struct Host {
     /// the player holds afterwards; `handled` is set non-zero if anything happened.
     pub use_container: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, stack: ItemStack, handled: *mut u32) -> ItemStack,
 
-    // ------------------------------------------------ events, interceptors, modifiers, loot
+    // ------------------------------------------------ events, questions, steps, loot
     /// Subscribes to event `name` carrying values of `schema` (checked against every other use);
     /// `cb` gets `EventArgs` once per tick and region with every value queued since.
     pub reg_event_handler: unsafe extern "C" fn(reg: *mut Registrar, name: Str, schema: Str, cb: Callback),
@@ -4644,7 +4647,7 @@ pub mod action {
     /// block `pos` when `state` is not 0.
     pub const USE_ITEM: &str = "core:use_item";
     /// `Death`. `entity` about to die of `amount` from `other` and `cause`. Denied, it lives on
-    /// with one health (a totem); what saves it is the interceptor's to do.
+    /// with one health (a totem); what saves it is the answering step's to do.
     pub const DIE: &str = "core:die";
     /// `Mounting`. `entity` getting onto `other` in seat `amount`.
     pub const MOUNT: &str = "core:mount";
@@ -4772,7 +4775,7 @@ pub mod step {
 /// Value chains the engine runs.
 pub mod chain {
     /// Damage an entity takes (`entity` hurt by `other` through `direct`, `cause`, `crit`):
-    /// `core:resistance` (`MULTIPLY`), `core:not_lethal` (`FINAL`).
+    /// what it resists comes off last, `core:resistance` then `core:not_lethal` (`FINAL`).
     pub const DAMAGE: &str = "core:damage";
     /// What a melee hit of `entity` on `other` with `item` does, from its `attribute::ATTACK_DAMAGE`
     /// against them: `core:charge` (`MULTIPLY`, 0.2 + 0.8 x `charge` squared) and `core:crit`
@@ -4788,6 +4791,10 @@ pub mod chain {
     /// What projectile `entity` does to `other` it hits, from its `Projectile::damage`:
     /// `core:by_speed` (`BASE`, times `amount`, its speed in blocks a tick, rounded up).
     pub const PROJECTILE_DAMAGE: &str = "core:projectile_damage";
+    /// What a fall of `amount` blocks does to `entity`, from that distance: `core:safe_fall`
+    /// (`BASE`, past its `SAFE_FALL`, times its `FALL_DAMAGE_MULTIPLIER`; none for a kind that
+    /// takes no fall damage). A soft block is a step reading what is under it.
+    pub const FALL_DAMAGE: &str = "core:fall_damage";
 }
 
 /// One step's run: what the value is about, where it began (`base`) and where this phase began

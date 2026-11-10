@@ -1426,11 +1426,16 @@ impl Client {
         let keys = &content().game.keys;
         self.keys_down.resize(keys.len(), false);
         let (mut down, mut up) = (Vec::new(), Vec::new());
+        let world = input.captured && !self.dead;
         for (i, k) in keys.iter().enumerate() {
-            let now = input.captured && !self.dead && input.held(&k.name);
+            let now = world && input.held(&k.name);
             if now != self.keys_down[i] {
                 self.keys_down[i] = now;
                 if now { down.push(i as u32) } else { up.push(i as u32) }
+            } else if !now && world && input.pressed(&k.name) {
+                // Down and up within a frame (a wheel notch, a tap): both still count.
+                down.push(i as u32);
+                up.push(i as u32);
             }
         }
         if self.joined && !(down.is_empty() && up.is_empty()) {
@@ -1649,9 +1654,9 @@ impl Client {
     fn use_held(&mut self, input: &Input, dt: f64, look: DVec3, send_look: &mut LookOnce) {
         if let Some((left, _)) = &mut self.using {
             *left = (*left - dt as f32 * self.tick_rate as f32).max(0.0);
+            // The server hears the button go up with the other keys (`send_keys`).
             if !input.held("core:use") {
                 self.using = None;
-                self.conn.send(ToServer::StopUsing);
             }
         } else if input.pressed("core:use") || (input.held("core:use") && self.use_delay <= 0.0) {
             send_look.send(&mut self.conn);
