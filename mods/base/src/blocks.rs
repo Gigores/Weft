@@ -108,6 +108,30 @@ fn leaves(r: &mut Registry, handle: &'static Block, tex: &str) {
         table.pool(Pool::new().when(Cond::chance(0.005)).item("apple"));
     }
 }
+fn berry_leaves(
+    r: &mut Registry,
+    handle: &'static Block,
+    texture: &'static str,
+    texture_berried: &'static str,
+    item: &'static Item
+) {
+    r.block(handle)
+        .sound_group("grass")
+        .prop("berried", ["false", "true"])
+        .hardness(0.2)
+        .cutout()
+        .light_opacity(1)
+        .tag("leaves")
+        .signal_blocker()
+        .mined_by("shears", tool_tier::HAND)
+        .tab(&crate::tabs::NATURAL)
+        .texture(texture_berried)
+        .states(|p, s| s.texture(if p.is("berried", "true") { texture_berried } else { texture }))
+        .on_use(move |u| pick_berries(u, item));
+    r.loot(handle)
+        // .pool(Pool::new().when(Cond::tool("tools/shears")).item(handle.name()))
+        .pool(Pool::new().when(Cond::state("berried=true")).items(item.name(), 1, 2));
+}
 
 fn plant(r: &mut Registry, handle: &'static Block, tex: &str) {
     r.block(handle)
@@ -326,33 +350,8 @@ pub fn register(r: &mut Registry) {
     leaves(r, &OAK_LEAVES, "leaves_oak");
     leaves(r, &BIRCH_LEAVES, "leaves_birch");
     leaves(r, &SPRUCE_LEAVES, "leaves_spruce");
-    r.block(&RASPBERRY_LEAVES)
-        .sound_group("grass")
-        .prop("berried", ["false", "true"])
-        .hardness(0.2)
-        .cutout()
-        .light_opacity(1)
-        .tag("leaves")
-        .signal_blocker()
-        .mined_by("shears", tool_tier::HAND)
-        .tab(&crate::tabs::NATURAL)
-        .texture("raspberry_leaves_berried")
-        .states(|p, s| s.texture(if p.is("berried", "true") { "raspberry_leaves_berried" } else { "raspberry_leaves" }))
-        .on_use(|u| pick_berries(u, &crate::items::RASPBERRY));
-    r.block(&SNOWBERRY_LEAVES)
-        .sound_group("grass")
-        .prop("berried", ["false", "true"])
-        .hardness(0.2)
-        .cutout()
-        .light_opacity(1)
-        .tag("leaves")
-        .signal_blocker()
-        .mined_by("shears", tool_tier::HAND)
-        .tab(&crate::tabs::NATURAL)
-        .texture("snowberry_leaves_berried")
-        .states(|p, s| s.texture(if p.is("berried", "true") { "snowberry_leaves_berried" } else { "raspberry_leaves" }))
-        .on_use(|u| pick_berries(u, &crate::items::SNOWBERRY));
-
+    berry_leaves(r, &RASPBERRY_LEAVES, "raspberry_leaves", "raspberry_leaves_berried" , &crate::items::RASPBERRY);
+    berry_leaves(r, &SNOWBERRY_LEAVES, "raspberry_leaves", "snowberry_leaves_berried" , &crate::items::SNOWBERRY);
     // Vanilla numbers: water steps every 5 ticks and reaches 7 blocks, lava every 30 and 3.
     // Players swim in water; what they wear may add more (`SWIMS_IN` on an item).
     r.edit(&PLAYER).set_text(&SWIMS_IN, "#water");
