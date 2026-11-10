@@ -5,7 +5,7 @@ use weft_sdk::*;
 
 use crate::items::{ARMOR, ARMOR_PIECE, ARMOR_TOUGHNESS, FOOD};
 
-pub use base_api::{FEET, HEAD, HUNGER, Hunger, LEGS};
+pub use base_api::{Hunger, FEET, HEAD, HUNGER, LEGS};
 
 /// Every 4 seconds a player with a full belly heals and a starving one hurts, like vanilla's.
 const PULSE_TICKS: u32 = 80;
@@ -62,12 +62,18 @@ pub fn register(r: &mut Registry) {
     r.world_tick(tick_players);
     // Not hungry, it doesn't start eating; the other way round it would only find out at the end.
     r.before_event(&actions::USE_ITEM, |q| {
-        if ALWAYS_EATABLE.on_item(q.item()) {return Verdict::Abstain;}
+        if ALWAYS_EATABLE.on_item(q.item()) {
+            return Verdict::Abstain;
+        }
         let full = FOOD.on_item(q.item()).is_some()
             && q.world()
                 .component(q.entity(), &HUNGER)
                 .is_some_and(|h| h.food >= 20.0);
-        if full { Verdict::Deny } else { Verdict::Abstain }
+        if full {
+            Verdict::Deny
+        } else {
+            Verdict::Abstain
+        }
     });
     // Modern's exhaustion, by what the player does.
     r.on_event(&actions::BREAK_BLOCK, |b| {
@@ -148,7 +154,11 @@ pub fn register(r: &mut Registry) {
     r.hud_element(&HUD_ARMOR, hud_anchor::HOTBAR_LEFT, 1, |ui| {
         ui.icons("armor", 10, |c| {
             let points = c.attribute(&ARMOR).floor() as f32;
-            if points > 0.0 && !c.outside_survival() { points } else { -1.0 }
+            if points > 0.0 && !c.outside_survival() {
+                points
+            } else {
+                -1.0
+            }
         });
     });
     r.hud_element(&HUD_FOOD, hud_anchor::HOTBAR_RIGHT, 0, |ui| {
@@ -188,7 +198,11 @@ pub fn register(r: &mut Registry) {
     r.hud_element(&HUD_ATTACK, hud_anchor::UNDER_CROSSHAIR, 0, |ui| {
         ui.progress_bind("attack_bar", S::default().size(16.0, 4.0), |c| {
             let charge = c.swing_strength();
-            if charge < 1.0 { charge } else { -1.0 }
+            if charge < 1.0 {
+                charge
+            } else {
+                -1.0
+            }
         })
     });
 
@@ -319,7 +333,11 @@ fn heal_or_starve(w: &World, id: u64, st: &mut EntityState) {
 
 /// What the air bar shows: whole bubbles like vanilla's, hidden with a full breath.
 fn air_bubbles(air: f32) -> f32 {
-    if air < MAX_AIR { (air.max(0.0) / MAX_AIR * 10.0).ceil() * 2.0 } else { -1.0 }
+    if air < MAX_AIR {
+        (air.max(0.0) / MAX_AIR * 10.0).ceil() * 2.0
+    } else {
+        -1.0
+    }
 }
 
 fn tick_players(w: &World) {
