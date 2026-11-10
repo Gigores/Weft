@@ -7,6 +7,7 @@ use crate::blocks::*;
 
 use weft_sdk::noise::*;
 use weft_sdk::terrain::*;
+use weft_sdk::abi::entry_kind as ek;
 
 pub const SEA: i32 = 63;
 
@@ -46,6 +47,28 @@ pub static OCEAN: Biome = Biome::named("ocean");
 pub static BEACH: Biome = Biome::named("beach");
 pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
 
+fn gentle(s: &Site, r: i32, max_range: i32) -> bool {
+    let p = s.pos();
+    let dim = Dimension::named(name_of(ek::DIMENSION, s.dimension()));
+    let seed = s.seed();
+
+    let mut lo = i32::MAX;
+    let mut hi = i32::MIN;
+
+    for dz in -r..=r {
+        for dx in -r..=r {
+            let h = dim.column(seed, p.x + dx, p.z + dz).height;
+            if h == i32::MIN {
+                return false;
+            }
+            lo = lo.min(h);
+            hi = hi.max(h);
+        }
+    }
+
+    hi - lo <= max_range
+}
+
 pub fn register(r: &mut Registry) {
     // Tags say what a biome is (spawning, decoration and mods ask these, not names).
     let (grass, foliage, water) = (&tints::GRASS, &tints::FOLIAGE, &tints::WATER);
@@ -56,7 +79,7 @@ pub fn register(r: &mut Registry) {
         .set(&TREES, 0.025)
         .set(&GRASS_COVER, 0.7)
         .set(&TALL_GRASS_COVER, 0.2)
-        .set(&BOULDER_COVER, 0.01)
+        .set(&BOULDER_COVER, 0.03)
         .set(&RASPBERRY_COVER, 0.05)
         .set(&SNOWBERRY_COVER, 0.025);
     r.biome(&FOREST)
@@ -219,6 +242,7 @@ pub fn register(r: &mut Registry) {
         .density(&BOULDER_COVER)
         .shape(|s| {
             let BlockPos { x, y, z } = s.pos();
+            if y < 70 || !gentle(s, 2, 2) { return; }
             let mut rng = Rng(s.random());
             let mut place_ball = |rng: &mut Rng, ox, oy, oz| {
                 for (dx, dy, dz) in sphere(1.5) {
