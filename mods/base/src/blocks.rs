@@ -59,6 +59,7 @@ pub static TALL_TALL_GRASS: Block = Block::named("tall_tallgrass");
 pub static BUSH_STEM: Block = Block::named("bush_stem");
 pub static RASPBERRY_LEAVES: Block = Block::named("raspberry_leaves");
 pub static SNOWBERRY_LEAVES: Block = Block::named("snowberry_leaves");
+pub static MOSS: Block = Block::named("moss");
 
 static TILLABLE: Tag = Tag::named("tillable");
 
@@ -595,6 +596,12 @@ pub fn register(r: &mut Registry) {
         .hardness(0.8)
         .set(&FLAMMABLE, 30)
         .tab(&crate::tabs::COLORED);
+    r.block(&MOSS)
+        .on_sides(Facings::ALL)
+        .sound_group("grass")
+        .hardness(0.1)
+        .signal_blocker()
+        .tab(&crate::tabs::BUILDING);
 
     // What may grow or stand where, from the common `dirt` and `sand` tags like modern vanilla:
     // a mod's sand tagged `sand` gets cactus and sugar cane, in the world and from players.
