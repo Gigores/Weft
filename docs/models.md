@@ -106,7 +106,7 @@ One file holds any number of animations, and an animation's name is whatever fol
 ```
 Each bone can carry `rotation` (degrees), `position` (model pixels) and `scale`, as keyframes at times in seconds. A keyframe is a plain `[x, y, z]` or an object with `pre`, `post` and `"lerp_mode": "catmullrom"` when you want a jump or a smooth curve. Between keys the value is linear. `loop` is `true` to repeat, `false` to play once and go back to normal, or `"hold_on_last_frame"` to stay in the last pose.
 
-Keyframes are added on top of what is below them, and of a bone's resting angle, so even a walking leg can be animated. Set `"override_previous_animation": true` (Blockbench's Override box) and they go over what is below on the bones they name instead: `blend_weight` then says how much of that it hides, and its own angles stay what the file has. So 1 replaces it, and 0.9 on a greatsword's `hold` leaves a tenth of the walk on the arms, so they stir without dangling. A clip only ever touches the bones it names: arms only and the walk goes on, the whole body for a heavy swing and it doesn't. The angles follow Blockbench's convention: a Bedrock arm turned -90 degrees on x points forward.
+Keyframes are added on top of what is below them, and of a bone's resting angle, so even a walking leg can be animated. Set `"override_previous_animation": true` (Blockbench's Override box) and they go over what is below on the bones they name instead, scale included (an arrow a `hold` clip hides at scale 0 shows again in `use`): `blend_weight` then says how much of that it hides, and its own angles stay what the file has. So 1 replaces it, and 0.9 on a greatsword's `hold` leaves a tenth of the walk on the arms, so they stir without dangling. A clip only ever touches the bones it names: arms only and the walk goes on, the whole body for a heavy swing and it doesn't. The angles follow Blockbench's convention: a Bedrock arm turned -90 degrees on x points forward.
 
 Without override `blend_weight` scales the clip: a number, or `query.modified_move_speed` for how fast it walks. `anim_time_update` says what moves the clip's time: `query.modified_distance_moved` for steps, or anything with `progress` in it to stretch the clip over however long the action takes. Other Molang isn't evaluated.
 
@@ -121,7 +121,7 @@ What plays goes by the name of an action, and that name is all there is to it. T
 | `hold` | something in hand (`hold_tool` for tools that don't have their own) | clock |
 | `hold_empty` | nothing in hand, for `.first_person` only by default | clock |
 | `equip` | the hand going down and up as it changes items or recharges | progress |
-| `swing`, `use` | swinging (`swing_held` with an item that has no `swing` of its own), and using what it holds | progress |
+| `swing`, `use` | swinging (`swing_held` with an item that has no `swing` of its own), and using what it holds | progress; seconds held for an item used until let go (a bow), staying at its end |
 | `death` | dying | clock |
 
 The engine has clips for all of these (`assets/animations/stock_*.animation.json`), picked by the shape of the model: walking on two legs, four, eight. So any model with the right [bone names](#roles) walks without a single keyframe. Your own clip of the same name takes over on the bones it names, and the stock one keeps moving the others.

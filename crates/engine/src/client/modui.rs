@@ -539,7 +539,11 @@ pub unsafe extern "C" fn client_swing_strength(c: *mut abi::ClientCtx) -> f32 {
 }
 
 pub unsafe extern "C" fn client_using(c: *mut abi::ClientCtx) -> f32 {
-    unsafe { view(c).and_then(|cl| cl.using).map_or(-1.0, |u| u.0) }
+    unsafe {
+        view(c)
+            .and_then(|cl| cl.using)
+            .map_or(-1.0, |(held, all)| (all - held).max(0.0))
+    }
 }
 
 pub unsafe extern "C" fn client_day_time(c: *mut abi::ClientCtx) -> u64 {

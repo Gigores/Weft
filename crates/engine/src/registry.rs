@@ -691,6 +691,7 @@ fn engine_components() -> Vec<RawEntry> {
         (EFFECT, "bytes", own | cf::SAVE, Vec::new()),
         (FORCED_POSE, "bytes", own | shown, Vec::new()),
         (RIDING, "bytes", own | shown | cf::SAVE, Vec::new()),
+        (STUCK, "bytes", shown, Vec::new()),
         (GAME_MODE, "u32", cf::SYNC_OWNER, vec![0; 4]),
         (PERMISSION, "u32", cf::SYNC_OWNER, vec![0; 4]),
         (ATTRIBUTES, "bytes", cf::SYNC_OWNER, Vec::new()),
@@ -1872,6 +1873,9 @@ pub const EFFECT: &str = "core:effect";
 pub const FORCED_POSE: &str = "core:forced_pose";
 /// What it rides (`u64` id) and its seat (`u32`), empty: nothing. Saved, and seen by everyone.
 pub const RIDING: &str = "core:riding";
+/// A projectile stuck in an entity: that entity (`u64`), where in its frame (`[f32; 3]`, turned
+/// with its yaw) and its own yaw there (`f32`); empty while it isn't. Clients hold it on the body.
+pub const STUCK: &str = "core:stuck";
 /// Entity component (`[u32]`, synced to watchers): the items in its kind's `SHOWN_SLOTS`, 0 empty.
 pub const SHOWN: &str = "core:shown";
 use abi::comp::{ATTRIBUTES, GAME_MODE, PERMISSION};
@@ -1897,6 +1901,7 @@ pub struct FieldComps {
     pub effect: u32,
     pub forced: u32,
     pub riding: u32,
+    pub stuck: u32,
     pub game_mode: u32,
     pub permission: u32,
     pub attributes: u32,
@@ -2410,6 +2415,7 @@ fn freeze_entity_storage(
         effect: id(EFFECT),
         forced: id(FORCED_POSE),
         riding: id(RIDING),
+        stuck: id(STUCK),
         game_mode: id(GAME_MODE),
         permission: id(PERMISSION),
         attributes: id(ATTRIBUTES),

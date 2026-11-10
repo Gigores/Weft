@@ -1239,15 +1239,21 @@ impl EntityRenderer {
             };
             let sleeping = pose.tilt == weft_abi::pose_tilt::ON_BACK;
             let body_yaw = if sleeping { e.yaw } else { e.body_yaw };
-            let swim = lying.map_or(Mat4::IDENTITY, |a| {
-                Mat4::from_translation(Vec3::new(0.0, 0.3, 0.0))
-                    * Mat4::from_rotation_x(a)
-                    * Mat4::from_translation(Vec3::new(0.0, -0.9, 0.0))
-            });
+            // A projectile points all of itself where it flies, not just a head.
+            let flies = c.game.entities[e.kind as usize].projectile.is_some();
+            let swim = match lying {
+                _ if flies => Mat4::from_rotation_x(e.pitch),
+                Some(a) => {
+                    Mat4::from_translation(Vec3::new(0.0, 0.3, 0.0))
+                        * Mat4::from_rotation_x(a)
+                        * Mat4::from_translation(Vec3::new(0.0, -0.9, 0.0))
+                }
+                None => Mat4::IDENTITY,
+            };
             let mut root =
                 Mat4::from_translation(base) * Mat4::from_rotation_y(body_yaw) * swim * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
             // Its head up to look ahead when lying down.
-            let (pitch, head_yaw) = if sleeping {
+            let (pitch, head_yaw) = if sleeping || flies {
                 (0.0, 0.0)
             } else if lying.is_some() {
                 (std::f32::consts::FRAC_PI_4, 0.0)
@@ -1604,7 +1610,13 @@ impl EntityRenderer {
             }
             if let Some((p, off)) = e.using {
                 let item = if off { e.off_held } else { e.held };
-                m.play(&mut clips, m.action_seen(item, swapped(item, "use"), in_view), &Play { progress: p, mirror: off, ..progress });
+                // Used until let go (a bow drawn), it plays by the seconds held and stays at its end.
+                let how = if super::endless_use(e.use_ticks) {
+                    Play { drive: Drive::Clock, clock: p, mirror: off, ..progress }
+                } else {
+                    Play { progress: p, mirror: off, ..progress }
+                };
+                m.play(&mut clips, m.action_seen(item, swapped(item, "use"), in_view), &how);
             }
         }
         if let Some(d) = e.dying {

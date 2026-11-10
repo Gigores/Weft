@@ -3029,6 +3029,9 @@ pub struct EntityState {
     pub moved: f32,
     /// Its box now (crouching and `set_size` included).
     pub size: EntitySize,
+    /// The item it is using (eating, a bow drawn), 0 for none, and for how many ticks so far.
+    pub using: u32,
+    pub using_ticks: u32,
 }
 
 impl EntityState {
@@ -3067,6 +3070,8 @@ defaults!(EntityState {
     selected: 0,
     moved: 0.0,
     size: EntitySize { width: 0.0, height: 0.0, eye: 0.0 },
+    using: 0,
+    using_ticks: 0,
 });
 
 impl Default for EntityState {

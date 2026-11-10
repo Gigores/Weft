@@ -85,6 +85,14 @@ pub fn register(r: &mut Registry) {
         .use_until_released()
         .on_release(shoot_bow)
         .tab(&crate::tabs::COMBAT);
+    // Drawing it narrows the view, more the further it is drawn (vanilla's 15% at full draw).
+    r.modify(&attribute::FOV, &phase::MULTIPLY, |m| {
+        let Some(s) = m.world().entity(m.query().entity) else { return };
+        if s.using == BOW.id() {
+            let drawn = (s.using_ticks as f64 / 20.0).min(1.0);
+            m.value *= 1.0 - drawn * drawn * 0.15;
+        }
+    });
     r.shaped(&crate::recipes::CRAFTING, "bow", 1, &[" s#", "s #", " s#"], &[('s', "#stick"), ('#', "#string")]);
     // Vanilla's arrow: 0.05 a tick down, stuck a minute where it hits a block.
     r.entity(&ARROW)

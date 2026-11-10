@@ -744,6 +744,7 @@ impl Dim {
             off_held,
             using,
             riding,
+            stuck,
             game_mode,
             permission,
             attributes,
@@ -834,6 +835,21 @@ impl Dim {
                     .collect()
             });
             put(comps, riding, &rides);
+            let held_by: Vec<u8> = match e.stuck {
+                Some(super::entity::Stuck { into: super::entity::StuckIn::Entity(host), at, yaw, .. }) => host
+                    .to_le_bytes()
+                    .into_iter()
+                    .chain(
+                        at.as_vec3()
+                            .to_array()
+                            .into_iter()
+                            .chain([yaw])
+                            .flat_map(f32::to_le_bytes),
+                    )
+                    .collect(),
+                _ => Vec::new(),
+            };
+            put(comps, stuck, &held_by);
             if let Some(a) = attrs {
                 let bytes: Vec<u8> = a.iter().flat_map(|v| v.to_le_bytes()).collect();
                 put(comps, attributes, &bytes);

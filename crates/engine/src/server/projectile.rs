@@ -2,7 +2,7 @@
 //! projectile's speed decides what it hits before it moves, so nothing is flown through however
 //! fast, and where it sticks is where the ray met the block.
 
-use glam::{DVec3, IVec3};
+use glam::{DQuat, DVec3, IVec3};
 use weft_abi as abi;
 
 use super::dim::Dim;
@@ -268,8 +268,7 @@ impl Dim {
     }
 }
 
-/// `v` turned about the up axis by `yaw` radians, as entity yaws turn.
+/// `v` turned about the up axis by `yaw` radians, as models turn with their yaw.
 fn turn(v: DVec3, yaw: f32) -> DVec3 {
-    let (s, c) = (yaw as f64).sin_cos();
-    DVec3::new(v.x * c - v.z * s, v.y, v.x * s + v.z * c)
+    DQuat::from_rotation_y(yaw as f64) * v
 }

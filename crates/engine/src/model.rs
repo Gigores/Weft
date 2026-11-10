@@ -886,7 +886,8 @@ pub fn pose(parts: &[Part], root: Mat4, m: &Motion, out: &mut Vec<Mat4>) {
                 offset = if replace { offset * (1.0 - c.w) + by } else { offset + by * c.w };
             }
             if let Some(k) = ch[2] {
-                scale *= Vec3::ONE.lerp(Vec3::from_array(c.bound.anim.channels[k].sample(c.t)), c.w);
+                let to = Vec3::from_array(c.bound.anim.channels[k].sample(c.t));
+                scale = if replace { scale.lerp(to, c.w) } else { scale * Vec3::ONE.lerp(to, c.w) };
             }
         }
         let pivot = Vec3::from_array(p.pivot);

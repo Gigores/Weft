@@ -2061,6 +2061,13 @@ pub async fn bow_and_keys(t: T) -> R {
         .map(|v| v.parse::<u32>().unwrap_or(0));
     let (down, ticks) = (p.next().unwrap_or(0), p.next().unwrap_or(0));
     t.check(down == 1 && ticks >= 5, format!("the server sees the use button held a while: {held}"));
+    let fov = t.op("attr me core:fov").await?;
+    let narrow: f64 = fov
+        .split_whitespace()
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    t.check((0.85..0.99).contains(&narrow), format!("drawing narrows the view: {fov}"));
     t.secs(1.4).await?;
     t.check_eq(t.op("key core:use").await?, "0 0".into(), "and let go");
     t.check_eq(t.c().inventory_slot(1).count, 4, "one arrow shot");

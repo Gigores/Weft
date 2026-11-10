@@ -331,6 +331,10 @@ impl Entity {
             selected: self.selected,
             moved: self.moved,
             size: self.dims(c).size(),
+            using: self.use_done.map_or(0, |u| u.0),
+            using_ticks: self
+                .use_done
+                .map_or(0, |(_, left, _)| self.using.0.saturating_sub(left)),
         }
     }
 }
