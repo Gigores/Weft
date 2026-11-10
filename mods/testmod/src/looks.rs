@@ -239,29 +239,6 @@ pub fn register(r: &mut Registry) {
         .tint_kind(&tints::GRASS)
         .hardness(1.5)
         .mined_by("pickaxe", tool_tier::HAND);
-    // Two cells tall, of crossed panels drawn without the shading by side as a cross plant is,
-    // else it looks darker than the grass around it. Faces left empty are the block's own.
-    static TALL_PLANT: Block = Block::named("tall_plant");
-    let panel = |along_x: bool| -> [(&'static str, [f32; 4]); 6] {
-        let face = ("", [0.0, 0.0, 16.0, 16.0]);
-        let none = ("", UV_NO_FACE);
-        if along_x { [face, face, none, none, none, none] } else { [none, none, none, none, face, face] }
-    };
-    r.block(&TALL_PLANT)
-        .plant()
-        .texture("base:tallgrass")
-        .tint_kind(&tints::GRASS)
-        .cells(&[[0, 1, 0]])
-        .hitbox([2.0, 0.0, 2.0], [14.0, 32.0, 14.0])
-        .model_box_faces([7.9, 0.0, 0.0], [8.1, 16.0, 16.0], panel(true))
-        .unshaded()
-        .model_box_faces([0.0, 0.0, 7.9], [16.0, 16.0, 8.1], panel(false))
-        .unshaded()
-        .model_box_faces([7.9, 16.0, 0.0], [8.1, 32.0, 16.0], panel(true))
-        .unshaded()
-        .model_box_faces([0.0, 16.0, 7.9], [16.0, 32.0, 8.1], panel(false))
-        .unshaded()
-        .tab(&base_api::tabs::NATURAL);
     // Goes before what the other hand holds, and leaves it its turn with nothing to shoot.
     static LONG_BOW: Item = Item::named("long_bow");
     r.item(&LONG_BOW)

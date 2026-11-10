@@ -1268,6 +1268,14 @@ impl Content {
             .is_some_and(|t| self.components.has(comps::ITEM, item, t))
     }
 
+    /// `state` turned `toward` (`north`..) if its block has a `facing`: how a block item shows its
+    /// front, in a slot and in the hand.
+    pub fn facing_toward(&self, state: u32, toward: &str) -> u32 {
+        self.block_of(state)
+            .changed_text(state, &format!("facing={toward}"))
+            .unwrap_or(state)
+    }
+
     pub fn block_of(&self, state: u32) -> &BlockDef {
         &self.blocks[self.states[state as usize].block as usize]
     }

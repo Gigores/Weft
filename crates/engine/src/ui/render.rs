@@ -745,7 +745,8 @@ impl UiRenderer {
                 mode: ui_mode::ICON,
                 ..Default::default()
             }),
-            crate::client::looks::ItemDraw::Block(state) => self.state_icon(c, tex, x, y, size, state),
+            // Its front on the left face, as vanilla's furnace in a slot.
+            crate::client::looks::ItemDraw::Block(state) => self.state_icon(c, tex, x, y, size, c.facing_toward(state, "south")),
             crate::client::looks::ItemDraw::Nothing => {}
         }
     }

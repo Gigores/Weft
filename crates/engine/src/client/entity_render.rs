@@ -730,6 +730,8 @@ impl EntityRenderer {
             }
             ItemDraw::Icon(t) => vec![(layers.map_or(t, |l| textures.layered(l)), white)],
             ItemDraw::Block(state) => {
+                // Its front toward whoever holds it.
+                let state = c.facing_toward(state, "west");
                 let s = &c.states[state as usize];
                 match looks.block_sprite(state, s) {
                     Some(t) => super::mesher::face_layers(c, s, t, 0)
