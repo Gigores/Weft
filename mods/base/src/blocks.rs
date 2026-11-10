@@ -417,7 +417,7 @@ pub fn register(r: &mut Registry) {
         .plant()
         .replaceable()
         .needs_below("#plant_soil")
-        .tint(&tints::GRASS)
+        .tint_kind(&tints::GRASS)
         .tab(&crate::tabs::NATURAL);
     r.loot(&TALL_GRASS)
         .pool(Pool::new().when(Cond::chance(0.125)).item("wheat_seeds"));
@@ -426,7 +426,7 @@ pub fn register(r: &mut Registry) {
         .texture("tall_tallgrass_bottom")
         .plant()
         .replaceable()
-        .tint(&tints::GRASS)
+        .tint_kind(&tints::GRASS)
         // .two_part("half", ["lower", "upper"], |_| Dir::Up)
         // .state_where("half=upper", |s| s.texture("tall_tallgrass_top"))
         // .state_where("half=lower", |s| s.needs_below("#plant_soil"))
