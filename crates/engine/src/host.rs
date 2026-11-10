@@ -65,6 +65,7 @@ pub static HOST: Host = Host {
     in_liquid,
     entity_swing_strength,
     entity_use_item,
+    entity_key,
     entity_mine,
     component,
     player_count,
@@ -838,6 +839,22 @@ unsafe extern "C" fn entity_use_item(w: *mut abi::WorldCtx, id: u64, off: u32, t
         let slot = if off != 0 { c.game.entities[e.kind as usize].off } else { main.then_some(e.selected) };
         let target = (!target.is_null()).then(|| (ip(target), face.min(5) as u8));
         slot.is_some_and(|slot| d.use_in_hand(c, id, slot, target, false)) as u32
+    }
+}
+
+unsafe extern "C" fn entity_key(w: *mut abi::WorldCtx, player: u64, key: Str, out: *mut abi::KeyState) {
+    unsafe {
+        let (d, c) = (dim(w), content());
+        let id = c.game.keys.iter().position(|k| k.name == key.as_str());
+        let since = id.and_then(|id| {
+            d.entities
+                .get(player)?
+                .keys
+                .iter()
+                .find(|k| k.0 == id as u32)
+                .map(|k| k.1)
+        });
+        *out = abi::KeyState { held: since.is_some() as u32, held_ticks: since.map_or(0, |s| (d.time - s) as u32), ..Default::default() };
     }
 }
 

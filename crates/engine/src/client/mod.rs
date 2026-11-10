@@ -493,6 +493,8 @@ pub struct Client {
     /// Seconds until holding a button repeats its action. A new press never waits.
     break_delay: f32,
     use_delay: f32,
+    /// Each action as the server last heard of it (`send_keys`).
+    keys_down: Vec<bool>,
     pub view_radius: i32,
     /// Makes the world in view from the seed (`terrain`); the server's cubes go through it.
     pub terrain: terrain::TerrainHandle,
@@ -825,6 +827,7 @@ impl Client {
             disconnected: None,
             break_delay: 0.0,
             use_delay: 0.0,
+            keys_down: Vec::new(),
             view_radius,
             terrain: terrain::spawn(gpu_tx, gpu_on.clone()),
             lod: lod::Lod::new(gpu_terrain.lod_tx.clone()),
@@ -1417,7 +1420,26 @@ impl Client {
         }
     }
 
+    /// The server hears every action go down and up (`event::KEY`), what the world has of the
+    /// input: none while a screen has it.
+    fn send_keys(&mut self, input: &Input) {
+        let keys = &content().game.keys;
+        self.keys_down.resize(keys.len(), false);
+        let (mut down, mut up) = (Vec::new(), Vec::new());
+        for (i, k) in keys.iter().enumerate() {
+            let now = input.captured && !self.dead && input.held(&k.name);
+            if now != self.keys_down[i] {
+                self.keys_down[i] = now;
+                if now { down.push(i as u32) } else { up.push(i as u32) }
+            }
+        }
+        if self.joined && !(down.is_empty() && up.is_empty()) {
+            self.conn.send(ToServer::Keys { down, up });
+        }
+    }
+
     fn act(&mut self, input: &Input, dt: f64, look: DVec3) {
+        self.send_keys(input);
         self.break_delay -= dt as f32;
         self.use_delay -= dt as f32;
         // The server judges actions by where the player looks, which it only hears 20 times a

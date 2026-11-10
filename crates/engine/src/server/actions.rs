@@ -144,7 +144,32 @@ impl Server {
             }
             ToServer::StopUsing => {
                 if let Some((r, entity)) = self.region(pi) {
-                    r.stop_using(entity);
+                    r.release_use(c, entity);
+                }
+            }
+            ToServer::Keys { down, up } => {
+                let Some((r, entity)) = self.region(pi) else { return };
+                let now = r.time;
+                let mut told = Vec::new();
+                if let Some(e) = r.entities.get_mut(entity) {
+                    for key in up.into_iter().filter(|&k| (k as usize) < c.game.keys.len()) {
+                        if let Some(i) = e.keys.iter().position(|k| k.0 == key) {
+                            let (_, since) = e.keys.swap_remove(i);
+                            told.push(abi::KeyChange { player: entity, key, down: 0, held_ticks: (now - since) as u32, pad: 0 });
+                        }
+                    }
+                    for key in down
+                        .into_iter()
+                        .filter(|&k| (k as usize) < c.game.keys.len())
+                    {
+                        if !e.keys.iter().any(|k| k.0 == key) {
+                            e.keys.push((key, now));
+                            told.push(abi::KeyChange { player: entity, key, down: 1, held_ticks: 0, pad: 0 });
+                        }
+                    }
+                }
+                for k in told {
+                    r.emit_engine(c, abi::event::KEY, &k);
                 }
             }
             ToServer::SwapHands => {
@@ -740,6 +765,7 @@ impl Dim {
                 face: face as u32,
                 has_target: target.is_some() as u32,
                 handled: 0,
+                held_ticks: 0,
             });
             if a.handled != 0 && a.stack != held && crate::host::known_item("on_use", &a.stack) {
                 self.entities.set_slot(entity, slot, a.stack);
@@ -787,6 +813,37 @@ impl Dim {
             } else if let Some(e) = self.entities.get_mut(id) {
                 e.use_done = Some((item, left - 1, slot));
             }
+        }
+    }
+
+    /// `id` let go of the use button: what it was using hears after how long (its
+    /// `comp::item::ON_RELEASE`: a bow shoots), then it stops.
+    pub fn release_use(&mut self, c: &'static Content, id: u64) {
+        let Some(e) = self.entities.get(id) else { return };
+        let (Some((item, left, slot)), total) = (e.use_done, e.using.0) else { return self.stop_using(id) };
+        self.stop_using(id);
+        let held = self.entities.inventory_slot(id, slot);
+        let Some((by, cb)) = c
+            .items
+            .get(item as usize)
+            .and_then(|d| d.on_release)
+            .filter(|_| held.item == item)
+        else {
+            return;
+        };
+        let a = self.call(by, cb, |w| abi::ItemUseArgs {
+            world: w,
+            entity: id,
+            stack: held,
+            slot,
+            pos: abi::BlockPos::ZERO,
+            face: 0,
+            has_target: 0,
+            handled: 0,
+            held_ticks: total.saturating_sub(left),
+        });
+        if a.handled != 0 && a.stack != held && crate::host::known_item("on_release", &a.stack) {
+            self.entities.set_slot(id, slot, a.stack);
         }
     }
 

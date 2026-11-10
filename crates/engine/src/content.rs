@@ -436,6 +436,8 @@ pub struct ItemDef {
     pub block: Option<u32>,
     /// And the mod it runs as.
     pub on_use: Option<(ModId, Callback)>,
+    /// The use button let go while using it (`comp::item::ON_RELEASE`).
+    pub on_release: Option<(ModId, Callback)>,
     /// Where it came in, every mod's in load order: how creative tabs list items.
     pub order: u64,
     /// The player's equipment slot it is worn in (`worn/<slot>` tag), by index.
@@ -2377,6 +2379,7 @@ fn number_items(
             layers,
             block,
             on_use: e.callback(it::ON_USE),
+            on_release: e.callback(it::ON_RELEASE),
             order: order[&e.name],
             equip: None,
             model,

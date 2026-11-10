@@ -287,6 +287,7 @@ schema_values!(
     abi::Spawned,
     abi::Removed,
     abi::ProjectileHit,
+    abi::KeyChange,
     abi::EffectChange
 );
 
@@ -300,6 +301,9 @@ pub static PLAYER_RESPAWNED: Event<abi::PlayerEvent> = Event::named(abi::event::
 pub static ENTITY_HEALED: Event<abi::Hurt> = Event::named(abi::event::ENTITY_HEALED);
 /// Every tick in each dimension with weather: which it is.
 pub static WEATHER_TICK: Event<abi::WeatherTick> = Event::named(abi::event::WEATHER_TICK);
+/// A player pressed an action or let go of it (`held_ticks` after how long): any key binding, the
+/// mouse buttons' `keys::USE` and `keys::ATTACK` too. Keys of your own are `Registry::key`.
+pub static KEY: Event<abi::KeyChange> = Event::named(abi::event::KEY);
 /// An entity left the world, and why (`removal`): died, despawned, unloaded, picked up..
 pub static ENTITY_REMOVED: Event<abi::Removed> = Event::named(abi::event::ENTITY_REMOVED);
 /// An effect ran out or was taken off.

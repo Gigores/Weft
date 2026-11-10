@@ -651,6 +651,11 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5])
             .to_string())
     }),
+    // What the server knows the player holds of an action: held, ticks.
+    ("key", "<action:word>", |w, cmd, player, _| {
+        let k = w.key(player, Key::generated(word(cmd, "action")?.to_string()));
+        Ok(format!("{} {}", k.held, k.held_ticks))
+    }),
     // A projectile from `x y z` flying `vx vy vz` blocks a second, shot by the player.
     ("shoot", "<kind:entity> <x:float> <y:float> <z:float> <vx:float> <vy:float> <vz:float>", |w, cmd, player, _| {
         let f = |n: &str| cmd.float(n).ok_or(format!("missing {n}"));

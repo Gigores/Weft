@@ -409,6 +409,8 @@ messages! {
         StopBreak,
         /// Let go of the use button before the item took effect.
         StopUsing,
+        /// Actions (key ids) that went down and up since the last.
+        Keys { down: Vec<u32>, up: Vec<u32> },
         /// The main hand's item goes to the other hand and back.
         SwapHands,
         /// `frame`: the structure (entity) the block is part of, its position in the structure's

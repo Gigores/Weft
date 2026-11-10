@@ -96,6 +96,8 @@ pub struct Entity {
     pub left_owner: bool,
     /// Ticks a projectile has been stuck in a block, 0 while it flies.
     pub stuck: u32,
+    /// A player's actions held down, by key id, with the tick each went down at.
+    pub keys: Vec<(u32, u64)>,
 }
 
 /// What an entity is breaking, and how far along by what it held and where it was each tick.
@@ -211,6 +213,7 @@ impl Entity {
             owner: 0,
             left_owner: false,
             stuck: 0,
+            keys: Vec::new(),
         }
     }
 

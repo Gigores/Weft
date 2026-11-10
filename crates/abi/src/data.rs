@@ -333,6 +333,7 @@ schema_data!(
     Spawned,
     Removed,
     ProjectileHit,
+    KeyChange,
     EffectChange,
     Energy,
     Vec3,

@@ -2006,6 +2006,29 @@ pub async fn projectiles(t: T) -> R {
     Ok(())
 }
 
+/// The server hears the use button held and for how long; a bow drawn that long shoots when
+/// let go, an arrow taken from the inventory.
+pub async fn bow_and_keys(t: T) -> R {
+    t.flat().await?;
+    t.op("put me 0 base:bow 1").await?;
+    t.op("put me 1 base:arrow 5").await?;
+    t.c().select_slot(0);
+    t.frames(2).await?;
+    t.hold("core:use", 1.5);
+    t.secs(0.6).await?;
+    let held = t.op("key core:use").await?;
+    let mut p = held
+        .split_whitespace()
+        .map(|v| v.parse::<u32>().unwrap_or(0));
+    let (down, ticks) = (p.next().unwrap_or(0), p.next().unwrap_or(0));
+    t.check(down == 1 && ticks >= 5, format!("the server sees the use button held a while: {held}"));
+    t.secs(1.4).await?;
+    t.check_eq(t.op("key core:use").await?, "0 0".into(), "and let go");
+    t.check_eq(t.c().inventory_slot(1).count, 4, "one arrow shot");
+    t.check_eq(t.c().inventory_slot(0).wear(), 1, "the bow wore by one");
+    Ok(())
+}
+
 pub async fn attack_charge(t: T) -> R {
     t.flat().await?;
     t.op("put me 0 iron_sword 1").await?;

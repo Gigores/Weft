@@ -1119,11 +1119,14 @@ pub mod comp {
     /// tools, food ...) that go in its component table: `comp::LAYERS` (`str`, how it looks,
     /// as a stack's: one layer, `<ns>:item/<name>`, when not given; empty with `BLOCK`: the
     /// block's model), `BLOCK` (`str`, the block it
-    /// places), `ON_USE` (`callback`, `ItemUseArgs`), `CONDITION` (`callback`, `ItemModelArgs`:
-    /// how a stack looks by what is in it, asked once per kind of stack).
+    /// places), `ON_USE` (`callback`, `ItemUseArgs`), `ON_RELEASE` (`callback`, `ItemUseArgs`: the
+    /// use button let go while using it, `held_ticks` after how long: a bow), `CONDITION`
+    /// (`callback`, `ItemModelArgs`: how a stack looks by what is in it, asked once per kind of
+    /// stack).
     pub mod item {
         pub const BLOCK: &str = "item.block";
         pub const ON_USE: &str = "item.on_use";
+        pub const ON_RELEASE: &str = "item.on_release";
         pub const CONDITION: &str = "item.condition";
     }
 
@@ -1430,6 +1433,7 @@ pub mod comp {
     pub const DURABILITY: &str = "durability";
     pub const ATTACK_DAMAGE: &str = "attack_damage";
     /// Item: ticks of holding the use button before it takes effect (food 32); slows while held.
+    /// `USE_HOLD`: it never does by itself, only its `ON_RELEASE` when let go (a bow).
     pub const USE_TICKS: &str = "use_ticks";
     /// Item: `[EffectGift]` its user gets when it is used (after `USE_TICKS`), the item turning
     /// into its `REMAINDER` (a potion's bottle) or one fewer; nothing else needed for a potion.
@@ -2204,7 +2208,12 @@ pub struct ItemUseArgs {
     pub face: u32,
     pub has_target: u32,
     pub handled: u32,
+    /// Ticks the use button was held (`comp::item::ON_RELEASE`); 0 for a use at once.
+    pub held_ticks: u32,
 }
+
+/// `comp::USE_TICKS` of an item held until the use button is let go.
+pub const USE_HOLD: u32 = u32::MAX;
 
 // ---------------------------------------------------------------- items, entities, menus
 
@@ -2794,6 +2803,21 @@ pub struct EffectChange {
 }
 impl Schema for EffectChange {
     const SCHEMA: &'static str = "{entity:u64,effect:u32,level:u32,ticks:u32,pad:u32}";
+}
+
+/// A player's action pressed (`down` 1) or let go after `held_ticks` (`event::KEY`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyChange {
+    pub player: u64,
+    /// The key's id (`entry_kind::KEY`).
+    pub key: u32,
+    pub down: u32,
+    pub held_ticks: u32,
+    pub pad: u32,
+}
+impl Schema for KeyChange {
+    const SCHEMA: &'static str = "{player:u64,key:u32,down:u32,held_ticks:u32,pad:u32}";
 }
 
 /// An effect's tick (`comp::ENTITY_EFFECT_ON_TICK`): every entity with it, and its level there.
@@ -3613,6 +3637,9 @@ pub struct Host {
     /// (null: on nothing) from `face`, as a player's right click does. 1 if it did something
     /// or started to (eating takes time; it goes on while the hand holds the item).
     pub entity_use_item: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, off: u32, target: *const BlockPos, face: u32) -> u32,
+    /// What a player holds of action `key` on the server (`held`, `held_ticks`; `pressed` and
+    /// `released` are its client's): what its client last said.
+    pub entity_key: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, key: Str, out: *mut KeyState),
     /// `id` starts breaking the block at `pos` (null: stops), as a player holding the button does:
     /// as fast as what it holds mines it, cracks shown, broken when done within its reach. 0 when
     /// it may not (`action::BREAK_BLOCK`).
@@ -4434,6 +4461,9 @@ pub mod event {
     pub const WEATHER_TICK: &str = "core:weather_tick";
     /// `Removed`: an entity left the world, and why.
     pub const ENTITY_REMOVED: &str = "core:entity_removed";
+    /// `KeyChange`: a player pressed or let go of an action (any key binding, the mouse buttons'
+    /// `core:use` and `core:attack` too) while the world had the input.
+    pub const KEY: &str = "core:key";
     /// `EffectChange`: an effect ran out or was taken off.
     pub const EFFECT_ENDED: &str = "core:effect_ended";
 }

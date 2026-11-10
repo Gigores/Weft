@@ -2600,6 +2600,20 @@ impl ItemBuilder<'_> {
     pub fn use_ticks(self, ticks: u32) -> Self {
         self.set(&c::USE_TICKS, ticks)
     }
+    /// Held as long as the use button is, slowing the player down, with nothing at the end:
+    /// `on_release` says what letting go does after how long (a bow, a charged spear).
+    pub fn use_until_released(self) -> Self {
+        self.use_ticks(abi::USE_HOLD)
+    }
+    /// The use button let go while using it (`use_until_released`, or before `use_ticks` ran
+    /// out): `u.held_ticks()` is how long it was held. True if it did something.
+    pub fn on_release(self, f: impl Fn(&mut ItemUse) -> bool + Send + Sync + 'static) -> Self {
+        let cb = callback(move |a: &mut abi::ItemUseArgs| {
+            let handled = f(ItemUse::wrap(a));
+            a.handled = handled as u32;
+        });
+        self.set(&crate::comps::item::ON_RELEASE, cb)
+    }
     /// What is left of it when it is used up (a potion's bottle, fuel's bucket).
     pub fn remainder(self, item: &crate::Item) -> Self {
         self.set_text(&c::REMAINDER, item.name())
@@ -3445,6 +3459,10 @@ impl ItemUse {
     }
     pub fn target_block(&self) -> Option<(BlockPos, u32)> {
         (self.args.has_target != 0).then_some((self.args.pos, self.args.face))
+    }
+    /// Ticks the use button was held, for `on_release` (a bow's draw); 0 for a use at once.
+    pub fn held_ticks(&self) -> u32 {
+        self.args.held_ticks
     }
     pub fn stack(&self) -> crate::ItemStack {
         self.args.stack

@@ -1506,6 +1506,7 @@ pub const ENGINE_EVENTS: &[(&str, &str, u32)] = {
         (abi::action::EFFECT, abi::EffectChange::SCHEMA, size_of::<abi::EffectChange>() as u32),
         (abi::event::EFFECT_ENDED, abi::EffectChange::SCHEMA, size_of::<abi::EffectChange>() as u32),
         (abi::action::PROJECTILE_HIT, abi::ProjectileHit::SCHEMA, size_of::<abi::ProjectileHit>() as u32),
+        (abi::event::KEY, abi::KeyChange::SCHEMA, size_of::<abi::KeyChange>() as u32),
     ]
 };
 

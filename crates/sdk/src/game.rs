@@ -326,6 +326,14 @@ impl World {
     pub fn stop_mining(&self, id: u64) {
         unsafe { (host().entity_mine)(self.raw(), id, std::ptr::null()) };
     }
+    /// What player `player` holds of action `key` (yours from `Registry::key`, or `keys::*`, the
+    /// mouse buttons' `keys::USE` and `keys::ATTACK` too): `held` and `held_ticks`, as its client
+    /// last said. Presses and releases come as `KEY` events.
+    pub fn key(&self, player: u64, key: &crate::Key) -> abi::KeyState {
+        let mut out = abi::KeyState::default();
+        unsafe { (host().entity_key)(self.raw(), player, Str::new(key.name()), &mut out) };
+        out
+    }
     /// How charged `id`'s next swing is, 0..1, with what it holds now.
     pub fn swing_strength(&self, id: u64) -> f32 {
         unsafe { (host().entity_swing_strength)(self.raw(), id) }

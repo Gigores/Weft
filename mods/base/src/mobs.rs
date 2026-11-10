@@ -11,6 +11,8 @@ pub static SKELETON: EntityKind = EntityKind::named("skeleton");
 pub static SHEEP: EntityKind = EntityKind::named("sheep");
 pub static CHICKEN: EntityKind = EntityKind::named("chicken");
 pub static ARROW: EntityKind = EntityKind::named("arrow");
+pub static BOW: Item = Item::named("bow");
+static ARROW_ITEM: Item = Item::named("arrow");
 static EGG: Item = Item::named("egg");
 /// Ticks of whatever a mob counts: a creeper's fuse, a skeleton's reload, a chicken's next egg.
 static FUSE: Component<u32> = Component::named("fuse");
@@ -76,6 +78,14 @@ pub fn register(r: &mut Registry) {
         .burns_in_sun()
         .attach(&FUSE)
         .goals(skeleton());
+    // Drawn as long as the use button is held, shot when it is let go.
+    r.item(&BOW)
+        .durability(384)
+        .handheld()
+        .use_until_released()
+        .on_release(shoot_bow)
+        .tab(&crate::tabs::COMBAT);
+    r.shaped(&crate::recipes::CRAFTING, "bow", 1, &[" s#", "s #", " s#"], &[('s', "#stick"), ('#', "#string")]);
     // Vanilla's arrow: 0.05 a tick down, stuck a minute where it hits a block.
     r.entity(&ARROW)
         .no_egg()
@@ -260,6 +270,34 @@ fn skeleton() -> ai::Goals {
         })
         .then(ai::chase_target(16.0, 1.0))
         .then(ai::wander(0.6, 10.0))
+}
+
+/// Vanilla's bow: full strength after a second's draw, the curve easing in; an arrow from the
+/// inventory, none taken in creative.
+fn shoot_bow(u: &mut ItemUse) -> bool {
+    let (w, id) = (u.world(), u.entity());
+    let t = u.held_ticks() as f32 / 20.0;
+    let power = ((t * t + t * 2.0) / 3.0).min(1.0) as f64;
+    if power < 0.1 {
+        return false;
+    }
+    let creative = w.creative(id);
+    let inv = w.inventory(id);
+    let arrow = (0..inv.len()).find(|&s| inv.get(s).item == ARROW_ITEM.id());
+    if arrow.is_none() && !creative {
+        return false;
+    }
+    let Some(s) = w.entity(id) else { return false };
+    // Three blocks a tick at full draw.
+    let v = look_dir(s.yaw, s.pitch) * (power * 3.0 * 20.0);
+    w.spawn_with(&ARROW, s.eye(), &Spawn::new().owner(id).velocity(v).yaw(s.yaw));
+    if !creative {
+        if let Some(slot) = arrow {
+            inv.set(slot, consume_one(inv.get(slot)));
+        }
+        u.set_stack(u.stack().add_wear(1));
+    }
+    true
 }
 
 fn shoot(w: &World, id: u64, from: &EntityState, at: &EntityState) {
