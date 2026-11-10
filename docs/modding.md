@@ -95,6 +95,7 @@ The library is built for one system, so that zip only runs on yours, but you wri
 To get your mod into the launcher, its source has to be public and its `Cargo.toml` has to take the SDK from the game's repository at a release tag, `weft_sdk = { git = "https://github.com/Weft-Rust/Weft", tag = "v26.11.3" }`. Commit, push, and run `weft submit-mod path/to/mymod`: it builds the mod once to be sure, then sends that commit to the [mod index](https://github.com/Weft-Rust/Weft-Mods-Index) as a pull request (with the GitHub CLI logged in, by itself; otherwise in the browser, filled in). The index builds the mod there for all three systems, and builds it again for each new Weft release. It shows as not verified until a maintainer reads the source. The id is yours from the first submission.
 
 The mod's id and version come from `Cargo.toml`, and its name from the lang file (`mod.mymod.name`), so `declare_mod!` only lists the mods yours needs.\
+To load after a mod without needing it, `declare_mod!(deps: ["base"], after: ["othermod"], init: init)`: if it is there, yours comes later and wins where both change one thing, else nothing happens (`before: [..]` the other way round).\
 A folder or zip named differently from the crate stops the game at load, since the library inside wouldn't match.
 
 A word on versioning: the mod interface is checked by a hash of its source. If your mod was built
@@ -183,7 +184,7 @@ r.remove(&Recipe::named("base:crafting/torch"));
 r.edit_pattern::<kind::Block>("#logs").hardness(3.0);
 ```
 
-Edits wait for what they edit, so load order only matters between two mods changing the same thing: the later one wins, and edits by pattern (`r.set` too) come after edits by name.
+Edits wait for what they edit, so load order only matters between two mods changing the same thing: the later one wins (`after`/`before` in `declare_mod!` decide it without depending on the other), and edits by pattern (`r.set` too) come after edits by name.
 Every kind with all its components and an example of changing someone else's is in the [registration guide](registration.md).
 
 ## Components and tags as inter-mod communication

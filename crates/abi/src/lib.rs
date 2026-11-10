@@ -291,6 +291,11 @@ pub struct ModDecl {
     /// Mod ids this one must load after. Registration itself is parallel, this orders what it
     /// registers (entries, edits, hooks) after theirs.
     pub deps: Slice<Str>,
+    /// Mod ids this one loads after if they are there, without needing them: its edits win over
+    /// theirs where both change one thing.
+    pub after: Slice<Str>,
+    /// Mod ids this one loads before if they are there: theirs win.
+    pub before: Slice<Str>,
     pub init: unsafe extern "C" fn(host: *const Host, me: ModId, reg: *mut Registrar) -> u32,
 }
 
