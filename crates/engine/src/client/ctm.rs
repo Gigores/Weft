@@ -1,13 +1,15 @@
-//! Connected and varied block textures. A `<texture>.ctm` file next to a block texture (in a mod
-//! or a resource pack) holds rules for every cube face showing that texture, on any block and any
-//! face (a log side is just its side texture); a pack that replaces the picture without a file of
-//! its own leaves it with none. Methods and keys follow OptiFine/MCPatcher CTM so existing packs
-//! port with little more than renaming files:
+//! Connected and varied block textures. A texture that is a folder of tiles instead of one
+//! picture, `block/glass/` with `glass.ctm` in it (in a mod or a resource pack), has rules for
+//! every cube face showing it, on any block and any face (a log side is just its side texture).
+//! Where nothing connects it (items, particles, distant terrain, faces a rule isn't for) it is the
+//! tile a block alone gets (`assets::ctm_alone`). A pack's plain `glass.png` over a mod's folder
+//! has no rules; a folder and a picture of one mod or pack stop the game. Methods and keys follow
+//! OptiFine/MCPatcher CTM so existing packs port with little more than moving files:
 //!
 //! ```text
 //! method = compact       # ctm (47 tiles), compact (5), horizontal, vertical, h+v, v+h (4/4/7/7),
-//!                        # top (1), random, repeat, fixed (1)
-//! tiles = glass/0-4      # relative to this file; ranges expand, <default> is the plain texture
+//!                        # top (2: plain, then under the same block), random, repeat, fixed (1)
+//! tiles = 0-4            # in this folder (or `mod:block/x` anywhere); ranges expand
 //! connect = tile         # tile (default: neighbors showing this texture on that face, whatever
 //!                        # block they are), block (same block), state (same block state)
 //! faces = sides          # all, top, bottom, sides, north, south, east, west
@@ -233,34 +235,6 @@ fn ranges(v: &str) -> Vec<(i32, i32)> {
         .collect()
 }
 
-/// Tile names relative to the folder of `texture`; `a-b` at the end of an entry expands to numbers.
-fn tile_names(v: &str, texture: &str) -> Vec<Option<String>> {
-    let dir = match texture.rfind('/') {
-        Some(i) => texture[..=i].to_string(),
-        None => texture
-            .split_once(':')
-            .map_or(String::new(), |(ns, _)| format!("{ns}:")),
-    };
-    let full = |rel: &str| if rel.contains(':') { rel.to_string() } else { format!("{dir}{rel}") };
-    let mut out = Vec::new();
-    for t in v.split_whitespace() {
-        if t == "<default>" {
-            out.push(None);
-            continue;
-        }
-        let (prefix, last) = t.rsplit_once('/').map_or(("", t), |(p, l)| (p, l));
-        let prefix = if prefix.is_empty() { String::new() } else { format!("{prefix}/") };
-        match last
-            .split_once('-')
-            .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))
-        {
-            Some((a, b)) => out.extend((a..=b).map(|i| Some(full(&format!("{prefix}{i}"))))),
-            None => out.push(Some(full(t))),
-        }
-    }
-    out
-}
-
 /// Whether something drawn other than as a cube shows `tex`, on a face in `faces`.
 fn off_cube(d: &Drawn, tex: u32, faces: u8) -> bool {
     d.model != weft_abi::BlockModel::Cube && (0..6).any(|f| faces & (1 << f) != 0 && d.on_face(f).contains(&tex))
@@ -313,7 +287,7 @@ pub fn load(assets: &Assets, c: &Content, looks: &Looks, mut names: Names) -> (C
         next += 1;
         let name = names.list[tex as usize].clone();
         let Some(src) = assets
-            .sidecar(&name, "textures", "png", "ctm")
+            .ctm_rules(&name)
             .and_then(|p| std::fs::read(p).ok())
             .map(|b| String::from_utf8_lossy(&b).into_owned())
         else {
@@ -343,12 +317,7 @@ pub fn load(assets: &Assets, c: &Content, looks: &Looks, mut names: Names) -> (C
             };
             let is_compact = matches!(kv.get("method").copied(), Some("compact" | "ctm_compact"));
             let (mut tiles, mut models) = (Vec::new(), Vec::new());
-            for t in tile_names(kv.get("tiles").copied().unwrap_or(""), &name) {
-                let Some(n) = t else {
-                    tiles.push(tex);
-                    models.push(NO_MODEL);
-                    continue;
-                };
+            for n in crate::assets::ctm_tiles(kv.get("tiles").copied().unwrap_or(""), &name) {
                 let known = tile_models.get(&(n.clone(), tex)).copied();
                 let model = known.or_else(|| {
                     let boxes = tile_model(assets, &n, tex, &mut names)?;
@@ -372,6 +341,7 @@ pub fn load(assets: &Assets, c: &Content, looks: &Looks, mut names: Names) -> (C
                 Method::Ctm => 47,
                 Method::Horizontal | Method::Vertical => 4,
                 Method::HorizontalVertical | Method::VerticalHorizontal => 7,
+                Method::Top => 2,
                 Method::Repeat => {
                     let w = kv
                         .get("width")
@@ -804,7 +774,7 @@ impl Ctm {
                     if dir == 2 || dir == 3 || c.states[above as usize].block != info.block {
                         continue;
                     }
-                    0
+                    1
                 }
                 Method::Random => {
                     let group = (dir as u32) / rule.symmetry as u32;
@@ -876,16 +846,7 @@ mod tests {
 
     #[test]
     fn tile_ranges_expand() {
-        let t = tile_names("glass/0-2 <default> other:x/y", "base:block/glass");
-        assert_eq!(
-            t,
-            vec![
-                Some("base:block/glass/0".into()),
-                Some("base:block/glass/1".into()),
-                Some("base:block/glass/2".into()),
-                None,
-                Some("other:x/y".into())
-            ]
-        );
+        let t = crate::assets::ctm_tiles("0-2 other:x/y", "base:block/glass");
+        assert_eq!(t, ["base:block/glass/0", "base:block/glass/1", "base:block/glass/2", "other:x/y"]);
     }
 }

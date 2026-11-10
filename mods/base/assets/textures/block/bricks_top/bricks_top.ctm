@@ -1,3 +1,4 @@
 method = compact
-tiles = stained_glass/0-4
+tiles = 0-4
 inner_seams = true
+blocks = base:bricks

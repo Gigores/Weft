@@ -1827,12 +1827,9 @@ pub fn load_order(mods: &[ModMeta]) -> Vec<u32> {
 /// Whether the mod a texture's name points at has that file.
 fn picture_exists(mods: &[ModMeta], name: &str) -> bool {
     let Some((ns, path)) = name.split_once(':') else { return false };
-    mods.iter().find(|m| m.id == ns).is_some_and(|m| {
-        m.assets
-            .join("textures")
-            .join(format!("{path}.png"))
-            .is_file()
-    })
+    mods.iter()
+        .find(|m| m.id == ns)
+        .is_some_and(|m| crate::modloader::file_or_tiles(&m.assets.join("textures"), path, "textures", "png"))
 }
 
 /// A tab's number is its entry's, the engine's spawn egg tab after them.

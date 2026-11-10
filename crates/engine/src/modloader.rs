@@ -21,8 +21,9 @@ static NAMES: OnceLock<Vec<String>> = OnceLock::new();
 static ASSET_ROOTS: std::sync::RwLock<Vec<(String, std::path::PathBuf)>> = std::sync::RwLock::new(Vec::new());
 
 /// Whether mod asset `name` (`beauty_of_nature:block/log_oak_inner`) is a file `<kind>/...<.ext>`
-/// of the mod it names. Mods' own files only: resource packs are each client's, and what a mod
-/// registers has to be the same everywhere.
+/// of the mod it names, or for a picture a folder of connected tiles (`Assets::ctm_rules`).
+/// Mods' own files only: resource packs are each client's, and what a mod registers has to be the
+/// same everywhere.
 pub fn asset_exists(name: &str, kind: &str, ext: &str) -> bool {
     let Some((ns, rel)) = name.split_once(':') else { return false };
     if rel.is_empty() || rel.contains("..") || rel.contains('\\') || rel.starts_with('/') {
@@ -32,7 +33,13 @@ pub fn asset_exists(name: &str, kind: &str, ext: &str) -> bool {
         .read()
         .unwrap()
         .iter()
-        .any(|(id, dir)| id == ns && dir.join(kind).join(format!("{rel}.{ext}")).is_file())
+        .any(|(id, dir)| id == ns && file_or_tiles(&dir.join(kind), rel, kind, ext))
+}
+
+/// `<rel>.<ext>` in `dir`, or for a texture its folder of connected tiles.
+pub fn file_or_tiles(dir: &Path, rel: &str, kind: &str, ext: &str) -> bool {
+    let last = rel.rsplit('/').next().unwrap_or(rel);
+    dir.join(format!("{rel}.{ext}")).is_file() || (kind == "textures" && ext == "png" && dir.join(format!("{rel}/{last}.ctm")).is_file())
 }
 
 pub fn mod_loaded(id: &str) -> bool {
@@ -207,17 +214,13 @@ fn fingerprint(dir: &Path, name: &str) -> String {
     collect(&dir.join("assets"), &mut files);
     files.extend(libraries(dir, name).into_iter().map(|l| l.1));
     files.sort();
-    let h = files.iter().fold(weft_noise::FNV, |h, f| {
+    // The std hasher may change with the compiler: then everything is packed again once.
+    let mut h = std::hash::DefaultHasher::new();
+    for f in &files {
         let meta = std::fs::metadata(f).ok();
-        let time = meta
-            .as_ref()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_nanos() as u64);
-        let h = weft_noise::fnv_step(h, weft_noise::fnv(f.to_string_lossy().as_bytes()));
-        weft_noise::fnv_step(weft_noise::fnv_step(h, meta.map_or(0, |m| m.len())), time)
-    });
-    format!("weft {h:016x}")
+        std::hash::Hash::hash(&(f, meta.as_ref().map(|m| m.len()), meta.and_then(|m| m.modified().ok())), &mut h);
+    }
+    format!("weft {:016x}", std::hash::Hasher::finish(&h))
 }
 
 /// `pack`, unless `<out>/<name>.zip` was packed from the folder as it is (`fingerprint`).

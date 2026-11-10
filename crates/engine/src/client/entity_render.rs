@@ -675,7 +675,7 @@ impl EntityRenderer {
                     .map(|rgba| crate::assets::Image { width: t.size, height: t.size, rgba: rgba.clone() })
             }
             None => assets
-                .read(&name, "textures", "png")
+                .read(&assets.picture(&name), "textures", "png")
                 .and_then(|b| decode_png(&b)),
         };
         let sprite = img.map(|img| {
