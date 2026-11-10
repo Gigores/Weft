@@ -1548,19 +1548,32 @@ unsafe extern "C" fn recipe_consume(kind: Str, recipe: u32, stacks: *mut ItemSta
     let Some(r) = recipe_at(kind, recipe) else { return 0 };
     let stacks = unsafe { std::slice::from_raw_parts_mut(stacks, count as usize) };
     let Some(found) = c.game.find_inputs(r, stacks, &c.components) else { return 0 };
-    let counts = r
-        .inputs
-        .iter()
-        .zip(&r.input_counts)
-        .filter(|(i, _)| !matches!(i, registry::Ingredient::Empty))
-        .map(|(_, &n)| n);
-    for (i, n) in found.into_iter().zip(counts) {
-        stacks[i].count -= n;
-        if stacks[i].count == 0 {
-            stacks[i] = ItemStack::EMPTY;
-        }
+    let used = (0..r.inputs.len()).filter(|&k| !matches!(r.inputs[k], registry::Ingredient::Empty));
+    for (i, k) in found.into_iter().zip(used) {
+        let (s, n) = (stacks[i], r.input_counts[k]);
+        stacks[i] = match r.uses.get(k).copied().unwrap_or(registry::Use::Consume) {
+            registry::Use::Keep => s,
+            registry::Use::Wear(w) => match crate::stack::worn(c, s, w) {
+                broken if broken.is_empty() => remainder_of(c, s.item).map_or(ItemStack::EMPTY, |x| ItemStack::new(x, 1)),
+                after => after,
+            },
+            // What is left of the last of a stack takes its place; a machine has nowhere else
+            // to put it.
+            u if s.count == n => match u {
+                registry::Use::Leaves(x) => ItemStack::new(x, n),
+                _ => remainder_of(c, s.item).map_or(ItemStack::EMPTY, |x| ItemStack::new(x, n)),
+            },
+            _ => ItemStack { count: s.count - n, ..s },
+        };
     }
     1
+}
+
+fn remainder_of(c: &crate::content::Content, item: u32) -> Option<u32> {
+    let id = c.components.id(abi::comp::REMAINDER)?;
+    c.components
+        .get::<u32>(crate::components::ITEM, item, id)
+        .filter(|&r| r != 0)
 }
 
 unsafe extern "C" fn recipe_process(kind: Str, input: u32, time_out: *mut u32) -> ItemStack {

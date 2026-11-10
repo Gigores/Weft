@@ -285,10 +285,23 @@ impl Ingredient {
     }
 }
 
+/// What a run of a recipe does to an ingredient (`abi::RecipeUse`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Use {
+    /// Used up; the last of a stack leaves its item's `remainder`.
+    Consume,
+    Keep,
+    Wear(u32),
+    /// Used up, this item left in its place.
+    Leaves(u32),
+}
+
 pub struct Recipe {
     /// Shaped: width, height, cells (row major).
     pub shaped: Option<(u32, u32, Vec<Ingredient>)>,
     pub inputs: Vec<Ingredient>,
+    /// Per cell of a shaped one, else per input: what a run does to it.
+    pub uses: Vec<Use>,
     /// How many of each input (millibuckets for fluids).
     pub input_counts: Vec<u32>,
     /// The main result, then each its pools can give (`extras`) with the most of it and its chance.
@@ -744,6 +757,7 @@ pub struct RawRecipe {
     pub time: u32,
     /// Pools for what else it gives; a liquid is its item.
     pub outputs: Vec<abi::LootPool>,
+    pub uses: Vec<abi::RecipeUse>,
     /// Its entry: recipes expanded from one share it.
     pub entry: u32,
 }
@@ -1813,6 +1827,7 @@ fn raw_recipe(e: &Entry) -> RawRecipe {
         count: e.or(r::COUNT, 1u32).max(1),
         time: e.or(r::TIME, 0),
         outputs: e.or(r::OUTPUTS, Vec::new()),
+        uses: e.or(r::USES, Vec::new()),
         entry: 0,
     }
 }
@@ -2655,6 +2670,37 @@ fn freeze_recipes(
             Some((w, h, cells))
         };
         let inputs: Vec<Ingredient> = r.inputs.iter().map(|s| ing(s, errors)).collect();
+        // What runs do to each ingredient, by its pattern key or its place among the inputs.
+        let keys: Vec<String> = match &shaped {
+            Some((w, _, cells)) => (0..cells.len())
+                .map(|i| {
+                    let row = &r.pattern[i / *w as usize];
+                    row.chars().nth(i % *w as usize).unwrap_or(' ').to_string()
+                })
+                .collect(),
+            None => (0..inputs.len()).map(|i| i.to_string()).collect(),
+        };
+        let uses: Vec<Use> = keys
+            .iter()
+            .map(|k| match r.uses.iter().rfind(|u| u.key == *k) {
+                None => Use::Consume,
+                Some(u) => match u.how {
+                    abi::recipe_use::KEEP => Use::Keep,
+                    abi::recipe_use::WEAR => Use::Wear(u.amount.max(1)),
+                    abi::recipe_use::LEAVES => match one(&u.item) {
+                        Ok(i) => Use::Leaves(i),
+                        Err(e) => {
+                            errors.push(format!("recipe for {}: leaves {e}", r.output));
+                            Use::Consume
+                        }
+                    },
+                    _ => Use::Consume,
+                },
+            })
+            .collect();
+        for u in r.uses.iter().filter(|u| !keys.contains(&u.key)) {
+            errors.push(format!("recipe for {}: no ingredient {} to say how it is used", r.output, u.key));
+        }
         let input_counts = (0..inputs.len())
             .map(|i| r.input_counts.get(i).copied().unwrap_or(1).max(1))
             .collect();
@@ -2684,10 +2730,16 @@ fn freeze_recipes(
                     }),
             );
         }
-        g.recipes
-            .entry(r.kind)
-            .or_default()
-            .push(Recipe { shaped, inputs, input_counts, outputs, extras, time: r.time, entry: r.entry });
+        g.recipes.entry(r.kind).or_default().push(Recipe {
+            shaped,
+            inputs,
+            uses,
+            input_counts,
+            outputs,
+            extras,
+            time: r.time,
+            entry: r.entry,
+        });
     }
 }
 
@@ -2714,6 +2766,12 @@ impl Game {
     /// Finds the recipe whose pattern fits the grid (any position, mirrored allowed) or whose
     /// shapeless inputs match the grid contents exactly.
     pub fn match_grid(&self, kind: &str, grid: &[u32], w: u32, h: u32, tags: &Components) -> Option<&Recipe> {
+        self.match_cells(kind, grid, w, h, tags).map(|m| m.0)
+    }
+
+    /// `match_grid`, and per grid slot the recipe's ingredient there (its cell of a shaped one,
+    /// its input of another), what says how the slot is used up.
+    pub fn match_cells(&self, kind: &str, grid: &[u32], w: u32, h: u32, tags: &Components) -> Option<(&Recipe, Vec<Option<usize>>)> {
         let list = self.recipes.get(kind)?;
         // Trim the grid to the bounding box of its items.
         let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
@@ -2732,41 +2790,50 @@ impl Game {
         }
         let (bw, bh) = (x1 - x0, y1 - y0);
         let at = |x: u32, y: u32| grid[((y0 + y) * w + x0 + x) as usize];
-        let items: Vec<u32> = grid.iter().copied().filter(|&i| i != 0).collect();
-        list.iter().find(|r| match &r.shaped {
-            Some((rw, rh, cells)) => {
-                if *rw != bw || *rh != bh {
-                    return false;
-                }
-                let fits = |mirror: bool| {
-                    (0..bh).all(|y| {
-                        (0..bw).all(|x| {
-                            let cx = if mirror { bw - 1 - x } else { x };
-                            cells[(y * rw + cx) as usize].matches(at(x, y), tags)
-                        })
-                    })
-                };
-                fits(false) || fits(true)
-            }
-            None => {
-                if r.inputs.len() != items.len() {
-                    return false;
-                }
-                let mut used = vec![false; items.len()];
-                r.inputs.iter().all(|ing| {
-                    let found = items
-                        .iter()
-                        .enumerate()
-                        .find(|(i, it)| !used[*i] && ing.matches(**it, tags));
-                    match found {
-                        Some((i, _)) => {
-                            used[i] = true;
-                            true
-                        }
-                        None => false,
+        list.iter().find_map(|r| {
+            let mut cells = vec![None; grid.len()];
+            match &r.shaped {
+                Some((rw, rh, pattern)) => {
+                    if *rw != bw || *rh != bh {
+                        return None;
                     }
-                })
+                    let fits = |mirror: bool| {
+                        (0..bh).all(|y| {
+                            (0..bw).all(|x| {
+                                let cx = if mirror { bw - 1 - x } else { x };
+                                pattern[(y * rw + cx) as usize].matches(at(x, y), tags)
+                            })
+                        })
+                    };
+                    let mirror = if fits(false) {
+                        false
+                    } else if fits(true) {
+                        true
+                    } else {
+                        return None;
+                    };
+                    for y in 0..bh {
+                        for x in 0..bw {
+                            let cx = if mirror { bw - 1 - x } else { x };
+                            cells[((y0 + y) * w + x0 + x) as usize] = Some((y * rw + cx) as usize);
+                        }
+                    }
+                }
+                None => {
+                    let filled: Vec<usize> = (0..grid.len()).filter(|&i| grid[i] != 0).collect();
+                    if r.inputs.len() != filled.len() {
+                        return None;
+                    }
+                    for (k, ing) in r.inputs.iter().enumerate() {
+                        let i = filled
+                            .iter()
+                            .copied()
+                            .find(|&i| cells[i].is_none() && ing.matches(grid[i], tags))?;
+                        cells[i] = Some(k);
+                    }
+                }
             }
+            Some((r, cells))
         })
     }
 
@@ -3058,6 +3125,11 @@ fn expand_variables(r: RawRecipe, tags: &FxHashMap<&str, u32>) -> Result<Vec<Raw
                             .collect(),
                         ..p.clone()
                     })
+                    .collect(),
+                uses: r
+                    .uses
+                    .iter()
+                    .map(|u| abi::RecipeUse { item: sub(&u.item), ..u.clone() })
                     .collect(),
                 entry: r.entry,
             });

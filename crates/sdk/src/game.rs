@@ -1291,6 +1291,11 @@ impl MenuCtx {
     pub fn player(&self) -> u64 {
         self.args.player
     }
+    /// In `on_take` of a crafting grid's result (`Slots::crafting`), how many runs of its recipe
+    /// that was (a shift-click crafts all that fit at once); 1 otherwise.
+    pub fn times(&self) -> u32 {
+        self.args.times.max(1)
+    }
     /// What the menu was opened on (a block entity, a mob, a pouch in a slot); `None` for
     /// the player's own and a crafting table's.
     pub fn owner(&self) -> Option<Holder> {
@@ -1410,6 +1415,13 @@ impl Slots {
     pub fn liquid(mut self, capacity: u32) -> Self {
         self.flags |= abi::slot_flags::LIQUID;
         self.limit = capacity;
+        self
+    }
+    /// A crafting grid of the menu's first `.recipes(..)` kind: the engine shows what it makes in
+    /// the menu's `output()` group and uses it up when that is taken, as the recipe says
+    /// (`RecipeBuilder::keep`, `wear`, `leaves`); a shift-click crafts all that fits at once.
+    pub fn crafting(mut self) -> Self {
+        self.flags |= abi::slot_flags::GRID;
         self
     }
     /// Items only come out (results).
@@ -1850,6 +1862,24 @@ impl Registry {
 /// unless `named`: other mods edit and remove it by that name (`r.remove(&Recipe::named(..))`).
 /// Any other component is data it carries for what makes it (`.set(&ENERGY_PER_TICK, 32)`), which
 /// the kind's info line can show.
+/// An ingredient of a recipe by its pattern character (`'h'`), or for one without a pattern by
+/// its place among the inputs (`0`).
+pub trait RecipeSlot {
+    fn key(&self) -> String;
+}
+
+impl RecipeSlot for char {
+    fn key(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl RecipeSlot for usize {
+    fn key(&self) -> String {
+        self.to_string()
+    }
+}
+
 pub struct RecipeBuilder<'a> {
     reg: &'a mut Registry,
     e: crate::entry::Entry,
@@ -1884,6 +1914,25 @@ impl RecipeBuilder<'_> {
         self.push(&comps::recipe::OUTPUTS, pool)
     }
     /// Works, but the recipe viewer doesn't list it.
+    /// Ingredient `key` (its pattern character, or for a recipe without a pattern its place
+    /// among the inputs) stays as it is: a mold, a catalyst.
+    pub fn keep(self, key: impl RecipeSlot) -> Self {
+        self.uses(key, abi::recipe_use::KEEP, 0, "")
+    }
+    /// Ingredient `key` stays and wears by `amount` a run, breaking when it is worn out: a hammer.
+    pub fn wear(self, key: impl RecipeSlot, amount: u32) -> Self {
+        self.uses(key, abi::recipe_use::WEAR, amount, "")
+    }
+    /// Ingredient `key` is used up and `item` takes its place (any mod's): a lava bucket leaving
+    /// its bucket. Without this one leaves its item's `remainder`.
+    pub fn leaves(self, key: impl RecipeSlot, item: &str) -> Self {
+        let item = crate::full_name(item);
+        self.uses(key, abi::recipe_use::LEAVES, 0, &item)
+    }
+    fn uses(self, key: impl RecipeSlot, how: u32, amount: u32, item: &str) -> Self {
+        let u = abi::RecipeUse { key: key.key(), how, amount, item: item.to_string() };
+        self.push(&comps::recipe::USES, u)
+    }
     pub fn hidden(self) -> Self {
         self.tag(abi::comp::recipe::HIDDEN)
     }

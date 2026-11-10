@@ -954,7 +954,8 @@ pub mod comp {
     /// shapeless or processing one: item names or `#tags`, a liquid by its name) with `AMOUNTS`
     /// (`[u32]`, of each, millibuckets for liquids, 1), `OUTPUT` (`str`) and `COUNT` (`u32`, 1),
     /// `TIME` (`u32`, ticks, the kind says what they mean, 0), `OUTPUTS` (`[LootPool]`, more
-    /// results, rolled as loot is: a 5% one is a pool of it and nothing by weight), tag `HIDDEN` (works, the recipe viewer doesn't list it). Any other component is
+    /// results, rolled as loot is: a 5% one is a pool of it and nothing by weight), `USES`
+    /// (`[RecipeUse]`, what a run does to an ingredient other than using it up), tag `HIDDEN` (works, the recipe viewer doesn't list it). Any other component is
     /// data it carries for what makes it (energy per tick).
     pub mod recipe {
         pub const KIND: &str = "recipe.kind";
@@ -966,6 +967,7 @@ pub mod comp {
         pub const COUNT: &str = "recipe.count";
         pub const TIME: &str = "recipe.time";
         pub const OUTPUTS: &str = "recipe.outputs";
+        pub const USES: &str = "recipe.uses";
         pub const HIDDEN: &str = "recipe.hidden";
     }
 
@@ -3184,6 +3186,30 @@ crate::data! {
     pub struct RecipeKey { pub name: alloc::string::String, pub item: alloc::string::String }
 }
 
+crate::data! {
+    /// What a run of a recipe does to one of its ingredients (`comp::recipe::USES`), other than
+    /// using it up: `key` its pattern character, or for a recipe without a pattern its place among
+    /// the inputs (`"0"`); `how` a `recipe_use`, `amount` the wear a run gives, `item` what is
+    /// left in its place.
+    pub struct RecipeUse {
+        pub key: alloc::string::String,
+        pub how: u32,
+        pub amount: u32,
+        pub item: alloc::string::String,
+    }
+}
+
+/// `RecipeUse::how`. Without one an ingredient is used up, the last of a stack leaving its item's
+/// `comp::REMAINDER` (a lava bucket its bucket).
+pub mod recipe_use {
+    /// It stays as it is: a mold, a catalyst.
+    pub const KEEP: u32 = 1;
+    /// It stays and wears by `amount` a run, breaking when its durability is gone: a hammer.
+    pub const WEAR: u32 = 2;
+    /// Used up, `item` taking its place (any item, also one with no `remainder`).
+    pub const LEAVES: u32 = 3;
+}
+
 /// A recipe the viewer shows with a kind's own `display`.
 #[repr(C)]
 pub struct RecipeUiArgs {
@@ -3224,6 +3250,10 @@ pub mod slot_flags {
     /// takes its place, or the player leaves; never filled by a shift-click. `core:trash`
     /// (Delete) over a slot sends that stack there.
     pub const TRASH: u32 = 64;
+    /// A crafting grid of its menu's first recipe kind (`comp::menu::RECIPES`): the engine shows
+    /// what it makes in the menu's output group, and taking that uses the grid up as the recipe
+    /// says (`comp::recipe::USES`), with shift as many runs as fit in the player's inventory.
+    pub const GRID: u32 = 128;
 }
 
 /// The equipment slot of the second hand. Without it, players have one.
@@ -3288,6 +3318,9 @@ pub struct MenuArgs {
     /// player's own and menus of no one (a crafting table).
     pub owner: Holder,
     pub slot: u32,
+    /// `on_take` of a crafting grid's result: how many runs of the recipe it was (shift crafts
+    /// all that fit at once); 1 otherwise.
+    pub times: u32,
 }
 
 // ---------------------------------------------------------------- mod UI

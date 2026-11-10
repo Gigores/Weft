@@ -337,6 +337,7 @@ pub mod recipe {
     pub static COUNT: Component<u32, Recipe> = Component::named(r::COUNT);
     pub static TIME: Component<u32, Recipe> = Component::named(r::TIME);
     pub static OUTPUTS: Component<Vec<crate::abi::LootPool>, Recipe> = Component::named(r::OUTPUTS);
+    pub static USES: Component<Vec<crate::abi::RecipeUse>, Recipe> = Component::named(r::USES);
 }
 
 /// What a loot table is made of.

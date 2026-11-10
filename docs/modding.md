@@ -407,6 +407,7 @@ It works on other mods' dimensions too, so adding a biome to base's overworld is
 ### Recipes
 - `r.shaped(&KIND, out, count, &["iii", " s ", " s "], &[('i', "#ingots/iron"), ('s', "#stick")])`
 - `r.shapeless(..)`
+- what a run does to an ingredient other than using it up, by its pattern character (or its place among a shapeless one's inputs): `.keep('m')` (a mold stays), `.wear('h', 1)` (a hammer stays and wears a point a run, breaking when worn out), `.leaves('b', "bucket")` (any item takes its place). Without one an ingredient is used up and the last of a stack leaves its item's `remainder` (a lava bucket its bucket)
 
 Recipe kinds are registered too (`r.recipe_kind`), a furnace is just a kind with stations.\
 What else a recipe gives besides its result is loot pools: `.extra(Pool::new()..)` is rolled the way a loot table is, and `.output("slag", 1)` and `.output_chance("diamond", 1, 0.05)` are pools made for you. The recipe viewer shows each item with its chance, and `recipe.roll(&w)` gives what one run brings.\
