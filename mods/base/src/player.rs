@@ -90,7 +90,7 @@ pub fn register(r: &mut Registry) {
     // Armor is a step of the damage chain (modern's CombatRules: big hits go through more of it,
     // unless it is tough), and wears when the hit actually lands, a quarter of the damage per
     // piece (at least 1) like vanilla.
-    r.modify(&chain::DAMAGE, stage::MULTIPLY, |m| {
+    r.modify(&chain::DAMAGE, &phase::MULTIPLY, |m| {
         let q = *m.query();
         if !armor_applies(q.cause) {
             return;
@@ -310,7 +310,7 @@ fn heal_or_starve(w: &World, id: u64, st: &mut EntityState) {
     h.food_timer = 0;
     if h.food <= 0.0 {
         if st.health > 1.0 {
-            w.damage(id, 1.0, 0, damage_cause::STARVE);
+            w.damage(id, Damage::new(1.0, damage_cause::STARVE));
         }
     } else {
         let spent = if every == 10 { h.saturation.min(6.0) } else { 6.0 };
@@ -370,7 +370,7 @@ fn tick_players(w: &World) {
             h.air -= 1.0;
             if h.air <= -20.0 {
                 h.air = 0.0;
-                w.damage(id, 2.0, 0, damage_cause::DROWN);
+                w.damage(id, Damage::new(2.0, damage_cause::DROWN));
             }
         } else if h.air < MAX_AIR {
             h.air = (h.air + 4.0).min(MAX_AIR);

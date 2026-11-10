@@ -4,7 +4,9 @@
 //!
 //! ```ignore
 //! static JETPACK: Key = Key::named("jetpack");
-//! r.key(&JETPACK, "J").on_server(|p| { let w = p.world(); /* for p.player() */ });
+//! r.key(&JETPACK, "J").on_server(|w, player| { /* on the server, for that player */ });
+//! // Any action on the server, the mouse buttons too, with how long it was held:
+//! r.on_event(&KEY, |b| for k in b.iter() { /* k.player, k.key, k.down, k.held_ticks */ });
 //! static SCAN: Key = Key::named("scan");
 //! r.key(&SCAN, "K").on_client(|c| { /* on this client */ });
 //! ```
@@ -629,13 +631,28 @@ impl KeyBuilder<'_> {
         self
     }
 
-    /// On the server, for the player who pressed it (`p.player()`, `p.world()`): the engine
-    /// carries the press over, no channel of yours needed.
-    pub fn on_server(self, f: impl Fn(&Packet) + Send + Sync + 'static) -> Self {
+    /// On the server, for the player who pressed it (world, player): `crate::KEY` filtered to
+    /// this key going down.
+    pub fn on_server(self, f: impl Fn(&crate::World, u64) + Send + Sync + 'static) -> Self {
         let key = self.key;
-        let channel: &'static Channel<()> = Channel::generated(format!("{}.pressed", key.name()));
-        self.reg.packet(channel, move |p, ()| f(p));
-        self.on_client(move |c| c.send(channel, &()))
+        self.reg.on_event(&crate::KEY, move |b| {
+            let w = b.world();
+            for k in b.iter().filter(|k| k.down != 0 && k.key == key.id()) {
+                f(&w, k.player);
+            }
+        });
+        self
+    }
+    /// On the server, when the player lets it go (world, player, ticks it was held): a charge.
+    pub fn on_release_server(self, f: impl Fn(&crate::World, u64, u32) + Send + Sync + 'static) -> Self {
+        let key = self.key;
+        self.reg.on_event(&crate::KEY, move |b| {
+            let w = b.world();
+            for k in b.iter().filter(|k| k.down == 0 && k.key == key.id()) {
+                f(&w, k.player, k.held_ticks);
+            }
+        });
+        self
     }
 }
 

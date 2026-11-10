@@ -328,7 +328,7 @@ messages! {
         /// Own synced components: (component id, bytes).
         Components(Vec<(u32, Vec<u8>)>),
         /// A hit knocks the player back, `away` being flat and of length 1 (`physics::knock`).
-        Knock { away: [f32; 3] },
+        Knock { push: [f32; 3] },
         /// Velocity change in blocks per tick (a mod's push, a sprinting hit).
         Velocity { add: [f32; 3] },
         /// A mod set the player's velocity, in blocks per tick.
@@ -407,8 +407,8 @@ messages! {
         StartBreak { pos: IVec3, part: u32, frame: u64 },
         /// Stopped mining without finishing.
         StopBreak,
-        /// Let go of the use button before the item took effect.
-        StopUsing,
+        /// Actions (key ids) that went down and up since the last.
+        Keys { down: Vec<u32>, up: Vec<u32> },
         /// The main hand's item goes to the other hand and back.
         SwapHands,
         /// `frame`: the structure (entity) the block is part of, its position in the structure's

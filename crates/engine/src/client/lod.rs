@@ -19,7 +19,7 @@ use weft_abi::{BlockModel, FACE_DIRS};
 
 use crate::background;
 use crate::config;
-use crate::content::{Content, StateInfo, content, face_paint};
+use crate::content::{Content, StateInfo, content};
 use crate::gpu_layout::terrain::lod as lod_gpu;
 use crate::gpu_layout::{CORNERS, face, lod_box, lod_record};
 use crate::server::lod_tops::{LodColumn, Span, shows};
@@ -189,12 +189,12 @@ pub fn mesh(c: &Content, key: TileKey, words: &[u32], columns: &Columns) -> (Vec
     let h = height_grid(words);
     let looks = super::looks::current();
     let ctm = super::ctm::current();
+    // Far off a face is its first layer.
     let face_of = |state: u32, dir: usize| {
         let info = &c.states[state as usize];
         let tex = looks.drawn(state, info).textures[dir] & face::TEX_MASK;
-        let paint = face_paint(info, dir, ctm.has_overlay(tex));
-        let tint = if paint.base_tinted || paint.overlay_tinted { info.tint as u32 } else { 0 };
-        (tex, tint)
+        let first = super::mesher::face_layers(c, info, tex, dir)[0];
+        (first.tex, first.tint as u32)
     };
     let mut faces = Vec::new();
     let (mut lo, mut hi) = (i32::MAX, i32::MIN);

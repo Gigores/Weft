@@ -11,10 +11,11 @@ pub static SKELETON: EntityKind = EntityKind::named("skeleton");
 pub static SHEEP: EntityKind = EntityKind::named("sheep");
 pub static CHICKEN: EntityKind = EntityKind::named("chicken");
 pub static ARROW: EntityKind = EntityKind::named("arrow");
+pub static BOW: Item = Item::named("bow");
+static ARROW_ITEM: Item = Item::named("arrow");
 static EGG: Item = Item::named("egg");
 /// Ticks of whatever a mob counts: a creeper's fuse, a skeleton's reload, a chicken's next egg.
 static FUSE: Component<u32> = Component::named("fuse");
-static SHOOTER: Component<u64> = Component::named("shooter");
 
 pub static COW: EntityKind = EntityKind::named("cow");
 
@@ -23,6 +24,9 @@ pub fn register(r: &mut Registry) {
     r.set_model(&PLAYER, humanoid(false));
     r.entity(&ZOMBIE)
         .tag("hostile")
+        // Undead, as vanilla's: poison and regeneration take no hold.
+        .tag("immune_effect/base:poison")
+        .tag("immune_effect/base:regeneration")
         .equipment()
         .sound("ambient")
         .sound("hurt")
@@ -54,7 +58,6 @@ pub fn register(r: &mut Registry) {
                 .neutral(),
         ));
     r.entity_component(&FUSE, 0u32, 0);
-    r.entity_component(&SHOOTER, 0u64, 0);
     r.entity(&CREEPER)
         .tag("hostile")
         .size(0.6, 1.7)
@@ -65,6 +68,8 @@ pub fn register(r: &mut Registry) {
         .goals(creeper());
     r.entity(&SKELETON)
         .tag("hostile")
+        .tag("immune_effect/base:poison")
+        .tag("immune_effect/base:regeneration")
         .equipment()
         .size(0.6, 1.99)
         .max_health(20.0)
@@ -73,14 +78,31 @@ pub fn register(r: &mut Registry) {
         .burns_in_sun()
         .attach(&FUSE)
         .goals(skeleton());
+    // Drawn as long as the use button is held, shot when it is let go.
+    r.item(&BOW)
+        .durability(384)
+        .handheld()
+        .use_until_released()
+        .on_release(shoot_bow)
+        .tab(&crate::tabs::COMBAT);
+    // Drawing it narrows the view, more the further it is drawn (vanilla's 15% at full draw).
+    r.modify(&attribute::FOV, &phase::MULTIPLY, |m| {
+        let Some(s) = m.world().entity(m.query().entity) else { return };
+        if s.using == BOW.id() {
+            let drawn = (s.using_ticks as f64 / 20.0).min(1.0);
+            m.value *= 1.0 - drawn * drawn * 0.15;
+        }
+    });
+    r.shaped(&crate::recipes::CRAFTING, "bow", 1, &[" s#", "s #", " s#"], &[('s', "#stick"), ('#', "#string")]);
+    // Vanilla's arrow: 0.05 a tick down, stuck a minute where it hits a block.
     r.entity(&ARROW)
         .no_egg()
         .size(0.5, 0.5)
         .unpushable()
         .max_health(1.0)
         .walk_speed(0.0)
-        .attach(&SHOOTER)
-        .goals(ai::Goals::new().then(arrow_flies));
+        .attribute(&attribute::GRAVITY, 0.625)
+        .projectile(Projectile::new().sticks(1200));
     r.entity(&SHEEP)
         .tag("livestock")
         .size(0.9, 1.3)
@@ -222,7 +244,7 @@ fn blast(w: &World, id: u64, at: Vec3, radius: f64) {
         let d = (s.pos - at).length_squared().sqrt();
         let impact = (1.0 - d / (radius * 2.0)).max(0.0);
         let damage = (impact * impact + impact) / 2.0 * 7.0 * radius * 2.0 + 1.0;
-        w.damage(other, damage as f32, id, damage_cause::EXPLOSION);
+        w.damage(other, Damage::new(damage as f32, damage_cause::EXPLOSION).by(id));
     }
     // Vanilla's: one going off in a liquid breaks nothing, and liquids don't break at all.
     if w.block_flags(block_pos_of(at)) & abi::block_flags::LIQUID == 0 {
@@ -258,6 +280,34 @@ fn skeleton() -> ai::Goals {
         .then(ai::wander(0.6, 10.0))
 }
 
+/// Vanilla's bow: full strength after a second's draw, the curve easing in; an arrow from the
+/// inventory, none taken in creative.
+fn shoot_bow(u: &mut ItemUse) -> bool {
+    let (w, id) = (u.world(), u.entity());
+    let t = u.held_ticks() as f32 / 20.0;
+    let power = ((t * t + t * 2.0) / 3.0).min(1.0) as f64;
+    if power < 0.1 {
+        return false;
+    }
+    let creative = w.creative(id);
+    let inv = w.inventory(id);
+    let arrow = (0..inv.len()).find(|&s| inv.get(s).item == ARROW_ITEM.id());
+    if arrow.is_none() && !creative {
+        return false;
+    }
+    let Some(s) = w.entity(id) else { return false };
+    // Three blocks a tick at full draw.
+    let v = look_dir(s.yaw, s.pitch) * (power * 3.0 * 20.0);
+    w.spawn_with(&ARROW, s.eye(), &Spawn::new().owner(id).velocity(v).yaw(s.yaw));
+    if !creative {
+        if let Some(slot) = arrow {
+            inv.set(slot, consume_one(inv.get(slot)));
+        }
+        u.set_stack(u.stack().add_wear(1));
+    }
+    true
+}
+
 fn shoot(w: &World, id: u64, from: &EntityState, at: &EntityState) {
     let eye = from.eye().y;
     let d = [at.pos.x - from.pos.x, at.pos.y + at.size.eye as f64 * 0.7 - eye, at.pos.z - from.pos.z];
@@ -265,31 +315,15 @@ fn shoot(w: &World, id: u64, from: &EntityState, at: &EntityState) {
     let len = (flat * flat + d[1] * d[1]).sqrt().max(0.1);
     // A little above the target for the drop on the way.
     const SPEED: f64 = 32.0;
-    let arrow = w.spawn(&ARROW, [from.pos.x, eye, from.pos.z]);
-    if let Some(shooter) = w.component_mut(arrow, &SHOOTER) {
-        *shooter = id;
-    }
-    w.entity_modify(arrow)
-        .velocity([d[0] / len * SPEED, d[1] / len * SPEED + flat * 0.4, d[2] / len * SPEED])
-        .yaw(yaw_toward([0.0; 3], d));
-}
-
-/// An arrow in flight: gone when it hits something or has flown for five seconds.
-fn arrow_flies(w: &World, id: u64, st: &EntityState) -> bool {
-    let shooter = w.component(id, &SHOOTER).unwrap_or(0);
-    // Its own box against theirs: a tall mob is hit in the head too.
-    let tip = Shape::cuboid([st.pos.x - 0.25, st.pos.y, st.pos.z - 0.25], [st.pos.x + 0.25, st.pos.y + 0.5, st.pos.z + 0.25]);
-    let hit = w
-        .entities_in(&tip, EntityFilter::any().targets().touching())
-        .into_iter()
-        .find(|&e| e != id && e != shooter && w.entity(e).is_some_and(|s| s.kind != st.kind));
-    if let Some(target) = hit {
-        w.damage(target, 3.0, shooter, damage_cause::ATTACK);
-        w.despawn(id);
-    } else if st.flags & entity_state::BLOCKED != 0 || st.on_ground != 0 || st.age > 100 {
-        w.despawn(id);
-    }
-    true
+    let v = [d[0] / len * SPEED, d[1] / len * SPEED + flat * 0.4, d[2] / len * SPEED];
+    w.spawn_with(
+        &ARROW,
+        [from.pos.x, eye, from.pos.z],
+        &Spawn::new()
+            .owner(id)
+            .velocity(v)
+            .yaw(yaw_toward([0.0; 3], d)),
+    );
 }
 
 /// A chicken: flutters down instead of falling, and lays an egg now and then.

@@ -41,6 +41,7 @@ pub mod settings;
 pub mod shaders;
 pub mod shape;
 pub mod stack;
+pub mod steps;
 pub mod tag_bits;
 pub mod ui;
 pub mod wire;

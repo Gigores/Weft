@@ -181,6 +181,8 @@ pub struct UiRenderer {
     /// UI animation files by name, and the nodes the last `build` animated.
     anims: FxHashMap<String, Vec<Arc<Animation>>>,
     pub animated: Vec<Animated>,
+    /// The biome under the player: what block items here take their tint kinds' colors from.
+    pub biome: Option<u16>,
 }
 
 pub const FX: Hook =
@@ -237,6 +239,7 @@ impl UiRenderer {
             fx_slots: Vec::new(),
             anims: FxHashMap::default(),
             animated: Vec::new(),
+            biome: None,
         })
     }
 
@@ -725,7 +728,7 @@ impl UiRenderer {
                 mode: ui_mode::ICON,
                 ..Default::default()
             }),
-            crate::client::looks::ItemDraw::Model(model) => self.boxes_icon(tex, x, y, size, model, &c.states[0]),
+            crate::client::looks::ItemDraw::Model(model) => self.boxes_icon(c, tex, x, y, size, model, &c.states[0]),
             crate::client::looks::ItemDraw::Icon(icon) => self.quads.push(Quad {
                 p0: [x, y],
                 u: [size, 0.0],
@@ -737,7 +740,7 @@ impl UiRenderer {
                     .get(&item)
                     .and_then(|&l| c.states.get(c.liquids[l as usize].first_state as usize))
                     .filter(|s| s.tint != 0)
-                    .map_or(0xFFFFFFFF, |s| crate::content::item_tint(s.tint) << 8 | 0xFF),
+                    .map_or(0xFFFFFFFF, |s| c.kind_color(s.tint, self.biome) << 8 | 0xFF),
                 tex: tex.texture(icon),
                 mode: ui_mode::ICON,
                 ..Default::default()
@@ -763,29 +766,29 @@ impl UiRenderer {
         let Some(s) = c.states.get(state as usize) else { return };
         let looks = crate::client::looks::current();
         if let Some(t) = looks.block_sprite(state, s) {
-            let tint = if crate::content::face_paint(s, 0, false).base_tinted {
-                crate::content::item_tint(s.tint) << 8 | 0xFF
-            } else {
-                0xFFFFFFFF
-            };
-            self.quads.push(Quad {
-                p0: [x, y],
-                u: [size, 0.0],
-                v: [0.0, size],
-                uv: [0.0, 0.0, 1.0, 1.0],
-                color: tint,
-                tex: tex.texture(t),
-                mode: ui_mode::ICON,
-                ..Default::default()
-            });
+            for l in crate::client::mesher::face_layers(c, s, t, 0).iter() {
+                self.quads.push(Quad {
+                    p0: [x, y],
+                    u: [size, 0.0],
+                    v: [0.0, size],
+                    uv: [0.0, 0.0, 1.0, 1.0],
+                    color: c.kind_color(l.tint, self.biome) << 8 | 0xFF,
+                    tex: tex.texture(l.tex),
+                    mode: ui_mode::ICON,
+                    ..Default::default()
+                });
+            }
             return;
         }
-        self.boxes_icon(tex, x, y, size, &looks.block_shape(state, s), s);
+        self.boxes_icon(c, tex, x, y, size, &looks.block_shape(state, s), s);
     }
 
-    /// Model boxes drawn isometric, tinted like `s` (air for an item's own model).
+    /// Model boxes drawn isometric, each face's layers one over the other as in the world (`s` is
+    /// air for an item's own model).
+    #[allow(clippy::too_many_arguments)]
     fn boxes_icon(
         &mut self,
+        c: &Content,
         tex: &GameTextures,
         x: f32,
         y: f32,
@@ -793,8 +796,6 @@ impl UiRenderer {
         boxes: &[crate::content::ModelBox],
         s: &crate::content::StateInfo,
     ) {
-        let grass = crate::content::item_tint(s.tint) << 8 | 0xFF;
-        let color_of = |tinted: bool| if tinted { grass } else { 0xFFFFFFFF };
         let shade = |c: u32, k: f32| {
             let ch = |s: u32| (((c >> s) & 255) as f32 * k) as u32;
             ch(24) << 24 | ch(16) << 16 | ch(8) << 8 | 0xFF
@@ -814,6 +815,7 @@ impl UiRenderer {
             for face in 0..6 {
                 let Some((corners, uv)) = crate::client::mesher::box_face(b, face) else { continue };
                 let (n, k) = crate::client::mesher::face_look(&corners);
+                let k = if b.flat { 1.0 } else { k };
                 if n.dot(toward) <= 0.0 {
                     continue;
                 }
@@ -823,26 +825,10 @@ impl UiRenderer {
                 let u = [top_right[0] - p0[0], top_right[1] - p0[1]];
                 let v = [bottom_left[0] - p0[0], bottom_left[1] - p0[1]];
                 let uv = uv.map(|t| t / 16.0);
-                let overlay = tex
-                    .overlays
-                    .get(b.textures[face] as usize)
-                    .filter(|&&ov| ov != 0);
-                let paint = crate::content::face_paint(s, face, overlay.is_some());
-                self.quads.push(Quad {
-                    p0,
-                    u,
-                    v,
-                    uv,
-                    color: shade(color_of(paint.base_tinted), k),
-                    tex: tex.texture(b.textures[face]),
-                    mode: ui_mode::ICON,
-                    ..Default::default()
-                });
-                // The part of a face over it.
-                if let Some(&ov) = overlay {
-                    let color = shade(color_of(paint.overlay_tinted), k);
+                for l in crate::client::mesher::face_layers(c, s, b.textures[face], face).iter() {
+                    let color = shade(c.kind_color(l.tint, self.biome) << 8 | 0xFF, k);
                     self.quads
-                        .push(Quad { p0, u, v, uv, color, tex: tex.texture(ov - 1), mode: ui_mode::ICON, ..Default::default() });
+                        .push(Quad { p0, u, v, uv, color, tex: tex.texture(l.tex), mode: ui_mode::ICON, ..Default::default() });
                 }
             }
         }

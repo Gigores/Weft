@@ -123,7 +123,7 @@ pub async fn mining_and_wear(t: T) -> R {
         .until("dirt picked up", Duration::from_secs(5), |t| (0..36).any(|i| t.c().inventory_slot(i).item == d))
         .await;
     t.check(got.is_ok(), "digging dirt by hand gave nothing");
-    // A break an interceptor refuses puts the block back on the client too.
+    // A break the question refuses puts the block back on the client too.
     let gold = add(f, [-2, 0, 0]);
     t.set(gold, "gold_block").await?;
     t.op("put me 1 diamond_pickaxe 1").await?;
@@ -889,7 +889,7 @@ pub async fn movement_attributes(t: T) -> R {
         Ok::<f64, String>(((end.x - start.x).powi(2) + (end.z - start.z).powi(2)).sqrt())
     };
     let slow = walk(t.clone()).await?;
-    t.op("attr_mod me core:movement_speed testkit:fast 1 1 0")
+    t.op("attr_mod me core:movement_speed testkit:fast core:percent 1 0")
         .await?;
     t.secs(0.2).await?;
     let fast = walk(t.clone()).await?;
@@ -908,7 +908,7 @@ pub async fn movement_attributes(t: T) -> R {
         Ok::<f64, String>(top - y0)
     };
     let low = jump(t.clone()).await?;
-    t.op("attr_mod me core:jump_strength testkit:spring 1 0.5 0")
+    t.op("attr_mod me core:jump_strength testkit:spring core:percent 0.5 0")
         .await?;
     t.secs(0.2).await?;
     let high = jump(t.clone()).await?;
@@ -1752,7 +1752,7 @@ pub async fn respawn(t: T) -> R {
         })
         .await?;
         if with_effect {
-            t.op("attr_mod me core:movement_speed testkit:fast 1 1 0")
+            t.op("attr_mod me core:movement_speed testkit:fast core:percent 1 0")
                 .await?;
         }
         t.cmd("/clear @s").await?;
@@ -1956,6 +1956,122 @@ pub async fn swimming(t: T) -> R {
     t.check(suit > wade * 1.3, format!("the suit swims in lava: {wade:.2} -> {suit:.2}"));
     t.op("put me 37 base:diamond_chestplate 0").await?;
     pool("air").await?;
+    Ok(())
+}
+
+/// A projectile hits what its whole way through a tick crosses, however fast: a pig fifteen blocks
+/// a tick doesn't slip through; one into a wall sticks at the face it met, and stays.
+pub async fn projectiles(t: T) -> R {
+    t.flat().await?;
+    let f = t.feet();
+    let num = |s: &str, i: usize| {
+        s.split_whitespace()
+            .nth(i)
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(f64::NAN)
+    };
+    let pig = t
+        .op(&format!("spawn base:pig {} {} {}", f[0], f[1], f[2] - 8))
+        .await?;
+    t.fill(add(f, [-1, 0, -10]), add(f, [1, 2, -10]), "stone")
+        .await?;
+    t.secs(0.3).await?;
+    let before = num(&t.op(&format!("entity {pig}")).await?, 4);
+    let (x, y, z) = (f[0] as f64 + 0.5, f[1] as f64 + 0.45, f[2] as f64 - 1.5);
+    t.op(&format!("shoot base:arrow {x} {y} {z} 0 0 -300"))
+        .await?;
+    t.secs(0.5).await?;
+    // That fast it kills: gone is hit too.
+    let after = t
+        .op(&format!("entity {pig}"))
+        .await
+        .map_or(0.0, |s| num(&s, 4));
+    t.check(after < before, format!("a fast arrow hits the pig in its way: health {before} -> {after}"));
+
+    let lane = f[0] as f64 + 4.5;
+    t.fill(add(f, [4, 0, -6]), add(f, [4, 2, -6]), "stone")
+        .await?;
+    let arrow = t
+        .op(&format!("shoot base:arrow {lane} {y} {z} 0 0 -300"))
+        .await?;
+    t.secs(0.5).await?;
+    let at = num(&t.op(&format!("entity {arrow}")).await?, 3);
+    let face = (f[2] - 5) as f64;
+    t.check((face..face + 0.2).contains(&at), format!("stuck at the wall's face {face}: z {at}"));
+    t.secs(1.0).await?;
+    let still = num(&t.op(&format!("entity {arrow}")).await?, 3);
+    t.check_eq(still, at, "and it stays");
+
+    // Shot up at a block a tick it slows as vanilla's arrow does: half a second on, some seven
+    // blocks higher.
+    let (ux, uz) = (f[0] as f64 - 4.5, f[2] as f64 + 0.5);
+    let up = t
+        .op(&format!("shoot base:arrow {ux} {y} {uz} 0 20 0"))
+        .await?;
+    t.secs(0.5).await?;
+    let height = num(&t.op(&format!("entity {up}")).await?, 2) - y;
+    t.check((4.0..11.0).contains(&height), format!("an arrow shot up climbs and slows: {height:.2} blocks"));
+
+    // Its block taken away, the stuck one falls.
+    t.fill(add(f, [4, 0, -6]), add(f, [4, 2, -6]), "air")
+        .await?;
+    t.secs(1.0).await?;
+    let fell = num(&t.op(&format!("entity {arrow}")).await?, 2);
+    t.check(fell < y - 0.3, format!("the arrow falls once its block is gone: y {fell:.2} from {y:.2}"));
+
+    // Into a cow it stays in the cow, going about with it.
+    let (cx, cz) = (f[0] + 8, f[2] - 5);
+    let cow = t.op(&format!("spawn base:cow {cx} {} {cz}", f[1])).await?;
+    t.secs(0.3).await?;
+    let lane = cx as f64 + 0.5;
+    let in_cow = t
+        .op(&format!("shoot base:arrow {lane} {} {z} 0 0 -40", y + 0.3))
+        .await?;
+    t.secs(1.5).await?;
+    let (a, c) = (t.op(&format!("entity {in_cow}")).await?, t.op(&format!("entity {cow}")).await?);
+    let near = (num(&a, 1) - num(&c, 1)).hypot(num(&a, 3) - num(&c, 3));
+    t.check(near < 1.2, format!("the arrow stays in the cow: {near:.2} blocks off ({a} / {c})"));
+
+    // Off what takes no harm it bounces back instead of going.
+    t.cmd("/gamemode creative").await?;
+    t.secs(0.2).await?;
+    let me = t.state().pos;
+    let back = t
+        .op(&format!("shoot base:arrow {} {} {} 0 0 40", me.x, me.y + 1.0, me.z - 4.0))
+        .await?;
+    t.secs(0.6).await?;
+    let after = t.op(&format!("entity {back}")).await;
+    t.check(after.as_ref().is_ok_and(|s| num(s, 3) < me.z), format!("an arrow that did no harm bounced off and stayed: {after:?}"));
+    Ok(())
+}
+
+/// The server hears the use button held and for how long; a bow drawn that long shoots when
+/// let go, an arrow taken from the inventory.
+pub async fn bow_and_keys(t: T) -> R {
+    t.flat().await?;
+    t.op("put me 0 base:bow 1").await?;
+    t.op("put me 1 base:arrow 5").await?;
+    t.c().select_slot(0);
+    t.frames(2).await?;
+    t.hold("core:use", 1.5);
+    t.secs(0.6).await?;
+    let held = t.op("key core:use").await?;
+    let mut p = held
+        .split_whitespace()
+        .map(|v| v.parse::<u32>().unwrap_or(0));
+    let (down, ticks) = (p.next().unwrap_or(0), p.next().unwrap_or(0));
+    t.check(down == 1 && ticks >= 5, format!("the server sees the use button held a while: {held}"));
+    let fov = t.op("attr me core:fov").await?;
+    let narrow: f64 = fov
+        .split_whitespace()
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    t.check((0.85..0.99).contains(&narrow), format!("drawing narrows the view: {fov}"));
+    t.secs(1.4).await?;
+    t.check_eq(t.op("key core:use").await?, "0 0".into(), "and let go");
+    t.check_eq(t.c().inventory_slot(1).count, 4, "one arrow shot");
+    t.check_eq(t.c().inventory_slot(0).wear(), 1, "the bow wore by one");
     Ok(())
 }
 

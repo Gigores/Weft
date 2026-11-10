@@ -431,11 +431,15 @@ pub mod entry_kind {
     pub const TERRAIN: u32 = 42;
     /// How a bone of a model file moves by itself, named `<model>/<bone>`.
     pub const BONE_MOTION: u32 = 43;
+    /// Code that changes a value (`comp::step`): on a chain, or used by modifiers.
+    pub const STEP: u32 = 44;
+    /// A place in the order steps run in (`comp::phase`).
+    pub const PHASE: u32 = 45;
     /// How many kinds there are; each has a component table (`ComponentTable`), empty for word
     /// sets and component declarations.
     pub const COUNT: usize = NAMES.len();
     /// Each kind's name for messages, by value.
-    pub const NAMES: [&str; 44] = [
+    pub const NAMES: [&str; 46] = [
         "block",
         "item",
         "entity",
@@ -480,6 +484,8 @@ pub mod entry_kind {
         "spawn rule",
         "terrain",
         "bone motion",
+        "step",
+        "phase",
     ];
 }
 
@@ -677,6 +683,8 @@ pub mod comp {
     pub const ENTITY_EFFECT_INSTANT: &str = "entity_effect.instant";
     pub const ENTITY_EFFECT_SCREEN: &str = "entity_effect.screen";
     pub const ENTITY_EFFECT_HIDES: &str = "entity_effect.hides";
+    /// An entity effect's `callback` (`EffectTickArgs`) every tick with every entity that has it.
+    pub const ENTITY_EFFECT_ON_TICK: &str = "entity_effect.on_tick";
     pub const CONDITION_CALL: &str = "condition.call";
 
     /// A sound event's: `FILES` (`[str]`, `sounds/<name>.ogg` or `.wav`, one picked at random),
@@ -1108,14 +1116,17 @@ pub mod comp {
     }
 
     /// An item's own (`entry_kind::ITEM`), besides the shared ones (`max_stack`, `durability`,
-    /// tools, food ...) that go in its component table: `TEXTURE` (`str`, its flat icon,
-    /// `<ns>:item/<name>`; empty with `BLOCK`: the block's model), `BLOCK` (`str`, the block it
-    /// places), `ON_USE` (`callback`, `ItemUseArgs`), `CONDITION` (`callback`, `ItemModelArgs`:
-    /// how a stack looks by what is in it, asked once per kind of stack).
+    /// tools, food ...) that go in its component table: `comp::LAYERS` (`str`, how it looks,
+    /// as a stack's: one layer, `<ns>:item/<name>`, when not given; empty with `BLOCK`: the
+    /// block's model), `BLOCK` (`str`, the block it
+    /// places), `ON_USE` (`callback`, `ItemUseArgs`), `ON_RELEASE` (`callback`, `ItemUseArgs`: the
+    /// use button let go while using it, `held_ticks` after how long: a bow), `CONDITION`
+    /// (`callback`, `ItemModelArgs`: how a stack looks by what is in it, asked once per kind of
+    /// stack).
     pub mod item {
-        pub const TEXTURE: &str = "item.texture";
         pub const BLOCK: &str = "item.block";
         pub const ON_USE: &str = "item.on_use";
+        pub const ON_RELEASE: &str = "item.on_release";
         pub const CONDITION: &str = "item.condition";
     }
 
@@ -1142,8 +1153,9 @@ pub mod comp {
     /// state: a tag per `block_flags` (`FLAGS`) and `NOT_SOLID`; `LIGHT_FILTER` (`[u8;3]`,
     /// absorption on top of the opacity, colored glass), `LIGHT_OPACITY` (`u8`, light it takes
     /// away, 15 for an opaque one, else 0), `LAYER` (`u32`, `RenderLayer`: cutout for boxes, else
-    /// opaque), `MODEL` (`u32`, `BlockModel`, a cube), `TEXTURES` (`[str;6]`, by face,
-    /// `<ns>:block/<name>`), `TURNS` (`[u8;6]`, quarter turns of a cube's face pictures), `BOXES`
+    /// opaque), `MODEL` (`u32`, `BlockModel`, a cube), `TEXTURES` (`[str;6]`, by face, each
+    /// `LAYERS` text, `<ns>:block/<name>`; layers tinted by a kind take its biome color, which
+    /// gives the state its `TINT` and `TINT_FACES`), `TURNS` (`[u8;6]`, quarter turns of a cube's face pictures), `BOXES`
     /// (`[ModelBox]`), `HITBOX` (`[[f32;6]]`, min and max in sixteenths: what stops a walker if it
     /// is solid and what the crosshair picks; none: the boxes, else a plant's cross, else the
     /// whole block) and `OUTLINE` (likewise, what is outlined and cracked when it isn't the
@@ -1365,6 +1377,26 @@ pub mod comp {
         pub const NO_FALL_DAMAGE: &str = "entity.no_fall_damage";
         /// Others don't push it away, which every kind does otherwise.
         pub const UNPUSHABLE: &str = "entity.unpushable";
+        /// It flies as a projectile (`Projectile`): the engine moves it, and each tick a ray along
+        /// its speed decides what it hits (`action::PROJECTILE_HIT`).
+        pub const PROJECTILE: &str = "entity.projectile";
+    }
+
+    /// A step's (`entry_kind::STEP`): `CHAIN` (`str`, the value it changes every time it is
+    /// computed; none: it only runs where a modifier names it), `PHASE` (`str`, `phase::*` or a
+    /// mod's), `AFTER` and `BEFORE` (`[str]`, steps of the same phase it runs after or before),
+    /// `CALL` (`callback`, `StepArgs`; the engine's own steps have none until a mod sets one).
+    pub mod step {
+        pub const CHAIN: &str = "step.chain";
+        pub const PHASE: &str = "step.phase";
+        pub const AFTER: &str = "step.after";
+        pub const BEFORE: &str = "step.before";
+        pub const CALL: &str = "step.call";
+    }
+
+    /// A phase's (`entry_kind::PHASE`): `AFTER` (`str`), the phase it comes right after.
+    pub mod phase {
+        pub const AFTER: &str = "phase.after";
     }
 
     /// A bone motion's (`entry_kind::BONE_MOTION`): `GRAVITY`, the pull toward hanging straight
@@ -1402,6 +1434,7 @@ pub mod comp {
     pub const DURABILITY: &str = "durability";
     pub const ATTACK_DAMAGE: &str = "attack_damage";
     /// Item: ticks of holding the use button before it takes effect (food 32); slows while held.
+    /// `USE_HOLD`: it never does by itself, only its `ON_RELEASE` when let go (a bow).
     pub const USE_TICKS: &str = "use_ticks";
     /// Item: `[EffectGift]` its user gets when it is used (after `USE_TICKS`), the item turning
     /// into its `REMAINDER` (a potion's bottle) or one fewer; nothing else needed for a potion.
@@ -1451,14 +1484,16 @@ pub mod comp {
     /// drawn by clients alone: it lights what players see, not the world.
     pub const LIGHT: &str = "light";
     /// Block: a tint kind by name (`tint`: `core:grass`, `core:foliage`, `core:water` or a mod's
-    /// own), colored by the biome.
+    /// own), colored by the biome. Set by the engine from the faces' layers (`Layer::kind`).
     pub const TINT: &str = "tint";
-    /// Block: faces the tint applies to (`u8`, a bit per face in -X, +X, -Y, +Y, -Z, +Z order;
-    /// all by default).
+    /// Block: faces the tint applies to (`u8`, a bit per face in -X, +X, -Y, +Y, -Z, +Z order),
+    /// from the faces' layers too.
     pub const TINT_FACES: &str = "tint_faces";
     /// The own name of one stack or block entity (UTF-8), as a player gave it: shown instead of
     /// the item's or block's, and carried from the stack to the placed block and back.
     pub const NAME: &str = "core:name";
+    /// Entity tag the engine keeps: it never despawns (`entity_state::PERSISTENT`).
+    pub const PERSISTENT: &str = "persistent";
     /// Blocks connecting energy networks.
     pub const CONDUCTOR: &str = "conductor";
     /// Entity or stack component, layout `Energy`.
@@ -1470,9 +1505,11 @@ pub mod comp {
     pub const INVENTORY: &str = "inventory";
     /// Stack component the engine keeps: what an item with `inventory` holds.
     pub const CONTENTS: &str = "contents";
-    /// Stack component: the pictures a stack shows as, one over the other, instead of its
-    /// item's icon (a tool made of parts: handle, head, binding). Text: texture names, space
-    /// separated, each with `#RRGGBB` to tint it if wanted.
+    /// How an item and its stacks look, and each face of a block (`block::TEXTURES`): pictures
+    /// one over the other, the first at the bottom (a tool made of parts: handle, head, binding;
+    /// a grass block's side: dirt and the green over it; a plain one is one). Text: texture
+    /// names, space separated, each tinted as `Layer` says. On the item (`entry_kind::ITEM`) it is
+    /// every stack's; a stack's own replaces it.
     pub const LAYERS: &str = "layers";
     /// Item shown on the wearer's model: `Worn`, plus `worn_texture: str` in the wearer's skin layout.
     pub const WORN: &str = "worn";
@@ -1641,6 +1678,8 @@ crate::data! {
         /// Per face quarter turns of the picture (`FACE_CORNERS`).
         pub turn: [u8; 6],
         pub tilt: BoxTilt,
+        /// Drawn without the shading by side, as cross plants are (a model file's `shade: false`).
+        pub flat: bool,
     }
 }
 
@@ -1764,6 +1803,56 @@ pub fn matcher_terms(text: &str) -> impl Iterator<Item = &str> {
         depth == 0 && ch.is_whitespace()
     })
     .filter(|t| !t.is_empty())
+}
+
+/// One picture of `comp::LAYERS` text: `name`, `name#RRGGBB` (multiplied by that color),
+/// `name@kind` (by a tint kind's color: a block's by the biome it stands in, an item's by the
+/// kind's default), or both, `name#RRGGBB@kind`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Layer<'a> {
+    pub name: &'a str,
+    pub tint: Option<u32>,
+    pub kind: Option<&'a str>,
+}
+
+impl<'a> Layer<'a> {
+    pub fn plain(name: &'a str) -> Layer<'a> {
+        Layer { name, tint: None, kind: None }
+    }
+}
+
+/// `comp::LAYERS` text as its layers, the bottom first.
+pub fn layers(text: &str) -> impl Iterator<Item = Layer<'_>> {
+    text.split_whitespace().map(|l| {
+        let (l, kind) = match l.split_once('@') {
+            Some((l, kind)) => (l, Some(kind)),
+            None => (l, None),
+        };
+        match l.rsplit_once('#') {
+            Some((name, hex)) => Layer { name, tint: u32::from_str_radix(hex, 16).ok(), kind },
+            None => Layer { name: l, tint: None, kind },
+        }
+    })
+}
+
+/// Layers as `comp::LAYERS` text, as `layers` reads it.
+pub fn layers_text<'a>(layers: impl IntoIterator<Item = Layer<'a>>) -> alloc::string::String {
+    use core::fmt::Write;
+    let mut text = alloc::string::String::new();
+    for l in layers {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(l.name);
+        if let Some(t) = l.tint {
+            let _ = write!(text, "#{:06X}", t & 0xFF_FFFF);
+        }
+        if let Some(k) = l.kind {
+            text.push('@');
+            text.push_str(k);
+        }
+    }
+    text
 }
 
 /// The texels a box between `min` and `max` (texels too) shows on a face when it says nothing, a
@@ -2149,7 +2238,12 @@ pub struct ItemUseArgs {
     pub face: u32,
     pub has_target: u32,
     pub handled: u32,
+    /// Ticks the use button was held (`comp::item::ON_RELEASE`); 0 for a use at once.
+    pub held_ticks: u32,
 }
+
+/// `comp::USE_TICKS` of an item held until the use button is let go.
+pub const USE_HOLD: u32 = u32::MAX;
 
 // ---------------------------------------------------------------- items, entities, menus
 
@@ -2265,6 +2359,8 @@ pub mod walk {
 pub mod entity_state {
     /// Its last move ran into a wall.
     pub const BLOCKED: u32 = 1 << 31;
+    /// It doesn't despawn however far from players (named, it picked something up, a mod said).
+    pub const PERSISTENT: u32 = 1 << 30;
 }
 
 /// A box of a model part (`ModelPart`) in model pixels (1/16 block) relative to the part pivot;
@@ -2563,7 +2659,11 @@ pub mod damage_cause {
     /// What `World::heal` gives when nothing more specific healed.
     pub const HEAL: u32 = 11;
     /// Names, by id.
-    pub const NAMES: [&str; 12] = [
+    /// What a projectile does (`comp::entity::PROJECTILE`).
+    pub const PROJECTILE: u32 = 12;
+    /// Too many pushing at once (`core:max_entity_cramming`).
+    pub const CRAMMING: u32 = 13;
+    pub const NAMES: [&str; 14] = [
         "core:generic",
         "core:fall",
         "core:attack",
@@ -2576,7 +2676,69 @@ pub mod damage_cause {
         "core:suffocate",
         "core:explosion",
         "core:heal",
+        "core:projectile",
+        "core:cramming",
     ];
+}
+
+/// What a ray looks for (`Host::raycast`).
+pub mod ray {
+    pub const BLOCKS: u32 = 1;
+    /// Liquids stop it too.
+    pub const LIQUIDS: u32 = 2;
+    /// What can be hit: bodies, not dropped stacks, the dead or spectators.
+    pub const ENTITIES: u32 = 4;
+    /// Blocks by what stops a body (their collision), not by what is aimed at: what an arrow hits,
+    /// flying through grass.
+    pub const SOLID: u32 = 8;
+}
+
+/// What a ray hit (`Host::raycast`): an entity, or a block (`entity` 0). A block is at `pos`,
+/// its own cell for a big one, on a body (`body` its entity) in that body's blocks; `state` is the
+/// block of the cell it entered, the cell's main one or a part. `face` is the face it went in
+/// through, of the block's or the entity's box (-X, +X, -Y, +Y, -Z, +Z). `point` is where, in the
+/// caller's frame; `local` where on what it hit, from the block's or the box's low corner (a
+/// block's 0..1, times 16 its pixel).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RayHit {
+    pub entity: u64,
+    pub body: u64,
+    pub pos: BlockPos,
+    pub state: u32,
+    pub face: u32,
+    pub point: Vec3,
+    pub local: Vec3,
+    pub distance: f64,
+}
+
+crate::data! {
+    /// How a projectile flies and what it does where it hits: `damage` per block a tick of its
+    /// speed (rounded up, vanilla's arrow 2), the share of its speed kept each tick in the air and
+    /// in a liquid (0.99, 0.6), and whether it stays stuck in a block (`stuck_ticks` before it goes,
+    /// vanilla's arrow 1200) or goes at once.
+    pub struct Projectile {
+        pub damage: f32,
+        pub drag: f32,
+        pub liquid_drag: f32,
+        pub sticks: bool,
+        pub stuck_ticks: u32,
+    }
+}
+
+/// A projectile's hit (`action::PROJECTILE_HIT`): `target` 0 for a block at `pos`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectileHit {
+    pub projectile: u64,
+    pub target: u64,
+    pub owner: u64,
+    pub pos: BlockPos,
+    pub face: u32,
+    pub point: Vec3,
+}
+impl Schema for ProjectileHit {
+    const SCHEMA: &'static str = "{projectile:u64,target:u64,owner:u64,pos:[i32;3],face:u32,point:[f64;3]}";
 }
 
 /// What `Host::entity_spawn` makes. What `set` leaves out takes the kind's defaults: a random
@@ -2595,6 +2757,110 @@ pub struct SpawnEntityDesc {
     pub yaw: f32,
     /// Ticks before an item can be picked up.
     pub pickup_delay: u32,
+    /// `spawn_cause`, what `action::SPAWN` is told.
+    pub cause: u32,
+    /// Who it belongs to: what a projectile doesn't hit while it leaves them, and whose its hits
+    /// are.
+    pub owner: u64,
+}
+
+/// Why an entity came into the world (`action::SPAWN`).
+pub mod spawn_cause {
+    /// A mod's `World::spawn`.
+    pub const MOD: u32 = 0;
+    /// Natural spawning (`entry_kind::SPAWN` rules).
+    pub const NATURAL: u32 = 1;
+    /// `/summon`.
+    pub const COMMAND: u32 = 2;
+    /// A spawn egg.
+    pub const EGG: u32 = 3;
+    /// A dropped stack: thrown, fallen out of something, a block's or a mob's loot.
+    pub const DROP: u32 = 4;
+}
+
+/// Why an entity left the world (`event::ENTITY_REMOVED`).
+pub mod removal {
+    /// A mod took it away (`World::despawn`).
+    pub const MOD: u32 = 0;
+    pub const DIED: u32 = 1;
+    /// Too far from every player (its category's `despawn`).
+    pub const DESPAWNED: u32 = 2;
+    /// Its cube was unloaded; it comes back with it.
+    pub const UNLOADED: u32 = 3;
+    /// A dropped stack burned up, ran out of time, was picked up or merged into another.
+    pub const BURNED: u32 = 4;
+    pub const EXPIRED: u32 = 5;
+    pub const PICKED_UP: u32 = 6;
+    pub const MERGED: u32 = 7;
+    /// A player left the game.
+    pub const LEFT: u32 = 8;
+    /// A projectile that hit something and went.
+    pub const HIT: u32 = 9;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spawned {
+    pub entity: u64,
+    pub kind: u32,
+    /// `spawn_cause`.
+    pub cause: u32,
+    pub pos: Vec3,
+}
+impl Schema for Spawned {
+    const SCHEMA: &'static str = "{entity:u64,kind:u32,cause:u32,pos:[f64;3]}";
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Removed {
+    pub entity: u64,
+    pub kind: u32,
+    /// `removal`.
+    pub reason: u32,
+    pub pos: Vec3,
+}
+impl Schema for Removed {
+    const SCHEMA: &'static str = "{entity:u64,kind:u32,reason:u32,pos:[f64;3]}";
+}
+
+/// An effect given or ended (`action::EFFECT`, `event::EFFECT_ENDED`); `ticks` 0 when it ended.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectChange {
+    pub entity: u64,
+    pub effect: u32,
+    pub level: u32,
+    pub ticks: u32,
+    pub pad: u32,
+}
+impl Schema for EffectChange {
+    const SCHEMA: &'static str = "{entity:u64,effect:u32,level:u32,ticks:u32,pad:u32}";
+}
+
+/// A player's action pressed (`down` 1) or let go after `held_ticks` (`event::KEY`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyChange {
+    pub player: u64,
+    /// The key's id (`entry_kind::KEY`).
+    pub key: u32,
+    pub down: u32,
+    pub held_ticks: u32,
+    pub pad: u32,
+}
+impl Schema for KeyChange {
+    const SCHEMA: &'static str = "{player:u64,key:u32,down:u32,held_ticks:u32,pad:u32}";
+}
+
+/// An effect's tick (`comp::ENTITY_EFFECT_ON_TICK`): every entity with it, and its level there.
+#[repr(C)]
+pub struct EffectTickArgs {
+    pub world: *mut WorldCtx,
+    pub effect: u32,
+    pub ids: *const u64,
+    pub levels: *const u32,
+    pub count: usize,
 }
 
 /// Which fields of `EntityState` `Host::entity_set` writes.
@@ -2612,6 +2878,8 @@ pub mod entity_set {
     /// The slot in its main hand: a player's hotbar, a mob's own slots (`comp::entity::WEARS`).
     pub const SELECTED: u32 = 128;
     pub const PITCH: u32 = 256;
+    /// `entity_state::PERSISTENT` of `flags`.
+    pub const PERSISTENT: u32 = 512;
 }
 
 pub mod spawn_set {
@@ -2688,15 +2956,17 @@ crate::data! {
 crate::data! {
     /// An attribute modifier something gives (`comp::MODIFIERS`): a game mode its players, an item
     /// while held in the main hand or (`worn`) in an equipment slot, a pose while in it, an entity
-    /// kind while all of `when` hold for it (`condition`; checked each tick).
+    /// kind while all of `when` hold for it (`condition`; checked each tick). It runs `step`
+    /// (`step::ADD`, `MUL`, `SET`, `PERCENT` or a mod's) with `amount`, in `phase` (empty: the
+    /// step's own).
     pub struct Modifier {
         pub attribute: alloc::string::String,
-        pub op: u32,
+        pub step: alloc::string::String,
+        pub phase: alloc::string::String,
         pub amount: f64,
         pub worn: bool,
         pub when: alloc::vec::Vec<alloc::string::String>,
-        /// An entity effect's: only at this level of it, as it is; 0, at every level, `amount`
-        /// times the level (a `SET` sets the same at every level).
+        /// An entity effect's: only at this level of it; 0, once for every level it has.
         pub level: u32,
     }
 }
@@ -2789,6 +3059,9 @@ pub struct EntityState {
     pub moved: f32,
     /// Its box now (crouching and `set_size` included).
     pub size: EntitySize,
+    /// The item it is using (eating, a bow drawn), 0 for none, and for how many ticks so far.
+    pub using: u32,
+    pub using_ticks: u32,
 }
 
 impl EntityState {
@@ -2827,6 +3100,8 @@ defaults!(EntityState {
     selected: 0,
     moved: 0.0,
     size: EntitySize { width: 0.0, height: 0.0, eye: 0.0 },
+    using: 0,
+    using_ticks: 0,
 });
 
 impl Default for EntityState {
@@ -3390,15 +3665,22 @@ pub struct Host {
     /// AI steering for this tick: horizontal direction, speed factor, and the movement keys a
     /// player would hold (`walk::*`), which the same physics and poses answer.
     pub entity_walk: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, keys: u32),
-    pub entity_damage: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, amount: f32, source: u64, cause: u32) -> u32,
-    /// `attacker` hits `target` with what it holds: the `ATTACK` question, the `ATTACK_DAMAGE`
-    /// chain from the held item's damage (else the kind's `attack_damage`), as strong as its
-    /// swing is charged. Non-zero if the hit landed.
+    /// Hurts `id` (a negative amount heals). Non-zero if it landed.
+    pub entity_damage: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, damage: *const Damage) -> u32,
+    /// `attacker` hits `target` with what it holds: the `ATTACK` question, its `ATTACK_DAMAGE`
+    /// against them through `chain::MELEE` (charge, crit), knockback and a sweep. Non-zero if the
+    /// hit landed.
     pub entity_attack: unsafe extern "C" fn(world: *mut WorldCtx, attacker: u64, target: u64) -> u32,
     /// `id` uses what is in its main hand, or its other one (`off`), on the block at `target`
     /// (null: on nothing) from `face`, as a player's right click does. 1 if it did something
     /// or started to (eating takes time; it goes on while the hand holds the item).
     pub entity_use_item: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, off: u32, target: *const BlockPos, face: u32) -> u32,
+    /// `id` lets go of what it is using, as a player letting go of the use button: its
+    /// `comp::item::ON_RELEASE` hears after how long (a skeleton's bow).
+    pub entity_release_use: unsafe extern "C" fn(world: *mut WorldCtx, id: u64),
+    /// What a player holds of action `key` on the server (`held`, `held_ticks`; `pressed` and
+    /// `released` are its client's): what its client last said.
+    pub entity_key: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, key: Str, out: *mut KeyState),
     /// `id` starts breaking the block at `pos` (null: stops), as a player holding the button does:
     /// as fast as what it holds mines it, cracks shown, broken when done within its reach. 0 when
     /// it may not (`action::BREAK_BLOCK`).
@@ -3406,18 +3688,16 @@ pub struct Host {
     /// Whether `target` is within `id`'s `ENTITY_REACH` attribute, from its eyes to the nearest
     /// point of the target's box. Non-zero if so.
     pub entity_in_reach: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, target: u64) -> u32,
-    /// The first block a ray from `from` along `dir` hits within `max` blocks (liquids too if
-    /// `liquids`), in the world or on a body (`body`: its entity, 0 for the world, `pos` in its
-    /// blocks). `from` is in the caller's frame. Returns its state + 1, or 0 for none.
+    /// What a ray from `from` along `dir` hits first within `max` blocks, of what `flags` say
+    /// (`ray::*`), past entity `skip`; `from` in the caller's frame. Non-zero if it hit.
     pub raycast: unsafe extern "C" fn(
         world: *mut WorldCtx,
         from: *const Vec3,
         dir: *const Vec3,
         max: f64,
-        liquids: u32,
-        pos: *mut BlockPos,
-        face: *mut u32,
-        body: *mut u64,
+        flags: u32,
+        skip: u64,
+        out: *mut RayHit,
     ) -> u32,
     pub in_liquid: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const Vec3) -> u32,
     pub entity_swing_strength: unsafe extern "C" fn(world: *mut WorldCtx, id: u64) -> f32,
@@ -3646,7 +3926,7 @@ pub struct Host {
     /// the player holds afterwards; `handled` is set non-zero if anything happened.
     pub use_container: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, stack: ItemStack, handled: *mut u32) -> ItemStack,
 
-    // ------------------------------------------------ events, interceptors, modifiers, loot
+    // ------------------------------------------------ events, questions, steps, loot
     /// Subscribes to event `name` carrying values of `schema` (checked against every other use);
     /// `cb` gets `EventArgs` once per tick and region with every value queued since.
     pub reg_event_handler: unsafe extern "C" fn(reg: *mut Registrar, name: Str, schema: Str, cb: Callback),
@@ -3654,29 +3934,24 @@ pub struct Host {
     pub find_event: unsafe extern "C" fn(name: Str, schema: Str) -> u32,
     /// Queues one value of event `event` (its schema's size) for the end of the tick.
     pub emit: unsafe extern "C" fn(world: *mut WorldCtx, event: u32, value: Slice<u8>),
-    /// "May it happen" handler for question `name` (`question::*` or a mod's own): gets
-    /// `InterceptArgs` and sets `Query::verdict`. Any deny wins.
-    pub reg_interceptor: unsafe extern "C" fn(reg: *mut Registrar, name: Str, cb: Callback),
-    /// Asks the interceptors of `name`; 1 if allowed.
-    pub ask: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, query: *mut Query) -> u32,
-    /// Modifier on value chain `name`, run in order of `stage` (`stage::*`), then mod load order;
-    /// gets `ModifyArgs`.
-    pub reg_chain_modifier: unsafe extern "C" fn(reg: *mut Registrar, name: Str, stage: u32, cb: Callback),
+    /// Question `name` (`question::*`, `action::*` or a mod's own): its chain run from 1 (yes);
+    /// 1 if the answer is yes.
+    pub ask: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, query: *const Query) -> u32,
     /// Runs chain `name` from `base`. With `explain` non-zero the steps are kept for
     /// `explanation`.
     pub chain_compute: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, base: f64, ctx: *const Query, explain: u32) -> f64,
-    /// Steps of the last explained `chain_compute` or `attribute_explain` on this thread.
+    /// Steps of the last explained `chain_compute` or `attribute` on this thread.
     pub explanation: unsafe extern "C" fn() -> Str,
 
-    /// Its current value for an entity: base (the kind's component of the same name, else the
-    /// default), then modifiers by `attr_op`, clamped.
-    pub attribute: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str) -> f64,
-    /// Adds (or replaces, same `id`) a modifier for `ticks` (0 = until removed). Saved.
+    /// Its current value for an entity: its chain run from its base (the kind's component of the
+    /// same name, else a world rule or the default) with what the entity has on it, clamped.
+    /// With `explain` non-zero the steps are kept for `explanation`.
+    pub attribute: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str, explain: u32) -> f64,
+    /// Puts (or replaces, same `id`) step `step` with `amount` on it for `ticks` (0 = until
+    /// removed), in `phase` (empty: the step's own). Saved.
     pub attribute_add_modifier:
-        unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str, id: Str, op: u32, amount: f64, ticks: u64),
+        unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str, id: Str, step: Str, phase: Str, amount: f64, ticks: u64),
     pub attribute_remove_modifier: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str, id: Str),
-    /// Fills `explanation` with how the value came about; returns the value.
-    pub attribute_explain: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str) -> f64,
     /// An entry: a new one, an edit, a replacement or a removal (`EntryDesc::mode`).
     pub reg_entry: unsafe extern "C" fn(reg: *mut Registrar, entry: *const EntryDesc),
     /// Whether mod `id` is loaded, known from before any mod registers.
@@ -4225,6 +4500,13 @@ pub mod event {
     pub const ENTITY_HEALED: &str = "core:entity_healed";
     /// `WeatherTick`: every tick in each dimension with weather, what the weather is.
     pub const WEATHER_TICK: &str = "core:weather_tick";
+    /// `Removed`: an entity left the world, and why.
+    pub const ENTITY_REMOVED: &str = "core:entity_removed";
+    /// `KeyChange`: a player pressed or let go of an action (any key binding, the mouse buttons'
+    /// `core:use` and `core:attack` too) while the world had the input.
+    pub const KEY: &str = "core:key";
+    /// `EffectChange`: an effect ran out or was taken off.
+    pub const EFFECT_ENDED: &str = "core:effect_ended";
 }
 
 #[repr(C)]
@@ -4284,11 +4566,15 @@ pub struct WorldTickArgs {
 pub struct Hurt {
     pub entity: u64,
     pub source: u64,
+    /// What hit, when not `source` itself (an arrow); 0 otherwise.
+    pub direct: u64,
     pub amount: f32,
     pub cause: u32,
+    pub crit: u32,
+    pub pad: u32,
 }
 impl Schema for Hurt {
-    const SCHEMA: &'static str = "{entity:u64,source:u64,amount:f32,cause:u32}";
+    const SCHEMA: &'static str = "{entity:u64,source:u64,direct:u64,amount:f32,cause:u32,crit:u32,pad:u32}";
 }
 
 #[repr(C)]
@@ -4373,9 +4659,8 @@ pub struct EventArgs {
     pub stride: u32,
 }
 
-/// Questions the engine asks before doing things (`Host::reg_interceptor`).
-/// The engine's actions: each name is both the question asked before (any deny wins) and the
-/// event sent after, with the value named in its doc.
+/// The engine's actions: each name is both the question asked before (a chain of yes or no,
+/// `Host::ask`) and the event sent after, with the value named in its doc.
 pub mod action {
     /// `BlockChange`. Asked with `entity` the player (0 for `break_block` without one), `pos`,
     /// `state`, `item` the tool.
@@ -4400,7 +4685,7 @@ pub mod action {
     /// block `pos` when `state` is not 0.
     pub const USE_ITEM: &str = "core:use_item";
     /// `Death`. `entity` about to die of `amount` from `other` and `cause`. Denied, it lives on
-    /// with one health (a totem); what saves it is the interceptor's to do.
+    /// with one health (a totem); what saves it is the answering step's to do.
     pub const DIE: &str = "core:die";
     /// `Mounting`. `entity` getting onto `other` in seat `amount`.
     pub const MOUNT: &str = "core:mount";
@@ -4412,81 +4697,158 @@ pub mod action {
     /// `Query`: cubes from `pos` kept loaded (`Host::force_load`), `amount` the mode, `other`
     /// the ticket's key.
     pub const FORCE_LOAD: &str = "core:force_load";
+    /// `Spawned`. Asked with `entity` made but not yet seen, `cause` (`spawn_cause`), `pos`:
+    /// no, and it never was. Moving blocks and block entities are blocks: their comings and goings
+    /// are the blocks', neither asked here nor told as `event::ENTITY_REMOVED`.
+    pub const SPAWN: &str = "core:spawn";
+    /// `EffectChange`. Asked with `entity` about to get effect `cause` at level `amount` for
+    /// `state` ticks; vanilla's immunities are tags `immune_effect/<effect>` on the kind.
+    pub const EFFECT: &str = "core:effect";
+    /// `ProjectileHit`. Asked with `entity` the projectile, `other` what it hits (0: the block at
+    /// `pos`), `amount` its speed in blocks a tick: no, and it flies on past them.
+    pub const PROJECTILE_HIT: &str = "core:projectile_hit";
 }
 
 pub mod question {
     /// `entity` attacking `other` with `item`.
     pub const ATTACK: &str = "core:attack";
-}
-
-pub mod verdict {
-    pub const ABSTAIN: u32 = 0;
-    pub const ALLOW: u32 = 1;
-    pub const DENY: u32 = 2;
+    /// Whether `entity`'s melee hit on `other` with `item`, charged `charge`, is a critical one;
+    /// from no: `core:vanilla_crit` (`BASE`: full charge, falling, not on the ground, in a liquid,
+    /// on a ladder or sprinting).
+    pub const CRIT: &str = "core:crit";
+    /// Whether the hit also sweeps those beside `other`; from no: `core:vanilla_sweep` (`BASE`:
+    /// full charge with an item with `sweeps`, on the ground, not sprinting, not a crit).
+    pub const SWEEP: &str = "core:sweep";
+    /// Whether `entity` is still recovering from its last hurt, so that of this one only what goes
+    /// beyond the last lands, and it doesn't knock; from no: `core:hurt_cooldown` (`BASE`: its
+    /// `attribute::HURT_COOLDOWN` hasn't run out, and `cause` doesn't ignore it).
+    pub const RECOVERING: &str = "core:recovering";
 }
 
 /// What a question or a value chain is about; fields one does not use are 0.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Query {
-    pub verdict: u32,
     pub entity: u64,
     pub other: u64,
+    /// What hit, when not `other` itself: the arrow `other` shot.
+    pub direct: u64,
     pub pos: BlockPos,
     pub state: u32,
     pub item: u32,
     pub dim: u32,
     pub cause: u32,
     pub amount: f64,
+    /// A melee hit's: how charged its swing was (0..1) and whether it is a critical one.
+    pub charge: f32,
+    pub crit: u32,
     /// Valid for the call.
     pub text: Str,
 }
 defaults!(Query {
-    verdict: 0,
     entity: 0,
     other: 0,
+    direct: 0,
     pos: BlockPos::ZERO,
     state: 0,
     item: 0,
     dim: 0,
     cause: 0,
     amount: 0.0,
+    charge: 0.0,
+    crit: 0,
     text: Str::EMPTY
 });
 
+/// A hurt described (`Host::entity_damage`): `amount` of `cause` from `source` (who; 0 for
+/// nothing), through `direct` (what hit: the arrow; 0 for `source` itself), with `item` (what
+/// `source` hit with), a critical one or not. `knock` the way it pushes (0: away from `direct`, else
+/// `source`).
 #[repr(C)]
-pub struct InterceptArgs {
-    pub world: *mut WorldCtx,
-    pub question: Str,
-    pub query: *mut Query,
+#[derive(Clone, Copy, Debug)]
+pub struct Damage {
+    pub amount: f32,
+    pub cause: u32,
+    pub source: u64,
+    pub direct: u64,
+    pub item: ItemStack,
+    pub knock: Vec3,
+    pub crit: u32,
+}
+impl Damage {
+    /// `amount` of `cause` from nobody.
+    pub const fn new(amount: f32, cause: u32) -> Damage {
+        Damage { amount, cause, ..Damage::DEFAULT }
+    }
+}
+defaults!(Damage { amount: 0.0, cause: 0, source: 0, direct: 0, item: ItemStack::EMPTY, knock: Vec3::ZERO, crit: 0 });
+
+/// The engine's phases, in the order they run; a mod's goes after one of them
+/// (`comp::phase::AFTER`). Numbers usually use `ADD`, `PERCENT`, `MULTIPLY` and `OVERRIDE`;
+/// questions `RULES` and `OVERRIDE`; `FINAL` is for what has to see the finished value.
+pub mod phase {
+    /// What the thing is: a weapon's own damage, a set base.
+    pub const BASE: &str = "core:base";
+    pub const ADD: &str = "core:add";
+    /// Shares of the value this phase started from, added up (vanilla's percent modifiers).
+    pub const PERCENT: &str = "core:percent";
+    pub const MULTIPLY: &str = "core:multiply";
+    /// Where questions are answered by default.
+    pub const RULES: &str = "core:rules";
+    pub const OVERRIDE: &str = "core:override";
+    pub const FINAL: &str = "core:final";
+    /// All of them in order.
+    pub const ALL: [&str; 7] = [BASE, ADD, PERCENT, MULTIPLY, RULES, OVERRIDE, FINAL];
 }
 
-/// Stage of a modifier; steps of one stage run in mod load order.
-pub mod stage {
-    pub const ADD: u32 = 100;
-    pub const MULTIPLY: u32 = 200;
-    pub const FINAL: u32 = 300;
+/// The engine's steps that take a number (`StepArgs::arg`), for modifiers: `ADD` adds it
+/// (phase `ADD`), `MUL` multiplies by it (`MULTIPLY`), `SET` makes the value it (`OVERRIDE`),
+/// `PERCENT` adds that share of the value the phase started from (`PERCENT`).
+pub mod step {
+    pub const ADD: &str = "core:add";
+    pub const MUL: &str = "core:mul";
+    pub const SET: &str = "core:set";
+    pub const PERCENT: &str = "core:percent";
 }
 
 /// Value chains the engine runs.
 pub mod chain {
-    /// Damage an entity takes (`entity` hurt by `other`, `cause`), after `on_hurt` hooks.
+    /// Damage an entity takes (`entity` hurt by `other` through `direct`, `cause`, `crit`):
+    /// what it resists comes off last, `core:resistance` then `core:not_lethal` (`FINAL`).
     pub const DAMAGE: &str = "core:damage";
-    /// Melee damage of `entity` hitting `other` holding `item`, from the item's
-    /// `attack_damage`.
-    pub const ATTACK_DAMAGE: &str = "core:attack_damage";
+    /// What a melee hit of `entity` on `other` with `item` does, from its `attribute::ATTACK_DAMAGE`
+    /// against them: `core:charge` (`MULTIPLY`, 0.2 + 0.8 x `charge` squared) and `core:crit`
+    /// (`MULTIPLY`, times `attribute::CRIT_DAMAGE` when `crit`).
+    pub const MELEE: &str = "core:melee";
+    /// How hard a hurt knocks `entity` away (0.4, vanilla's), before its knockback resistance.
+    pub const KNOCKBACK: &str = "core:knockback";
+    /// What a sweep does to each one beside the target, from the hit's damage: `core:sweep_damage`
+    /// (`BASE`, 1 + `attribute::SWEEPING_DAMAGE_RATIO` of it).
+    pub const SWEEP_DAMAGE: &str = "core:sweep_damage";
     /// Health an entity gains (`entity` healed by `other`, `cause`).
     pub const HEAL: &str = "core:heal";
+    /// What projectile `entity` does to `other` it hits, from its `Projectile::damage`:
+    /// `core:by_speed` (`BASE`, times `amount`, its speed in blocks a tick, rounded up).
+    pub const PROJECTILE_DAMAGE: &str = "core:projectile_damage";
+    /// What a fall of `amount` blocks does to `entity`, from that distance: `core:safe_fall`
+    /// (`BASE`, past its `SAFE_FALL`, times its `FALL_DAMAGE_MULTIPLIER`; none for a kind that
+    /// takes no fall damage). A soft block is a step reading what is under it.
+    pub const FALL_DAMAGE: &str = "core:fall_damage";
 }
 
+/// One step's run: what the value is about, where it began (`base`) and where this phase began
+/// (`start`), the value to change, and the number a modifier gave the step (`arg`, 0 on a chain).
+/// A question's value is 1 for yes and 0 for no.
 #[repr(C)]
-pub struct ModifyArgs {
+pub struct StepArgs {
     pub world: *mut WorldCtx,
     pub chain: Str,
     pub ctx: *const Query,
     pub base: f64,
+    pub start: f64,
     /// In/out.
     pub value: f64,
+    pub arg: f64,
 }
 
 /// Attributes the engine reads.
@@ -4527,8 +4889,24 @@ pub mod attribute {
     pub const GRAVITY: &str = "core:gravity";
     /// Share of knockback it shrugs off (0..1).
     pub const KNOCKBACK_RESISTANCE: &str = "core:knockback_resistance";
-    /// Added to each of its melee hits (0; strength +3 a level).
+    /// Its own melee damage, as vanilla's (1; a kind's `.attack_damage(..)`), what it holds adding
+    /// to it (`core:weapon`, `ADD`: a 6 sword's 5 over a bare hand), strength +3 a level; what a
+    /// hit does before its charge and crit (`chain::MELEE`).
     pub const ATTACK_DAMAGE: &str = "core:attack_damage";
+    /// What a critical hit multiplies by (1.5).
+    pub const CRIT_DAMAGE: &str = "core:crit_damage";
+    /// Share of a hit's damage a sweep adds to its 1 (0; vanilla's sweeping edge).
+    pub const SWEEPING_DAMAGE_RATIO: &str = "core:sweeping_damage_ratio";
+    /// Extra knockback of its melee hits (0; a full charged sprinting hit 1 more, `core:sprint_knockback`).
+    pub const ATTACK_KNOCKBACK: &str = "core:attack_knockback";
+    /// Ticks after a hurt in which a weaker one doesn't land (10).
+    pub const HURT_COOLDOWN: &str = "core:hurt_cooldown";
+    /// Multiplier on how much it pushes itself in the air (1): a light mob that steers well.
+    pub const AIR_CONTROL: &str = "core:air_control";
+    /// Multiplier on how slippery the ground under it is (1, at most nearly 1 a tick kept): skates.
+    pub const SLIPPERINESS: &str = "core:slipperiness";
+    /// Multiplier on how fast it goes up and down ladders and vines (1).
+    pub const CLIMB_SPEED: &str = "core:climb_speed";
     /// Share of damage taken off, after armor and the `DAMAGE` chain (0..1; resistance 0.2 a
     /// level). What pierces invulnerability gets through.
     pub const DAMAGE_RESISTANCE: &str = "core:damage_resistance";
@@ -4547,16 +4925,6 @@ pub mod attribute {
     pub const SWIM_SPEED: &str = "core:swim_speed";
     /// Multiplier on how fast it flies (1), on top of a player's own flight speed (the wheel).
     pub const FLYING_SPEED: &str = "core:flying_speed";
-}
-
-/// How an attribute modifier applies, like vanilla: ADD amounts sum onto the base, then times
-/// (1 + the sum of MUL_BASE), then times (1 + each MUL_TOTAL).
-pub mod attr_op {
-    pub const ADD: u32 = 0;
-    pub const MULTIPLY_BASE: u32 = 1;
-    pub const MULTIPLY_TOTAL: u32 = 2;
-    /// The value is the amount, whatever the rest says (the last one given wins): `/attribute`.
-    pub const SET: u32 = 3;
 }
 
 crate::data! {

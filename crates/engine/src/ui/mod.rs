@@ -707,10 +707,10 @@ impl Ui {
             .unwrap_or(content[0] + pad_w)
             .max(style.min[0])
             .min(style.max_w);
-        let h = fixed_h
-            .unwrap_or(content[1] + pad_h)
-            .max(style.min[1])
-            .min(style.max_h);
+        // What scrolls up and down needs no more height than it gets: a row holding a long list
+        // stays as tall as the screen, and so do the list's neighbors stretched beside it.
+        let own_h = if style.scroll && !style.row { (content[1] + pad_h).min(avail[1]) } else { content[1] + pad_h };
+        let h = fixed_h.unwrap_or(own_h).max(style.min[1]).min(style.max_h);
         self.nodes[id].measured = [w, h];
         [w, h]
     }

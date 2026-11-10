@@ -241,7 +241,7 @@ pub fn tick(m: &mut OpenMenu, dim: &mut Dim, c: &Content, player: u64) {
 
 /// Returns temp slots and the cursor to the player (dropping what does not fit). Output slots are
 /// previews, not real items, and are discarded.
-pub fn close(m: OpenMenu, dim: &mut Dim, c: &Content, player: u64) {
+pub fn close(m: OpenMenu, dim: &mut Dim, c: &'static Content, player: u64) {
     let outputs: Vec<u32> = m
         .slots
         .iter()
@@ -281,9 +281,9 @@ fn fits(c: &Content, s: &SlotRef, item: u32) -> bool {
     item == 0 || s.accepts.is_none_or(|a| crate::refs::has(a, item))
 }
 
-/// Most of `item` slot `s` holds.
-fn cap(c: &Content, s: &SlotRef, item: u32) -> u32 {
-    let max = c.max_stack(item);
+/// Most of `stack` slot `s` holds.
+fn cap(c: &Content, s: &SlotRef, stack: &ItemStack) -> u32 {
+    let max = c.max_stack(stack);
     if s.limit > 0 { max.min(s.limit) } else { max }
 }
 
@@ -395,7 +395,7 @@ fn sort(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, slot:
         if s.is_empty() {
             continue;
         }
-        let max = c.max_stack(s.item);
+        let max = c.max_stack(&s);
         let mut left = s.count;
         for t in stacks
             .iter_mut()
@@ -433,7 +433,7 @@ pub fn creative_to_hotbar(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, 
     else {
         return;
     };
-    set(m, dim, player, h, ItemStack::new(item, c.max_stack(item)));
+    set(m, dim, player, h, ItemStack::new(item, c.max_stack(&ItemStack::new(item, 1))));
     call(m, dim, c, player, h, |d| d.on_change);
 }
 
@@ -486,8 +486,8 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
             || (!takeable(&a) && !sa.is_empty())
             || !fits(c, &a, sb.item)
             || !fits(c, &b, sa.item)
-            || sb.count > cap(c, &a, sb.item)
-            || sa.count > cap(c, &b, sa.item)
+            || sb.count > cap(c, &a, &sb)
+            || sa.count > cap(c, &b, &sa)
         {
             return;
         }
@@ -507,7 +507,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
             .is_some_and(|e| e.mode.has(crate::tag_bits::game_mode::NO_COSTS));
         let there = if (slot as usize) < m.slots.len() { get(m, dim, player, slot) } else { ItemStack::EMPTY };
         if creative && m.cursor.is_empty() && !there.is_empty() {
-            m.cursor = ItemStack { count: c.max_stack(there.item), ..there };
+            m.cursor = ItemStack { count: c.max_stack(&there), ..there };
         }
         return;
     }
@@ -516,7 +516,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
         if want.is_empty() {
             return;
         }
-        let max = c.max_stack(want.item);
+        let max = c.max_stack(&want);
         // Partial stacks first, like vanilla, so full ones stay put when they are not needed.
         for full in [false, true] {
             for i in 0..m.slots.len() as u32 {
@@ -594,7 +594,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
             return;
         }
         let n = if button == PICK_SAME {
-            let max = c.max_stack(cur.item);
+            let max = c.max_stack(&cur);
             if output || m.cursor.is_empty() || m.cursor.item != cur.item || m.cursor.data != cur.data || m.cursor.count >= max {
                 return;
             }
@@ -634,7 +634,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
     }
     let cur = get(m, dim, player, slot);
     let output = r.flags & sf::OUTPUT != 0;
-    let max = |item: u32| c.max_stack(item);
+    let max = |s: &ItemStack| c.max_stack(s);
 
     if output {
         if cur.is_empty() {
@@ -654,7 +654,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
                 }
                 return;
             }
-            for _ in 0..max(cur.item).max(64) {
+            for _ in 0..max(&cur).max(64) {
                 let now = get(m, dim, player, slot);
                 if now.is_empty() || now.item != cur.item || now.data != cur.data {
                     break;
@@ -674,7 +674,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
             return;
         } else if m.cursor.is_empty() {
             m.cursor = cur;
-        } else if m.cursor.item == cur.item && m.cursor.data == cur.data && m.cursor.count + cur.count <= max(cur.item) {
+        } else if m.cursor.item == cur.item && m.cursor.data == cur.data && m.cursor.count + cur.count <= max(&cur) {
             m.cursor.count += cur.count;
         } else {
             return;
@@ -742,7 +742,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
                     break;
                 }
                 let ts = get(m, dim, player, t);
-                let room = cap(c, &m.slots[t as usize], rest.item);
+                let room = cap(c, &m.slots[t as usize], &rest);
                 if pass == 0 && !ts.is_empty() && ts.item == rest.item && ts.data == rest.data && ts.count < room {
                     let n = (room - ts.count).min(rest.count);
                     set(m, dim, player, t, ItemStack { count: ts.count + n, ..ts });
@@ -765,7 +765,7 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
     let mut cursor = m.cursor;
     let mut slot_stack = cur;
     let same = !cursor.is_empty() && !slot_stack.is_empty() && cursor.item == slot_stack.item && cursor.data == slot_stack.data;
-    let room = cap(c, &r, cursor.item);
+    let room = cap(c, &r, &cursor);
     // An input slot only takes: anything that would hand items back is refused.
     if !takeable(&r) && !slot_stack.is_empty() && (cursor.is_empty() || !same) {
         return;
@@ -829,7 +829,7 @@ pub fn drag(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, s
             let t = get(m, dim, player, s);
             r.flags & sf::OUTPUT == 0
                 && fits(c, r, cur.item)
-                && (t.is_empty() || (t.item == cur.item && t.data == cur.data && t.count < cap(c, r, cur.item)))
+                && (t.is_empty() || (t.item == cur.item && t.data == cur.data && t.count < cap(c, r, &cur)))
         })
         .take(cur.count as usize)
         .collect();
@@ -840,7 +840,7 @@ pub fn drag(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, s
     let mut left = cur.count;
     for &s in &valid {
         let t = get(m, dim, player, s);
-        let max = cap(c, &m.slots[s as usize], cur.item);
+        let max = cap(c, &m.slots[s as usize], &cur);
         let n = per.min(max - t.count.min(max)).min(left);
         if n > 0 {
             set(m, dim, player, s, ItemStack { count: t.count + n, ..cur });
