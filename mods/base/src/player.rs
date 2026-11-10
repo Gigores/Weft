@@ -20,6 +20,7 @@ static HUD_FOOD: HudElement = HudElement::named("food");
 static HUD_AIR: HudElement = HudElement::named("air");
 static HUD_ATTACK: HudElement = HudElement::named("attack_indicator");
 static WATER_LIKE: Tag = Tag::named("water");
+static ALWAYS_EATABLE: Tag = Tag::named("can_always_eat");
 
 const MAX_AIR: f32 = 300.0;
 
@@ -61,6 +62,9 @@ pub fn register(r: &mut Registry) {
     r.world_tick(tick_players);
     // Not hungry, it doesn't start eating; the other way round it would only find out at the end.
     r.before_event(&actions::USE_ITEM, |q| {
+        if ALWAYS_EATABLE.on_item(q.item()) {
+            return Verdict::Abstain;
+        }
         let full = FOOD.on_item(q.item()).is_some()
             && q.world()
                 .component(q.entity(), &HUNGER)
@@ -137,6 +141,8 @@ pub fn register(r: &mut Registry) {
             // Wither's black hearts over poison's green ones, as vanilla's.
             .look_while("heart_withered", |c| c.effect_level(&crate::effects::WITHER) as f32)
             .look_while("heart_poisoned", |c| c.effect_level(&crate::effects::POISON) as f32)
+            // One life: hearts that say so, as vanilla's hardcore ones.
+            .look_while("heart_hardcore", |_| (weft_sdk::settings::LIVES.get() == 1) as u32 as f32)
             .shaking()
             .flash_on_gain(0.5)
             .flash_on_loss(1.0);

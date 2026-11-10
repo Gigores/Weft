@@ -111,6 +111,9 @@ pub mod settings {
     pub static VOLUME_MASTER: Config<u32> = Config::named("core:volume_master");
     /// A world's: mobs appear by themselves.
     pub static MOB_SPAWNING: Config<bool> = Config::named("core:mob_spawning");
+    /// Deaths a player has before staying a spectator (0: no end); 1 is hardcore. A world rule,
+    /// the server's on its clients.
+    pub static LIVES: Config<u32> = Config::named("core:lives");
     pub static KEEP_INVENTORY: Config<bool> = Config::named("core:keep_inventory");
 }
 
