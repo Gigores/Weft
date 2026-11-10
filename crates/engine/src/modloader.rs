@@ -186,20 +186,42 @@ pub fn pack(dir: &Path, out: &Path) -> Result<PathBuf, String> {
     }
     let mut files = Vec::new();
     collect(&dir.join("assets"), &mut files);
-    for f in files {
+    for f in &files {
         let rel = f
             .strip_prefix(dir)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        add(rel, &f)?;
+        add(rel, f)?;
     }
+    zip.set_comment(fingerprint(dir, &name));
     zip.finish().map_err(|e| e.to_string())?;
     Ok(path)
 }
 
-/// `pack`, unless `<out>/<name>.zip` is already newer than the library and every asset. Returns
-/// the archive and whether it was written.
+/// What a mod folder packs, as a text the archive keeps (its comment): every file's path, size
+/// and time. A file added, taken away or renamed changes it, also one copied in with an older
+/// time than the archive's.
+fn fingerprint(dir: &Path, name: &str) -> String {
+    let mut files = Vec::new();
+    collect(&dir.join("assets"), &mut files);
+    files.extend(libraries(dir, name).into_iter().map(|l| l.1));
+    files.sort();
+    let h = files.iter().fold(weft_noise::FNV, |h, f| {
+        let meta = std::fs::metadata(f).ok();
+        let time = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as u64);
+        let h = weft_noise::fnv_step(h, weft_noise::fnv(f.to_string_lossy().as_bytes()));
+        weft_noise::fnv_step(weft_noise::fnv_step(h, meta.map_or(0, |m| m.len())), time)
+    });
+    format!("weft {h:016x}")
+}
+
+/// `pack`, unless `<out>/<name>.zip` was packed from the folder as it is (`fingerprint`).
+/// Returns the archive and whether it was written.
 pub fn pack_if_stale(dir: &Path, out: &Path) -> Result<(PathBuf, bool), String> {
     let name = dir
         .file_name()
@@ -207,15 +229,12 @@ pub fn pack_if_stale(dir: &Path, out: &Path) -> Result<(PathBuf, bool), String> 
         .to_string_lossy()
         .into_owned();
     let zip = out.join(format!("{name}.zip"));
-    let mut inputs = Vec::new();
-    collect(&dir.join("assets"), &mut inputs);
-    inputs.extend(libraries(dir, &name).into_iter().map(|l| l.1));
-    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-    let newest = inputs.iter().filter_map(|p| modified(p)).max();
-    if let (Some(z), Some(n)) = (modified(&zip), newest) {
-        if z >= n {
-            return Ok((zip, false));
-        }
+    let packed = std::fs::File::open(&zip)
+        .ok()
+        .and_then(|f| zip::ZipArchive::new(f).ok())
+        .map(|a| a.comment().to_vec());
+    if packed.is_some_and(|c| c == fingerprint(dir, &name).as_bytes()) {
+        return Ok((zip, false));
     }
     pack(dir, out).map(|p| (p, true))
 }
