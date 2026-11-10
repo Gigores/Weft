@@ -348,7 +348,7 @@ async fn damage_chain(t: &T) -> R {
     let both = t.op("damage 8 0").await?;
     t.cmd("/rule testkit:half_damage 0").await?;
     t.check((value(&both) - 3.68).abs() < 1e-4, format!("armor then halved: {both}"));
-    t.check(both.contains("base at stage 200") && both.contains("testkit at stage 300"), format!("explanation names both steps: {both}"));
+    t.check(both.contains("core:multiply base:") && both.contains("core:final testkit:"), format!("explanation names both steps: {both}"));
     Ok(())
 }
 

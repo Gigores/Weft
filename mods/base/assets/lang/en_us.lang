@@ -162,6 +162,7 @@ item.base.diamond_chestplate = Diamond Chestplate
 item.base.diamond_leggings = Diamond Leggings
 item.base.diamond_boots = Diamond Boots
 item.base.arrow = Arrow
+item.base.bow = Bow
 item.base.chicken = Raw Chicken
 item.base.cooked_chicken = Cooked Chicken
 item.base.mutton = Raw Mutton

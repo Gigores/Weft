@@ -139,6 +139,7 @@ item.base.diamond_chestplate = Алмазная кираса
 item.base.diamond_leggings = Алмазные поножи
 item.base.diamond_boots = Алмазные ботинки
 item.base.arrow = Стрела
+item.base.bow = Лук
 item.base.chicken = Сырая курица
 item.base.cooked_chicken = Жареная курица
 item.base.mutton = Сырая баранина

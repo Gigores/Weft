@@ -17,6 +17,11 @@ static GOLD: Block = Block::named("base:gold_block");
 static GOLD_HELMET: Item = Item::named("base:gold_helmet");
 static RED_LAMP: Item = Item::named("base:red_lamp");
 static BLUE_LAMP: Item = Item::named("base:blue_lamp");
+/// A value and a question of steps in several phases (`value` op).
+static VALUE: Chain = Chain::named("value");
+static LATE: Step = Step::named("late");
+static EARLY: Step = Step::named("early");
+static MAY: Question = Question::named("may");
 /// Shared with everyone who sees the entity, for the sync test.
 pub static MARK: Component<u32> = Component::named("testkit:mark");
 /// Server-side stack data that is not saved either.
@@ -264,6 +269,23 @@ pub fn register(r: &mut Registry) {
             m.value *= 0.5;
         }
     });
+    // Registered out of order: phases and `before` decide, not who came first.
+    r.modify(&VALUE, &phase::MULTIPLY, |m| m.value *= 2.0);
+    r.modify(&VALUE, &phase::ADD, |m| m.value += 3.0);
+    r.step(&LATE)
+        .on(&VALUE)
+        .phase(&phase::OVERRIDE)
+        .run(|m| m.value -= 1.0);
+    r.step(&EARLY)
+        .on(&VALUE)
+        .phase(&phase::OVERRIDE)
+        .before("late")
+        .run(|m| m.value *= 10.0);
+    r.before_event(&MAY, |_| Verdict::Deny);
+    r.before_event(&MAY, |_| Verdict::Allow)
+        .phase(&phase::OVERRIDE);
+    r.before_event(&MAY, |_| Verdict::Abstain)
+        .phase(&phase::FINAL);
     r.on_event(&actions::BREAK_BLOCK, |b| count(0, b.len()));
     r.on_event(&actions::PLACE_BLOCK, |b| count(1, b.len()));
     r.on_event(&actions::PICKUP_ITEM, |b| count(2, b.len()));
@@ -651,6 +673,8 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5])
             .to_string())
     }),
+    // `VALUE` from 1 and the answer to `MAY`.
+    ("value", "", |w, _, _, _| Ok(format!("{} {}", w.chain_compute(&VALUE, 1.0, &query()), w.ask(&MAY, &query()) as u32))),
     // What the server knows the player holds of an action: held, ticks.
     ("key", "<action:word>", |w, cmd, player, _| {
         let k = w.key(player, Key::generated(word(cmd, "action")?.to_string()));

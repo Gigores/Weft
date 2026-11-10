@@ -475,7 +475,7 @@ r.edit(&poses::CROUCH).speed(0.4);
 A set of abilities. `r.game_mode(&M)`, the engine's in `game_modes::*`. `comps::game_mode::MODIFIERS` (`[Modifier]`, `.modifier` pushes; flight is `attribute::CAN_FLY`, no damage, hunger or air `attribute::INVULNERABLE`, `.invulnerable()`); tags `game_mode.instant_break`, `no_break`, `no_place`, `no_costs`, `always_fly`, `noclip`, `no_interact`, `hidden`, `no_hud`, `creative_inventory` (presets `.breaks`, `.flight`, `.no_placing`...).
 
 ```rust
-r.edit(&game_modes::SURVIVAL).modifier(&attribute::MAX_HEALTH, abi::attr_op::ADD, 4.0);
+r.edit(&game_modes::SURVIVAL).modifier(Modifier::add(&attribute::MAX_HEALTH, 4.0));
 ```
 
 ## Damage cause
@@ -491,7 +491,7 @@ What is on a mob for a while (`w.entity_effect(id, &E, level, ticks)`), several 
 ```rust
 r.edit(&entity_effects::HURT).shader(&Shader::named("mymod:hurt_blue"));
 r.entity_effect(&POISON).unseen().hazard(Hazard::own(1.0, &MAGIC).every(25));
-r.entity_effect(&SWIFTNESS).modifier(Modifier::new(&attribute::MOVEMENT_SPEED, attr_op::MULTIPLY_BASE, 0.2));
+r.entity_effect(&SWIFTNESS).modifier(Modifier::percent(&attribute::MOVEMENT_SPEED, 0.2));
 ```
 
 ## Text place
@@ -530,10 +530,26 @@ r.edit(Handle::<kind::Config>::generated("core:fov".to_string())).set(&comps::co
 ```
 
 ## Attribute
-A value of living entities with timed modifiers. `r.attribute(&A, default, min, max)`, the engine's in `attribute::*`. `comps::attribute`: `DEFAULT` (`f64`), `RANGE` (`[f64;2]`).
+A value of living entities, worked out as a chain from its base, its modifiers among the steps. `r.attribute(&A, default, min, max)`, the engine's in `attribute::*`. `comps::attribute`: `DEFAULT` (`f64`), `RANGE` (`[f64;2]`).
 
 ```rust
 r.edit(&attribute::MAX_HEALTH).set(&comps::attribute::RANGE, [1.0, 2048.0]);
+```
+
+## Step
+Code that changes a value (`docs/modding.md`, Hooking into the game). `r.step(&S)`, `r.modify(&chain, &phase, ..)` and `r.before_event(..)` for one without a name of yours; the engine's are named `core:..`. `comps::step`: `CHAIN` (`str`, run in every computation of it; none: only where a modifier names it), `PHASE` (`str`), `AFTER`, `BEFORE` (`[str]`, steps of its phase), `CALL` (`callback`, `.run`, `.answer`).
+
+```rust
+r.step(&SHARP).on(&attribute::ATTACK_DAMAGE).phase(&phase::ADD).after("othermod:blunt").run(|m| m.value += 1.0);
+r.edit(&Step::named("core:charge")).run(|m| m.value *= 0.2 + 0.8 * m.query().charge as f64);
+r.remove(&Step::named("core:vanilla_sweep"));
+```
+
+## Phase
+A place in the order steps run in, right after another. `r.phase(&P, &after)`, the engine's in `phase::*`. `comps::phase`: `AFTER` (`str`).
+
+```rust
+r.phase(&CRITS, &phase::MULTIPLY);
 ```
 
 ## Equipment slot

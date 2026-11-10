@@ -4618,9 +4618,8 @@ pub struct EventArgs {
     pub stride: u32,
 }
 
-/// Questions the engine asks before doing things (`Host::reg_interceptor`).
-/// The engine's actions: each name is both the question asked before (any deny wins) and the
-/// event sent after, with the value named in its doc.
+/// The engine's actions: each name is both the question asked before (a chain of yes or no,
+/// `Host::ask`) and the event sent after, with the value named in its doc.
 pub mod action {
     /// `BlockChange`. Asked with `entity` the player (0 for `break_block` without one), `pos`,
     /// `state`, `item` the tool.
