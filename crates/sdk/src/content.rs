@@ -1547,10 +1547,12 @@ macro_rules! state_setters {
         }
         /// One more picture on top of the picked faces' (relative names under `block/`): the
         /// green over a grass block's sides, an ore's stones over stone. Each layer is drawn by
-        /// itself over the one under it, with its own animation and connected textures.
+        /// itself over the one under it, with its own animation and connected textures. Like
+        /// `tint` and `tint_kind` it goes on the faces with pictures of their own of the model
+        /// boxes made so far too, toward the picked sides.
         pub fn layer(self, t: &str) -> Self {
             let t = crate::asset("block", t);
-            self.change_faces(|face| {
+            self.change_layers(|face| {
                 if !face.is_empty() {
                     face.push(' ');
                 }
@@ -1561,18 +1563,37 @@ macro_rules! state_setters {
         /// (wool). A tinted copy of the picture is made as the game loads, every frame of it and
         /// its connected tiles too, so it costs nothing to draw.
         pub fn tint(self, color: u32) -> Self {
-            self.change_faces(|face| top_layer(face, Some(color & 0xFF_FFFF), None))
+            self.change_layers(|face| top_layer(face, Some(color & 0xFF_FFFF), None))
         }
         /// The picked faces' top layer colored by the biome the block stands in (`tints::GRASS`,
         /// `FOLIAGE`, `WATER` or a mod's own `TintKind`), and an item of it by the kind's
         /// default. Each layer its own, any kind and in any order.
         pub fn tint_kind(self, kind: &TintKind) -> Self {
-            self.change_faces(|face| top_layer(face, None, Some(kind.name())))
+            self.change_layers(|face| top_layer(face, None, Some(kind.name())))
         }
         fn pick(mut self, which: u8, t: &str) -> Self {
             let t = crate::asset("block", t);
             *self.picked() = which;
             self.change_faces(|face| *face = t.clone())
+        }
+        /// `change_faces`, and the faces toward the picked sides of the model boxes made so far
+        /// that have pictures of their own (a tall plant's panels).
+        fn change_layers(mut self, mut f: impl FnMut(&mut String)) -> Self {
+            let which = *self.picked();
+            for p in self
+                .pending()
+                .iter_mut()
+                .filter(|p| p.name == bc::BOXES.name() && p.op == abi::value_op::PUSH)
+            {
+                let Some(mut b) = abi::data::from_bytes::<abi::ModelBox>(&p.bytes) else { continue };
+                for (i, face) in b.textures.iter_mut().enumerate() {
+                    if which & 1 << i != 0 && !face.is_empty() {
+                        f(face);
+                    }
+                }
+                p.bytes = abi::data::bytes_of(&b);
+            }
+            self.change_faces(f)
         }
         /// Its faces as they are so far, the picked ones changed by `f`.
         fn change_faces(mut self, mut f: impl FnMut(&mut String)) -> Self {
