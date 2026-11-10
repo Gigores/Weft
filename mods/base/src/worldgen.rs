@@ -381,6 +381,16 @@ static COVERED: Block = Block::named("core:covered");
 
 /// Plants and Clay after the terrain and trees filled the cube.
 fn decorate(g: &mut Gen) {
+    let place_grass = |g: &mut Gen, x, y, z| g.set(x, y, z, TALL_GRASS.id());
+    let place_tall_grass = |g: &mut Gen, x, y, z| {
+        let upper = COVERED.with(&[("to", "down")]);
+        if y + 1 < 16 && g.get(x, y + 1, z) == 0 && upper != u32::MAX {
+            g.set(x, y, z, TALL_TALL_GRASS.id());
+            g.set(x, y + 1, z, upper);
+        } else {
+            g.set(x, y, z, TALL_GRASS.id());
+        }
+    };
     let Some(&cols) = g.columns() else { return };
     let seed = g.seed();
     let BlockPos { x: ox, y: oy, z: oz } = g.origin();
@@ -429,16 +439,15 @@ fn decorate(g: &mut Gen) {
                     }
                 // roll ∈ [0.012; tall_grass_chance)
                 } else if roll < tall_grass_chance {
-                    let upper = COVERED.with(&[("to", "down")]);
-                    if y + 1 < 16 && g.get(x, y + 1, z) == 0 && upper != u32::MAX {
-                        g.set(x, y, z, TALL_TALL_GRASS.id());
-                        g.set(x, y + 1, z, upper);
+                    let wave = fixed::fbm(fixed::seed32(seed, 0x7A11), wx * 16, wz * 16, 48 * 16, 3);
+                    if wave > 0 {
+                        place_tall_grass(g, x, y, z);
                     } else {
-                        g.set(x, y, z, TALL_GRASS.id());
+                        place_grass(g, x, y, z);
                     }
                 // roll ∈ [tall_grass_chance; grass_chance)
                 } else if roll < grass_chance {
-                    g.set(x, y, z, TALL_GRASS.id());
+                    place_grass(g, x, y, z);
                 }
             } else if CACTUS_SOIL.on_block(below) && DRY.on_biome(b) && roll < 0.006 && y + 2 < 16 {
                 let n = 1 + (h >> 40) % 3;
