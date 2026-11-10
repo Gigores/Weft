@@ -263,6 +263,8 @@ fn send_entities(
                     item: crate::stack::for_client(e.item),
                     born: tick.saturating_sub(e.age),
                     body_yaw: e.body_yaw,
+                    strode: e.strode,
+                    stride: e.stride,
                 });
             }
         }

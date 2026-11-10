@@ -22,7 +22,9 @@ pub static COW: EntityKind = EntityKind::named("cow");
 pub fn register(r: &mut Registry) {
     // The engine's player kind, drawn as the same humanoid as the zombie.
     r.set_model(&PLAYER, humanoid(false));
+    r.edit(&PLAYER).hitboxes(Hitboxes::humanoid());
     r.entity(&ZOMBIE)
+        .hitboxes(Hitboxes::humanoid().reaching())
         .tag("hostile")
         // Undead, as vanilla's: poison and regeneration take no hold.
         .tag("immune_effect/base:poison")
@@ -40,6 +42,7 @@ pub fn register(r: &mut Registry) {
         .reach(1.3)
         .goals(hostile(ai::Goals::new().aggressive(35.0)));
     r.entity(&SPIDER)
+        .hitboxes(spider_parts())
         .tag("hostile")
         .sound("ambient")
         .sound("hurt")
@@ -59,6 +62,7 @@ pub fn register(r: &mut Registry) {
         ));
     r.entity_component(&FUSE, 0u32, 0);
     r.entity(&CREEPER)
+        .hitboxes(creeper_parts())
         .tag("hostile")
         .size(0.6, 1.7)
         .max_health(20.0)
@@ -67,6 +71,7 @@ pub fn register(r: &mut Registry) {
         .attach(&FUSE)
         .goals(creeper());
     r.entity(&SKELETON)
+        .hitboxes(Hitboxes::humanoid().slim(2.0).reaching())
         .tag("hostile")
         .tag("immune_effect/base:poison")
         .tag("immune_effect/base:regeneration")
@@ -85,6 +90,18 @@ pub fn register(r: &mut Registry) {
         .use_until_released()
         .on_release(shoot_bow)
         .tab(&crate::tabs::COMBAT);
+    // An arrow in the head hurts half as much again, a bow's critical hit: `part` is the part
+    // of the hitbox it went into.
+    r.modify(&chain::PROJECTILE_DAMAGE, &phase::MULTIPLY, |m| {
+        let q = *m.query();
+        let arrow = m
+            .world()
+            .entity(q.entity)
+            .is_some_and(|e| e.kind == ARROW.id());
+        if arrow && q.part == hitbox_part::HEAD {
+            m.value *= 2.0;
+        }
+    });
     // Drawing it narrows the view, more the further it is drawn (vanilla's 15% at full draw).
     r.modify(&attribute::FOV, &phase::MULTIPLY, |m| {
         let Some(s) = m.world().entity(m.query().entity) else { return };
@@ -104,6 +121,7 @@ pub fn register(r: &mut Registry) {
         .attribute(&attribute::GRAVITY, 0.625)
         .projectile(Projectile::new().sticks(1200));
     r.entity(&SHEEP)
+        .hitboxes(sheep_parts())
         .tag("livestock")
         .size(0.9, 1.3)
         .max_health(8.0)
@@ -111,6 +129,7 @@ pub fn register(r: &mut Registry) {
         .passive()
         .goals(passive());
     r.entity(&CHICKEN)
+        .hitboxes(chicken_parts())
         .tag("livestock")
         .size(0.4, 0.7)
         .max_health(4.0)
@@ -119,6 +138,7 @@ pub fn register(r: &mut Registry) {
         .attach(&FUSE)
         .goals(passive_chicken());
     r.entity(&PIG)
+        .hitboxes(pig_parts())
         .tag("livestock")
         .sound("ambient")
         .sound("hurt")
@@ -129,6 +149,7 @@ pub fn register(r: &mut Registry) {
         .passive()
         .goals(passive());
     r.entity(&COW)
+        .hitboxes(Hitboxes::quadruped())
         .tag("livestock")
         .sound("ambient")
         .sound("hurt")
@@ -375,4 +396,57 @@ fn with_passive(goals: ai::Goals) -> ai::Goals {
         .then(ai::watch_player(6.0))
         .then(ai::panic(1.6))
         .then(ai::wander(0.5, 10.0))
+}
+
+// Where each of base's mobs is hit, part by part, in the pixels of its model: what its body
+// looks like, not the model itself (`Hitboxes`).
+const PI: f32 = std::f32::consts::PI;
+
+fn four_legs(h: Hitboxes, x: [f32; 2], tall: f32, front: [f32; 2], back: [f32; 2]) -> Hitboxes {
+    let mid = |a: [f32; 2]| (a[0] + a[1]) / 2.0;
+    let (xm, fz, bz) = (mid(x), mid(front), mid(back));
+    h.limb("front_right_leg", [-x[1], 0.0, front[0]], [-x[0], tall, front[1]], [-xm, tall, fz], 0.8, PI)
+        .limb("front_left_leg", [x[0], 0.0, front[0]], [x[1], tall, front[1]], [xm, tall, fz], 0.8, 0.0)
+        .limb("back_right_leg", [-x[1], 0.0, back[0]], [-x[0], tall, back[1]], [-xm, tall, bz], 0.8, 0.0)
+        .limb("back_left_leg", [x[0], 0.0, back[0]], [x[1], tall, back[1]], [xm, tall, bz], 0.8, PI)
+}
+
+fn sheep_parts() -> Hitboxes {
+    let h = Hitboxes::new()
+        .head("head", [-4.0, 14.0, -14.0], [4.0, 22.0, -6.0], [0.0, 18.0, -8.0])
+        .part("body", [-4.5, 10.0, -8.0], [4.5, 18.0, 10.0]);
+    four_legs(h, [1.0, 5.0], 12.0, [-7.0, -3.0], [5.0, 9.0])
+}
+
+fn pig_parts() -> Hitboxes {
+    let h = Hitboxes::new()
+        .head("head", [-4.0, 8.0, -15.0], [4.0, 16.0, -6.0], [0.0, 12.0, -6.0])
+        .part("body", [-5.0, 6.0, -8.0], [5.0, 14.0, 9.0]);
+    four_legs(h, [1.0, 5.0], 6.0, [-7.0, -3.0], [5.0, 9.0])
+}
+
+fn creeper_parts() -> Hitboxes {
+    let h = Hitboxes::new()
+        .head("head", [-4.0, 18.0, -4.0], [4.0, 26.0, 4.0], [0.0, 18.0, 0.0])
+        .part("body", [-4.0, 6.0, -2.0], [4.0, 18.0, 2.0]);
+    four_legs(h, [0.0, 4.0], 6.0, [-6.0, -2.0], [2.0, 6.0])
+}
+
+fn chicken_parts() -> Hitboxes {
+    Hitboxes::new()
+        .head("head", [-2.0, 9.0, -8.0], [2.0, 15.0, -3.0], [0.0, 9.0, -4.0])
+        .part("body", [-3.0, 5.0, -4.0], [3.0, 11.0, 4.0])
+        .part("right_wing", [-4.0, 7.0, -3.0], [-3.0, 11.0, 3.0])
+        .part("left_wing", [3.0, 7.0, -3.0], [4.0, 11.0, 3.0])
+        .limb("right_leg", [-2.5, 0.0, -1.0], [-1.5, 5.0, 1.0], [-2.0, 5.0, 0.0], 0.8, 0.0)
+        .limb("left_leg", [0.5, 0.0, -1.0], [1.5, 5.0, 1.0], [1.0, 5.0, 0.0], 0.8, PI)
+}
+
+fn spider_parts() -> Hitboxes {
+    Hitboxes::new()
+        .head("head", [-4.0, 5.0, -11.0], [4.0, 13.0, -3.0], [0.0, 9.0, -3.0])
+        .part("body", [-3.0, 6.0, -3.0], [3.0, 12.0, 3.0])
+        .part("abdomen", [-5.0, 5.0, 3.0], [5.0, 13.0, 15.0])
+        .part("right_legs", [-15.0, 0.0, -4.0], [-3.0, 9.0, 4.0])
+        .part("left_legs", [3.0, 0.0, -4.0], [15.0, 9.0, 4.0])
 }

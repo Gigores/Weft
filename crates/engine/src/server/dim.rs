@@ -1642,6 +1642,17 @@ impl Dim {
     /// A melee hit of `attacker` on `target`, the same for players and mobs: the `ATTACK`
     /// question, its `ATTACK_DAMAGE` against the target through `chain::MELEE` (how charged its
     /// swing is, whether it crits), the damage, extra knockback (`ATTACK_KNOCKBACK`), a sweep.
+    /// The part of `target`'s hitbox `who` looks at (`abi::hitbox_part`), 0 if none: where a blow
+    /// lands.
+    fn part_looked_at(&self, c: &Content, who: u64, target: u64) -> u32 {
+        let (Some(me), Some(t)) = (self.entities.get(who), self.entities.get(target)) else { return 0 };
+        let eye = me.pos + DVec3::Y * me.dims(c).eye;
+        let ((sy, cy), (sp, cp)) = ((me.yaw as f64).sin_cos(), (me.pitch as f64).sin_cos());
+        let look = DVec3::new(-sy * cp, sp, -cy * cp);
+        let parts = c.game.entities[t.kind as usize].hitboxes.as_ref();
+        crate::hitbox::ray_entity(parts, &t.hit_body(c, t.pos), eye, look, 16.0, &mut Vec::new()).map_or(0, |h| h.0)
+    }
+
     pub fn attack(&mut self, c: &'static Content, attacker: u64, target: u64, held: ItemStack) -> bool {
         let (Some(_), Some(t)) = (self.entities.get(attacker), self.entities.get(target)) else { return false };
         if target == attacker || !t.is_body() {
@@ -1656,6 +1667,7 @@ impl Dim {
             me.notice_hand(held);
         }
         q.charge = self.swing_strength(c, attacker, held);
+        q.part = self.part_looked_at(c, attacker, target);
         q.crit = self.ask_or(c, abi::question::CRIT, &q, false) as u32;
         let base = self.attribute_for(c, crate::registry::attr::ATTACK_DAMAGE, &q, false);
         let dmg = (self.compute(c, abi::chain::MELEE, base, &q, false) as f32).max(0.0);
@@ -1667,7 +1679,15 @@ impl Dim {
         let hit = self.damage(
             c,
             target,
-            &abi::Damage { amount: dmg, cause: damage::ATTACK, source: attacker, item: held, crit: q.crit, ..abi::Damage::DEFAULT },
+            &abi::Damage {
+                amount: dmg,
+                cause: damage::ATTACK,
+                source: attacker,
+                item: held,
+                crit: q.crit,
+                part: q.part,
+                ..abi::Damage::DEFAULT
+            },
         );
         if !hit {
             return false;
@@ -1936,6 +1956,7 @@ impl Dim {
             cause,
             amount: amount as f64,
             crit: d.crit,
+            part: d.part,
             ..abi::Query::DEFAULT
         };
         if !self.ask(c, abi::action::HURT, &q) {
@@ -1955,7 +1976,11 @@ impl Dim {
         }
         let amount = landing;
         let direct = if d.direct != 0 { d.direct } else { source };
-        self.emit_engine(c, abi::action::HURT, &abi::Hurt { entity: id, source, direct: d.direct, amount, cause, crit: d.crit, pad: 0 });
+        self.emit_engine(
+            c,
+            abi::action::HURT,
+            &abi::Hurt { entity: id, source, direct: d.direct, amount, cause, crit: d.crit, part: d.part },
+        );
         let from = self.entities.get(direct).map(|s| s.pos);
         let knock = if recovering || def.has(df::NO_KNOCKBACK) {
             None
@@ -2053,7 +2078,7 @@ impl Dim {
         self.emit_engine(
             c,
             abi::event::ENTITY_HEALED,
-            &abi::Hurt { entity: id, source, direct: 0, amount: gained, cause, crit: 0, pad: 0 },
+            &abi::Hurt { entity: id, source, direct: 0, amount: gained, cause, crit: 0, part: 0 },
         );
         true
     }
@@ -2805,7 +2830,10 @@ impl Dim {
                 .frame
                 .and_then(|f| frames.iter().find(|b| b.0 == f))
                 .map_or(DVec3::ZERO, |b| b.1);
-            e.body_yaw = crate::physics::turn_body(e.body_yaw, e.yaw, e.pos - e.body_from - carried);
+            let walked = e.pos - e.body_from - carried;
+            e.body_yaw = crate::physics::turn_body(e.body_yaw, e.yaw, walked);
+            let speed = (walked.with_y(0.0).length() * crate::world::TPS as f64) as f32;
+            crate::model::walk_limbs(&mut e.strode, &mut e.stride, speed, crate::world::TICK as f32);
             e.body_from = e.pos;
         }
     }

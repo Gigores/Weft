@@ -90,7 +90,7 @@ impl Gizmos {
         }
         if self.on("hitboxes") {
             // Its own only where its body is seen. White the box blocks and pushing go by, pink
-            // the one turned with the body that hits land on.
+            // the parts of its hitbox, where hits land.
             let own = client
                 .camera_has(crate::tag_bits::camera::BODY)
                 .then_some((&client.me, client.player.dims()));
@@ -99,11 +99,19 @@ impl Gizmos {
                 .values()
                 .filter(|e| (e.pos - me).length_squared() < 64.0 * 64.0)
                 .map(|e| (e, e.dims()));
+            let mut parts = Vec::new();
             for (e, dims) in near.chain(own) {
                 let crate::physics::Dims { half_width: hw, height: h, eye } = dims;
                 cuboid(&mut lines, e.pos - DVec3::new(hw, 0.0, hw), e.pos + DVec3::new(hw, h, hw), 0xFFFFFFFF);
-                if e.is_body() {
-                    turned_cuboid(&mut lines, e.pos, hw, h, e.body_yaw, 0xFF60D0FF);
+                if let Some(hb) = c.game.entities[e.kind as usize]
+                    .hitboxes
+                    .as_ref()
+                    .filter(|_| e.is_body())
+                {
+                    crate::hitbox::place(hb, &e.hit_body(), &mut parts);
+                    for p in &parts {
+                        placed_cuboid(&mut lines, p, 0xFF60D0FF);
+                    }
                 }
                 let eye = e.pos + DVec3::Y * eye;
                 let (sy, cy) = (e.yaw as f64).sin_cos();
@@ -197,11 +205,13 @@ pub fn shape(s: &GizmoShape, lines: &mut Vec<Line>, fills: &mut Vec<Fill>, label
 }
 
 /// The twelve edges of an axis-aligned box.
-/// A box `hw` to each side and `h` high about the feet at `pos`, turned by `yaw` as bodies turn.
-fn turned_cuboid(out: &mut Vec<Line>, pos: DVec3, hw: f64, h: f64, yaw: f32, color: u32) {
-    let turn = glam::DQuat::from_rotation_y(yaw as f64);
-    let p =
-        |x: bool, y: bool, z: bool| pos + turn * DVec3::new(if x { hw } else { -hw }, if y { h } else { 0.0 }, if z { hw } else { -hw });
+/// A hitbox part where it is (`hitbox::place`).
+fn placed_cuboid(out: &mut Vec<Line>, part: &crate::hitbox::Placed, color: u32) {
+    let (a, b) = (part.min, part.max);
+    let p = |x: bool, y: bool, z: bool| {
+        part.to_world
+            .transform_point3(DVec3::new(if x { b.x } else { a.x }, if y { b.y } else { a.y }, if z { b.z } else { a.z }))
+    };
     for i in 0..4 {
         let (u, v) = (i & 1 != 0, i & 2 != 0);
         out.push((p(false, u, v), p(true, u, v), color));

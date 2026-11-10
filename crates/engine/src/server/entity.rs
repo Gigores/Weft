@@ -62,6 +62,10 @@ pub struct Entity {
     /// Where its body faces (`physics::turn_body`), and where it was when that last turned.
     pub body_yaw: f32,
     pub body_from: DVec3,
+    /// How far its legs have walked and its stride (`model::walk_limbs`, by the tick): where its
+    /// legs are.
+    pub strode: f32,
+    pub stride: f32,
     pub motion: Motion,
     /// A body that falls under its weight and is put down as blocks where it lands, whatever
     /// its kind would do otherwise (`World::body_fall`, every falling block).
@@ -193,6 +197,8 @@ impl Entity {
             pitch: 0.0,
             body_yaw: 0.0,
             body_from: pos,
+            strode: 0.0,
+            stride: 0.0,
             on_ground: false,
             in_liquid: false,
             fall: 0.0,
@@ -250,6 +256,25 @@ impl Entity {
     }
 
     /// Its box: its own size if a mod gave it one, else its kind's; crouching lowers either.
+    /// How it stands for what hits it (`hitbox`), at `pos` in the caller's frame.
+    pub fn hit_body(&self, c: &Content, pos: DVec3) -> crate::hitbox::Body {
+        crate::hitbox::Body {
+            pos,
+            body_yaw: self.body_yaw,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            walk: self.strode,
+            stride: self.stride,
+            size: self
+                .size
+                .unwrap_or(c.game.entities[self.kind as usize].size()),
+            scale: self
+                .size
+                .map_or(1.0, |s| (s.height / c.game.entities[self.kind as usize].size().height.max(1e-3)) as f64),
+            pose: self.pose,
+        }
+    }
+
     pub fn dims(&self, c: &Content) -> physics::Dims {
         physics::posed(
             self.size

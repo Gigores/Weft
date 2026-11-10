@@ -1387,6 +1387,8 @@ pub mod comp {
         /// It flies as a projectile (`Projectile`): the engine moves it, and each tick a ray along
         /// its speed decides what it hits (`action::PROJECTILE_HIT`).
         pub const PROJECTILE: &str = "entity.projectile";
+        /// What hits land on, part by part (`Hitboxes`); without, its whole box.
+        pub const HITBOXES: &str = "entity.hitboxes";
     }
 
     /// A step's (`entry_kind::STEP`): `CHAIN` (`str`, the value it changes every time it is
@@ -2716,6 +2718,8 @@ pub struct RayHit {
     pub pos: BlockPos,
     pub state: u32,
     pub face: u32,
+    /// The part of the entity's hitbox it hit (`hitbox_part`): `face` and `local` are that part's.
+    pub part: u32,
     pub point: Vec3,
     pub local: Vec3,
     pub distance: f64,
@@ -2735,6 +2739,68 @@ crate::data! {
     }
 }
 
+crate::data! {
+    /// One part of an entity's hitbox: a box in model pixels of the kind (its feet at 0, -Z its
+    /// front) turning about `pivot` as `follows` says (`hitbox_follows`); a `STRIDE` part swings
+    /// `swing` radians at a full stride, `phase` (radians) after the stride's own beat.
+    pub struct HitboxPart {
+        pub name: crate::data::String,
+        pub min: [f32; 3],
+        pub max: [f32; 3],
+        pub pivot: [f32; 3],
+        pub follows: u32,
+        pub swing: f32,
+        pub phase: f32,
+    }
+}
+
+crate::data! {
+    /// What hits land on (`comp::entity::HITBOXES`), part by part, in pixels (1/16 block) at the
+    /// kind's own size: one made bigger or smaller (`set_size`) has them so too, a crouch squeezes
+    /// them down, a lying pose lays them down, and they turn with its body. Rays, arrows and blows
+    /// find the part they hit (`RayHit::part`, `Damage::part`).
+    pub struct Hitboxes {
+        pub parts: crate::data::Vec<HitboxPart>,
+    }
+}
+
+/// How a part of a hitbox moves (`HitboxPart::follows`).
+pub mod hitbox_follows {
+    /// With the body only.
+    pub const BODY: u32 = 0;
+    /// With the head: the look's yaw past the body's, and its pitch.
+    pub const LOOK: u32 = 1;
+    /// Swinging forward and back as it walks, a leg or an arm.
+    pub const STRIDE: u32 = 2;
+}
+
+/// A hitbox part's id from its name, as hits tell it (`RayHit::part`, `Damage::part`).
+pub const fn hitbox_part_id(name: &str) -> u32 {
+    let h = fnv(name.as_bytes());
+    (h ^ (h >> 32)) as u32 | 1
+}
+
+/// The parts the engine's shapes (the SDK's `Hitboxes::humanoid` ...) name.
+pub mod hitbox_part {
+    use super::hitbox_part_id as id;
+    pub const HEAD: u32 = id("head");
+    pub const BODY: u32 = id("body");
+    pub const RIGHT_ARM: u32 = id("right_arm");
+    pub const LEFT_ARM: u32 = id("left_arm");
+    pub const RIGHT_LEG: u32 = id("right_leg");
+    pub const LEFT_LEG: u32 = id("left_leg");
+    /// A four-legged one's: front right, front left, back right, back left.
+    pub const FRONT_RIGHT_LEG: u32 = id("front_right_leg");
+    pub const FRONT_LEFT_LEG: u32 = id("front_left_leg");
+    pub const BACK_RIGHT_LEG: u32 = id("back_right_leg");
+    pub const BACK_LEFT_LEG: u32 = id("back_left_leg");
+    /// A spider's legs, each side as one, and a bird's wings.
+    pub const RIGHT_LEGS: u32 = id("right_legs");
+    pub const LEFT_LEGS: u32 = id("left_legs");
+    pub const RIGHT_WING: u32 = id("right_wing");
+    pub const LEFT_WING: u32 = id("left_wing");
+}
+
 /// A projectile's hit (`action::PROJECTILE_HIT`): `target` 0 for a block at `pos`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2744,10 +2810,12 @@ pub struct ProjectileHit {
     pub owner: u64,
     pub pos: BlockPos,
     pub face: u32,
+    /// The part of `target`'s hitbox (`hitbox_part`).
+    pub part: u32,
     pub point: Vec3,
 }
 impl Schema for ProjectileHit {
-    const SCHEMA: &'static str = "{projectile:u64,target:u64,owner:u64,pos:[i32;3],face:u32,point:[f64;3]}";
+    const SCHEMA: &'static str = "{projectile:u64,target:u64,owner:u64,pos:[i32;3],face:u32,part:u32,point:[f64;3]}";
 }
 
 /// What `Host::entity_spawn` makes. What `set` leaves out takes the kind's defaults: a random
@@ -4615,10 +4683,11 @@ pub struct Hurt {
     pub amount: f32,
     pub cause: u32,
     pub crit: u32,
-    pub pad: u32,
+    /// The part of its hitbox it landed on (`hitbox_part`), 0 for none in particular.
+    pub part: u32,
 }
 impl Schema for Hurt {
-    const SCHEMA: &'static str = "{entity:u64,source:u64,direct:u64,amount:f32,cause:u32,crit:u32,pad:u32}";
+    const SCHEMA: &'static str = "{entity:u64,source:u64,direct:u64,amount:f32,cause:u32,crit:u32,part:u32}";
 }
 
 #[repr(C)]
@@ -4786,6 +4855,8 @@ pub struct Query {
     /// A melee hit's: how charged its swing was (0..1) and whether it is a critical one.
     pub charge: f32,
     pub crit: u32,
+    /// The part of `entity`'s hitbox a hurt lands on (`hitbox_part`), 0 for none in particular.
+    pub part: u32,
     /// Valid for the call.
     pub text: Str,
 }
@@ -4801,13 +4872,14 @@ defaults!(Query {
     amount: 0.0,
     charge: 0.0,
     crit: 0,
+    part: 0,
     text: Str::EMPTY
 });
 
 /// A hurt described (`Host::entity_damage`): `amount` of `cause` from `source` (who; 0 for
 /// nothing), through `direct` (what hit: the arrow; 0 for `source` itself), with `item` (what
 /// `source` hit with), a critical one or not. `knock` the way it pushes (0: away from `direct`, else
-/// `source`).
+/// `source`). `part` the part of the hitbox it lands on (`hitbox_part`, 0 none in particular).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Damage {
@@ -4818,6 +4890,7 @@ pub struct Damage {
     pub item: ItemStack,
     pub knock: Vec3,
     pub crit: u32,
+    pub part: u32,
 }
 impl Damage {
     /// `amount` of `cause` from nobody.
@@ -4825,7 +4898,7 @@ impl Damage {
         Damage { amount, cause, ..Damage::DEFAULT }
     }
 }
-defaults!(Damage { amount: 0.0, cause: 0, source: 0, direct: 0, item: ItemStack::EMPTY, knock: Vec3::ZERO, crit: 0 });
+defaults!(Damage { amount: 0.0, cause: 0, source: 0, direct: 0, item: ItemStack::EMPTY, knock: Vec3::ZERO, crit: 0, part: 0 });
 
 /// The engine's phases, in the order they run; a mod's goes after one of them
 /// (`comp::phase::AFTER`). Numbers usually use `ADD`, `PERCENT`, `MULTIPLY` and `OVERRIDE`;

@@ -655,17 +655,6 @@ pub fn pick(
     best
 }
 
-/// An entity's box turned with its body (`body_yaw`) about its feet at `pos`, what hits land on:
-/// where a ray enters it within `max`, the face it went in through in the box's own frame (-X,
-/// +X, -Y, +Y, -Z its front, +Z its back) and where on the box, from its low corner in that frame.
-pub fn ray_body(o: DVec3, d: DVec3, pos: DVec3, dims: Dims, body_yaw: f32, max: f64) -> Option<(f64, u8, DVec3)> {
-    let back = glam::DQuat::from_rotation_y(-body_yaw as f64);
-    let (o, d) = (back * (o - pos), back * d);
-    let b = Aabb::around(DVec3::ZERO, dims.half_width, dims.height);
-    let (t, face) = ray_aabb(o, d, &b, max)?;
-    Some((t, face, o + d * t - b.min))
-}
-
 /// Where a ray enters box `b` (0 when it starts inside), within `max`, and the face it went in
 /// through (-X, +X, -Y, +Y, -Z, +Z; inside: the one it looks most toward).
 pub fn ray_aabb(o: DVec3, d: DVec3, b: &Aabb, max: f64) -> Option<(f64, u8)> {

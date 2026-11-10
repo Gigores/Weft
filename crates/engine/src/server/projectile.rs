@@ -36,6 +36,7 @@ impl Dim {
                     pos: h.origin.to_array().into(),
                     state: h.state,
                     face: h.face as u32,
+                    part: 0,
                     point: point.to_array().into(),
                     local: (on - h.origin.as_dvec3()).to_array().into(),
                     distance: h.dist,
@@ -48,7 +49,8 @@ impl Dim {
             const WIDEST: f64 = 4.0;
             let (to, world_from) = (self.place.to_world(from + dir * reach), self.place.to_world(from));
             let (lo, hi) = (world_from.min(to) - DVec3::splat(WIDEST), world_from.max(to) + DVec3::splat(WIDEST));
-            let mut near: Option<(f64, u8, u64, DVec3)> = None;
+            let mut near: Option<(f64, u8, u64, DVec3, u32)> = None;
+            let mut scratch = Vec::new();
             for e in &self.entities.list {
                 if e.pos.cmplt(lo).any() || e.pos.cmpgt(hi).any() {
                     continue;
@@ -57,14 +59,16 @@ impl Dim {
                 if e.removed || !e.is_body() || !e.alive() || skip.contains(&e.id) || self.bodies.contains_key(&e.id) {
                     continue;
                 }
-                // Its box turned with its body, as it is drawn.
-                if let Some((t, face, on)) = crate::physics::ray_body(from, dir, self.place.to_local(e.pos), e.dims(c), e.body_yaw, reach) {
+                // The parts of its hitbox where they are this tick, else its box.
+                let body = e.hit_body(c, self.place.to_local(e.pos));
+                let parts = c.game.entities[e.kind as usize].hitboxes.as_ref();
+                if let Some((part, t, face, on)) = crate::hitbox::ray_entity(parts, &body, from, dir, reach, &mut scratch) {
                     if near.is_none_or(|n| t < n.0) {
-                        near = Some((t, face, e.id, on));
+                        near = Some((t, face, e.id, on, part));
                     }
                 }
             }
-            if let Some((t, face, id, on)) = near {
+            if let Some((t, face, id, on, part)) = near {
                 let point = from + dir * t;
                 best = Some(abi::RayHit {
                     entity: id,
@@ -72,6 +76,7 @@ impl Dim {
                     pos: abi::Vec3::from(point.to_array()).block(),
                     state: 0,
                     face: face as u32,
+                    part,
                     point: point.to_array().into(),
                     local: on.to_array().into(),
                     distance: t,
@@ -131,7 +136,15 @@ impl Dim {
             for _ in 0..MAX_REFUSED {
                 let flags = abi::ray::BLOCKS | abi::ray::SOLID | abi::ray::ENTITIES;
                 let Some(h) = self.raycast(c, pos, v, speed, flags, &skip) else { break };
-                let q = abi::Query { entity: id, other: h.entity, pos: h.pos, state: h.state, amount: speed, ..abi::Query::DEFAULT };
+                let q = abi::Query {
+                    entity: id,
+                    other: h.entity,
+                    pos: h.pos,
+                    state: h.state,
+                    amount: speed,
+                    part: h.part,
+                    ..abi::Query::DEFAULT
+                };
                 if !self.ask(c, abi::action::PROJECTILE_HIT, &q) {
                     if h.entity == 0 {
                         break;
@@ -140,7 +153,8 @@ impl Dim {
                     continue;
                 }
                 let point = DVec3::from_array(h.point.to_array());
-                let hit = abi::ProjectileHit { projectile: id, target: h.entity, owner, pos: h.pos, face: h.face, point: h.point };
+                let hit =
+                    abi::ProjectileHit { projectile: id, target: h.entity, owner, pos: h.pos, face: h.face, part: h.part, point: h.point };
                 self.emit_engine(c, abi::action::PROJECTILE_HIT, &hit);
                 if h.entity != 0 {
                     let amount = self.compute(c, abi::chain::PROJECTILE_DAMAGE, p.damage as f64, &q, false) as f32;
@@ -150,6 +164,7 @@ impl Dim {
                         source: owner,
                         direct: id,
                         knock: v.to_array().into(),
+                        part: h.part,
                         ..abi::Damage::DEFAULT
                     };
                     if self.damage(c, h.entity, &d) {

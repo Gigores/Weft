@@ -18,6 +18,7 @@ pub mod dedicated;
 pub mod diag;
 pub mod entries;
 pub mod game_screens;
+pub mod hitbox;
 pub mod host;
 pub mod hud;
 pub mod hud_editor;

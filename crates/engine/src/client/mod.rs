@@ -430,6 +430,29 @@ impl ClientEntity {
         )
     }
 
+    /// How it stands for what hits it (`hitbox`), as drawn.
+    pub fn hit_body(&self) -> crate::hitbox::Body {
+        crate::hitbox::Body {
+            pos: self.pos,
+            body_yaw: self.body_yaw,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            walk: self.walk,
+            stride: self.swing,
+            size: self
+                .size
+                .unwrap_or(content().game.entities[self.kind as usize].size()),
+            scale: self.size.map_or(1.0, |s| {
+                (s.height
+                    / content().game.entities[self.kind as usize]
+                        .size()
+                        .height
+                        .max(1e-3)) as f64
+            }),
+            pose: self.pose,
+        }
+    }
+
     /// The kind whose model, texture and animations draw it.
     pub fn look(&self) -> u32 {
         self.look.unwrap_or(self.kind)
@@ -2425,13 +2448,15 @@ impl Client {
 
     fn pick_entity(&self, eye: DVec3, dir: DVec3, max: f64) -> Option<u64> {
         let mut best: Option<(f64, u64)> = None;
+        let mut scratch = Vec::new();
         for (&id, e) in &self.entities {
             // Structures are aimed at by their blocks.
             if !e.is_body() || id == self.player_id || e.structure.is_some() {
                 continue;
             }
-            // Its box turned with its body, what the server hits too.
-            if let Some((t, ..)) = physics::ray_body(eye, dir, e.pos, e.dims(), e.body_yaw, max) {
+            // The parts of its hitbox, what the server hits too.
+            let parts = content().game.entities[e.kind as usize].hitboxes.as_ref();
+            if let Some((_, t, ..)) = crate::hitbox::ray_entity(parts, &e.hit_body(), eye, dir, max, &mut scratch) {
                 if best.is_none_or(|(bt, _)| t < bt) {
                     best = Some((t, id));
                 }

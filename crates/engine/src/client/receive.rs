@@ -304,6 +304,7 @@ impl Client {
             let to = if content().game.is_block_entity(e.kind) { &mut self.showing_blocks } else { &mut self.entities };
             let mut shown = ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch, e.item);
             (shown.born, shown.body_yaw, shown.body_target) = (e.born as f64, e.body_yaw, e.body_yaw);
+            (shown.walk, shown.walk_target, shown.swing, shown.swing_target) = (e.strode, e.strode, e.stride, e.stride);
             to.insert(e.id, shown);
         }
     }
