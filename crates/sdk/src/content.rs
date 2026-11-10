@@ -1679,6 +1679,19 @@ macro_rules! state_setters {
                 .hardness(0.0)
                 .tag("plantable")
         }
+        /// `plant` two blocks tall (vanilla's tall grass, a sunflower): a cross showing `lower`
+        /// in its cell and `upper` in the one above (relative names under `block/`), taking room
+        /// in both. Every face is picked after, so `.tint_kind(..)` goes on both.
+        pub fn tall_plant(self, lower: &str, upper: &str) -> Self {
+            let mut b = self
+                .plant()
+                .cells(&[[0, 1, 0]])
+                .hitbox([2.0, 0.0, 2.0], [14.0, 30.0, 14.0])
+                .texture(lower)
+                .top(upper);
+            *b.picked() = faces::ALL;
+            b
+        }
         pub fn not_solid(self) -> Self {
             self.tag(abi::comp::block::NOT_SOLID)
         }
