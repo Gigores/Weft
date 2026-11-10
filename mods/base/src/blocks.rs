@@ -599,6 +599,7 @@ pub fn register(r: &mut Registry) {
     r.block(&MOSS)
         .on_sides(Facings::ALL)
         .sound_group("grass")
+        .shares_cell_with("#water")
         .hardness(0.1)
         .signal_blocker()
         .tab(&crate::tabs::BUILDING);
