@@ -667,6 +667,9 @@ pub trait StackData: Sized {
     /// (`Layers::new().layer("handle").layer("head").tint(0xFF8800)`). Empty: its item's look
     /// again. In slots, in the hand and on the ground alike.
     fn with_layers(self, layers: Layers) -> Self;
+    /// The stack giving `list` while held or worn instead of its item's modifiers (an enchanted
+    /// sword's `Modifier::add(&attribute::ATTACK_DAMAGE, 2.0)`). Empty: its item's again.
+    fn with_modifiers(self, list: &[crate::Modifier]) -> Self;
 }
 
 /// How an item or a stack looks (`abi::comp::LAYERS`): pictures one over the other, the first
@@ -777,6 +780,12 @@ impl StackData for ItemStack {
         } else {
             unsafe { (host().stack_with)(self.data, LAYERS.id(), abi::Slice::new(text.as_bytes()), 0) }
         };
+        ItemStack { data, ..self }
+    }
+    fn with_modifiers(self, list: &[crate::Modifier]) -> Self {
+        let raw: Vec<abi::Modifier> = list.iter().map(|m| m.0.clone()).collect();
+        let bytes = abi::data::bytes_of(&raw);
+        let data = unsafe { (host().stack_with)(self.data, MODIFIERS.id(), abi::Slice::new(&bytes), raw.is_empty() as u32) };
         ItemStack { data, ..self }
     }
     fn with_stacks(self, storage: &Storage, list: &[ItemStack]) -> Self {

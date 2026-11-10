@@ -407,6 +407,8 @@ pub struct Game {
     pub world_ticks: Vec<(ModId, Callback)>,
     /// `abi::comp::NAME` as an entity component.
     pub name_comp: u32,
+    /// `abi::comp::PERSISTENT` as an entity component.
+    pub persistent_comp: u32,
     /// Components with `component_flags::CARRIED`: between a block's item and its block entity.
     pub carried: Vec<u32>,
     pub fields: FieldComps,
@@ -670,6 +672,7 @@ fn engine_components() -> Vec<RawEntry> {
         (MODIFIERS, "bytes", cf::SAVE, Vec::new()),
         (TIMERS, "bytes", cf::SAVE, Vec::new()),
         (abi::comp::NAME, "bytes", cf::SAVE | cf::CARRIED, Vec::new()),
+        (abi::comp::PERSISTENT, "bytes", cf::SAVE, Vec::new()),
         (HEALTH, "[f32;2]", own, vec![0; 8]),
         (BURNING, "u8", shown, vec![0]),
         (abi::comp::LIGHT, "[u8;3]", own, vec![0; 3]),
@@ -1251,7 +1254,7 @@ fn bake_precipitation(e: &Entry) -> PrecipitationDef {
 }
 
 /// A shader effect on entities: the snippet that draws it, `ns:name`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EntityEffectDef {
     pub name: String,
     /// Empty: none.
@@ -1275,6 +1278,8 @@ pub struct EntityEffectDef {
     pub hazards: Vec<crate::content::Hazard>,
     /// Given off while it is on.
     pub light: [u8; 3],
+    /// Its tick with every entity that has it (`comp::ENTITY_EFFECT_ON_TICK`).
+    pub on_tick: Option<(ModId, Callback)>,
 }
 
 /// Whether an entity effect is good for who has it (`EntityEffectDef::kind`).
@@ -1466,6 +1471,10 @@ pub const ENGINE_EVENTS: &[(&str, &str, u32)] = {
         (abi::action::MOUNT, abi::Mounting::SCHEMA, size_of::<abi::Mounting>() as u32),
         (abi::action::DISMOUNT, abi::Mounting::SCHEMA, size_of::<abi::Mounting>() as u32),
         (abi::action::ENTER_DIMENSION, abi::DimensionChange::SCHEMA, size_of::<abi::DimensionChange>() as u32),
+        (abi::action::SPAWN, abi::Spawned::SCHEMA, size_of::<abi::Spawned>() as u32),
+        (abi::event::ENTITY_REMOVED, abi::Removed::SCHEMA, size_of::<abi::Removed>() as u32),
+        (abi::action::EFFECT, abi::EffectChange::SCHEMA, size_of::<abi::EffectChange>() as u32),
+        (abi::event::EFFECT_ENDED, abi::EffectChange::SCHEMA, size_of::<abi::EffectChange>() as u32),
     ]
 };
 
@@ -2161,6 +2170,7 @@ pub fn freeze(
             hides: e.has(abi::comp::ENTITY_EFFECT_HIDES),
             raw_hazards: e.or(abi::comp::ENTITY_EFFECT_HAZARDS, Vec::new()),
             hazards: Vec::new(),
+            on_tick: e.callback(abi::comp::ENTITY_EFFECT_ON_TICK),
             light: e.or(abi::comp::LIGHT, [0; 3]),
         });
     (g.conditions, g.condition_names) = tables.bake(kind(ek::CONDITION), ek::CONDITION, mod_name, errors, |e, _| ConditionDef {
@@ -2339,6 +2349,7 @@ fn freeze_entity_storage(
     g.modifiers_comp = g.component_names[MODIFIERS];
     g.timers_comp = g.component_names[TIMERS];
     g.name_comp = g.component_names[abi::comp::NAME];
+    g.persistent_comp = g.component_names[abi::comp::PERSISTENT];
     g.carried = g
         .components
         .iter()

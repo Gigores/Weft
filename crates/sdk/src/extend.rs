@@ -25,7 +25,10 @@ use crate::{
     Attribute, Chain, LootSource, LootTable, Phase, Question, Registry, Step, WithComponents, World, callback, comps, host, qualify,
 };
 
-pub use abi::{BlockChange, ChatMessage, Death, DimensionChange, Hurt, Interaction, ItemUsed, Pickup, PlayerEvent, permission};
+pub use abi::{
+    BlockChange, ChatMessage, Death, DimensionChange, EffectChange, Hurt, Interaction, ItemUsed, Pickup, PlayerEvent, Removed, Spawned,
+    permission, removal, spawn_cause,
+};
 
 /// The engine's phases, in the order they run (`Registry::phase` puts a mod's after one).
 pub mod phase {
@@ -278,7 +281,10 @@ schema_values!(
     abi::Interaction,
     abi::Mounting,
     abi::DimensionChange,
-    abi::WeatherTick
+    abi::WeatherTick,
+    abi::Spawned,
+    abi::Removed,
+    abi::EffectChange
 );
 
 /// The engine's events with no question before them; the others are `actions`.
@@ -291,6 +297,10 @@ pub static PLAYER_RESPAWNED: Event<abi::PlayerEvent> = Event::named(abi::event::
 pub static ENTITY_HEALED: Event<abi::Hurt> = Event::named(abi::event::ENTITY_HEALED);
 /// Every tick in each dimension with weather: which it is.
 pub static WEATHER_TICK: Event<abi::WeatherTick> = Event::named(abi::event::WEATHER_TICK);
+/// An entity left the world, and why (`removal`): died, despawned, unloaded, picked up..
+pub static ENTITY_REMOVED: Event<abi::Removed> = Event::named(abi::event::ENTITY_REMOVED);
+/// An effect ran out or was taken off.
+pub static EFFECT_ENDED: Event<abi::EffectChange> = Event::named(abi::event::EFFECT_ENDED);
 
 /// Something that happens, as one name: the question asked before it (`r.before_event(&A, ..)`)
 /// and the event after (`r.on_event(&A, ..)`). The engine's are in `actions`; a mod's
@@ -368,6 +378,12 @@ pub mod actions {
     /// Asked with `entity` the rider, `other` the mount, `amount` the seat.
     pub static MOUNT: Action<abi::Mounting> = Action::named(a::MOUNT);
     pub static DISMOUNT: Action<abi::Mounting> = Action::named(a::DISMOUNT);
+    /// Asked with `entity` just made and not yet seen, `cause` (`spawn_cause`), `pos`: a no and
+    /// it never was. Sent when it came. Not for dropped stacks and moving blocks.
+    pub static SPAWN: Action<abi::Spawned> = Action::named(a::SPAWN);
+    /// Asked with `entity` about to get effect `cause` at level `amount` for `state` ticks (an
+    /// immunity, a milk of your own); sent when it got it.
+    pub static EFFECT: Action<abi::EffectChange> = Action::named(a::EFFECT);
 }
 
 /// Every value of one event queued during a tick, in the order they happened.

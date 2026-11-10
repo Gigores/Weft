@@ -1160,13 +1160,10 @@ pub fn item_tooltip(lang: &Lang, input: &crate::input::Input, stack: weft_abi::I
         group(&key, Some(comp), &mut out);
     }
     // What it gives, worn or in hand, with each attribute's name (`attribute.<name>`).
-    for m in c
-        .source_mods
-        .items
-        .get(&stack.item)
+    for (m, _) in c
+        .stack_modifiers(&stack)
         .into_iter()
-        .flatten()
-        .filter(|m| c.game.steps.defs[m.step as usize].name == weft_abi::step::ADD)
+        .filter(|m| c.game.steps.defs[m.0.step as usize].name == weft_abi::step::ADD)
     {
         let name = &c.game.attributes[m.attr as usize].name;
         let key = text::lang_key("attribute", name);

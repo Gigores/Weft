@@ -683,6 +683,8 @@ pub mod comp {
     pub const ENTITY_EFFECT_INSTANT: &str = "entity_effect.instant";
     pub const ENTITY_EFFECT_SCREEN: &str = "entity_effect.screen";
     pub const ENTITY_EFFECT_HIDES: &str = "entity_effect.hides";
+    /// An entity effect's `callback` (`EffectTickArgs`) every tick with every entity that has it.
+    pub const ENTITY_EFFECT_ON_TICK: &str = "entity_effect.on_tick";
     pub const CONDITION_CALL: &str = "condition.call";
 
     /// A sound event's: `FILES` (`[str]`, `sounds/<name>.ogg` or `.wav`, one picked at random),
@@ -1482,6 +1484,8 @@ pub mod comp {
     /// The own name of one stack or block entity (UTF-8), as a player gave it: shown instead of
     /// the item's or block's, and carried from the stack to the placed block and back.
     pub const NAME: &str = "core:name";
+    /// Entity tag the engine keeps: it never despawns (`entity_state::PERSISTENT`).
+    pub const PERSISTENT: &str = "persistent";
     /// Blocks connecting energy networks.
     pub const CONDUCTOR: &str = "conductor";
     /// Entity or stack component, layout `Energy`.
@@ -2313,6 +2317,8 @@ pub mod walk {
 pub mod entity_state {
     /// Its last move ran into a wall.
     pub const BLOCKED: u32 = 1 << 31;
+    /// It doesn't despawn however far from players (named, it picked something up, a mod said).
+    pub const PERSISTENT: u32 = 1 << 30;
 }
 
 /// A box of a model part (`ModelPart`) in model pixels (1/16 block) relative to the part pivot;
@@ -2643,6 +2649,90 @@ pub struct SpawnEntityDesc {
     pub yaw: f32,
     /// Ticks before an item can be picked up.
     pub pickup_delay: u32,
+    /// `spawn_cause`, what `action::SPAWN` is told.
+    pub cause: u32,
+}
+
+/// Why an entity came into the world (`action::SPAWN`).
+pub mod spawn_cause {
+    /// A mod's `World::spawn`.
+    pub const MOD: u32 = 0;
+    /// Natural spawning (`entry_kind::SPAWN` rules).
+    pub const NATURAL: u32 = 1;
+    /// `/summon`.
+    pub const COMMAND: u32 = 2;
+    /// A spawn egg.
+    pub const EGG: u32 = 3;
+}
+
+/// Why an entity left the world (`event::ENTITY_REMOVED`).
+pub mod removal {
+    /// A mod took it away (`World::despawn`).
+    pub const MOD: u32 = 0;
+    pub const DIED: u32 = 1;
+    /// Too far from every player (its category's `despawn`).
+    pub const DESPAWNED: u32 = 2;
+    /// Its cube was unloaded; it comes back with it.
+    pub const UNLOADED: u32 = 3;
+    /// A dropped stack burned up, ran out of time, was picked up or merged into another.
+    pub const BURNED: u32 = 4;
+    pub const EXPIRED: u32 = 5;
+    pub const PICKED_UP: u32 = 6;
+    pub const MERGED: u32 = 7;
+    /// A player left the game.
+    pub const LEFT: u32 = 8;
+    /// Moving blocks set down, a block entity's block gone.
+    pub const BLOCKS: u32 = 9;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spawned {
+    pub entity: u64,
+    pub kind: u32,
+    /// `spawn_cause`.
+    pub cause: u32,
+    pub pos: Vec3,
+}
+impl Schema for Spawned {
+    const SCHEMA: &'static str = "{entity:u64,kind:u32,cause:u32,pos:[f64;3]}";
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Removed {
+    pub entity: u64,
+    pub kind: u32,
+    /// `removal`.
+    pub reason: u32,
+    pub pos: Vec3,
+}
+impl Schema for Removed {
+    const SCHEMA: &'static str = "{entity:u64,kind:u32,reason:u32,pos:[f64;3]}";
+}
+
+/// An effect given or ended (`action::EFFECT`, `event::EFFECT_ENDED`); `ticks` 0 when it ended.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectChange {
+    pub entity: u64,
+    pub effect: u32,
+    pub level: u32,
+    pub ticks: u32,
+    pub pad: u32,
+}
+impl Schema for EffectChange {
+    const SCHEMA: &'static str = "{entity:u64,effect:u32,level:u32,ticks:u32,pad:u32}";
+}
+
+/// An effect's tick (`comp::ENTITY_EFFECT_ON_TICK`): every entity with it, and its level there.
+#[repr(C)]
+pub struct EffectTickArgs {
+    pub world: *mut WorldCtx,
+    pub effect: u32,
+    pub ids: *const u64,
+    pub levels: *const u32,
+    pub count: usize,
 }
 
 /// Which fields of `EntityState` `Host::entity_set` writes.
@@ -2660,6 +2750,8 @@ pub mod entity_set {
     /// The slot in its main hand: a player's hotbar, a mob's own slots (`comp::entity::WEARS`).
     pub const SELECTED: u32 = 128;
     pub const PITCH: u32 = 256;
+    /// `entity_state::PERSISTENT` of `flags`.
+    pub const PERSISTENT: u32 = 512;
 }
 
 pub mod spawn_set {
@@ -4271,6 +4363,10 @@ pub mod event {
     pub const ENTITY_HEALED: &str = "core:entity_healed";
     /// `WeatherTick`: every tick in each dimension with weather, what the weather is.
     pub const WEATHER_TICK: &str = "core:weather_tick";
+    /// `Removed`: an entity left the world, and why.
+    pub const ENTITY_REMOVED: &str = "core:entity_removed";
+    /// `EffectChange`: an effect ran out or was taken off.
+    pub const EFFECT_ENDED: &str = "core:effect_ended";
 }
 
 #[repr(C)]
@@ -4462,6 +4558,12 @@ pub mod action {
     /// `Query`: cubes from `pos` kept loaded (`Host::force_load`), `amount` the mode, `other`
     /// the ticket's key.
     pub const FORCE_LOAD: &str = "core:force_load";
+    /// `Spawned`. Asked with `entity` made but not yet seen, `cause` (`spawn_cause`), `pos`:
+    /// no, and it never was. Not for dropped stacks and moving blocks.
+    pub const SPAWN: &str = "core:spawn";
+    /// `EffectChange`. Asked with `entity` about to get effect `cause` at level `amount` for
+    /// `state` ticks; vanilla's immunities are tags `immune_effect/<effect>` on the kind.
+    pub const EFFECT: &str = "core:effect";
 }
 
 pub mod question {

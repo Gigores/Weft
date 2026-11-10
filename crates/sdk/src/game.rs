@@ -37,8 +37,14 @@ impl Spawn {
                 velocity: [0.0; 3].into(),
                 yaw: 0.0,
                 pickup_delay: 0,
+                cause: abi::spawn_cause::MOD,
             },
         }
+    }
+    /// Why it comes (`spawn_cause`, `MOD` unless said), what `actions::SPAWN` is told.
+    pub fn cause(mut self, cause: u32) -> Self {
+        self.desc.cause = cause;
+        self
     }
     /// What an item entity is.
     pub fn stack(mut self, s: ItemStack) -> Self {
@@ -525,6 +531,13 @@ impl EntityModify {
     pub fn selected(self, slot: u32) -> Self {
         self.with(abi::entity_set::SELECTED, |s| s.selected = slot)
     }
+    /// Never despawns however far from players (a boss, a pet, a prisoner), or does again as its
+    /// category says. Naming it or it picking something up keeps it too.
+    pub fn persistent(self, on: bool) -> Self {
+        self.with(abi::entity_set::PERSISTENT, |s| {
+            s.flags = if on { s.flags | abi::entity_state::PERSISTENT } else { s.flags & !abi::entity_state::PERSISTENT }
+        })
+    }
 }
 
 impl Drop for EntityModify {
@@ -698,6 +711,30 @@ impl EntityEvent {
     pub fn other(&self) -> u64 {
         self.args.other
     }
+}
+
+/// An effect's tick (`EntityEffectBuilder::on_tick`): every entity that has it, with its level.
+pub struct EffectTick {
+    args: abi::EffectTickArgs,
+}
+
+impl EffectTick {
+    pub fn world(&self) -> World {
+        World::from_raw(self.args.world)
+    }
+    pub fn effect(&self) -> u32 {
+        self.args.effect
+    }
+    /// (entity, level).
+    pub fn iter(&self) -> impl Iterator<Item = (u64, u32)> + '_ {
+        let ids = unsafe { std::slice::from_raw_parts(self.args.ids, self.args.count) };
+        let levels = unsafe { std::slice::from_raw_parts(self.args.levels, self.args.count) };
+        ids.iter().copied().zip(levels.iter().copied())
+    }
+}
+
+pub(crate) fn effect_tick_cb(f: impl Fn(&EffectTick) + Send + Sync + 'static) -> abi::Callback {
+    callback(move |a: &mut abi::EffectTickArgs| f(unsafe { &*(a as *const abi::EffectTickArgs as *const EffectTick) }))
 }
 
 fn tick_cb(f: impl Fn(&EntityTick) + Send + Sync + 'static) -> abi::Callback {

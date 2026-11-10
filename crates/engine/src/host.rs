@@ -605,7 +605,7 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
     let dim = unsafe { dim(w) };
     let pos = crate::world::dvec(d.pos);
     // Items are their stack: nothing to spawn for an empty one.
-    let id = if is_item { dim.spawn_item(c, pos, d.stack) } else { dim.spawn(c, kind, pos) };
+    let id = if is_item { dim.spawn_item(c, pos, d.stack) } else { dim.spawn_by(c, kind, pos, d.cause) };
     if let Some(e) = dim.entities.get_mut(id) {
         use abi::spawn_set as s;
         if d.set & s::VELOCITY != 0 && crate::world::dvec(d.velocity).is_finite() {
@@ -628,7 +628,7 @@ unsafe extern "C" fn entity_despawn(w: *mut abi::WorldCtx, id: u64) {
             misuse("entity_remove", || "a player can't be removed; kill it or teleport it".to_string());
             return;
         }
-        d.entities.remove(id)
+        d.entities.remove(id, abi::removal::MOD)
     }
 }
 
@@ -669,9 +669,13 @@ unsafe extern "C" fn entity_get(w: *mut abi::WorldCtx, id: u64, out: *mut abi::E
         let d = dim(w);
         let c = content();
         let max = d.max_health(c, id);
+        let kept = d.entities.comps.contains_key(&(id, c.game.persistent_comp));
         match d.entities.get(id) {
             Some(e) => {
                 *out = e.state(c, max);
+                if kept {
+                    (*out).flags |= abi::entity_state::PERSISTENT;
+                }
                 (*out).pos = (d.place.to_local(e.pos).to_array()).into();
                 1
             }
@@ -742,6 +746,14 @@ unsafe extern "C" fn entity_set(w: *mut abi::WorldCtx, id: u64, set: u32, s: *co
         if teleport && player {
             d.events
                 .push(crate::server::DimEvent::Teleport { from: d.id, id, dim: d.id, pos: d.place.to_world(pos) });
+        }
+        if set & es::PERSISTENT != 0 {
+            let key = (id, c.game.persistent_comp);
+            if s.flags & abi::entity_state::PERSISTENT != 0 {
+                d.entities.comps.insert(key, Box::new([]));
+            } else {
+                d.entities.comps.remove(&key);
+            }
         }
         if dies {
             d.damage(c, id, &abi::Damage::new(f32::MAX, weft_abi::damage_cause::VOID));

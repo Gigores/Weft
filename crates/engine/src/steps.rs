@@ -214,6 +214,15 @@ fn hurt_cooldown(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc)
     }
 }
 
+/// A kind tagged `immune_effect/<effect>` never takes it.
+fn effect_immune(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+    let Some(kind) = d.entities.get(q.entity).map(|e| e.kind) else { return };
+    let tag = c.effect_immune.get(q.cause as usize).copied().flatten();
+    if tag.is_some_and(|t| c.components.has(crate::components::ENTITY, kind, t)) {
+        s.value = 0.0;
+    }
+}
+
 /// The engine's steps: name, the chain it is on (none: modifiers use it), phase, code.
 pub const NATIVE: &[(&str, Option<&str>, &str, Native)] = &[
     (abi::step::ADD, None, abi::phase::ADD, add),
@@ -233,6 +242,7 @@ pub const NATIVE: &[(&str, Option<&str>, &str, Native)] = &[
     ("core:resistance", Some(abi::chain::DAMAGE), abi::phase::MULTIPLY, resistance),
     ("core:not_lethal", Some(abi::chain::DAMAGE), abi::phase::FINAL, not_lethal),
     ("core:hurt_cooldown", Some(abi::question::RECOVERING), abi::phase::BASE, hurt_cooldown),
+    ("core:effect_immune", Some(abi::action::EFFECT), abi::phase::BASE, effect_immune),
 ];
 
 /// The engine's phases and steps as entries, before every mod's.

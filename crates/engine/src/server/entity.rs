@@ -39,6 +39,9 @@ pub struct Entity {
     /// Its `SAFE_FALL` this tick: how far its paths go down at once.
     pub safe_fall: f32,
     pub removed: bool,
+    /// Why it was removed (`abi::removal`), what `event::ENTITY_REMOVED` says; `REFUSED` for one
+    /// whose spawn was refused, which nobody was told of.
+    pub removal: u32,
     pub item: ItemStack,
     pub pickup_delay: u32,
     pub player: bool,
@@ -146,6 +149,12 @@ impl Entity {
         self.anchor.and(self.frame).unwrap_or(0)
     }
 
+    /// Out of the world for `why` (`abi::removal`), dropped at the end of the tick.
+    pub fn gone(&mut self, why: u32) {
+        self.removed = true;
+        self.removal = why;
+    }
+
     pub fn new(id: u64, kind: u32, pos: DVec3, health: f32) -> Entity {
         Entity {
             id,
@@ -170,6 +179,7 @@ impl Entity {
             fly_mul: 1.0,
             safe_fall: 3.0,
             removed: false,
+            removal: 0,
             item: ItemStack::EMPTY,
             pickup_delay: 0,
             player: false,
@@ -490,9 +500,10 @@ impl Entities {
             .collect()
     }
 
-    pub fn remove(&mut self, id: u64) {
+    /// Takes `id` out of the world for `why` (`abi::removal`).
+    pub fn remove(&mut self, id: u64, why: u32) {
         if let Some(e) = self.get_mut(id) {
-            e.removed = true;
+            e.gone(why);
             if let Some(a) = e.anchor {
                 let frame = e.block_frame();
                 self.unanchor((frame, a), id);

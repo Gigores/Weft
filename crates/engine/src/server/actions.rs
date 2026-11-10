@@ -579,7 +579,7 @@ impl Server {
                     if let Some(s) = storage {
                         save_player(&s.lock(), p, r);
                     }
-                    r.entities.remove(p.entity);
+                    r.entities.remove(p.entity, abi::removal::LEFT);
                 }
                 p.conn.send(ToClient::Disconnect("bye".into()));
                 p.joined = false;

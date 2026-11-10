@@ -446,6 +446,11 @@ impl EntityEffectBuilder<'_> {
     pub fn modifier(self, m: crate::Modifier) -> Self {
         self.push(&crate::comps::entity_effect::MODIFIERS, m.0)
     }
+    /// Every tick, once with every entity that has it and its level there: levitation of your
+    /// own, a mana drain, saturation.
+    pub fn on_tick(self, f: impl Fn(&crate::EffectTick) + Send + Sync + 'static) -> Self {
+        self.set(&crate::comps::entity_effect::ON_TICK, crate::game::effect_tick_cb(f))
+    }
     /// `modifier` for `level` only, as it is: at that level the others of its attribute don't
     /// count (mining fatigue's steep steps).
     pub fn modifier_at(self, level: u32, mut m: crate::Modifier) -> Self {
@@ -2654,7 +2659,8 @@ impl ItemBuilder<'_> {
         self.on_use(move |u| {
             let Some((p, face)) = u.target_block() else { return false };
             let (w, side) = (u.world(), crate::Dir::from_face(face).offset());
-            w.spawn(entity, [(p.x + side.x) as f64 + 0.5, (p.y + side.y) as f64, (p.z + side.z) as f64 + 0.5]);
+            let at = [(p.x + side.x) as f64 + 0.5, (p.y + side.y) as f64, (p.z + side.z) as f64 + 0.5];
+            w.spawn_with(entity, at, &crate::Spawn::new().cause(abi::spawn_cause::EGG));
             if !w.creative(u.entity()) {
                 u.set_stack(crate::StackData::shrink(u.stack(), 1));
             }

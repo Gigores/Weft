@@ -342,23 +342,17 @@ impl Dim {
         let s = &c.source_mods;
         let Some(e) = self.entities.get(id) else { return };
         let (kind, pose, pos, mode, body) = (e.kind, e.pose, e.pos, e.mode, e.body());
-        let mut from: Vec<(SourceMod, u32)> = s
+        type Cond = Option<std::sync::Arc<crate::conditions::Expr>>;
+        let mut from: Vec<(SourceMod, u32, Cond)> = s
             .kinds
             .get(&kind)
             .into_iter()
             .flatten()
             .filter(|m| m.when.is_some())
-            .map(|m| (*m, 1))
+            .map(|m| (*m, 1, None))
             .collect();
         let comp = c.game.fields.effect;
         let on: Vec<_> = crate::world::effects_on(self.entities.comps.get(&(id, comp)).map(|b| &b[..]), self.time).collect();
-        if on.len() * 16 != self.entities.comps.get(&(id, comp)).map_or(0, |b| b.len()) {
-            // Emptied, not removed: a removed component never reaches clients.
-            self.entities
-                .comps
-                .insert((id, comp), crate::world::encode_effects(&on));
-            self.entities.dirty_comp.insert((id, comp));
-        }
         // An effect's at its level: for each attribute those given for the highest level up to
         // it, else the others once a level.
         for f in &on {
@@ -370,8 +364,8 @@ impl Dim {
                     .max()
             };
             from.extend(all.iter().filter_map(|m| match (m.level, given(m.attr)) {
-                (l, Some(at)) if l == at => Some((*m, 1)),
-                (0, None) => Some((*m, f.level)),
+                (l, Some(at)) if l == at => Some((*m, 1, None)),
+                (0, None) => Some((*m, f.level, None)),
                 _ => None,
             }));
         }
@@ -380,21 +374,21 @@ impl Dim {
                 .get(&(mode.0 as u32))
                 .into_iter()
                 .flatten()
-                .map(|m| (*m, 1)),
+                .map(|m| (*m, 1, None)),
         );
         from.extend(
             s.poses
                 .get(&(pose.0 as u32))
                 .into_iter()
                 .flatten()
-                .map(|m| (*m, 1)),
+                .map(|m| (*m, 1, None)),
         );
         let held = self.entities.held(id);
         from.extend(
             c.stack_modifiers(&held)
-                .iter()
-                .filter(|m| !m.worn)
-                .map(|m| (*m, 1)),
+                .into_iter()
+                .filter(|m| !m.0.worn)
+                .map(|(m, when)| (m, 1, when)),
         );
         let worn = c.game.entities[kind as usize].worn.clone();
         let stacks: Vec<_> = self
@@ -406,9 +400,9 @@ impl Dim {
         for st in &stacks {
             from.extend(
                 c.stack_modifiers(st)
-                    .iter()
-                    .filter(|m| m.worn)
-                    .map(|m| (*m, 1)),
+                    .into_iter()
+                    .filter(|m| m.0.worn)
+                    .map(|(m, when)| (m, 1, when)),
             );
         }
         let ours = |m: &AttrMod| m.id == SOURCE;
@@ -417,10 +411,13 @@ impl Dim {
         }
         let ask = crate::conditions::Ask { pos, entity: id, body: Some(body), ..Default::default() };
         let mut now: Vec<AttrMod> = Vec::new();
-        for (m, times) in from {
-            if m.when
-                .is_some_and(|w| !crate::conditions::on_server(self, c, w, &ask))
-            {
+        for (m, times, when) in from {
+            let holds = match (m.when, when) {
+                (Some(w), _) => crate::conditions::on_server(self, c, w, &ask),
+                (None, Some(e)) => crate::conditions::holds_server(self, c, &e, &ask),
+                (None, None) => true,
+            };
+            if !holds {
                 continue;
             }
             let step = &c.game.steps.defs[m.step as usize];

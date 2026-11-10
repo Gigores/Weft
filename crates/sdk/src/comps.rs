@@ -111,6 +111,7 @@ pub mod entity_effect {
     pub static INSTANT: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_INSTANT);
     pub static SCREEN: Component<Text, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_SCREEN);
     pub static HIDES: crate::Tag<EntityEffect> = crate::Tag::named(crate::abi::comp::ENTITY_EFFECT_HIDES);
+    pub static ON_TICK: Component<crate::abi::Callback, EntityEffect> = Component::named(crate::abi::comp::ENTITY_EFFECT_ON_TICK);
 }
 
 /// What a sound event is made of (`abi::comp::sound`).

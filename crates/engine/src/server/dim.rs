@@ -22,6 +22,8 @@ const MAX_NEIGHBOR_UPDATES: usize = 1 << 16;
 /// Missed ticks are made up in at most this many parts, all in one tick (`run_systems`).
 const CATCH_UP_PARTS: u64 = 20;
 const ITEM_LIFETIME: u64 = crate::world::TPS as u64 * 60 * 5;
+/// The removal of an entity whose spawn was refused: nobody was told it came, nor that it went.
+pub const REFUSED: u32 = u32::MAX;
 
 pub enum DimEvent {
     /// An entity started using an item that takes time (ticks, off hand), or stopped.
@@ -1252,7 +1254,7 @@ impl Dim {
                     self.spawn_item(c, p.as_dvec3() + DVec3::splat(0.5), s);
                 }
             }
-            self.entities.remove(id);
+            self.entities.remove(id, abi::removal::BLOCKS);
         }
         for b in now.iter().filter(|b| !was.contains(b)) {
             if let Some(&kind) = c.game.block_entities.get(b) {
@@ -1529,7 +1531,7 @@ impl Dim {
         for (id, pos, blocks, ground, on) in landed {
             // One without its blocks (loaded from a save mid-fall) just goes.
             if blocks.is_empty() {
-                self.entities.remove(id);
+                self.entities.remove(id, abi::removal::BLOCKS);
                 continue;
             }
             let entities: Vec<Option<u64>> = blocks
@@ -1554,7 +1556,7 @@ impl Dim {
                     }
                 }
                 if down.is_empty() {
-                    d.entities.remove(id);
+                    d.entities.remove(id, abi::removal::BLOCKS);
                 } else {
                     d.put_down(c, id, down, Vec::new(), None);
                 }
@@ -1738,14 +1740,24 @@ impl Dim {
     }
 
     /// Effect `effect` on `id` at `level` for `ticks`, replacing the one it had (0 ticks ends it,
-    /// `INFINITE_TICKS` never does).
-    /// An instant one acts once, its hazards at that level, and doesn't stay.
+    /// `INFINITE_TICKS` never does): asked first (`action::EFFECT`) and told after, an end told
+    /// as `EFFECT_ENDED`. An instant one acts once, its hazards at that level, and doesn't stay.
     pub fn give_effect(&mut self, c: &'static Content, id: u64, effect: u32, level: u32, ticks: u32) {
         let Some(def) = c.game.entity_effects.get(effect as usize) else { return };
         if self.entities.get(id).is_none() {
             return;
         }
         let level = level.max(1);
+        let comp = c.game.fields.effect;
+        let had: Vec<_> = crate::world::effects_on(self.entities.comps.get(&(id, comp)).map(|b| &b[..]), self.time).collect();
+        let change = abi::EffectChange { entity: id, effect, level, ticks, pad: 0 };
+        if ticks > 0 {
+            let q = abi::Query { entity: id, cause: effect, amount: level as f64, state: ticks, ..abi::Query::DEFAULT };
+            if !self.ask(c, abi::action::EFFECT, &q) {
+                return;
+            }
+            self.emit_engine(c, abi::action::EFFECT, &change);
+        }
         if def.instant {
             for h in def.hazards_at(level) {
                 if let Some(cause) = h.cause {
@@ -1754,18 +1766,66 @@ impl Dim {
             }
             return;
         }
-        let comp = c.game.fields.effect;
-        let mut list: Vec<_> = crate::world::effects_on(self.entities.comps.get(&(id, comp)).map(|b| &b[..]), self.time)
-            .filter(|f| f.id != effect)
-            .collect();
+        let mut list: Vec<_> = had.iter().copied().filter(|f| f.id != effect).collect();
         if ticks > 0 {
             let until = if ticks == abi::INFINITE_TICKS { crate::world::FOREVER } else { self.time + ticks as u64 };
             list.push(crate::world::OnEffect { id: effect, level, until });
+        } else if let Some(f) = had.iter().find(|f| f.id == effect) {
+            self.emit_engine(c, abi::event::EFFECT_ENDED, &abi::EffectChange { level: f.level, ticks: 0, ..change });
         }
         self.entities
             .comps
             .insert((id, comp), crate::world::encode_effects(&list));
         self.entities.dirty_comp.insert((id, comp));
+    }
+
+    /// Effects that ran out go (`EFFECT_ENDED`), then each effect with a tick of its own gets every
+    /// entity that has it, once.
+    fn tick_effects(&mut self, c: &'static Content) {
+        let comp = c.game.fields.effect;
+        let mut ended = Vec::new();
+        let mut ticking: FxHashMap<u32, (Vec<u64>, Vec<u32>)> = FxHashMap::default();
+        let ids: Vec<u64> = self
+            .entities
+            .list
+            .iter()
+            .filter(|e| !e.removed)
+            .map(|e| e.id)
+            .collect();
+        for id in ids {
+            let Some(bytes) = self.entities.comps.get_mut(&(id, comp)) else { continue };
+            let all = crate::world::effects_on(Some(&bytes[..]), u64::MAX).collect::<Vec<_>>();
+            let (on, off): (Vec<_>, Vec<_>) = all.into_iter().partition(|f| f.until > self.time);
+            if !off.is_empty() {
+                *bytes = crate::world::encode_effects(&on);
+                ended.push((id, off));
+            }
+            for f in on {
+                if c.game.entity_effects[f.id as usize].on_tick.is_some() {
+                    let t = ticking.entry(f.id).or_default();
+                    t.0.push(id);
+                    t.1.push(f.level);
+                }
+            }
+        }
+        for (id, off) in ended {
+            self.entities.dirty_comp.insert((id, comp));
+            for f in off {
+                self.emit_engine(
+                    c,
+                    abi::event::EFFECT_ENDED,
+                    &abi::EffectChange { entity: id, effect: f.id, level: f.level, ticks: 0, pad: 0 },
+                );
+            }
+        }
+        let mut effects: Vec<u32> = ticking.keys().copied().collect();
+        effects.sort();
+        for effect in effects {
+            let (ids, levels) = &ticking[&effect];
+            let Some((owner, cb)) = c.game.entity_effects[effect as usize].on_tick else { continue };
+            let (ids, levels, count) = (ids.as_ptr(), levels.as_ptr(), ids.len());
+            self.call(owner, cb, |w| abi::EffectTickArgs { world: w, effect, ids, levels, count });
+        }
     }
 
     /// The damage a fall of `fell` blocks does to `id`: past its `SAFE_FALL`, by its
@@ -1961,7 +2021,7 @@ impl Dim {
                     self.spawn_item(c, pos + DVec3::Y * 0.5, s);
                 }
                 self.drop_inventory(c, id);
-                self.entities.remove(id);
+                self.entities.remove(id, abi::removal::DIED);
             }
         }
         true
@@ -2015,13 +2075,48 @@ impl Dim {
         self.space.signals.now = self.time;
         self.players = None;
         self.tick_blocks_first(c);
+        self.tick_effects(c);
         self.source_modifiers(c);
         self.natural_spawns(c);
         self.tick_entities(c);
         self.tick_bodies(c);
         self.tick_blocks_after(c);
-        self.entities.compact();
+        self.compact(c);
         self.finish_tick(c);
+    }
+
+    /// Drops what was removed, telling mods (`event::ENTITY_REMOVED`) what went and why.
+    pub fn compact(&mut self, c: &'static Content) {
+        let gone: Vec<abi::Removed> = self
+            .entities
+            .list
+            .iter()
+            .filter(|e| e.removed && e.removal != REFUSED)
+            .map(|e| abi::Removed { entity: e.id, kind: e.kind, reason: e.removal, pos: self.place.to_local(e.pos).to_array().into() })
+            .collect();
+        for r in &gone {
+            self.emit_engine(c, abi::event::ENTITY_REMOVED, r);
+        }
+        self.entities.compact();
+    }
+
+    /// `spawn` asked first (`action::SPAWN`, `cause` a `spawn_cause`) and told after: 0 when
+    /// refused.
+    pub fn spawn_by(&mut self, c: &'static Content, kind: u32, pos: DVec3, cause: u32) -> u64 {
+        let id = self.spawn(c, kind, pos);
+        if id == 0 {
+            return 0;
+        }
+        let at = self
+            .place
+            .to_local(self.entities.get(id).map_or(pos, |e| e.pos));
+        let q = abi::Query { entity: id, cause, pos: abi::Vec3::from(at.to_array()).block(), ..abi::Query::DEFAULT };
+        if !self.ask(c, abi::action::SPAWN, &q) {
+            self.entities.remove(id, REFUSED);
+            return 0;
+        }
+        self.emit_engine(c, abi::action::SPAWN, &abi::Spawned { entity: id, kind, cause, pos: at.to_array().into() });
+        id
     }
 
     fn tick_blocks_first(&mut self, c: &'static Content) {
@@ -2097,7 +2192,7 @@ impl Dim {
             .map(|e| e.id)
             .collect();
         for id in orphans {
-            self.entities.remove(id);
+            self.entities.remove(id, abi::removal::BLOCKS);
         }
         for b in self.bodies.values_mut() {
             b.signals.now = self.time;
@@ -2377,7 +2472,7 @@ impl Dim {
                 }
                 let n = rule.group[0] + (self.rng.next() % (rule.group[1] - rule.group[0] + 1) as u64) as u32;
                 for _ in 0..n {
-                    self.spawn(c, rule.entity, DVec3::new(x as f64 + 0.5, y as f64, z as f64 + 0.5));
+                    self.spawn_by(c, rule.entity, DVec3::new(x as f64 + 0.5, y as f64, z as f64 + 0.5), abi::spawn_cause::NATURAL);
                 }
                 count[rule.category as usize] += n;
             }
@@ -2601,7 +2696,7 @@ impl Dim {
                 }
                 // What sets things burning burns a dropped stack up, as lava and fire do in vanilla.
                 if hot && !e.item.is_empty() {
-                    e.removed = true;
+                    e.gone(abi::removal::BURNED);
                 }
                 if wet && !hot {
                     e.fire = 0;
@@ -2609,18 +2704,20 @@ impl Dim {
                 e.fire = e.fire.saturating_sub(1);
                 let burn = e.fire > 0 && e.fire % crate::world::TPS == 0 && !hot;
                 let despawn = c.game.categories[k.category as usize].despawn;
-                if despawn > 0.0 && e.age % 100 == 0 {
+                // A named one, or one that picked something up or a mod keeps, stays.
+                let kept = || comps.contains_key(&(e.id, c.game.persistent_comp)) || comps.contains_key(&(e.id, c.game.name_comp));
+                if despawn > 0.0 && e.age % 100 == 0 && !kept() {
                     let near = players
                         .iter()
                         .any(|p| (*p - e.pos).length_squared() < despawn * despawn);
                     if !near {
-                        e.removed = true;
+                        e.gone(abi::removal::DESPAWNED);
                     }
                 }
                 if !e.item.is_empty() {
                     e.pickup_delay = e.pickup_delay.saturating_sub(1);
                     if e.age > ITEM_LIFETIME {
-                        e.removed = true;
+                        e.gone(abi::removal::EXPIRED);
                     }
                 }
                 (fell.is_some() || splash || burn || !met.is_empty()).then_some(TickHit { id: e.id, fell, splash, burn, met })
@@ -2920,10 +3017,16 @@ impl Dim {
                         .unwrap_or(u32::MAX);
                     self.sound(pickup, pos, 1.0, 0.0);
                     self.emit_engine(c, abi::action::PICKUP_ITEM, &abi::Pickup { entity: pid, stack: ItemStack { count: taken, ..stack } });
+                    // A mob that picked something up keeps it: it no longer despawns, as vanilla's.
+                    if self.entities.get(pid).is_some_and(|e| !e.player) {
+                        self.entities
+                            .comps
+                            .insert((pid, c.game.persistent_comp), Box::new([]));
+                    }
                 }
                 if let Some(e) = self.entities.get_mut(id) {
                     if rest.is_empty() {
-                        e.removed = true;
+                        e.gone(abi::removal::PICKED_UP);
                         self.entities.taken.push((id, pid));
                     } else {
                         e.item = rest;
@@ -2950,7 +3053,7 @@ impl Dim {
                 if let Some(oi) = other {
                     self.entities.list[oi].item.count += stack.count;
                     if let Some(e) = self.entities.get_mut(id) {
-                        e.removed = true;
+                        e.gone(abi::removal::MERGED);
                     }
                 }
             }

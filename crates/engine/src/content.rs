@@ -1,7 +1,7 @@
 //! Frozen registries. Built once from every mod's registrar, then shared read-only.
 
 use glam::IVec3;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -1106,6 +1106,8 @@ pub struct Content {
     pub biome_precipitation: Vec<u16>,
     /// The `immune/<cause>` tag of each damage cause, by cause id, if anything uses it.
     pub damage_immune: Vec<Option<u32>>,
+    /// By entity effect, the tag of kinds it never takes hold of (`immune_effect/<effect>`).
+    pub effect_immune: Vec<Option<u32>>,
 }
 
 static CONTENT: OnceLock<Content> = OnceLock::new();
@@ -1431,9 +1433,47 @@ impl Content {
         crate::world::TICK as f32 / secs
     }
 
-    /// The attribute modifiers a stack gives while held or worn: its item's.
-    pub fn stack_modifiers(&self, s: &abi::ItemStack) -> &[SourceMod] {
-        self.source_mods.items.get(&s.item).map_or(&[], |v| &v[..])
+    /// The attribute modifiers a stack gives while held or worn: its own `MODIFIERS` (an
+    /// enchanted sword's, resolved once per kind of stack, their conditions compiled at run time),
+    /// else its item's.
+    pub fn stack_modifiers(&self, s: &abi::ItemStack) -> Vec<(SourceMod, Option<Arc<crate::conditions::Expr>>)> {
+        type Resolved = Arc<[(SourceMod, Option<Arc<crate::conditions::Expr>>)]>;
+        static OWN: std::sync::LazyLock<parking_lot::RwLock<FxHashMap<u32, Resolved>>> = std::sync::LazyLock::new(Default::default);
+        let own = self
+            .components
+            .id(abi::comp::MODIFIERS)
+            .and_then(|id| crate::stack::value(s.data, id));
+        let Some(bytes) = own else {
+            return self
+                .source_mods
+                .items
+                .get(&s.item)
+                .map_or_else(Vec::new, |v| v.iter().map(|m| (*m, None)).collect());
+        };
+        if let Some(r) = OWN.read().get(&s.data) {
+            return r.to_vec();
+        }
+        let list = abi::data::from_bytes::<Vec<abi::Modifier>>(bytes).unwrap_or_default();
+        let steps = &self.game.steps;
+        let resolved: Resolved = list
+            .iter()
+            .filter_map(|m| {
+                let attr = *self.game.attr_names.get(&m.attribute)?;
+                let step = *steps
+                    .names
+                    .get(if m.step.is_empty() { abi::step::ADD } else { &m.step })?;
+                let phase = match m.phase.as_str() {
+                    "" => steps.defs[step as usize].phase,
+                    p => *steps.phase_names.get(p)?,
+                };
+                let when = (!m.when.is_empty())
+                    .then(|| self.condition(&m.when.join(" & ")))
+                    .flatten();
+                Some((SourceMod { attr, step, phase, amount: m.amount, worn: m.worn, when: None, level: 0 }, when))
+            })
+            .collect();
+        OWN.write().insert(s.data, resolved.clone());
+        resolved.to_vec()
     }
 
     /// Mining the block with `tool` (empty: the hand) harvests it: it needs no tool, or this
@@ -2060,6 +2100,12 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
         .iter()
         .map(|d| components.id(&format!("immune/{}", d.name.strip_prefix("core:").unwrap_or(&d.name))))
         .collect();
+    // `immune_effect/base:poison`: undead and the poison effect.
+    let effect_immune = game
+        .entity_effects
+        .iter()
+        .map(|e| components.id(&format!("immune_effect/{}", e.name)))
+        .collect();
     link_menus(&mut game, &mut block_defs, &item_defs, &opens_names, &mods, &mut errors);
     let biome_precipitation = (0..biome_defs.len() as u32)
         .map(|b| {
@@ -2178,6 +2224,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
         loot,
         stack_flags,
         damage_immune,
+        effect_immune,
         biome_precipitation,
     })
 }

@@ -276,7 +276,7 @@ fn summon(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     }
     let r = s.dims[me.0 as usize].ensure_region(c, pos);
     for _ in 0..count {
-        r.spawn(c, kind, pos);
+        r.spawn_by(c, kind, pos, weft_abi::spawn_cause::COMMAND);
     }
     say("summon.done", vec![int(count), text(&kname)])
 }

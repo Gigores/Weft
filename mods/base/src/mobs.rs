@@ -23,6 +23,9 @@ pub fn register(r: &mut Registry) {
     r.set_model(&PLAYER, humanoid(false));
     r.entity(&ZOMBIE)
         .tag("hostile")
+        // Undead, as vanilla's: poison and regeneration take no hold.
+        .tag("immune_effect/base:poison")
+        .tag("immune_effect/base:regeneration")
         .equipment()
         .sound("ambient")
         .sound("hurt")
@@ -65,6 +68,8 @@ pub fn register(r: &mut Registry) {
         .goals(creeper());
     r.entity(&SKELETON)
         .tag("hostile")
+        .tag("immune_effect/base:poison")
+        .tag("immune_effect/base:regeneration")
         .equipment()
         .size(0.6, 1.99)
         .max_health(20.0)
