@@ -1108,12 +1108,12 @@ pub mod comp {
     }
 
     /// An item's own (`entry_kind::ITEM`), besides the shared ones (`max_stack`, `durability`,
-    /// tools, food ...) that go in its component table: `TEXTURE` (`str`, its flat icon,
-    /// `<ns>:item/<name>`; empty with `BLOCK`: the block's model), `BLOCK` (`str`, the block it
+    /// tools, food ...) that go in its component table: `comp::LAYERS` (`str`, how it looks,
+    /// as a stack's: one layer, `<ns>:item/<name>`, when not given; empty with `BLOCK`: the
+    /// block's model), `BLOCK` (`str`, the block it
     /// places), `ON_USE` (`callback`, `ItemUseArgs`), `CONDITION` (`callback`, `ItemModelArgs`:
     /// how a stack looks by what is in it, asked once per kind of stack).
     pub mod item {
-        pub const TEXTURE: &str = "item.texture";
         pub const BLOCK: &str = "item.block";
         pub const ON_USE: &str = "item.on_use";
         pub const CONDITION: &str = "item.condition";
@@ -1470,9 +1470,10 @@ pub mod comp {
     pub const INVENTORY: &str = "inventory";
     /// Stack component the engine keeps: what an item with `inventory` holds.
     pub const CONTENTS: &str = "contents";
-    /// Stack component: the pictures a stack shows as, one over the other, instead of its
-    /// item's icon (a tool made of parts: handle, head, binding). Text: texture names, space
-    /// separated, each with `#RRGGBB` to tint it if wanted.
+    /// How an item and its stacks look: pictures one over the other, the first at the bottom
+    /// (a tool made of parts: handle, head, binding; a plain item is one). Text: texture names,
+    /// space separated, each with `#RRGGBB` to tint it if wanted. On the item (`entry_kind::ITEM`)
+    /// it is every stack's; a stack's own replaces it.
     pub const LAYERS: &str = "layers";
     /// Item shown on the wearer's model: `Worn`, plus `worn_texture: str` in the wearer's skin layout.
     pub const WORN: &str = "worn";
@@ -1764,6 +1765,30 @@ pub fn matcher_terms(text: &str) -> impl Iterator<Item = &str> {
         depth == 0 && ch.is_whitespace()
     })
     .filter(|t| !t.is_empty())
+}
+
+/// `comp::LAYERS` text as (texture name, tint `0xRRGGBB` if it has one), the bottom first.
+pub fn layers(text: &str) -> impl Iterator<Item = (&str, Option<u32>)> {
+    text.split_whitespace().map(|l| match l.rsplit_once('#') {
+        Some((name, hex)) => (name, u32::from_str_radix(hex, 16).ok()),
+        None => (l, None),
+    })
+}
+
+/// (texture name, tint) pairs as `comp::LAYERS` text, as `layers` reads it.
+pub fn layers_text<'a>(layers: impl IntoIterator<Item = (&'a str, Option<u32>)>) -> alloc::string::String {
+    use core::fmt::Write;
+    let mut text = alloc::string::String::new();
+    for (name, tint) in layers {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(name);
+        if let Some(t) = tint {
+            let _ = write!(text, "#{:06X}", t & 0xFF_FFFF);
+        }
+    }
+    text
 }
 
 /// The texels a box between `min` and `max` (texels too) shows on a face when it says nothing, a

@@ -454,7 +454,8 @@ pub mod item {
     use crate::abi::comp::item as i;
     use crate::kind::Item;
     use crate::{Component, Text};
-    pub static TEXTURE: Component<Text, Item> = Component::named(i::TEXTURE);
+    /// How it and its stacks look (`abi::comp::LAYERS`); `ItemBuilder::texture`, `layers`, `tint`.
+    pub static LAYERS: Component<Text, Item> = Component::named(crate::abi::comp::LAYERS);
     pub static BLOCK: Component<Text, Item> = Component::named(i::BLOCK);
     pub static ON_USE: Component<crate::abi::Callback, Item> = Component::named(i::ON_USE);
     pub static CONDITION: Component<crate::abi::Callback, Item> = Component::named(i::CONDITION);

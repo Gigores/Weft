@@ -994,7 +994,7 @@ fn expand_templates(
             if let Some(i) = item {
                 let mut it = Entry { name: name.clone(), cells: Vec::new(), ..i.clone() };
                 it.set(abi::comp::item::BLOCK, name.clone());
-                it.set(abi::comp::item::TEXTURE, String::new());
+                it.set(abi::comp::LAYERS, String::new());
                 made_items.entry(i.name.clone()).or_default().push(it);
             }
             made.push(Entry { name, owner: template.owner, cells: Vec::new(), values, callers: template.callers.clone(), parts });

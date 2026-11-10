@@ -9,7 +9,9 @@
 //! - an idol from a Blockbench model file (bones, a mesh pair of wings) that idles by keyframes
 //!   and bows when used, and an orb whose model is built in code (a sphere mesh and a ring of
 //!   stones on a child bone) but animated from a file,
-//! - the player waves when using the rune: keyframes for the player's model, seen from anywhere.
+//! - the player waves when using the rune: keyframes for the player's model, seen from anywhere,
+//! - items drawn from layers: a ruby that is base's diamond tinted red (one picture, many
+//!   colors), and a wand put together from a stick and a tinted diamond on top of it.
 
 use weft_sdk::*;
 
@@ -200,6 +202,18 @@ pub fn register(r: &mut Registry) {
 
     r.set_animations(&PLAYER, "testmod:player");
     r.item(&TOTEM).max_stack(1);
+    // An item's look is layers, a stack's the same (`stack.with_layers(Layers::new()...)`
+    // replaces it per stack). `tint` colors the layer just before it, multiplying: white
+    // parts take the color. A plain item is one layer.
+    static RUBY: Item = Item::named("ruby");
+    static WAND: Item = Item::named("wand");
+    r.item(&RUBY).texture("base:diamond").tint(0xE0204A);
+    r.item(&WAND)
+        .layer("base:stick")
+        .layer("base:diamond")
+        .tint(0x40E0FF)
+        .max_stack(1)
+        .handheld();
     // Goes before what the other hand holds, and leaves it its turn with nothing to shoot.
     static LONG_BOW: Item = Item::named("long_bow");
     r.item(&LONG_BOW)

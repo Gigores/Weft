@@ -1272,12 +1272,12 @@ unsafe extern "C" fn item_info(item: u32, out: *mut abi::ItemInfo) -> u32 {
         *out = abi::ItemInfo {
             name: Str::new(&d.name),
             owner: Str::new(c.mod_name(d.owner)),
-            max_stack: d.max_stack,
-            durability: d.durability,
-            attack: d.attack,
+            max_stack: c.max_stack(&abi::ItemStack::new(item, 1)),
+            durability: c.item_value(item, c.ids.durability).unwrap_or(0),
+            attack: c.item_value(item, c.ids.attack_damage).unwrap_or(1.0),
             block: d.block.unwrap_or(u32::MAX),
             worn,
-            handheld: d.handheld as u32,
+            handheld: c.item_has(item, c.ids.handheld) as u32,
         };
     }
     1

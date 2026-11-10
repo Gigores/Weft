@@ -417,7 +417,7 @@ impl Server {
                 } else if let (true, Some(m), true) = (creative, &mut p.menu, item != 0 && (item as usize) < c.items.len()) {
                     // Like vanilla: the same item adds one, anything else held is thrown away
                     // first, an empty hand takes a stack (left) or one (right).
-                    let max = c.max_stack(item);
+                    let max = c.max_stack(&ItemStack::new(item, 1));
                     m.cursor = if m.cursor.is_empty() {
                         ItemStack::new(item, if button == 1 { 1 } else { max })
                     } else if m.cursor.item == item && m.cursor.data == 0 {

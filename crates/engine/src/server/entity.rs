@@ -545,7 +545,7 @@ impl Entities {
                 s.is_empty()
                     || (s.item == stack.item
                         && s.data == stack.data
-                        && s.count < c.items.get(stack.item as usize).map_or(64, |i| i.max_stack))
+                        && s.count < c.max_stack(&stack))
             })
         })
     }
@@ -603,7 +603,7 @@ impl Entities {
 
     /// Merges into matching stacks, then empty slots. Returns the rest.
     pub fn insert_item(&mut self, c: &Content, owner: u64, mut stack: ItemStack) -> ItemStack {
-        let max = c.max_stack(stack.item);
+        let max = c.max_stack(&stack);
         // Pickups never go into equipment.
         let Some(e) = self.get(owner) else { return stack };
         let k = &c.game.entities[e.kind as usize];

@@ -987,7 +987,7 @@ const OPS: &[(&str, &str, Run)] = &[
     }),
     // A stick with a diamond over it, tinted red: a stack's own layered picture.
     ("layered", "<index:int>", |w, cmd, player, _| {
-        let s = ItemStack::new(item("base:stick")?, 1).with_layers(&[("base:stick", None), ("base:diamond", Some(0xFF2020))]);
+        let s = ItemStack::new(item("base:stick")?, 1).with_layers(Layers::new().layer("base:stick").layer("base:diamond").tint(0xFF2020));
         w.inventory(player).set(int(cmd, "index")?, s);
         Ok(String::new())
     }),

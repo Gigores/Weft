@@ -87,8 +87,9 @@ pub fn damage(stack: &ItemStack) -> u32 {
     u32_of(stack, crate::content::try_content().and_then(|c| c.ids.damage))
 }
 
-/// The pictures a stack shows as, if it has its own (`abi::comp::LAYERS`: a tool made of parts)
-/// or its item's `condition` gives it a texture.
+/// The pictures a stack shows as (`abi::comp::LAYERS`): its own, else what its item's
+/// `condition` gives it, else its item's when that is more than its one untinted icon.
+/// `None`: the item's icon.
 pub fn layers(stack: &ItemStack) -> Option<&'static str> {
     let c = crate::content::try_content()?;
     c.ids
@@ -97,6 +98,7 @@ pub fn layers(stack: &ItemStack) -> Option<&'static str> {
         .and_then(|b| std::str::from_utf8(b).ok())
         .filter(|s| !s.trim().is_empty())
         .or_else(|| condition_texture(c, stack))
+        .or_else(|| c.items.get(stack.item as usize)?.layers.as_deref())
 }
 
 /// What the item's `condition` says `stack` shows as, asked once per kind of stack.
@@ -117,11 +119,8 @@ fn condition_texture(c: &crate::content::Content, stack: &ItemStack) -> Option<&
 
 /// `layers` text as (texture name, tint 0xRRGGBB) pairs, white where none is given.
 pub fn parse_layers(spec: &str) -> Vec<(&str, u32)> {
-    spec.split_whitespace()
-        .map(|l| match l.rsplit_once('#') {
-            Some((name, hex)) => (name, u32::from_str_radix(hex, 16).unwrap_or(0xFF_FFFF)),
-            None => (l, 0xFF_FFFF),
-        })
+    weft_abi::layers(spec)
+        .map(|(name, tint)| (name, tint.unwrap_or(0xFF_FFFF)))
         .collect()
 }
 

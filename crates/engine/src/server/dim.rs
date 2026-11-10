@@ -2936,7 +2936,7 @@ impl Dim {
                 continue;
             }
             if merging {
-                let max = c.max_stack(stack.item);
+                let max = c.max_stack(&stack);
                 let at = pos.floor().as_ivec3();
                 let list = &self.entities.list;
                 let other = (-1..=1)

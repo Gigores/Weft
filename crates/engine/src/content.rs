@@ -425,13 +425,12 @@ pub fn prop_pairs(text: &str) -> Result<Vec<(&str, &str)>, String> {
 pub struct ItemDef {
     pub name: String,
     pub owner: ModId,
-    /// From the `max_stack`, `durability` and `attack_damage` components, read often enough to keep
-    /// at hand.
-    pub max_stack: u32,
-    pub durability: u32,
-    pub attack: f32,
-    /// Item icon layer; `u32::MAX` when the icon is the 3D block.
+    /// Item icon layer; `u32::MAX` when the icon is the 3D block. Its bottom layer when it has
+    /// more or tints them.
     pub icon: u32,
+    /// Its `comp::LAYERS`, retextured, when that is more than one untinted picture (`icon` is
+    /// that one): what its stacks show unless they have their own.
+    pub layers: Option<String>,
     pub block: Option<u32>,
     /// And the mod it runs as.
     pub on_use: Option<(ModId, Callback)>,
@@ -439,8 +438,6 @@ pub struct ItemDef {
     pub order: u64,
     /// The player's equipment slot it is worn in (`worn/<slot>` tag), by index.
     pub equip: Option<u32>,
-    /// Held like a tool in third person (`handheld` tag).
-    pub handheld: bool,
     /// Boxes from its model file (`models/item/<name>.json`) in block units, drawn instead of
     /// the icon in hands, on the ground and in slots; empty: none.
     pub model: Vec<ModelBox>,
@@ -953,6 +950,8 @@ pub struct Ids {
     pub inventory: Option<u32>,
     pub contents: Option<u32>,
     pub layers: Option<u32>,
+    /// Tag: held like a tool in third person.
+    pub handheld: Option<u32>,
     pub energy: Option<u32>,
 }
 
@@ -1478,8 +1477,11 @@ impl Content {
             .unwrap_or(0)
     }
 
-    pub fn max_stack(&self, item: u32) -> u32 {
-        self.items.get(item as usize).map_or(64, |d| d.max_stack)
+    /// How many of the stack's kind one slot holds: its `max_stack`, else its item's, else 64.
+    pub fn max_stack(&self, stack: &abi::ItemStack) -> u32 {
+        self.stack_value::<u32>(stack, self.ids.max_stack)
+            .unwrap_or(64)
+            .max(1)
     }
 
     pub fn mod_name(&self, id: ModId) -> &str {
@@ -1863,7 +1865,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
     };
     // Folded now: templates copy their items.
     let item = abi::entry_kind::ITEM;
-    let mut raw_items = vec![RawEntry::engine(item, "core:empty").set(abi::comp::item::TEXTURE, String::new())];
+    let mut raw_items = vec![RawEntry::engine(item, "core:empty").set(abi::comp::LAYERS, String::new())];
     raw_items.extend(entries_of(&mut games, item));
     let mut items = crate::entries::fold(abi::entry_kind::NAMES[item as usize], raw_items, &mod_name, &mut errors);
     // Folded now: a liquid hot enough has its block burn what touches it.
@@ -1943,7 +1945,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
     let DimTables { mut dim_defs, dim_names, spawn_dim, void_dim, .. } = dim_tables;
     let ids = component_ids(&components);
     let mut conds = crate::conditions::Texts::default();
-    flatten_components(&mut states, &mut item_defs, &components, &ids, &mut conds);
+    flatten_components(&mut states, &components, &ids, &mut conds);
     resolve_rules(&mut states, &block_defs, &block_names, raw_rules, &mut conds, &mut errors);
     for b in &block_defs {
         let grows = (b.first_state..b.first_state + b.states).any(|s| {
@@ -2266,22 +2268,34 @@ fn number_items(
             }
         });
         let (ns, path) = e.name.split_once(':').unwrap_or(("core", &e.name));
-        let mut texture = e
-            .text(it::TEXTURE)
-            .map_or_else(|| format!("{ns}:item/{path}"), str::to_string);
-        for (_, pairs) in retextures
-            .iter()
-            .filter(|r| r.0 == e.name || Some(r.0.as_str()) == placed)
-        {
-            if let Some((_, to)) = pairs.iter().find(|p| p.0 == texture) {
-                texture = to.clone();
+        let own = format!("{ns}:item/{path}");
+        let spec = e.text(abi::comp::LAYERS).unwrap_or(&own);
+        let mut parts: Vec<(String, Option<u32>)> = abi::layers(spec)
+            .map(|(name, tint)| (name.to_string(), tint))
+            .collect();
+        for (texture, _) in &mut parts {
+            for (_, pairs) in retextures
+                .iter()
+                .filter(|r| r.0 == e.name || Some(r.0.as_str()) == placed)
+            {
+                if let Some((_, to)) = pairs.iter().find(|p| p.0 == *texture) {
+                    *texture = to.clone();
+                }
             }
         }
         // An egg its mod drew no picture for. Packs can still replace the generic one.
-        if e.has(abi::comp::SPAWN_EGG) && !picture_exists(mods, &texture) {
-            texture = "core:item/spawn_egg".into();
+        if let Some((texture, _)) = parts.first_mut().filter(|_| e.has(abi::comp::SPAWN_EGG))
+            && !picture_exists(mods, texture)
+        {
+            *texture = "core:item/spawn_egg".into();
         }
-        let mut icon = if texture.is_empty() && block.is_some() { u32::MAX } else { textures.id(&texture) };
+        let layers = (parts.len() > 1 || parts.iter().any(|p| p.1.is_some()))
+            .then(|| abi::layers_text(parts.iter().map(|(name, tint)| (name.as_str(), *tint))));
+        let mut icon = match parts.first() {
+            Some((texture, _)) => textures.id(texture),
+            None if block.is_some() => u32::MAX,
+            None => textures.id(""),
+        };
         // Its model file: a flat item of another texture, or boxes (faces it leaves to the item
         // show the icon).
         let mut model = Vec::new();
@@ -2303,15 +2317,12 @@ fn number_items(
         let def = ItemDef {
             name: e.name.clone(),
             owner: e.owner,
-            max_stack: 64,
-            durability: 0,
-            attack: 1.0,
             icon,
+            layers,
             block,
             on_use: e.callback(it::ON_USE),
             order: order[&e.name],
             equip: None,
-            handheld: false,
             model,
         };
         (def, (e.owner, e.components("item.")), e.callback(it::CONDITION))
@@ -2657,6 +2668,7 @@ fn component_ids(components: &Components) -> Ids {
         inventory: id(abi::comp::INVENTORY),
         contents: id(abi::comp::CONTENTS),
         layers: id(abi::comp::LAYERS),
+        handheld: id("handheld"),
         energy: id(abi::comp::ENERGY),
     }
 }
@@ -2664,7 +2676,6 @@ fn component_ids(components: &Components) -> Ids {
 /// What hot code reads per state (physics, light, breaking) goes into flat fields.
 fn flatten_components(
     states: &mut [StateInfo],
-    item_defs: &mut [ItemDef],
     components: &Components,
     ids: &Ids,
     conds: &mut crate::conditions::Texts,
@@ -2710,19 +2721,6 @@ fn flatten_components(
                 .unwrap_or_else(|| vec!["light(9.., up)".into(), "!covered".into()]);
             s.spread = Some(Spread { to, mean: secs as f64 * crate::world::TPS as f64, when: conds.all(&when), min, max });
         }
-    }
-    for (i, d) in item_defs.iter_mut().enumerate() {
-        let i = i as u32;
-        d.max_stack = components
-            .get::<u32>(comps::ITEM, i, ids.max_stack.unwrap_or(u32::MAX))
-            .unwrap_or(64)
-            .max(1);
-        d.durability = components
-            .get::<u32>(comps::ITEM, i, ids.durability.unwrap_or(u32::MAX))
-            .unwrap_or(0);
-        d.attack = components
-            .get::<f32>(comps::ITEM, i, ids.attack_damage.unwrap_or(u32::MAX))
-            .unwrap_or(1.0);
     }
 }
 
@@ -3441,14 +3439,8 @@ fn link_entity_templates(
     }
 }
 
-/// Items worn in an equipment slot carry its `worn/<slot>` tag, and the ones held like tools
-/// `handheld`.
+/// Items worn in an equipment slot carry its `worn/<slot>` tag.
 fn link_equipment(game: &crate::registry::Game, item_defs: &mut [ItemDef], components: &Components) {
-    if let Some(t) = components.id("handheld") {
-        for (i, d) in item_defs.iter_mut().enumerate() {
-            d.handheld = components.has(comps::ITEM, i as u32, t);
-        }
-    }
     for (e, slot) in game.player_layout.equipment.iter().enumerate() {
         if let Some(t) = components.id(&format!("worn/{}", slot.name)) {
             for (i, d) in item_defs.iter_mut().enumerate() {

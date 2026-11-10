@@ -1182,7 +1182,7 @@ impl Registry {
         }
         ItemBuilder { reg: self, e }
             .set_text(&crate::comps::item::BLOCK, block)
-            .set_text(&crate::comps::item::TEXTURE, &texture)
+            .set_text(&crate::comps::item::LAYERS, &texture)
     }
 
     pub fn biome<'a>(&'a mut self, biome: &'static Biome) -> BiomeBuilder<'a> {
@@ -2430,7 +2430,7 @@ impl BlockBuilder<'_> {
             (true, true) if !texture.is_empty() => drop(
                 self.reg
                     .edit(Item::generated(name.clone()))
-                    .set_text(&crate::comps::item::TEXTURE, &texture),
+                    .set_text(&crate::comps::item::LAYERS, &texture),
             ),
             (true, true) => {}
             (true, false) => self.reg.remove(Item::generated(name.clone())),
@@ -2487,9 +2487,42 @@ impl ItemBuilder<'_> {
         });
         self.set(&crate::comps::item::CONDITION, cb)
     }
+    /// Its only picture (under `item/`; without one: the item's name), the layers given so
+    /// far dropped: `.texture("ingot").tint(0xC0C0FF)`.
     pub fn texture(self, t: &str) -> Self {
-        let t = crate::asset("item", t);
-        self.set_text(&crate::comps::item::TEXTURE, &t)
+        self.with_layers(crate::Layers::new().layer(t))
+    }
+    /// One more picture on top, the first at the bottom: a tool made of parts,
+    /// `.layer("handle").layer("head").tint(0xFF8800)`. The first replaces its own picture.
+    /// Stacks can still show their own (`with_layers`).
+    pub fn layer(self, t: &str) -> Self {
+        let layers = self.set_layers().unwrap_or_default().layer(t);
+        self.with_layers(layers)
+    }
+    /// Tints the layer just added `0xRRGGBB` (its own picture if none was), multiplied: white
+    /// parts take the color. One picture for many items of a color.
+    pub fn tint(self, color: u32) -> Self {
+        let layers = self.set_layers().unwrap_or_else(|| self.own_layers()).tint(color);
+        self.with_layers(layers)
+    }
+    /// The layers given so far, if any.
+    fn set_layers(&self) -> Option<crate::Layers> {
+        self.e
+            .ops
+            .iter()
+            .rev()
+            .find(|p| p.name == abi::comp::LAYERS)
+            .and_then(|p| p.text.as_deref())
+            .map(crate::Layers::parse)
+    }
+    /// Its picture when none is given: `<ns>:item/<name>`.
+    fn own_layers(&self) -> crate::Layers {
+        let (ns, path) = self.e.name.split_once(':').unwrap_or((self.reg.ns, self.e.name.as_str()));
+        crate::Layers::parse(&format!("{ns}:item/{path}"))
+    }
+    fn with_layers(self, layers: crate::Layers) -> Self {
+        let text = layers.text();
+        self.set_text(&crate::comps::item::LAYERS, &text)
     }
     /// Stack size (`max_stack`).
     pub fn max_stack(self, n: u32) -> Self {
@@ -3528,7 +3561,7 @@ impl LiquidBuilder<'_> {
                     .item(item)
                     .set_text(&c::FLUID, &name)
                     .max_stack(u32::MAX)
-                    .set_text(&crate::comps::item::TEXTURE, &texture),
+                    .set_text(&crate::comps::item::LAYERS, &texture),
                 None => self.reg.edit(item),
             };
             it.e.ops.extend(tags);

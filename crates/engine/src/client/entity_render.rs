@@ -2051,11 +2051,7 @@ fn held_transform(arm: Mat4, item: u32, off: bool, display: Option<Display>) -> 
     let d = display.unwrap_or_else(|| {
         if shows_block(item) {
             plain([0.0, 0.0, 0.0], [0.0, 2.5, 0.0], 0.375)
-        } else if content()
-            .items
-            .get(item as usize)
-            .is_some_and(|d| d.handheld)
-        {
+        } else if content().item_has(item, content().ids.handheld) {
             plain([0.0, -90.0, 55.0], [0.0, 4.0, 0.5], 0.85)
         } else {
             plain([0.0, 0.0, 0.0], [0.0, 3.0, 1.0], 0.55)
@@ -2077,7 +2073,7 @@ fn held_transform(arm: Mat4, item: u32, off: bool, display: Option<Display>) -> 
 
 /// How an item is held unless it says: a long tool lower down.
 fn hold_of(c: &crate::content::Content, m: &super::models::KindModel, item: u32) -> &'static str {
-    let tool = c.items.get(item as usize).is_some_and(|d| d.handheld);
+    let tool = c.item_has(item, c.ids.handheld);
     if tool && !m.has_own(item, "hold") { "hold_tool" } else { "hold" }
 }
 

@@ -86,3 +86,5 @@ block.testmod.dynamite = Динамит
 config.testmod.dynamite_radius = Радиус воронки динамита
 config.testmod.dynamite_radius.tooltip = Сколько блоков вокруг выносит динамит. Сотни можно: движок копает воронку за один раз.
 entity.testmod.steed = Скакун
+item.testmod.ruby = Рубин
+item.testmod.wand = Слоёный жезл
