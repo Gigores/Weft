@@ -102,6 +102,7 @@ impl Client {
                 }
             }
             ToClient::Despawn(ids) => {
+                let arriving = self.arriving_tick();
                 self.entity_components
                     .retain(|(e, _), _| !ids.iter().any(|g| g.0 == *e));
                 for &(id, killed) in &ids {
@@ -122,7 +123,9 @@ impl Client {
                                 s.leaving = true;
                             }
                         }
-                        Some(e) if (killed || e.health <= 0.0) && e.item.is_empty() && e.dying.is_none() => e.dying = Some(0.0),
+                        Some(e) if (killed || e.health <= 0.0) && e.item.is_empty() && e.dying.is_none() => {
+                            (e.dying, e.died_at) = (Some(0.0), arriving);
+                        }
                         _ => {
                             self.entities.remove(&id);
                         }
@@ -186,8 +189,12 @@ impl Client {
             }
 
             ToClient::EntitySwing { id, off } => {
+                let arriving = self.arriving_tick();
                 if let Some(e) = self.entities.get_mut(&id) {
-                    restart_swing(&mut e.arm_swing);
+                    // Past halfway it starts over, as vanilla's.
+                    if e.arm_swing.is_none_or(|p| p >= 0.5) {
+                        e.swing_at = Some(arriving);
+                    }
                     e.swing_off = off;
                 }
             }
@@ -248,11 +255,13 @@ impl Client {
                 .push((entity, std::sync::Arc::new(avatar))),
             ToClient::PlayerGone { entity } => self.entity_render.gone_pending.push(entity),
             ToClient::PlayAction(list) => {
+                let arriving = self.arriving_tick();
                 for (id, name, looping) in list {
                     if id == self.player_id {
                         self.me.action = (!name.is_empty()).then(|| (name, self.me.age, looping));
                     } else if let Some(e) = self.entities.get_mut(&id) {
-                        e.action = (!name.is_empty()).then(|| (name, e.age, looping));
+                        let start = ((arriving - e.born).max(0.0) / crate::world::TPS as f64) as f32;
+                        e.action = (!name.is_empty()).then(|| (name, start, looping));
                     }
                 }
             }
@@ -293,7 +302,9 @@ impl Client {
     fn spawn_entities(&mut self, list: Vec<crate::net::EntityView>) {
         for e in list {
             let to = if content().game.is_block_entity(e.kind) { &mut self.showing_blocks } else { &mut self.entities };
-            to.insert(e.id, ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch, e.item));
+            let mut shown = ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch, e.item);
+            (shown.born, shown.body_yaw, shown.body_target) = (e.born as f64, e.body_yaw, e.body_yaw);
+            to.insert(e.id, shown);
         }
     }
 
@@ -315,7 +326,8 @@ impl Client {
             .iter()
             .filter_map(|&(id, pos, ..)| self.entities.get(&id).map(|e| (id, pos - e.target)))
             .collect();
-        for &(id, _, yaw, .., frame) in &list {
+        // Limbs swing and crouching turns by the tick too, the clips' clock.
+        for &(id, _, yaw, _, pose, _, frame) in &list {
             let Some(&d) = deltas.get(&id) else { continue };
             let carried = deltas
                 .get(&frame)
@@ -323,7 +335,14 @@ impl Client {
                 .copied()
                 .unwrap_or_default();
             if let Some(e) = self.entities.get_mut(&id) {
-                e.body_target = crate::physics::turn_body(e.body_target, yaw, d - carried);
+                let walked = d - carried;
+                e.body_target = crate::physics::turn_body(e.body_target, yaw, walked);
+                let speed = (walked.with_y(0.0).length() * crate::world::TPS as f64) as f32;
+                crate::model::walk_limbs(&mut e.walk_target, &mut e.swing_target, speed, crate::world::TICK as f32);
+                let crouching = pose == Pose::CROUCH;
+                if crouching != e.crouch_at.2 {
+                    e.crouch_at = (tick as f64, e.crouched, crouching);
+                }
             }
         }
         for &(id, pos, yaw, pitch, pose, sprinting, frame) in &list {

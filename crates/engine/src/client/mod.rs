@@ -146,6 +146,17 @@ pub struct ClientEntity {
     /// ticks (`physics::turn_body`), as the server has it.
     pub body_yaw: f32,
     pub body_target: f32,
+    /// Its clocks in the server's ticks (`Client::anim_tick`), so every client poses it alike:
+    /// the tick it came, its swing, its use and its death started, and its crouching turned
+    /// (tick, how far into the pose then, crouching).
+    pub born: f64,
+    pub swing_at: Option<f64>,
+    pub use_at: f64,
+    pub died_at: f64,
+    pub crouch_at: (f64, f32, bool),
+    /// Its walk distance and limb swing by the server's ticks, which `walk` and `swing` ease to.
+    pub walk_target: f32,
+    pub swing_target: f32,
     /// Arm swing progress 0..1 while swinging.
     pub arm_swing: Option<f32>,
     /// Every effect on it, its level and the tick it ends (`ClientWorld::ticks`).
@@ -179,9 +190,11 @@ pub struct Stuck {
     pub at: DVec3,
     pub yaw: f32,
     pub pitch: f32,
-    /// The model, its bone, and its place and way in that bone's pixels, once looked for.
+    /// The model, its bone, and its place and way in that bone's pixels, looked for once the
+    /// host is shown at the tick it went in (`seen_at`): every client finds the same bone.
     pub bone: Option<(u32, usize, glam::Vec3, glam::Vec3)>,
     pub looked: bool,
+    pub seen_at: f64,
     /// Its place and way in the host's frame as last placed, and the host then (place, body yaw):
     /// last frame's bones were posed there.
     pub placed: Option<(DVec3, DVec3)>,
@@ -333,6 +346,13 @@ impl ClientEntity {
             target_yaw: yaw,
             body_yaw: yaw,
             body_target: yaw,
+            born: 0.0,
+            swing_at: None,
+            use_at: 0.0,
+            died_at: 0.0,
+            crouch_at: (0.0, 0.0, false),
+            walk_target: 0.0,
+            swing_target: 0.0,
             arm_swing: None,
             effects: Vec::new(),
             shown: Vec::new(),
@@ -1815,22 +1835,23 @@ impl Client {
                 let body = e.body_yaw + angle_diff(e.body_target, e.body_yaw) * k as f32;
                 e.yaw - angle_diff(e.yaw, body)
             };
-            advance_swing(&mut e.arm_swing, dt as f32);
+            // Clips go by the server's ticks as shown: every client poses it alike at a tick.
+            let since = |t: f64| ((at - t).max(0.0) / crate::world::TPS as f64) as f32;
+            e.age = since(e.born);
+            e.arm_swing = e.swing_at.map(|t| since(t) / 0.3).filter(|&p| p < 1.0);
             let speed = (walked.unwrap_or(e.pos - before).with_y(0.0).length() / dt.max(1e-4)) as f32;
             e.walked += speed * dt as f32;
-            crate::model::walk_limbs(&mut e.walk, &mut e.swing, speed, dt as f32);
-            e.crouched = fade_pose(e.crouched, e.pose == Pose::CROUCH, dt as f32);
+            e.walk += (e.walk_target - e.walk) * k as f32;
+            e.swing += (e.swing_target - e.swing) * k as f32;
+            let (turned, from, crouching) = e.crouch_at;
+            e.crouched = (from + if crouching { 1.0 } else { -1.0 } * since(turned) / 0.1).clamp(0.0, 1.0);
             if let Some((p, _)) = &mut e.using {
-                *p = if endless_use(e.use_ticks) {
-                    *p + dt as f32
-                } else {
-                    (*p + dt as f32 * crate::world::TPS as f32 / e.use_ticks.max(1.0)).min(1.0)
-                };
+                let secs = since(e.use_at);
+                *p = if endless_use(e.use_ticks) { secs } else { (secs * crate::world::TPS as f32 / e.use_ticks.max(1.0)).min(1.0) };
             }
             e.hurt = (e.hurt - dt as f32).max(0.0);
-            e.age += dt as f32;
             if let Some(d) = &mut e.dying {
-                *d += dt as f32;
+                *d = since(e.died_at);
                 e.hurt = HURT_FLASH;
                 e.burning = false;
             }
@@ -1856,6 +1877,7 @@ impl Client {
             .filter(|e| e.1.stuck.is_some())
             .map(|e| *e.0)
             .collect();
+        let now = self.anim_tick();
         let models = &self.entity_render.models;
         let dir = |yaw: f32, pitch: f32| {
             let ((sy, cy), (sp, cp)) = ((yaw as f64).sin_cos(), (pitch as f64).sin_cos());
@@ -1876,7 +1898,7 @@ impl Client {
             };
             if let Some((last_pos, last_body)) = st.last {
                 // Once: the bone its line goes into first, else the one the whole body goes with.
-                if !st.looked && models.posed(st.host) {
+                if !st.looked && now >= st.seen_at && models.posed(st.host) {
                     let (p, d) = (last_pos + turn_y(st.at, last_body), dir(last_body + st.yaw, st.pitch));
                     st.bone = match models.ray_bones(st.host, p - d, d, 2.0) {
                         // Its tip a little way in: it is drawn about its middle, the tip 0.225 ahead.
@@ -2443,6 +2465,7 @@ impl Client {
             trash: _,
         } = c.game.fields;
         let now = self.ticks();
+        let arriving = self.arriving_tick();
         let f: Vec<f32> = words(bytes).map(f32::from_le_bytes).collect();
         let shaped = || {
             let size = (f.len() == 4 && f[0] > 0.0).then(|| weft_abi::EntitySize { width: f[0], height: f[1], eye: f[2] });
@@ -2478,6 +2501,7 @@ impl Client {
                 pitch: f32::NAN,
                 bone: None,
                 looked: false,
+                seen_at: arriving,
                 placed: None,
                 last: None,
                 leaving: false,
@@ -2496,13 +2520,17 @@ impl Client {
             // For who wasn't around when it started; those who were have it from `PlayAction`.
             let name = String::from_utf8_lossy(bytes);
             if !name.is_empty() && e.action.as_ref().is_none_or(|a| a.0 != name) {
-                e.action = Some((name.into_owned(), e.age, true));
+                e.action = Some((name.into_owned(), ((arriving - e.born).max(0.0) / crate::world::TPS as f64) as f32, true));
             }
         } else if comp == off_held {
             e.off_held = words(bytes).next().map_or(0, u32::from_le_bytes);
         } else if comp == using {
             let v = words(bytes).next().map_or(0, u32::from_le_bytes);
-            e.use_ticks = (v & !(1 << 31)) as f32;
+            let ticks = (v & !(1 << 31)) as f32;
+            if v != 0 && (e.using.is_none() || e.use_ticks != ticks) {
+                e.use_at = arriving;
+            }
+            e.use_ticks = ticks;
             e.using = (v != 0).then(|| (e.using.map_or(0.0, |u| u.0), v >> 31 != 0));
         } else if comp == shape {
             (e.size, e.look) = shaped();
@@ -2648,6 +2676,16 @@ impl Client {
     }
 
     /// Server tick (fractional) bodies are shown at when the client clock reads `clock`.
+    /// The server's tick its entities are shown at now, with its fraction: their clips' clock.
+    pub fn anim_tick(&self) -> f64 {
+        self.body_tick(self.body_clock - STEP + self.accum)
+    }
+
+    /// The server's tick of what arrives now: it is shown `INTERP_TICKS` later.
+    pub fn arriving_tick(&self) -> f64 {
+        self.anim_tick() + INTERP_TICKS
+    }
+
     fn body_tick(&self, clock: f64) -> f64 {
         (clock - self.tick_offset.unwrap_or(clock)) * self.tick_rate - INTERP_TICKS
     }

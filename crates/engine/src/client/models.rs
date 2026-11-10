@@ -238,21 +238,38 @@ pub struct PlayClip {
     pub by_progress: bool,
 }
 
-/// A clip coming in or going out on one entity.
+/// A clip coming in or going out on one entity: how far in it was when it last turned (`from`,
+/// 0..1, at its holder's clock `since`) and how fast it goes now, so it is a function of the
+/// holder's clock and every client has it alike.
 #[derive(Clone, Copy)]
 pub struct Fade {
     clip: PlayClip,
-    /// How far in it is, 0..1.
-    on: f32,
+    since: f32,
+    from: f32,
+    rate: f32,
+}
+
+impl Fade {
+    fn on(&self, now: f32) -> f32 {
+        (self.from + self.rate * (now - self.since).max(0.0)).clamp(0.0, 1.0)
+    }
+
+    /// From `now` on at `rate` a second, going on from where it is.
+    fn turn(&mut self, now: f32, rate: f32) {
+        if self.rate != rate {
+            (self.from, self.since, self.rate) = (self.on(now), now, rate);
+        }
+    }
 }
 
 /// Seconds a clip takes to come and go unless its file says. What goes by an action's progress
 /// starts at once: its first frames are the action's.
 const BLEND_SECS: f32 = 0.12;
 
-/// Eases what plays over the standing clips in and out: on `t` what is wanted comes in, what no
-/// longer is goes out where it stopped. What is below keeps its order: over it, later clips win.
-pub fn fade_clips(fades: &mut Vec<Fade>, m: &KindModel, clips: &mut Clips, standing: usize, dt: f32) {
+/// Eases what plays over the standing clips in and out by the holder's clock `now` (seconds):
+/// what is wanted comes in, what no longer is goes out where it stopped. What is below keeps its
+/// order: over it, later clips win.
+pub fn fade_clips(fades: &mut Vec<Fade>, m: &KindModel, clips: &mut Clips, standing: usize, now: f32) {
     let wanted = *clips;
     clips.n = standing;
     let anim = |c: &PlayClip| m.anims.get(c.anim as usize).map(|b| &b.anim);
@@ -266,11 +283,12 @@ pub fn fade_clips(fades: &mut Vec<Fade>, m: &KindModel, clips: &mut Clips, stand
         let secs = anim(&f.clip)
             .and_then(|a| a.blend_out)
             .unwrap_or(BLEND_SECS);
-        f.on -= dt / secs.max(1e-3);
-        if f.on <= 0.0 {
+        f.turn(now, -1.0 / secs.max(1e-3));
+        let on = f.on(now);
+        if on <= 0.0 {
             return false;
         }
-        clips.push(PlayClip { w: f.clip.w * smooth(f.on), ..f.clip });
+        clips.push(PlayClip { w: f.clip.w * smooth(on), ..f.clip });
         true
     });
     for c in &wanted.all()[standing..] {
@@ -280,14 +298,15 @@ pub fn fade_clips(fades: &mut Vec<Fade>, m: &KindModel, clips: &mut Clips, stand
         let found = fades
             .iter()
             .position(|f| (f.clip.anim, f.clip.mirror) == (c.anim, c.mirror));
+        // What has no time to come in is there at once.
         let i = found.unwrap_or_else(|| {
-            fades.push(Fade { clip: *c, on: 0.0 });
+            fades.push(Fade { clip: *c, since: now, from: if secs <= 0.0 { 1.0 } else { 0.0 }, rate: 0.0 });
             fades.len() - 1
         });
         let f = &mut fades[i];
-        f.on = (f.on + dt / secs.max(1e-3)).min(1.0);
+        f.turn(now, 1.0 / secs.max(1e-3));
         f.clip = *c;
-        clips.push(PlayClip { w: c.w * smooth(f.on), ..*c });
+        clips.push(PlayClip { w: c.w * smooth(f.on(now)), ..*c });
     }
 }
 

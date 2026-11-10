@@ -232,6 +232,10 @@ wire_struct! {
         pub yaw: f32,
         pub pitch: f32,
         pub item: ItemStack,
+        // The tick it came into the world (`Moves::tick`'s), its clips' clock.
+        pub born: u64,
+        // Where its body faces (`physics::turn_body`), for those seeing it from now on.
+        pub body_yaw: f32,
     }
 }
 
