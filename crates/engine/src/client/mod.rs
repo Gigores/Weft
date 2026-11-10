@@ -142,8 +142,10 @@ pub struct ClientEntity {
     /// How a player holds itself: its box and how the model stands.
     pub pose: Pose,
     pub sprinting: bool,
-    /// Where the body faces: follows the head with a lag, and where it walks.
+    /// Where the body faces as drawn, easing to `body_target`: where it faces by the server's
+    /// ticks (`physics::turn_body`), as the server has it.
     pub body_yaw: f32,
+    pub body_target: f32,
     /// Arm swing progress 0..1 while swinging.
     pub arm_swing: Option<f32>,
     /// Every effect on it, its level and the tick it ends (`ClientWorld::ticks`).
@@ -169,15 +171,21 @@ pub struct ClientEntity {
     pub world_light: rustc_hash::FxHashMap<IVec3, u32>,
 }
 
-/// Where a projectile sits in an entity: its frame as the server has it until it is on the body
-/// this client draws, and then in that body's.
+/// Where a projectile sits in an entity: in its box turned with its body as the server has it,
+/// and on the bone of its model the arrow's line went into as this client shows it.
 #[derive(Clone, Copy)]
 pub struct Stuck {
     pub host: u64,
     pub at: DVec3,
     pub yaw: f32,
     pub pitch: f32,
-    pub on_body: bool,
+    /// The model, its bone, and its place and way in that bone's pixels, once looked for.
+    pub bone: Option<(u32, usize, glam::Vec3, glam::Vec3)>,
+    pub looked: bool,
+    /// Its place and way in the host's frame as last placed, and the host then (place, body yaw):
+    /// last frame's bones were posed there.
+    pub placed: Option<(DVec3, DVec3)>,
+    pub last: Option<(DVec3, f32)>,
     /// The server is done with it as its host died: it stays for the host's death animation.
     pub leaving: bool,
 }
@@ -324,6 +332,7 @@ impl ClientEntity {
             yaw,
             target_yaw: yaw,
             body_yaw: yaw,
+            body_target: yaw,
             arm_swing: None,
             effects: Vec::new(),
             shown: Vec::new(),
@@ -1209,7 +1218,9 @@ impl Client {
         let walked_by = if frame == self.last_frame { now - self.last_smooth } else { DVec3::ZERO };
         let moved = walked_by.with_y(0.0).length().min(2.0) as f32;
         (self.last_smooth, self.last_frame) = (now, frame);
-        self.me.body_yaw = turn_body(self.me.body_yaw, self.player.yaw, walked_by, dt as f32);
+        let k = (dt * 15.0).min(1.0) as f32;
+        let body = self.me.body_yaw + angle_diff(self.me.body_target, self.me.body_yaw) * k;
+        self.me.body_yaw = self.player.yaw - angle_diff(self.player.yaw, body);
         // That move is the last frame's: physics runs after this. By this frame's time, uneven frames
         // made the speed jump up and down and the bob settle far too low.
         let speed = moved / std::mem::replace(&mut self.moved_over, dt as f32).max(1e-4);
@@ -1354,6 +1365,7 @@ impl Client {
                     if let (Some((pos, yaw)), Some(e)) = (moved, self.entities.get_mut(&mount)) {
                         (e.pos, e.target, e.yaw, e.target_yaw) = (pos, pos, yaw, yaw);
                     }
+                    self.me.body_target = physics::turn_body(self.me.body_target, self.player.yaw, DVec3::ZERO);
                     continue;
                 }
                 if !flying {
@@ -1371,6 +1383,12 @@ impl Client {
                         .get(&b)
                         .map(|e| (b, p.prev - e.known(at - step_ticks), p.pos - e.known(at)))
                 });
+                // The body turns by the tick, as the server turns it from these moves.
+                let walked = self
+                    .player
+                    .riding
+                    .map_or(self.player.pos - self.player.prev, |(_, before, now)| now - before);
+                self.me.body_target = physics::turn_body(self.me.body_target, self.player.yaw, walked);
                 if crate::log::on(crate::log::Channel::Physics, log::Level::Trace) {
                     let p = &self.player;
                     let feet = p.pos.floor().as_ivec3() - glam::IVec3::Y;
@@ -1794,7 +1812,8 @@ impl Client {
             e.body_yaw = if c.game.entities[e.kind as usize].projectile.is_some() {
                 e.yaw
             } else {
-                turn_body(e.body_yaw, e.yaw, walked.unwrap_or(e.pos - before), dt as f32)
+                let body = e.body_yaw + angle_diff(e.body_target, e.body_yaw) * k as f32;
+                e.yaw - angle_diff(e.yaw, body)
             };
             advance_swing(&mut e.arm_swing, dt as f32);
             let speed = (walked.unwrap_or(e.pos - before).with_y(0.0).length() / dt.max(1e-4)) as f32;
@@ -1827,9 +1846,9 @@ impl Client {
         self.hold_stuck();
     }
 
-    /// Projectiles stuck in an entity, where they went in on its body as drawn this frame: they
-    /// turn with its body, not its head, keep up with it however fast it goes, and fall over
-    /// with it when it dies, going when it does.
+    /// Projectiles stuck in an entity, on the bone of its model they went into as drawn: they
+    /// go with the arm or the body, keep up however fast it goes, fall over with it when it dies
+    /// and go when it does. Bones are last frame's, taken over by where the host is now.
     fn hold_stuck(&mut self) {
         let stuck: Vec<u64> = self
             .entities
@@ -1837,39 +1856,60 @@ impl Client {
             .filter(|e| e.1.stuck.is_some())
             .map(|e| *e.0)
             .collect();
+        let models = &self.entity_render.models;
+        let dir = |yaw: f32, pitch: f32| {
+            let ((sy, cy), (sp, cp)) = ((yaw as f64).sin_cos(), (pitch as f64).sin_cos());
+            DVec3::new(-sy * cp, sp, -cy * cp)
+        };
         for id in stuck {
-            let Some(st) = self.entities.get(&id).and_then(|e| e.stuck) else { continue };
+            let Some(mut st) = self.entities.get(&id).and_then(|e| e.stuck) else { continue };
             let host = if st.host == self.player_id {
-                Some((self.me.pos, self.player.yaw, self.me.body_yaw, self.me.dying))
+                Some((self.me.pos, self.me.body_yaw))
             } else {
-                self.entities
-                    .get(&st.host)
-                    .map(|h| (h.pos, h.yaw, h.body_yaw, h.dying))
+                self.entities.get(&st.host).map(|h| (h.pos, h.body_yaw))
             };
-            let Some((pos, head, body, dying)) = host else {
+            let Some((pos, body)) = host else {
                 if st.leaving {
                     self.entities.remove(&id);
                 }
                 continue;
             };
+            if let Some((last_pos, last_body)) = st.last {
+                // Once: the bone its line goes into first, else the one the whole body goes with.
+                if !st.looked && models.posed(st.host) {
+                    let (p, d) = (last_pos + turn_y(st.at, last_body), dir(last_body + st.yaw, st.pitch));
+                    st.bone = match models.ray_bones(st.host, p - d, d, 2.0) {
+                        // Its tip a little way in: it is drawn about its middle, the tip 0.225 ahead.
+                        Some((kind, part, t)) => models
+                            .to_bone(st.host, kind, part, p - d + d * (t - 0.125), d)
+                            .map(|b| (kind, part, b.0, b.1)),
+                        None => models.main_bone(st.host).and_then(|(kind, part)| {
+                            models
+                                .to_bone(st.host, kind, part, p, d)
+                                .map(|b| (kind, part, b.0, b.1))
+                        }),
+                    };
+                    st.looked = true;
+                }
+                if let Some((wp, wd)) = st
+                    .bone
+                    .and_then(|(kind, part, p, d)| models.from_bone(st.host, kind, part, p, d))
+                {
+                    st.placed = Some((turn_y(wp - last_pos, -last_body), turn_y(wd, -last_body)));
+                }
+            }
+            st.last = Some((pos, body));
             let Some(e) = self.entities.get_mut(&id) else { continue };
-            // The server keeps it by the head's yaw: onto the body as it is when first seen here.
-            let st = if st.on_body {
-                st
-            } else {
-                Stuck { at: turn_y(st.at, head - body), yaw: st.yaw + head - body, pitch: e.target_pitch, on_body: true, ..st }
-            };
+            if st.pitch.is_nan() {
+                st.pitch = e.target_pitch;
+            }
+            let (p, d) = st.placed.unwrap_or((st.at, dir(st.yaw, st.pitch)));
             e.stuck = Some(st);
-            // Dying, the body tips onto its side about its feet as the stock `death` clip has it.
-            let fall = glam::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2 * dying.map_or(0.0, |d| (d as f64 * 1.6).sqrt().min(1.0)));
-            let (sy, cy) = (st.yaw as f64).sin_cos();
-            let (sp, cp) = (st.pitch as f64).sin_cos();
-            let dir = fall * DVec3::new(-sy * cp, sp, -cy * cp);
-            let p = pos + turn_y(fall * st.at, body);
+            let (p, d) = (pos + turn_y(p, body), turn_y(d, body));
             (e.pos, e.target) = (p, p);
-            let yaw = body + (-dir.x).atan2(-dir.z) as f32;
+            let yaw = (-d.x).atan2(-d.z) as f32;
             (e.yaw, e.target_yaw, e.body_yaw) = (yaw, yaw, yaw);
-            (e.pitch, e.target_pitch) = (dir.y.asin() as f32, st.pitch);
+            (e.pitch, e.target_pitch) = (d.y.clamp(-1.0, 1.0).asin() as f32, e.target_pitch);
         }
     }
 
@@ -2368,9 +2408,8 @@ impl Client {
             if !e.is_body() || id == self.player_id || e.structure.is_some() {
                 continue;
             }
-            let physics::Dims { half_width: hw, height: h, .. } = e.dims();
-            let b = physics::Aabb::around(e.pos, hw, h);
-            if let Some((t, _)) = physics::ray_aabb(eye, dir, &b, max) {
+            // Its box turned with its body, what the server hits too.
+            if let Some((t, ..)) = physics::ray_body(eye, dir, e.pos, e.dims(), e.body_yaw, max) {
                 if best.is_none_or(|(bt, _)| t < bt) {
                     best = Some((t, id));
                 }
@@ -2431,12 +2470,16 @@ impl Client {
                 (mount, u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as u8)
             });
         } else if comp == stuck {
+            // Its pitch is the one it flew in with, as it arrives with its moves.
             e.stuck = (bytes.len() >= 24).then(|| Stuck {
                 host: u64::from_le_bytes(bytes[..8].try_into().unwrap()),
                 at: DVec3::new(f[2] as f64, f[3] as f64, f[4] as f64),
                 yaw: f[5],
-                pitch: 0.0,
-                on_body: false,
+                pitch: f32::NAN,
+                bone: None,
+                looked: false,
+                placed: None,
+                last: None,
                 leaving: false,
             });
         } else if comp == burning {
@@ -2970,8 +3013,6 @@ impl Client {
     }
 }
 
-/// Vanilla's tickHeadTurn: the body turns towards where it walks (or stays put), and the head
-/// drags it along only once it has turned more than 50 degrees away. Radians, `moved` this frame.
 /// Ticks of an item used until it is let go (`abi::USE_HOLD`), as the server sends them.
 pub(crate) fn endless_use(ticks: f32) -> bool {
     ticks >= (weft_abi::USE_HOLD >> 1) as f32
@@ -2980,26 +3021,6 @@ pub(crate) fn endless_use(ticks: f32) -> bool {
 /// `v` turned about the up axis by `yaw` radians, as models turn with their yaw.
 fn turn_y(v: DVec3, yaw: f32) -> DVec3 {
     glam::DQuat::from_rotation_y(yaw as f64) * v
-}
-
-pub(crate) fn turn_body(body: f32, head: f32, moved: DVec3, dt: f32) -> f32 {
-    let mut body = body;
-    let flat = moved.with_y(0.0);
-    if flat.length_squared() > (0.05 * dt as f64 * 20.0).powi(2) * 0.0025 {
-        // Backing up, the body faces the way the head does.
-        let mut toward = (-flat.x as f32).atan2(-flat.z as f32);
-        if angle_diff(toward, head).abs() > 95f32.to_radians() {
-            toward += std::f32::consts::PI;
-        }
-        body += angle_diff(toward, body) * (1.0 - 0.7f32.powf(dt * crate::world::TPS as f32));
-    }
-    let off = angle_diff(head, body);
-    let limit = 50f32.to_radians();
-    if off.abs() > limit {
-        body += off - limit * off.signum();
-    }
-    // Keep it near the head, so their difference never needs wrapping where it is used.
-    head - angle_diff(head, body)
 }
 
 /// Vanilla's swing starts over once past halfway.
@@ -3014,10 +3035,7 @@ fn advance_swing(swing: &mut Option<f32>, dt: f32) {
     *swing = swing.map(|p| p + dt / 0.3).filter(|&p| p < 1.0);
 }
 
-/// `a - b` the short way around, radians.
-fn angle_diff(a: f32, b: f32) -> f32 {
-    (a - b + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
-}
+use crate::physics::angle_diff;
 
 /// One 20 Hz tick of player movement with vanilla's numbers (blocks per tick): acceleration
 /// scaled by ground slipperiness, 0.91 air drag, 0.98 vertical drag, 0.08 gravity, 0.42 jump,

@@ -89,13 +89,22 @@ impl Gizmos {
             }
         }
         if self.on("hitboxes") {
-            for e in client
+            // Its own only where its body is seen. White the box blocks and pushing go by, pink
+            // the one turned with the body that hits land on.
+            let own = client
+                .camera_has(crate::tag_bits::camera::BODY)
+                .then_some((&client.me, client.player.dims()));
+            let near = client
                 .entities
                 .values()
                 .filter(|e| (e.pos - me).length_squared() < 64.0 * 64.0)
-            {
-                let crate::physics::Dims { half_width: hw, height: h, eye } = e.dims();
+                .map(|e| (e, e.dims()));
+            for (e, dims) in near.chain(own) {
+                let crate::physics::Dims { half_width: hw, height: h, eye } = dims;
                 cuboid(&mut lines, e.pos - DVec3::new(hw, 0.0, hw), e.pos + DVec3::new(hw, h, hw), 0xFFFFFFFF);
+                if e.is_body() {
+                    turned_cuboid(&mut lines, e.pos, hw, h, e.body_yaw, 0xFF60D0FF);
+                }
                 let eye = e.pos + DVec3::Y * eye;
                 let (sy, cy) = (e.yaw as f64).sin_cos();
                 lines.push((eye, eye + DVec3::new(-sy, 0.0, -cy) * 1.5, 0x4060FFFF));
@@ -188,6 +197,19 @@ pub fn shape(s: &GizmoShape, lines: &mut Vec<Line>, fills: &mut Vec<Fill>, label
 }
 
 /// The twelve edges of an axis-aligned box.
+/// A box `hw` to each side and `h` high about the feet at `pos`, turned by `yaw` as bodies turn.
+fn turned_cuboid(out: &mut Vec<Line>, pos: DVec3, hw: f64, h: f64, yaw: f32, color: u32) {
+    let turn = glam::DQuat::from_rotation_y(yaw as f64);
+    let p =
+        |x: bool, y: bool, z: bool| pos + turn * DVec3::new(if x { hw } else { -hw }, if y { h } else { 0.0 }, if z { hw } else { -hw });
+    for i in 0..4 {
+        let (u, v) = (i & 1 != 0, i & 2 != 0);
+        out.push((p(false, u, v), p(true, u, v), color));
+        out.push((p(u, false, v), p(u, true, v), color));
+        out.push((p(u, v, false), p(u, v, true), color));
+    }
+}
+
 pub fn cuboid(out: &mut Vec<Line>, a: DVec3, b: DVec3, color: u32) {
     let p = |x: bool, y: bool, z: bool| DVec3::new(if x { b.x } else { a.x }, if y { b.y } else { a.y }, if z { b.z } else { a.z });
     for i in 0..4 {

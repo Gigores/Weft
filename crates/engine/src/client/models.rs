@@ -1280,6 +1280,62 @@ impl Models {
             })
     }
 
+    /// The first box of what `entity` showed last frame (its model, what it holds and has on) that
+    /// a ray from `from` along `dir` (the world, a unit vector) enters within `max`: that model,
+    /// the bone and how far along.
+    pub fn ray_bones(&self, entity: u64, from: glam::DVec3, dir: glam::DVec3, max: f64) -> Option<(u32, usize, f64)> {
+        let mut best: Option<(u32, usize, f64)> = None;
+        for &(_, kind, first) in self.located.iter().filter(|l| l.0 == entity) {
+            let Some(m) = self.kinds.get(kind as usize) else { continue };
+            for (i, p) in m.parts.iter().enumerate() {
+                // In the bone's pixels the ray goes by the same steps: its own length stays the world's.
+                let back = self.bone(first as usize + i).inverse();
+                let o = back
+                    .transform_point3((from - self.located_from).as_vec3())
+                    .as_dvec3();
+                let d = back.transform_vector3(dir.as_vec3()).as_dvec3();
+                for cu in &p.cuboids {
+                    let lo = Vec3::from_array(p.pivot) + Vec3::from_array(cu.origin);
+                    let b = crate::physics::Aabb { min: lo.as_dvec3(), max: (lo + Vec3::from_array(cu.size)).as_dvec3() };
+                    if let Some((t, _)) = crate::physics::ray_aabb(o, d, &b, max) {
+                        if best.is_none_or(|b| t < b.2) {
+                            best = Some((kind, i, t));
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// Whether `entity` was shown last frame: its bones are known.
+    pub fn posed(&self, entity: u64) -> bool {
+        self.located.iter().any(|l| l.0 == entity)
+    }
+
+    /// The bone the whole of `entity`'s own model goes with (its `body`, else its first), as last shown.
+    pub fn main_bone(&self, entity: u64) -> Option<(u32, usize)> {
+        let &(_, kind, _) = self.located.iter().find(|l| l.0 == entity)?;
+        let parts = &self.kinds.get(kind as usize)?.parts;
+        Some((kind, model::bone_named(parts, "body").unwrap_or(0)))
+    }
+
+    /// A point and a direction in the world as they were in bone `part` of `entity`'s model
+    /// `kind` last frame, in its pixels.
+    pub fn to_bone(&self, entity: u64, kind: u32, part: usize, p: glam::DVec3, d: glam::DVec3) -> Option<(Vec3, Vec3)> {
+        let &(.., first) = self.located.iter().find(|l| l.0 == entity && l.1 == kind)?;
+        let back = self.bone(first as usize + part).inverse();
+        Some((back.transform_point3((p - self.located_from).as_vec3()), back.transform_vector3(d.as_vec3())))
+    }
+
+    /// Where a point and a direction in a bone's pixels were in the world last frame (`to_bone`
+    /// the other way).
+    pub fn from_bone(&self, entity: u64, kind: u32, part: usize, p: Vec3, d: Vec3) -> Option<(glam::DVec3, glam::DVec3)> {
+        let &(.., first) = self.located.iter().find(|l| l.0 == entity && l.1 == kind)?;
+        let m = self.bone(first as usize + part);
+        Some((self.located_from + m.transform_point3(p).as_dvec3(), m.transform_vector3(d).as_dvec3().normalize_or_zero()))
+    }
+
     pub fn destroy(&mut self, gpu: &mut dyn Backend) {
         for b in [self.cuboids, self.corners].into_iter().chain(
             self.instances

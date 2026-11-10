@@ -59,6 +59,9 @@ pub struct Entity {
     /// The solid body it rides (stands on, or flies above within its carry height).
     /// The body it is on: what it rides, or whose blocks hold it if it has an `anchor`.
     pub frame: Option<u64>,
+    /// Where its body faces (`physics::turn_body`), and where it was when that last turned.
+    pub body_yaw: f32,
+    pub body_from: DVec3,
     pub motion: Motion,
     /// A body that falls under its weight and is put down as blocks where it lands, whatever
     /// its kind would do otherwise (`World::body_fall`, every falling block).
@@ -116,7 +119,7 @@ pub struct Stuck {
 pub enum StuckIn {
     /// A block, on `body` (in its blocks; 0: this dimension's).
     Block { body: u64, block: IVec3 },
-    /// An entity's box: it goes and turns with it.
+    /// An entity's box: it goes and turns with its body.
     Entity(u64),
 }
 
@@ -188,6 +191,8 @@ impl Entity {
             blocked: false,
             yaw: 0.0,
             pitch: 0.0,
+            body_yaw: 0.0,
+            body_from: pos,
             on_ground: false,
             in_liquid: false,
             fall: 0.0,
@@ -331,6 +336,7 @@ impl Entity {
             selected: self.selected,
             moved: self.moved,
             size: self.dims(c).size(),
+            body_yaw: self.body_yaw,
             using: self.use_done.map_or(0, |u| u.0),
             using_ticks: self
                 .use_done

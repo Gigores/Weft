@@ -2786,9 +2786,28 @@ impl Dim {
                 }
             }
         }
+        self.turn_bodies();
         self.fly_projectiles(c);
         self.items(c);
         self.land_falling(c);
+    }
+
+    /// Bodies turn by the tick (`physics::turn_body`) after this tick's moves, by how they
+    /// moved on what they stand on, as every client turns them from the same moves.
+    fn turn_bodies(&mut self) {
+        let frames: Vec<(u64, DVec3)> = self
+            .bodies
+            .keys()
+            .filter_map(|&b| self.entities.get(b).map(|e| (b, e.pos - e.body_from)))
+            .collect();
+        for e in &mut self.entities.list {
+            let carried = e
+                .frame
+                .and_then(|f| frames.iter().find(|b| b.0 == f))
+                .map_or(DVec3::ZERO, |b| b.1);
+            e.body_yaw = crate::physics::turn_body(e.body_yaw, e.yaw, e.pos - e.body_from - carried);
+            e.body_from = e.pos;
+        }
     }
 
     /// Systems over per-entity components: values copied into one aligned array, handed over

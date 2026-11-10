@@ -1612,7 +1612,11 @@ impl Occlusion {
 }
 
 /// Left, right, bottom, top planes; the reverse-Z infinite projection has no useful far plane.
+/// With `core:frustum_culling` off, planes nothing is behind: everything is drawn.
 pub fn frustum_planes(m: Mat4) -> [Vec4; 4] {
+    if !crate::settings::frustum_culling() {
+        return [Vec4::W; 4];
+    }
     let r = |i: usize| m.row(i);
     let norm = |p: Vec4| p / p.truncate().length();
     [norm(r(3) + r(0)), norm(r(3) - r(0)), norm(r(3) + r(1)), norm(r(3) - r(1))]

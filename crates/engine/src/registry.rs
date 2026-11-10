@@ -1888,8 +1888,9 @@ pub const EFFECT: &str = "core:effect";
 pub const FORCED_POSE: &str = "core:forced_pose";
 /// What it rides (`u64` id) and its seat (`u32`), empty: nothing. Saved, and seen by everyone.
 pub const RIDING: &str = "core:riding";
-/// A projectile stuck in an entity: that entity (`u64`), where in its frame (`[f32; 3]`, turned
-/// with its yaw) and its own yaw there (`f32`); empty while it isn't. Clients hold it on the body.
+/// A projectile stuck in an entity: that entity (`u64`), where in its box (`[f32; 3]`, turned
+/// with its body) and its own yaw there (`f32`); empty while it isn't. Clients hold it on the
+/// bone of the model it went into.
 pub const STUCK: &str = "core:stuck";
 /// Entity component (`[u32]`, synced to watchers): the items in its kind's `SHOWN_SLOTS`, 0 empty.
 pub const SHOWN: &str = "core:shown";

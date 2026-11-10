@@ -2705,7 +2705,9 @@ pub mod ray {
 /// block of the cell it entered, the cell's main one or a part. `face` is the face it went in
 /// through, of the block's or the entity's box (-X, +X, -Y, +Y, -Z, +Z). `point` is where, in the
 /// caller's frame; `local` where on what it hit, from the block's or the box's low corner (a
-/// block's 0..1, times 16 its pixel).
+/// block's 0..1, times 16 its pixel). An entity's box turns with its body (`EntityState::body_yaw`):
+/// its face and `local` are in that turned box, -Z its front and +Z its back, `local.y` how high
+/// up from its feet.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RayHit {
@@ -3066,6 +3068,9 @@ pub struct EntityState {
     pub moved: f32,
     /// Its box now (crouching and `set_size` included).
     pub size: EntitySize,
+    /// Where its body faces, radians like `yaw`: it lags behind the head, turning to where it
+    /// walks; what hits land on turns with it.
+    pub body_yaw: f32,
     /// The item it is using (eating, a bow drawn), 0 for none, and for how many ticks so far.
     pub using: u32,
     pub using_ticks: u32,
@@ -3107,6 +3112,7 @@ defaults!(EntityState {
     selected: 0,
     moved: 0.0,
     size: EntitySize { width: 0.0, height: 0.0, eye: 0.0 },
+    body_yaw: 0.0,
     using: 0,
     using_ticks: 0,
 });

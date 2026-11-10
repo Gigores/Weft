@@ -309,6 +309,23 @@ impl Client {
         let keep = ((self.tick_rate * STEP).ceil() as usize * 2 + 4).max(8);
         // The mount this client steers goes where it moves it.
         let driving = self.me.vehicle.map(|v| v.0);
+        // Bodies turn by the tick from these moves (`physics::turn_body`), as the server turned
+        // them, by how they moved on what they stand on.
+        let deltas: rustc_hash::FxHashMap<u64, DVec3> = list
+            .iter()
+            .filter_map(|&(id, pos, ..)| self.entities.get(&id).map(|e| (id, pos - e.target)))
+            .collect();
+        for &(id, _, yaw, .., frame) in &list {
+            let Some(&d) = deltas.get(&id) else { continue };
+            let carried = deltas
+                .get(&frame)
+                .filter(|_| frame != 0)
+                .copied()
+                .unwrap_or_default();
+            if let Some(e) = self.entities.get_mut(&id) {
+                e.body_target = crate::physics::turn_body(e.body_target, yaw, d - carried);
+            }
+        }
         for &(id, pos, yaw, pitch, pose, sprinting, frame) in &list {
             if Some(id) == driving {
                 continue;
