@@ -259,7 +259,7 @@ pub fn register(r: &mut Registry) {
     });
     r.config(&HALF_DAMAGE).bool(false).world();
     r.before_event(&actions::BREAK_BLOCK, |q| if GOLD.is(q.state()) && PROTECT_GOLD.get() { Verdict::Deny } else { Verdict::Abstain });
-    r.modify(&chain::DAMAGE, stage::FINAL, |m| {
+    r.modify(&chain::DAMAGE, &phase::FINAL, |m| {
         if HALF_DAMAGE.get() {
             m.value *= 0.5;
         }
@@ -987,7 +987,12 @@ const OPS: &[(&str, &str, Run)] = &[
     }),
     // A stick with a diamond over it, tinted red: a stack's own layered picture.
     ("layered", "<index:int>", |w, cmd, player, _| {
-        let s = ItemStack::new(item("base:stick")?, 1).with_layers(Layers::new().layer("base:stick").layer("base:diamond").tint(0xFF2020));
+        let s = ItemStack::new(item("base:stick")?, 1).with_layers(
+            Layers::new()
+                .layer("base:stick")
+                .layer("base:diamond")
+                .tint(0xFF2020),
+        );
         w.inventory(player).set(int(cmd, "index")?, s);
         Ok(String::new())
     }),
@@ -1075,17 +1080,12 @@ const OPS: &[(&str, &str, Run)] = &[
         let (v, text) = w.attribute_explain(owner(w, cmd)?, Attribute::generated(word(cmd, "attribute")?.to_string()));
         Ok(format!("{v} | {text}"))
     }),
-    ("attr_mod", "@owner <attribute:word> <mod:word> <op:int> <amount:float> <ticks:int>", |w, cmd, _, _| {
+    ("attr_mod", "@owner <attribute:word> <mod:word> <step:word> <amount:float> <ticks:int>", |w, cmd, _, _| {
         let o = owner(w, cmd)?;
         let amount = cmd.float("amount").ok_or("missing amount")?;
-        w.attribute_add_modifier(
-            o,
-            Attribute::generated(word(cmd, "attribute")?.to_string()),
-            word(cmd, "mod")?,
-            int(cmd, "op")?,
-            amount,
-            int(cmd, "ticks")?,
-        );
+        let attr = Attribute::generated(word(cmd, "attribute")?.to_string());
+        let m = Modifier::step(attr, Step::generated(word(cmd, "step")?.to_string()), amount);
+        w.attribute_add_modifier(o, word(cmd, "mod")?, &m, int(cmd, "ticks")?);
         Ok(String::new())
     }),
     ("attr_rm", "@owner <attribute:word> <mod:word>", |w, cmd, _, _| {
@@ -1130,13 +1130,13 @@ const OPS: &[(&str, &str, Run)] = &[
         let base = 6.0;
         let q = abi::Query { entity: player, item: id(cmd, "item")?, amount: base, ..query() };
         let fell = w.entity(player).map_or(-1.0, |s| s.fall_distance);
-        Ok(format!("{} {fell}", w.chain_compute(&chain::ATTACK_DAMAGE, base, &q)))
+        Ok(format!("{} {fell}", w.chain_compute(&attribute::ATTACK_DAMAGE, base, &q)))
     }),
     // The player hits `id` as if having fallen `fall` blocks first.
     ("hit_falling", "<id:int> <fall:float>", |w, cmd, player, _| {
         w.entity_modify(player)
             .fall_distance(cmd.float("fall").unwrap_or(0.0) as f32);
-        w.damage(int(cmd, "id")?, 1.0, player, damage_cause::ATTACK);
+        w.damage(int(cmd, "id")?, Damage::new(1.0, damage_cause::ATTACK).by(player));
         Ok(String::new())
     }),
     // Three blocks up, flying there: landing would end the flight.
@@ -1175,12 +1175,12 @@ const OPS: &[(&str, &str, Run)] = &[
     }),
     ("hurt", "<id:int> <amount:float>", |w, cmd, player, _| {
         let amount = cmd.float("amount").ok_or("missing amount")? as f32;
-        Ok((w.damage(int(cmd, "id")?, amount, player, abi::damage_cause::ATTACK) as u32).to_string())
+        Ok((w.damage(int(cmd, "id")?, Damage::new(amount, abi::damage_cause::ATTACK).by(player)) as u32).to_string())
     }),
     ("pose", "", |w, _, player, _| Ok(w.entity(player).map_or(0, |e| e.pose).to_string())),
     ("hurt_me", "<amount:float>", |w, cmd, player, _| {
         let amount = cmd.float("amount").ok_or("missing amount")? as f32;
-        Ok((w.damage(player, amount, 0, abi::damage_cause::ATTACK) as u32).to_string())
+        Ok((w.damage(player, Damage::new(amount, abi::damage_cause::ATTACK)) as u32).to_string())
     }),
     ("snapshot", "<from:pos> <to:pos>", |w, cmd, _, _| {
         let (p, q) = (pos(cmd, "from")?, pos(cmd, "to")?);

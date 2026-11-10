@@ -222,7 +222,7 @@ fn blast(w: &World, id: u64, at: Vec3, radius: f64) {
         let d = (s.pos - at).length_squared().sqrt();
         let impact = (1.0 - d / (radius * 2.0)).max(0.0);
         let damage = (impact * impact + impact) / 2.0 * 7.0 * radius * 2.0 + 1.0;
-        w.damage(other, damage as f32, id, damage_cause::EXPLOSION);
+        w.damage(other, Damage::new(damage as f32, damage_cause::EXPLOSION).by(id));
     }
     // Vanilla's: one going off in a liquid breaks nothing, and liquids don't break at all.
     if w.block_flags(block_pos_of(at)) & abi::block_flags::LIQUID == 0 {
@@ -284,7 +284,12 @@ fn arrow_flies(w: &World, id: u64, st: &EntityState) -> bool {
         .into_iter()
         .find(|&e| e != id && e != shooter && w.entity(e).is_some_and(|s| s.kind != st.kind));
     if let Some(target) = hit {
-        w.damage(target, 3.0, shooter, damage_cause::ATTACK);
+        w.damage(
+            target,
+            Damage::new(3.0, damage_cause::ATTACK)
+                .by(shooter)
+                .through(id),
+        );
         w.despawn(id);
     } else if st.flags & entity_state::BLOCKED != 0 || st.on_ground != 0 || st.age > 100 {
         w.despawn(id);

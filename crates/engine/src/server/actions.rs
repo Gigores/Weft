@@ -212,7 +212,7 @@ impl Server {
                 e.in_liquid = here.in_liquid;
                 r.fall_effects(c, entity, fell, splash);
                 if let Some(amount) = fell.and_then(|f| r.fall_damage(c, entity, f)) {
-                    r.damage(c, entity, amount, 0, abi::damage_cause::FALL);
+                    r.damage(c, entity, &abi::Damage::new(amount, abi::damage_cause::FALL));
                 }
             }
 
@@ -344,8 +344,7 @@ impl Server {
 
             ToServer::Attack(target) => {
                 let Some((r, entity)) = self.region(pi) else { return };
-                let (Some(me), Some(t)) = (r.entities.get(entity), r.entities.get(target)) else { return };
-                if !in_reach(c, r, me, t) {
+                if !in_reach(c, r, entity, target) {
                     return;
                 }
                 r.melee(c, entity, target);
@@ -360,12 +359,7 @@ impl Server {
             ToServer::Interact(target) => {
                 let Some((r, entity)) = self.region(pi) else { return };
                 let Some(kind) = r.entities.get(target).map(|e| e.kind) else { return };
-                if !r
-                    .entities
-                    .get(entity)
-                    .zip(r.entities.get(target))
-                    .is_some_and(|(me, t)| in_reach(c, r, me, t))
-                {
+                if !in_reach(c, r, entity, target) {
                     return;
                 }
                 let held = r.entities.held(entity);
@@ -596,11 +590,12 @@ impl Server {
 
 /// Within its `ENTITY_REACH`, from the eyes to the nearest point of the target's box, like
 /// modern's; a player's with room for what its client saw last.
-pub(crate) fn in_reach(c: &Content, d: &Dim, me: &Entity, target: &Entity) -> bool {
+pub(crate) fn in_reach(c: &'static Content, d: &mut Dim, me: u64, target: u64) -> bool {
+    let reach = d.attribute(c, me, crate::registry::attr::ENTITY_REACH, false);
+    let (Some(me), Some(target)) = (d.entities.get(me), d.entities.get(target)) else { return false };
     let eye = me.pos + DVec3::Y * me.eye(c);
     let b = target.aabb(c);
-    let slack = if me.player { ENTITY_SLACK } else { 0.0 };
-    let reach = d.attribute(c, me.id, crate::registry::attr::ENTITY_REACH, false) + slack;
+    let reach = reach + if me.player { ENTITY_SLACK } else { 0.0 };
     (eye.clamp(b.min, b.max) - eye).length_squared() <= reach * reach && (me.player || sees(c, d, eye, target))
 }
 

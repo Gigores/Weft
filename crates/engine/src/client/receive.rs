@@ -181,10 +181,10 @@ impl Client {
             ToClient::StopSprint => self.sprint_stopped = true,
             ToClient::LodColumns { dim, all, cols } => self.lod.set_columns(dim, all, &cols),
             ToClient::Camera { mode, locked, transition, easing } => self.camera_from_server(mode, locked, transition, easing),
-            ToClient::Knock { away } => {
-                let away = Vec3::from_array(away).as_dvec3();
+            ToClient::Knock { push } => {
+                let push = Vec3::from_array(push).as_dvec3();
                 let resist = self.attribute(crate::registry::attr::KNOCKBACK_RESISTANCE) as f64;
-                self.player.vel = physics::knock(self.player.vel, away, self.player.on_ground, resist);
+                self.player.vel = physics::knock(self.player.vel, push, self.player.on_ground, resist);
             }
             ToClient::Velocity { add } => self.player.vel += Vec3::from_array(add).as_dvec3(),
             ToClient::SetVelocity(v) => self.player.vel = Vec3::from_array(v).as_dvec3(),

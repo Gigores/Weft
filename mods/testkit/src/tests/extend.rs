@@ -81,7 +81,7 @@ pub async fn status_effects(t: T) -> R {
     t.until("drank", Duration::from_secs(5), |t| t.c().inventory_slot(0).item == weft_sdk::Item::named("base:glass_bottle").id())
         .await?;
     t.secs(0.3).await?;
-    t.check((attr(&t, "core:attack_damage").await? - 3.0).abs() < 1e-6, "the potion's strength");
+    t.check((attr(&t, "core:attack_damage").await? - 4.0).abs() < 1e-6, "the potion's strength: a bare hand's 1 and 3");
     Ok(())
 }
 

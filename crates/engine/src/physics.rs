@@ -51,16 +51,17 @@ pub fn gravity_per_tick(gravity: f64) -> f64 {
     gravity * crate::world::TICK * crate::world::TICK
 }
 
-/// Vanilla's knockback, in blocks per tick: half the speed, 0.4 away (`away` is flat and of length
-/// 1) and on the ground up, never more than that up; `resist` (`KNOCKBACK_RESISTANCE`) takes its
-/// share off, all of it leaving the speed alone.
-pub fn knock(vel: DVec3, away: DVec3, on_ground: bool, resist: f64) -> DVec3 {
-    let strength = 0.4 * (1.0 - resist.clamp(0.0, 1.0));
+/// Vanilla's knockback, in blocks per tick: half the speed, `push` away (flat, its length the
+/// strength, a hurt's 0.4) and on the ground as much up, never more than 0.4 up; `resist`
+/// (`KNOCKBACK_RESISTANCE`) takes its share off, all of it leaving the speed alone.
+pub fn knock(vel: DVec3, push: DVec3, on_ground: bool, resist: f64) -> DVec3 {
+    let push = push.with_y(0.0) * (1.0 - resist.clamp(0.0, 1.0));
+    let strength = push.length();
     if strength <= 0.0 {
         return vel;
     }
-    let y = if on_ground { (vel.y / 2.0 + strength).min(strength) } else { vel.y };
-    DVec3::new(vel.x / 2.0 + away.x * strength, y, vel.z / 2.0 + away.z * strength)
+    let y = if on_ground { (vel.y / 2.0 + strength).min(0.4) } else { vel.y };
+    DVec3::new(vel.x / 2.0 + push.x, y, vel.z / 2.0 + push.z)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1067,7 +1068,7 @@ mod knock_tests {
 
     #[test]
     fn knock_is_vanillas() {
-        let away = DVec3::X;
+        let away = DVec3::X * 0.4;
         // On the ground: half the speed, away and up, never more than that up.
         assert_eq!(knock(DVec3::new(0.2, 0.0, 0.1), away, true, 0.0), DVec3::new(0.5, 0.4, 0.05));
         assert_eq!(knock(DVec3::new(0.0, 0.3, 0.0), away, true, 0.0).y, 0.4);

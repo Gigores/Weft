@@ -236,8 +236,9 @@ impl Dim {
             .get(player)
             .is_some_and(|e| e.mode.has(crate::tag_bits::game_mode::NO_COSTS));
         if let Some(&(l, empty)) = c.item_liquid.get(&held.item) {
+            let reach = self.block_reach(c, player);
             let hit = self
-                .look_ray(c, player, self.block_reach(c, player), false)
+                .look_ray(c, player, reach, false)
                 .filter(|h| h.frame == 0)?;
             let source = c.liquids[l as usize].first_state;
             // Into what holds liquid, with the same say as placing a block.
@@ -281,8 +282,9 @@ impl Dim {
             }
             return Some(if creative || empty == 0 { held } else { ItemStack::new(empty, 1) });
         }
+        let reach = self.block_reach(c, player);
         let hit = self
-            .look_ray(c, player, self.block_reach(c, player), true)
+            .look_ray(c, player, reach, true)
             .filter(|h| h.frame == 0)?;
         let f = decode(c, hit.state).filter(|f| f.source)?;
         let filled = *c.containers.get(&(held.item, f.id))?;

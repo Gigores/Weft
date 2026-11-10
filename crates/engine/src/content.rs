@@ -146,15 +146,17 @@ pub struct StateInfo {
     pub cells: Vec<(IVec3, u8)>,
 }
 
-/// An attribute modifier something gives (`abi::Modifier`) resolved.
+/// An attribute modifier something gives (`abi::Modifier`) resolved: the step and the phase it
+/// runs in by id.
 #[derive(Clone, Copy, Debug)]
 pub struct SourceMod {
     pub attr: u32,
-    pub op: u32,
+    pub step: u32,
+    pub phase: u32,
     pub amount: f64,
     pub worn: bool,
     pub when: Option<u32>,
-    /// An entity effect's: only at this level, as it is; 0 at every level, times the level.
+    /// An entity effect's: only at this level; 0 once for every level it has.
     pub level: u32,
 }
 
@@ -1429,6 +1431,11 @@ impl Content {
         crate::world::TICK as f32 / secs
     }
 
+    /// The attribute modifiers a stack gives while held or worn: its item's.
+    pub fn stack_modifiers(&self, s: &abi::ItemStack) -> &[SourceMod] {
+        self.source_mods.items.get(&s.item).map_or(&[], |v| &v[..])
+    }
+
     /// Mining the block with `tool` (empty: the hand) harvests it: it needs no tool, or this
     /// one fits and is of a high enough level.
     pub fn harvests(&self, state: u32, tool: &abi::ItemStack) -> bool {
@@ -1852,7 +1859,8 @@ struct Lookups<'a> {
 /// Merges per-mod registrars into frozen content. Ids are assigned in name order, so they do not
 /// depend on which mod finished registering first. The order of the stages is the meaning here:
 /// each one reads what the ones before it settled.
-pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content, Vec<String>> {
+/// `step_order` is the pack's own order of steps (`config/step_order.txt`).
+pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str) -> Result<Content, Vec<String>> {
     let order = load_order(&mods);
     for (m, o) in mods.iter_mut().zip(&order) {
         m.order = *o;
@@ -2005,6 +2013,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>) -> Result<Content
         &mut tables,
         &mut conds,
         &mod_name,
+        step_order,
         &mut errors,
     );
     // The kinds frozen with the game (poses, entity effects ...) get their tables before what
@@ -2674,12 +2683,7 @@ fn component_ids(components: &Components) -> Ids {
 }
 
 /// What hot code reads per state (physics, light, breaking) goes into flat fields.
-fn flatten_components(
-    states: &mut [StateInfo],
-    components: &Components,
-    ids: &Ids,
-    conds: &mut crate::conditions::Texts,
-) {
+fn flatten_components(states: &mut [StateInfo], components: &Components, ids: &Ids, conds: &mut crate::conditions::Texts) {
     let id = |n: &str| components.id(n);
     let get = |state: u32, name: &str| id(name).and_then(|c| components.bytes(comps::BLOCK, state, c));
     let f32_of = |state: u32, name: &str| get(state, name).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
@@ -3310,14 +3314,30 @@ fn resolve_source_mods(
     errors: &mut Vec<String>,
 ) -> SourceMods {
     let mut out = SourceMods::default();
+    let steps = &game.steps;
     let mut resolve = |list: Vec<abi::Modifier>| -> Vec<SourceMod> {
         list.into_iter()
-            .filter_map(|m| match game.attr_names.get(&m.attribute) {
-                Some(&attr) => Some(SourceMod { attr, op: m.op, amount: m.amount, worn: m.worn, when: conds.all(&m.when), level: m.level }),
-                None => {
+            .filter_map(|m| {
+                let Some(&attr) = game.attr_names.get(&m.attribute) else {
                     errors.push(format!("modifier: no attribute {}", m.attribute));
-                    None
-                }
+                    return None;
+                };
+                let step_name = if m.step.is_empty() { abi::step::ADD } else { &m.step };
+                let Some(&step) = steps.names.get(step_name) else {
+                    errors.push(format!("modifier of {}: no step {step_name}", m.attribute));
+                    return None;
+                };
+                let phase = match m.phase.as_str() {
+                    "" => steps.defs[step as usize].phase,
+                    p => match steps.phase_names.get(p) {
+                        Some(&p) => p,
+                        None => {
+                            errors.push(format!("modifier of {}: no phase {p}", m.attribute));
+                            return None;
+                        }
+                    },
+                };
+                Some(SourceMod { attr, step, phase, amount: m.amount, worn: m.worn, when: conds.all(&m.when), level: m.level })
             })
             .collect()
     };

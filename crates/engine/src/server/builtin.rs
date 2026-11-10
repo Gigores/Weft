@@ -289,7 +289,7 @@ fn clear(s: &mut Server, x: &Ctx) -> Vec<Msg> {
         let who = x.targets(s, "who");
         for &(d, id) in &who {
             if let Some(r) = s.dims[d as usize].entity_region(id) {
-                r.damage(c, id, f32::MAX, 0, damage::VOID);
+                r.damage(c, id, &weft_abi::Damage::new(f32::MAX, damage::VOID));
             }
         }
         return say("clear.killed", vec![int(who.len())]);

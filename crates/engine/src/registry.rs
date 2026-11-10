@@ -394,9 +394,7 @@ pub struct Game {
     pub keys: Vec<KeyDef>,
     pub events: Vec<EventDef>,
     pub event_names: FxHashMap<String, u32>,
-    pub interceptors: FxHashMap<String, Vec<(ModId, Callback)>>,
-    /// Steps per chain in run order: (stage, owner, modifier).
-    pub modifiers: FxHashMap<String, Vec<(u32, ModId, Callback)>>,
+    pub steps: crate::steps::Steps,
     pub attributes: Vec<AttrDef>,
     pub attr_names: FxHashMap<String, u32>,
     /// The engine component holding entities' attribute modifiers.
@@ -664,7 +662,7 @@ fn engine_components() -> Vec<RawEntry> {
     let energy = (<abi::Energy as abi::Schema>::SCHEMA, cf::SAVE | cf::SYNC_MENU, vec![0; size_of::<abi::Energy>()]);
     // What items, entity kinds, poses and entity effects give (`content::SourceMods`).
     let modifiers = <Vec<abi::Modifier> as abi::data::Data>::schema();
-    let mut all = vec![decl(abi::comp::CONTENTS, "bytes"), decl(abi::comp::LAYERS, "bytes"), decl(abi::comp::MODIFIERS, &modifiers)];
+    let mut all = vec![decl(abi::comp::CONTENTS, "bytes"), decl(abi::comp::LAYERS, "str"), decl(abi::comp::MODIFIERS, &modifiers)];
     // Variable length (no bytes): attribute modifiers, timers, a block entity's own name (a
     // renamed chest).
     for (name, schema, flags, default) in [
@@ -762,9 +760,6 @@ pub struct RawGame {
     pub command_permissions: Vec<(String, u32)>,
     /// (owner, event, schema, handler).
     pub event_handlers: Vec<(ModId, String, String, Callback)>,
-    pub interceptors: Vec<(ModId, String, Callback)>,
-    /// (owner, chain, stage, modifier).
-    pub modifiers: Vec<(ModId, String, u32, Callback)>,
     /// (owner, component, schema, system).
     pub systems: Vec<(ModId, String, String, Callback)>,
 }
@@ -1188,27 +1183,31 @@ fn engine_game_modes() -> Vec<RawEntry> {
             .unwrap()
             .0
     };
-    let modifier =
-        |attribute: &str, op: u32, amount: f64| abi::Modifier { attribute: attribute.to_string(), op, amount, ..Default::default() };
+    let modifier = |attribute: &str, step: &str, amount: f64| abi::Modifier {
+        attribute: attribute.to_string(),
+        step: step.to_string(),
+        amount,
+        ..Default::default()
+    };
     let mode = |name: &str, flags: &[u32], modifiers: Vec<abi::Modifier>| {
         flags
             .iter()
             .fold(RawEntry::engine(abi::entry_kind::GAME_MODE, name), |e, f| e.tag(tag(*f)))
             .set(abi::comp::MODIFIERS, modifiers)
     };
-    let flies = || modifier(abi::attribute::CAN_FLY, abi::attr_op::ADD, 1.0);
-    let spared = || modifier(abi::attribute::INVULNERABLE, abi::attr_op::SET, 1.0);
+    let flies = || modifier(abi::attribute::CAN_FLY, abi::step::ADD, 1.0);
+    let spared = || modifier(abi::attribute::INVULNERABLE, abi::step::SET, 1.0);
     use crate::tag_bits::game_mode as f;
     // Unseen by mobs outside survival; creative reaches further.
-    let unseen = || modifier(abi::attribute::VISIBILITY, abi::attr_op::MULTIPLY_TOTAL, -1.0);
+    let unseen = || modifier(abi::attribute::VISIBILITY, abi::step::MUL, 0.0);
     vec![
         mode("core:survival", &[], Vec::new()),
         mode(
             "core:creative",
             &[f::INSTANT_BREAK, f::NO_COSTS, f::CREATIVE_INVENTORY],
             vec![
-                modifier(abi::attribute::BLOCK_REACH, abi::attr_op::ADD, 0.5),
-                modifier(abi::attribute::ENTITY_REACH, abi::attr_op::ADD, 2.0),
+                modifier(abi::attribute::BLOCK_REACH, abi::step::ADD, 0.5),
+                modifier(abi::attribute::ENTITY_REACH, abi::step::ADD, 2.0),
                 unseen(),
                 flies(),
                 spared(),
@@ -1394,6 +1393,10 @@ pub mod attr {
     pub const NIGHT_VISION: u32 = 23;
     pub const SWIM_SPEED: u32 = 24;
     pub const FLYING_SPEED: u32 = 25;
+    pub const CRIT_DAMAGE: u32 = 26;
+    pub const SWEEPING_DAMAGE_RATIO: u32 = 27;
+    pub const ATTACK_KNOCKBACK: u32 = 28;
+    pub const HURT_COOLDOWN: u32 = 29;
 }
 
 fn engine_attributes() -> Vec<RawEntry> {
@@ -1417,7 +1420,7 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::STEP_HEIGHT, 0.6, 0.0, 10.0),
         (a::GRAVITY, 1.0, -8.0, 8.0),
         (a::KNOCKBACK_RESISTANCE, 0.0, 0.0, 1.0),
-        (a::ATTACK_DAMAGE, 0.0, -1024.0, 1024.0),
+        (a::ATTACK_DAMAGE, 1.0, 0.0, 2048.0),
         (a::DAMAGE_RESISTANCE, 0.0, 0.0, 1.0),
         (a::FIRE_RESISTANCE, 0.0, 0.0, 1.0),
         (a::BURNING_TIME, 1.0, 0.0, 100.0),
@@ -1426,6 +1429,10 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::NIGHT_VISION, 0.0, 0.0, 1.0),
         (a::SWIM_SPEED, 1.0, 0.0, 16.0),
         (a::FLYING_SPEED, 1.0, 0.0, 16.0),
+        (a::CRIT_DAMAGE, 1.5, 0.0, 1024.0),
+        (a::SWEEPING_DAMAGE_RATIO, 0.0, 0.0, 1024.0),
+        (a::ATTACK_KNOCKBACK, 0.0, 0.0, 16.0),
+        (a::HURT_COOLDOWN, 10.0, 0.0, 1024.0),
     ]
     .iter()
     .map(|&(name, default, min, max)| {
@@ -1493,6 +1500,7 @@ pub fn engine_entries(kind: u32) -> Vec<RawEntry> {
             .iter()
             .map(|n| RawEntry::engine(kind, n))
             .collect(),
+        ek::PHASE | ek::STEP => crate::steps::engine_entries(kind),
         _ => Vec::new(),
     }
 }
@@ -1716,7 +1724,7 @@ fn engine_entities() -> Vec<RawEntry> {
                 abi::comp::MODIFIERS,
                 vec![abi::Modifier {
                     attribute: abi::attribute::INVULNERABLE.into(),
-                    op: abi::attr_op::SET,
+                    step: abi::step::SET.into(),
                     amount: 1.0,
                     ..Default::default()
                 }],
@@ -1918,6 +1926,7 @@ pub fn freeze(
     tables: &mut crate::entries::Tables,
     conds: &mut crate::conditions::Texts,
     mod_name: &dyn Fn(ModId) -> String,
+    step_order: &str,
     errors: &mut Vec<String>,
 ) -> Game {
     let mut g = Game::default();
@@ -1925,8 +1934,6 @@ pub fn freeze(
     let mut packets: Vec<(ModId, String, String, u32, Callback)> = Vec::new();
     let mut event_handlers: Vec<(ModId, String, String, Callback)> = Vec::new();
     let mut systems: Vec<(ModId, String, String, Callback)> = Vec::new();
-    let mut interceptors: Vec<(ModId, String, Callback)> = Vec::new();
-    let mut modifiers: Vec<(ModId, String, u32, Callback)> = Vec::new();
     let mut entries: Vec<RawEntry> = raws
         .iter_mut()
         .flat_map(|r| std::mem::take(&mut r.entries))
@@ -1936,8 +1943,6 @@ pub fn freeze(
         packets.extend(r.packets);
         event_handlers.extend(r.event_handlers);
         systems.extend(r.systems);
-        interceptors.extend(r.interceptors);
-        modifiers.extend(r.modifiers);
         world_ticks.extend(r.world_ticks);
         g.chat_format = r.chat_format.or(g.chat_format);
     }
@@ -2024,6 +2029,10 @@ pub fn freeze(
     });
     (g.damage_causes, g.damage_cause_names) =
         tables.bake(kind(ek::DAMAGE_CAUSE), ek::DAMAGE_CAUSE, mod_name, errors, |e, _| bake_damage_cause(e));
+    let (phases, _) = tables.bake(kind(ek::PHASE), ek::PHASE, mod_name, errors, |e, _| e.clone());
+    let phases = crate::steps::order_phases(&phases, errors);
+    let (steps, _) = tables.bake(kind(ek::STEP), ek::STEP, mod_name, errors, |e, _| e.clone());
+    g.steps = crate::steps::freeze(phases, &steps, step_order, errors);
     // The settings, with a binding per key.
     let keys: Vec<(String, String)> = g
         .keys
@@ -2216,7 +2225,7 @@ pub fn freeze(
     let (spawns, _) =
         tables.bake(kind(ek::SPAWN), ek::SPAWN, mod_name, errors, |e, errors| bake_spawn(e, &g, c, conds, dim_names, biome_names, errors));
     g.spawns = spawns.into_iter().flatten().collect();
-    link_handlers(&mut g, event_handlers, interceptors, modifiers, packets, order, errors);
+    link_handlers(&mut g, event_handlers, packets, order, errors);
 
     freeze_entity_storage(&mut g, c, decls, systems, entities.attach, order, errors);
 
@@ -2251,13 +2260,10 @@ pub fn freeze(
     g
 }
 
-/// Events with their handlers, interceptors, value chain modifiers and packet channels, each in
-/// mod order.
+/// Events with their handlers and packet channels, each in mod order.
 fn link_handlers(
     g: &mut Game,
     mut event_handlers: Vec<(ModId, String, String, Callback)>,
-    mut interceptors: Vec<(ModId, String, Callback)>,
-    mut modifiers: Vec<(ModId, String, u32, Callback)>,
     mut packets: Vec<(ModId, String, String, u32, Callback)>,
     order: &dyn Fn(ModId) -> u32,
     errors: &mut Vec<String>,
@@ -2282,17 +2288,6 @@ fn link_handlers(
         .collect();
     g.block_tick = g.event_names[abi::event::BLOCK_TICK];
     g.events = events;
-    interceptors.sort_by_key(|h| order(h.0));
-    for (owner, name, cb) in interceptors {
-        g.interceptors.entry(name).or_default().push((owner, cb));
-    }
-    modifiers.sort_by_key(|m| (m.2, order(m.0)));
-    for (owner, name, stage, cb) in modifiers {
-        g.modifiers
-            .entry(name)
-            .or_default()
-            .push((stage, owner, cb));
-    }
     packets.sort_by(|a, b| a.1.cmp(&b.1).then(a.3.cmp(&b.3)));
     for (owner, name, schema, side, cb) in packets {
         let id = *g.packet_names.entry(name.clone()).or_insert_with(|| {

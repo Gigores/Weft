@@ -699,7 +699,11 @@ impl Layers {
     }
     /// From `text` (full names, as `text` gives them).
     pub(crate) fn parse(text: &str) -> Layers {
-        Layers(abi::layers(text).map(|(name, tint)| (name.to_string(), tint)).collect())
+        Layers(
+            abi::layers(text)
+                .map(|(name, tint)| (name.to_string(), tint))
+                .collect(),
+        )
     }
 }
 

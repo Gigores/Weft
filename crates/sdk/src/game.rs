@@ -65,6 +65,41 @@ impl Spawn {
     }
 }
 
+/// A hurt described (`World::damage`): `Damage::new(4.0, &damage_causes::ATTACK).by(shooter)
+/// .through(arrow)`. Steps see all of it (`Query::other`, `direct`, `item`, `crit`).
+#[derive(Clone, Copy, Debug)]
+pub struct Damage(pub(crate) abi::Damage);
+
+impl Damage {
+    pub fn new(amount: f32, cause: impl Into<Id<crate::DamageCause>>) -> Damage {
+        Damage(abi::Damage::new(amount, cause.into().raw()))
+    }
+    /// Who did it.
+    pub fn by(mut self, source: u64) -> Self {
+        self.0.source = source;
+        self
+    }
+    /// What hit, when not `by` itself (the arrow): knockback goes away from it.
+    pub fn through(mut self, direct: u64) -> Self {
+        self.0.direct = direct;
+        self
+    }
+    /// What it was done with.
+    pub fn with(mut self, item: ItemStack) -> Self {
+        self.0.item = item;
+        self
+    }
+    /// The way it pushes, instead of away from what hit.
+    pub fn knock(mut self, way: impl Into<Vec3>) -> Self {
+        self.0.knock = way.into();
+        self
+    }
+    pub fn crit(mut self) -> Self {
+        self.0.crit = 1;
+        self
+    }
+}
+
 // ---------------------------------------------------------------- world helpers
 
 impl World {
@@ -228,19 +263,19 @@ impl World {
     }
     /// Up to its maximum: `damage` with a negative amount.
     pub fn heal(&self, id: u64, amount: f32) -> bool {
-        self.damage(id, -amount.max(0.0), 0, &crate::damage_causes::HEAL)
+        self.damage(id, Damage::new(-amount.max(0.0), &crate::damage_causes::HEAL))
     }
-    /// Hurts `id` (`source`: the entity that did it, 0 for none): the `HURT` question, the
-    /// `DAMAGE` chain, the `actions::HURT` event, armor and death as the cause says. A negative
-    /// `amount` heals instead, through the `HEAL` chain and the `ENTITY_HEALED` event, with none
-    /// of damage's consequences. True if health changed.
-    pub fn damage(&self, id: u64, amount: f32, source: u64, cause: impl Into<Id<crate::DamageCause>>) -> bool {
-        unsafe { (host().entity_damage)(self.raw(), id, amount, source, cause.into().raw()) != 0 }
+    /// Hurts `id` as `d` says: the `HURT` question, `question::RECOVERING`, the `DAMAGE` chain,
+    /// knockback, the `actions::HURT` event, death as the cause says. A negative amount heals
+    /// instead, through the `HEAL` chain and the `ENTITY_HEALED` event, with none of damage's
+    /// consequences. True if health changed.
+    pub fn damage(&self, id: u64, d: Damage) -> bool {
+        unsafe { (host().entity_damage)(self.raw(), id, &d.0) != 0 }
     }
     /// `id` hits `target` with what it holds, which wears, or bare handed with its kind's
     /// `.attack_damage(..)`, as strong as its swing is charged (`swing_strength`, by its
     /// `.attack_speed(..)` when bare handed). Other mods can forbid it (`question::ATTACK`) or
-    /// change it (`chain::ATTACK_DAMAGE`). True if it landed.
+    /// change it (`attribute::ATTACK_DAMAGE`, `chain::MELEE`, `question::CRIT`). True if it landed.
     pub fn attack(&self, id: u64, target: u64) -> bool {
         unsafe { (host().entity_attack)(self.raw(), id, target) != 0 }
     }
@@ -889,7 +924,7 @@ impl EntityBuilder<'_> {
     }
     /// Takes no damage (no hurt flash, health stays); `/clear` and the void still remove it.
     pub fn invulnerable(self) -> Self {
-        self.modifier(crate::Modifier::new(&crate::attribute::INVULNERABLE, abi::attr_op::SET, 1.0))
+        self.modifier(crate::Modifier::set(&crate::attribute::INVULNERABLE, 1.0))
     }
     /// Neither pushes nor is pushed by other entities (ghosts, projectiles).
     pub fn unpushable(self) -> Self {

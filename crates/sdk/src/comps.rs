@@ -264,6 +264,25 @@ pub mod sky {
     pub static ORDER: Component<i32, SkyObject> = Component::named(s::ORDER);
 }
 
+/// What a step is made of (`Registry::step`).
+pub mod step {
+    use crate::abi::comp::step as s;
+    use crate::kind::Step;
+    use crate::{Component, Text};
+    pub static CHAIN: Component<Text, Step> = Component::named(s::CHAIN);
+    pub static PHASE: Component<Text, Step> = Component::named(s::PHASE);
+    pub static AFTER: Component<Vec<String>, Step> = Component::named(s::AFTER);
+    pub static BEFORE: Component<Vec<String>, Step> = Component::named(s::BEFORE);
+    pub static CALL: Component<crate::abi::Callback, Step> = Component::named(s::CALL);
+}
+
+/// What a phase is made of (`Registry::phase`).
+pub mod phase {
+    use crate::kind::Phase;
+    use crate::{Component, Text};
+    pub static AFTER: Component<Text, Phase> = Component::named(crate::abi::comp::phase::AFTER);
+}
+
 /// What a HUD element is made of.
 pub mod hud_element {
     use crate::abi::comp::hud_element as h;

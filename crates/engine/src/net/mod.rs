@@ -328,7 +328,7 @@ messages! {
         /// Own synced components: (component id, bytes).
         Components(Vec<(u32, Vec<u8>)>),
         /// A hit knocks the player back, `away` being flat and of length 1 (`physics::knock`).
-        Knock { away: [f32; 3] },
+        Knock { push: [f32; 3] },
         /// Velocity change in blocks per tick (a mod's push, a sprinting hit).
         Velocity { add: [f32; 3] },
         /// A mod set the player's velocity, in blocks per tick.

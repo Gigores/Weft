@@ -160,15 +160,12 @@ pub static HOST: Host = Host {
     reg_event_handler,
     find_event,
     emit,
-    reg_interceptor,
     ask,
-    reg_chain_modifier,
     chain_compute,
     explanation,
     attribute,
     attribute_add_modifier,
     attribute_remove_modifier,
-    attribute_explain,
     reg_entry,
     mod_loaded,
     roll_loot,
@@ -671,9 +668,10 @@ unsafe extern "C" fn entity_get(w: *mut abi::WorldCtx, id: u64, out: *mut abi::E
     unsafe {
         let d = dim(w);
         let c = content();
+        let max = d.max_health(c, id);
         match d.entities.get(id) {
             Some(e) => {
-                *out = e.state(c, d.max_health(c, id));
+                *out = e.state(c, max);
                 (*out).pos = (d.place.to_local(e.pos).to_array()).into();
                 1
             }
@@ -746,7 +744,7 @@ unsafe extern "C" fn entity_set(w: *mut abi::WorldCtx, id: u64, set: u32, s: *co
                 .push(crate::server::DimEvent::Teleport { from: d.id, id, dim: d.id, pos: d.place.to_world(pos) });
         }
         if dies {
-            d.damage(c, id, f32::MAX, 0, weft_abi::damage_cause::VOID);
+            d.damage(c, id, &abi::Damage::new(f32::MAX, weft_abi::damage_cause::VOID));
         }
     }
 }
@@ -764,7 +762,7 @@ unsafe extern "C" fn entity_push(w: *mut abi::WorldCtx, id: u64, v: *const abi::
 unsafe extern "C" fn entity_walk(w: *mut abi::WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, keys: u32) {
     unsafe {
         let (d, c) = (dim(w), content());
-        let attr = |a| d.attribute(c, id, a, false) as f32;
+        let mut attr = |a| d.attribute(c, id, a, false) as f32;
         use crate::registry::attr as a;
         let (mul, jump_mul, can_fly, can_sprint) = (attr(a::MOVEMENT_SPEED), attr(a::JUMP_STRENGTH), attr(a::CAN_FLY), attr(a::CAN_SPRINT));
         if let Some(e) = d.entities.get_mut(id).filter(|e| !e.player) {
@@ -804,18 +802,12 @@ unsafe extern "C" fn raycast(
     }
 }
 
-unsafe extern "C" fn entity_damage(w: *mut abi::WorldCtx, id: u64, amount: f32, source: u64, cause: u32) -> u32 {
-    unsafe { dim(w).damage(content(), id, amount, source, cause) as u32 }
+unsafe extern "C" fn entity_damage(w: *mut abi::WorldCtx, id: u64, damage: *const abi::Damage) -> u32 {
+    unsafe { dim(w).damage(content(), id, &*damage) as u32 }
 }
 
 unsafe extern "C" fn entity_in_reach(w: *mut abi::WorldCtx, id: u64, target: u64) -> u32 {
-    unsafe {
-        let d = dim(w);
-        match (d.entities.get(id), d.entities.get(target)) {
-            (Some(me), Some(t)) => crate::server::actions::in_reach(content(), d, me, t) as u32,
-            _ => 0,
-        }
-    }
+    unsafe { crate::server::actions::in_reach(content(), dim(w), id, target) as u32 }
 }
 
 unsafe extern "C" fn entity_attack(w: *mut abi::WorldCtx, attacker: u64, target: u64) -> u32 {
@@ -1885,33 +1877,8 @@ unsafe extern "C" fn emit(w: *mut abi::WorldCtx, event: u32, value: abi::Slice<u
     unsafe { dim(w).emit(content(), event, value.as_slice()) }
 }
 
-unsafe extern "C" fn reg_interceptor(r: *mut abi::Registrar, name: Str, cb: Callback) {
-    unsafe {
-        let r = reg(r);
-        let owner = r.owner;
-        r.game
-            .interceptors
-            .push((owner, name.as_str().to_string(), cb));
-    }
-}
-
-unsafe extern "C" fn ask(w: *mut abi::WorldCtx, name: Str, query: *mut abi::Query) -> u32 {
-    unsafe {
-        let mut q = *query;
-        let ok = dim(w).ask(content(), name.as_str(), &mut q);
-        *query = q;
-        ok as u32
-    }
-}
-
-unsafe extern "C" fn reg_chain_modifier(r: *mut abi::Registrar, name: Str, stage: u32, cb: Callback) {
-    unsafe {
-        let r = reg(r);
-        let owner = r.owner;
-        r.game
-            .modifiers
-            .push((owner, name.as_str().to_string(), stage, cb));
-    }
+unsafe extern "C" fn ask(w: *mut abi::WorldCtx, name: Str, query: *const abi::Query) -> u32 {
+    unsafe { dim(w).ask(content(), name.as_str(), &*query) as u32 }
 }
 
 unsafe extern "C" fn chain_compute(w: *mut abi::WorldCtx, name: Str, base: f64, ctx: *const abi::Query, explain: u32) -> f64 {
@@ -1932,21 +1899,33 @@ unsafe extern "C" fn explanation() -> Str {
     })
 }
 
-unsafe extern "C" fn attribute(w: *mut abi::WorldCtx, entity: u64, name: Str) -> f64 {
-    unsafe { dim(w).attribute_named(content(), entity, name.as_str(), false) }
+unsafe extern "C" fn attribute(w: *mut abi::WorldCtx, entity: u64, name: Str, explain: u32) -> f64 {
+    unsafe { dim(w).attribute_named(content(), entity, name.as_str(), explain != 0) }
 }
 
-unsafe extern "C" fn attribute_explain(w: *mut abi::WorldCtx, entity: u64, name: Str) -> f64 {
-    unsafe { dim(w).attribute_named(content(), entity, name.as_str(), true) }
-}
-
-unsafe extern "C" fn attribute_add_modifier(w: *mut abi::WorldCtx, entity: u64, name: Str, id: Str, op: u32, amount: f64, ticks: u64) {
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn attribute_add_modifier(
+    w: *mut abi::WorldCtx,
+    entity: u64,
+    name: Str,
+    id: Str,
+    step: Str,
+    phase: Str,
+    amount: f64,
+    ticks: u64,
+) {
     unsafe {
         let c = content();
-        match c.game.attr_names.get(name.as_str()) {
-            Some(&a) => dim(w).set_attr_modifier(c, entity, a, id.as_str(), op, amount, ticks),
-            None => log::error!("no attribute {}", name.as_str()),
+        let (name, step, phase) = (name.as_str(), step.as_str(), phase.as_str());
+        let Some(&a) = c.game.attr_names.get(name) else { return misuse("attribute_add_modifier", || format!("no attribute {name}")) };
+        if !c.game.steps.names.contains_key(step) {
+            return misuse("attribute_add_modifier", || format!("no step {step}"));
         }
+        if !phase.is_empty() && !c.game.steps.phase_names.contains_key(phase) {
+            return misuse("attribute_add_modifier", || format!("no phase {phase}"));
+        }
+        let phase = if phase.is_empty() { 0 } else { crate::registry::name_hash(phase) };
+        dim(w).set_attr_modifier(c, entity, a, id.as_str(), crate::registry::name_hash(step), phase, amount, ticks);
     }
 }
 

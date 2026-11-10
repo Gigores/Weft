@@ -456,7 +456,8 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
         })
         .collect();
 
-    let content = content::freeze(metas, regs).map_err(|e| e.join("\n"))?;
+    let step_order = std::fs::read_to_string(off_file.with_file_name("step_order.txt")).unwrap_or_default();
+    let content = content::freeze(metas, regs, &step_order).map_err(|e| e.join("\n"))?;
     log::info!(
         "{} mods, {} blocks ({} states), {} items, {} dimensions in {:.1} ms",
         mods.len(),

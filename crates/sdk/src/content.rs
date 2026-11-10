@@ -97,6 +97,8 @@ pub mod kind {
         SpawnRule = crate::abi::entry_kind::SPAWN,
         Terrain = crate::abi::entry_kind::TERRAIN,
         BoneMotion = crate::abi::entry_kind::BONE_MOTION,
+        Step = crate::abi::entry_kind::STEP,
+        Phase = crate::abi::entry_kind::PHASE,
         GizmoGroup,
         Shader,
         Question,
@@ -439,8 +441,8 @@ impl EntityEffectBuilder<'_> {
         h.0.level = level.max(1);
         self.push(&crate::comps::entity_effect::HAZARDS, h.0)
     }
-    /// A modifier its entity has while it is on (`Modifier::add(&attribute::MOVEMENT_SPEED, 0.2)`),
-    /// its amount times the level; a `attr_op::SET` one sets what it says at every level.
+    /// A modifier its entity has while it is on (`Modifier::percent(&attribute::MOVEMENT_SPEED,
+    /// 0.2)`), run once for every level (`set` gives the same at any level).
     pub fn modifier(self, m: crate::Modifier) -> Self {
         self.push(&crate::comps::entity_effect::MODIFIERS, m.0)
     }
@@ -730,7 +732,7 @@ impl GameModeBuilder<'_> {
     pub fn flight(self, how: Flight) -> Self {
         use abi::comp::game_mode as g;
         match how {
-            Flight::Allowed => self.modifier(&crate::attribute::CAN_FLY, abi::attr_op::ADD, 1.0),
+            Flight::Allowed => self.modifier(crate::Modifier::add(&crate::attribute::CAN_FLY, 1.0)),
             Flight::Always => self.tag(g::ALWAYS_FLY),
             Flight::None => self,
         }
@@ -744,7 +746,7 @@ impl GameModeBuilder<'_> {
     }
     /// No damage, hunger or air (`attribute::INVULNERABLE` 1).
     pub fn invulnerable(self) -> Self {
-        self.modifier(&crate::attribute::INVULNERABLE, abi::attr_op::SET, 1.0)
+        self.modifier(crate::Modifier::set(&crate::attribute::INVULNERABLE, 1.0))
     }
     /// Through blocks.
     pub fn noclip(self) -> Self {
@@ -767,9 +769,8 @@ impl GameModeBuilder<'_> {
         self.tag(abi::comp::game_mode::CREATIVE_INVENTORY)
     }
     /// An attribute modifier its players have while in it (longer reach, `visibility` 0).
-    pub fn modifier(self, attribute: &crate::Attribute, op: u32, amount: f64) -> Self {
-        let m = abi::Modifier { attribute: attribute.name().to_string(), op, amount, ..Default::default() };
-        self.push(&crate::comps::game_mode::MODIFIERS, m)
+    pub fn modifier(self, m: crate::Modifier) -> Self {
+        self.push(&crate::comps::game_mode::MODIFIERS, m.0)
     }
 }
 
@@ -845,6 +846,8 @@ pub type SoundCategory = Handle<kind::SoundCategory>;
 pub type CreativeTab = Handle<kind::CreativeTab>;
 pub type Question = Handle<kind::Question>;
 pub type Chain = Handle<kind::Chain>;
+pub type Step = Handle<kind::Step>;
+pub type Phase = Handle<kind::Phase>;
 pub type Attribute = Handle<kind::Attribute>;
 
 /// What puts a block or an item in `tab`.
@@ -2502,7 +2505,10 @@ impl ItemBuilder<'_> {
     /// Tints the layer just added `0xRRGGBB` (its own picture if none was), multiplied: white
     /// parts take the color. One picture for many items of a color.
     pub fn tint(self, color: u32) -> Self {
-        let layers = self.set_layers().unwrap_or_else(|| self.own_layers()).tint(color);
+        let layers = self
+            .set_layers()
+            .unwrap_or_else(|| self.own_layers())
+            .tint(color);
         self.with_layers(layers)
     }
     /// The layers given so far, if any.
@@ -2517,7 +2523,11 @@ impl ItemBuilder<'_> {
     }
     /// Its picture when none is given: `<ns>:item/<name>`.
     fn own_layers(&self) -> crate::Layers {
-        let (ns, path) = self.e.name.split_once(':').unwrap_or((self.reg.ns, self.e.name.as_str()));
+        let (ns, path) = self
+            .e
+            .name
+            .split_once(':')
+            .unwrap_or((self.reg.ns, self.e.name.as_str()));
         crate::Layers::parse(&format!("{ns}:item/{path}"))
     }
     fn with_layers(self, layers: crate::Layers) -> Self {

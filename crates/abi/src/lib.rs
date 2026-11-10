@@ -431,11 +431,15 @@ pub mod entry_kind {
     pub const TERRAIN: u32 = 42;
     /// How a bone of a model file moves by itself, named `<model>/<bone>`.
     pub const BONE_MOTION: u32 = 43;
+    /// Code that changes a value (`comp::step`): on a chain, or used by modifiers.
+    pub const STEP: u32 = 44;
+    /// A place in the order steps run in (`comp::phase`).
+    pub const PHASE: u32 = 45;
     /// How many kinds there are; each has a component table (`ComponentTable`), empty for word
     /// sets and component declarations.
     pub const COUNT: usize = NAMES.len();
     /// Each kind's name for messages, by value.
-    pub const NAMES: [&str; 44] = [
+    pub const NAMES: [&str; 46] = [
         "block",
         "item",
         "entity",
@@ -480,6 +484,8 @@ pub mod entry_kind {
         "spawn rule",
         "terrain",
         "bone motion",
+        "step",
+        "phase",
     ];
 }
 
@@ -1365,6 +1371,23 @@ pub mod comp {
         pub const NO_FALL_DAMAGE: &str = "entity.no_fall_damage";
         /// Others don't push it away, which every kind does otherwise.
         pub const UNPUSHABLE: &str = "entity.unpushable";
+    }
+
+    /// A step's (`entry_kind::STEP`): `CHAIN` (`str`, the value it changes every time it is
+    /// computed; none: it only runs where a modifier names it), `PHASE` (`str`, `phase::*` or a
+    /// mod's), `AFTER` and `BEFORE` (`[str]`, steps of the same phase it runs after or before),
+    /// `CALL` (`callback`, `StepArgs`; the engine's own steps have none until a mod sets one).
+    pub mod step {
+        pub const CHAIN: &str = "step.chain";
+        pub const PHASE: &str = "step.phase";
+        pub const AFTER: &str = "step.after";
+        pub const BEFORE: &str = "step.before";
+        pub const CALL: &str = "step.call";
+    }
+
+    /// A phase's (`entry_kind::PHASE`): `AFTER` (`str`), the phase it comes right after.
+    pub mod phase {
+        pub const AFTER: &str = "phase.after";
     }
 
     /// A bone motion's (`entry_kind::BONE_MOTION`): `GRAVITY`, the pull toward hanging straight
@@ -2713,15 +2736,17 @@ crate::data! {
 crate::data! {
     /// An attribute modifier something gives (`comp::MODIFIERS`): a game mode its players, an item
     /// while held in the main hand or (`worn`) in an equipment slot, a pose while in it, an entity
-    /// kind while all of `when` hold for it (`condition`; checked each tick).
+    /// kind while all of `when` hold for it (`condition`; checked each tick). It runs `step`
+    /// (`step::ADD`, `MUL`, `SET`, `PERCENT` or a mod's) with `amount`, in `phase` (empty: the
+    /// step's own).
     pub struct Modifier {
         pub attribute: alloc::string::String,
-        pub op: u32,
+        pub step: alloc::string::String,
+        pub phase: alloc::string::String,
         pub amount: f64,
         pub worn: bool,
         pub when: alloc::vec::Vec<alloc::string::String>,
-        /// An entity effect's: only at this level of it, as it is; 0, at every level, `amount`
-        /// times the level (a `SET` sets the same at every level).
+        /// An entity effect's: only at this level of it; 0, once for every level it has.
         pub level: u32,
     }
 }
@@ -3415,10 +3440,11 @@ pub struct Host {
     /// AI steering for this tick: horizontal direction, speed factor, and the movement keys a
     /// player would hold (`walk::*`), which the same physics and poses answer.
     pub entity_walk: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, dir: *const [f32; 2], speed: f32, keys: u32),
-    pub entity_damage: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, amount: f32, source: u64, cause: u32) -> u32,
-    /// `attacker` hits `target` with what it holds: the `ATTACK` question, the `ATTACK_DAMAGE`
-    /// chain from the held item's damage (else the kind's `attack_damage`), as strong as its
-    /// swing is charged. Non-zero if the hit landed.
+    /// Hurts `id` (a negative amount heals). Non-zero if it landed.
+    pub entity_damage: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, damage: *const Damage) -> u32,
+    /// `attacker` hits `target` with what it holds: the `ATTACK` question, its `ATTACK_DAMAGE`
+    /// against them through `chain::MELEE` (charge, crit), knockback and a sweep. Non-zero if the
+    /// hit landed.
     pub entity_attack: unsafe extern "C" fn(world: *mut WorldCtx, attacker: u64, target: u64) -> u32,
     /// `id` uses what is in its main hand, or its other one (`off`), on the block at `target`
     /// (null: on nothing) from `face`, as a player's right click does. 1 if it did something
@@ -3679,29 +3705,24 @@ pub struct Host {
     pub find_event: unsafe extern "C" fn(name: Str, schema: Str) -> u32,
     /// Queues one value of event `event` (its schema's size) for the end of the tick.
     pub emit: unsafe extern "C" fn(world: *mut WorldCtx, event: u32, value: Slice<u8>),
-    /// "May it happen" handler for question `name` (`question::*` or a mod's own): gets
-    /// `InterceptArgs` and sets `Query::verdict`. Any deny wins.
-    pub reg_interceptor: unsafe extern "C" fn(reg: *mut Registrar, name: Str, cb: Callback),
-    /// Asks the interceptors of `name`; 1 if allowed.
-    pub ask: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, query: *mut Query) -> u32,
-    /// Modifier on value chain `name`, run in order of `stage` (`stage::*`), then mod load order;
-    /// gets `ModifyArgs`.
-    pub reg_chain_modifier: unsafe extern "C" fn(reg: *mut Registrar, name: Str, stage: u32, cb: Callback),
+    /// Question `name` (`question::*`, `action::*` or a mod's own): its chain run from 1 (yes);
+    /// 1 if the answer is yes.
+    pub ask: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, query: *const Query) -> u32,
     /// Runs chain `name` from `base`. With `explain` non-zero the steps are kept for
     /// `explanation`.
     pub chain_compute: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, base: f64, ctx: *const Query, explain: u32) -> f64,
-    /// Steps of the last explained `chain_compute` or `attribute_explain` on this thread.
+    /// Steps of the last explained `chain_compute` or `attribute` on this thread.
     pub explanation: unsafe extern "C" fn() -> Str,
 
-    /// Its current value for an entity: base (the kind's component of the same name, else the
-    /// default), then modifiers by `attr_op`, clamped.
-    pub attribute: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str) -> f64,
-    /// Adds (or replaces, same `id`) a modifier for `ticks` (0 = until removed). Saved.
+    /// Its current value for an entity: its chain run from its base (the kind's component of the
+    /// same name, else a world rule or the default) with what the entity has on it, clamped.
+    /// With `explain` non-zero the steps are kept for `explanation`.
+    pub attribute: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str, explain: u32) -> f64,
+    /// Puts (or replaces, same `id`) step `step` with `amount` on it for `ticks` (0 = until
+    /// removed), in `phase` (empty: the step's own). Saved.
     pub attribute_add_modifier:
-        unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str, id: Str, op: u32, amount: f64, ticks: u64),
+        unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str, id: Str, step: Str, phase: Str, amount: f64, ticks: u64),
     pub attribute_remove_modifier: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str, id: Str),
-    /// Fills `explanation` with how the value came about; returns the value.
-    pub attribute_explain: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, name: Str) -> f64,
     /// An entry: a new one, an edit, a replacement or a removal (`EntryDesc::mode`).
     pub reg_entry: unsafe extern "C" fn(reg: *mut Registrar, entry: *const EntryDesc),
     /// Whether mod `id` is loaded, known from before any mod registers.
@@ -4309,11 +4330,15 @@ pub struct WorldTickArgs {
 pub struct Hurt {
     pub entity: u64,
     pub source: u64,
+    /// What hit, when not `source` itself (an arrow); 0 otherwise.
+    pub direct: u64,
     pub amount: f32,
     pub cause: u32,
+    pub crit: u32,
+    pub pad: u32,
 }
 impl Schema for Hurt {
-    const SCHEMA: &'static str = "{entity:u64,source:u64,amount:f32,cause:u32}";
+    const SCHEMA: &'static str = "{entity:u64,source:u64,direct:u64,amount:f32,cause:u32,crit:u32,pad:u32}";
 }
 
 #[repr(C)]
@@ -4442,76 +4467,136 @@ pub mod action {
 pub mod question {
     /// `entity` attacking `other` with `item`.
     pub const ATTACK: &str = "core:attack";
-}
-
-pub mod verdict {
-    pub const ABSTAIN: u32 = 0;
-    pub const ALLOW: u32 = 1;
-    pub const DENY: u32 = 2;
+    /// Whether `entity`'s melee hit on `other` with `item`, charged `charge`, is a critical one;
+    /// from no: `core:vanilla_crit` (`BASE`: full charge, falling, not on the ground, in a liquid,
+    /// on a ladder or sprinting).
+    pub const CRIT: &str = "core:crit";
+    /// Whether the hit also sweeps those beside `other`; from no: `core:vanilla_sweep` (`BASE`:
+    /// full charge with an item with `sweeps`, on the ground, not sprinting, not a crit).
+    pub const SWEEP: &str = "core:sweep";
+    /// Whether `entity` is still recovering from its last hurt, so that of this one only what goes
+    /// beyond the last lands, and it doesn't knock; from no: `core:hurt_cooldown` (`BASE`: its
+    /// `attribute::HURT_COOLDOWN` hasn't run out, and `cause` doesn't ignore it).
+    pub const RECOVERING: &str = "core:recovering";
 }
 
 /// What a question or a value chain is about; fields one does not use are 0.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Query {
-    pub verdict: u32,
     pub entity: u64,
     pub other: u64,
+    /// What hit, when not `other` itself: the arrow `other` shot.
+    pub direct: u64,
     pub pos: BlockPos,
     pub state: u32,
     pub item: u32,
     pub dim: u32,
     pub cause: u32,
     pub amount: f64,
+    /// A melee hit's: how charged its swing was (0..1) and whether it is a critical one.
+    pub charge: f32,
+    pub crit: u32,
     /// Valid for the call.
     pub text: Str,
 }
 defaults!(Query {
-    verdict: 0,
     entity: 0,
     other: 0,
+    direct: 0,
     pos: BlockPos::ZERO,
     state: 0,
     item: 0,
     dim: 0,
     cause: 0,
     amount: 0.0,
+    charge: 0.0,
+    crit: 0,
     text: Str::EMPTY
 });
 
+/// A hurt described (`Host::entity_damage`): `amount` of `cause` from `source` (who; 0 for
+/// nothing), through `direct` (what hit: the arrow; 0 for `source` itself), with `item` (what
+/// `source` hit with), a critical one or not. `knock` the way it pushes (0: away from `direct`, else
+/// `source`).
 #[repr(C)]
-pub struct InterceptArgs {
-    pub world: *mut WorldCtx,
-    pub question: Str,
-    pub query: *mut Query,
+#[derive(Clone, Copy, Debug)]
+pub struct Damage {
+    pub amount: f32,
+    pub cause: u32,
+    pub source: u64,
+    pub direct: u64,
+    pub item: ItemStack,
+    pub knock: Vec3,
+    pub crit: u32,
+}
+impl Damage {
+    /// `amount` of `cause` from nobody.
+    pub const fn new(amount: f32, cause: u32) -> Damage {
+        Damage { amount, cause, ..Damage::DEFAULT }
+    }
+}
+defaults!(Damage { amount: 0.0, cause: 0, source: 0, direct: 0, item: ItemStack::EMPTY, knock: Vec3::ZERO, crit: 0 });
+
+/// The engine's phases, in the order they run; a mod's goes after one of them
+/// (`comp::phase::AFTER`). Numbers usually use `ADD`, `PERCENT`, `MULTIPLY` and `OVERRIDE`;
+/// questions `RULES` and `OVERRIDE`; `FINAL` is for what has to see the finished value.
+pub mod phase {
+    /// What the thing is: a weapon's own damage, a set base.
+    pub const BASE: &str = "core:base";
+    pub const ADD: &str = "core:add";
+    /// Shares of the value this phase started from, added up (vanilla's percent modifiers).
+    pub const PERCENT: &str = "core:percent";
+    pub const MULTIPLY: &str = "core:multiply";
+    /// Where questions are answered by default.
+    pub const RULES: &str = "core:rules";
+    pub const OVERRIDE: &str = "core:override";
+    pub const FINAL: &str = "core:final";
+    /// All of them in order.
+    pub const ALL: [&str; 7] = [BASE, ADD, PERCENT, MULTIPLY, RULES, OVERRIDE, FINAL];
 }
 
-/// Stage of a modifier; steps of one stage run in mod load order.
-pub mod stage {
-    pub const ADD: u32 = 100;
-    pub const MULTIPLY: u32 = 200;
-    pub const FINAL: u32 = 300;
+/// The engine's steps that take a number (`StepArgs::arg`), for modifiers: `ADD` adds it
+/// (phase `ADD`), `MUL` multiplies by it (`MULTIPLY`), `SET` makes the value it (`OVERRIDE`),
+/// `PERCENT` adds that share of the value the phase started from (`PERCENT`).
+pub mod step {
+    pub const ADD: &str = "core:add";
+    pub const MUL: &str = "core:mul";
+    pub const SET: &str = "core:set";
+    pub const PERCENT: &str = "core:percent";
 }
 
 /// Value chains the engine runs.
 pub mod chain {
-    /// Damage an entity takes (`entity` hurt by `other`, `cause`), after `on_hurt` hooks.
+    /// Damage an entity takes (`entity` hurt by `other` through `direct`, `cause`, `crit`):
+    /// `core:resistance` (`MULTIPLY`), `core:not_lethal` (`FINAL`).
     pub const DAMAGE: &str = "core:damage";
-    /// Melee damage of `entity` hitting `other` holding `item`, from the item's
-    /// `attack_damage`.
-    pub const ATTACK_DAMAGE: &str = "core:attack_damage";
+    /// What a melee hit of `entity` on `other` with `item` does, from its `attribute::ATTACK_DAMAGE`
+    /// against them: `core:charge` (`MULTIPLY`, 0.2 + 0.8 x `charge` squared) and `core:crit`
+    /// (`MULTIPLY`, times `attribute::CRIT_DAMAGE` when `crit`).
+    pub const MELEE: &str = "core:melee";
+    /// How hard a hurt knocks `entity` away (0.4, vanilla's), before its knockback resistance.
+    pub const KNOCKBACK: &str = "core:knockback";
+    /// What a sweep does to each one beside the target, from the hit's damage: `core:sweep_damage`
+    /// (`BASE`, 1 + `attribute::SWEEPING_DAMAGE_RATIO` of it).
+    pub const SWEEP_DAMAGE: &str = "core:sweep_damage";
     /// Health an entity gains (`entity` healed by `other`, `cause`).
     pub const HEAL: &str = "core:heal";
 }
 
+/// One step's run: what the value is about, where it began (`base`) and where this phase began
+/// (`start`), the value to change, and the number a modifier gave the step (`arg`, 0 on a chain).
+/// A question's value is 1 for yes and 0 for no.
 #[repr(C)]
-pub struct ModifyArgs {
+pub struct StepArgs {
     pub world: *mut WorldCtx,
     pub chain: Str,
     pub ctx: *const Query,
     pub base: f64,
+    pub start: f64,
     /// In/out.
     pub value: f64,
+    pub arg: f64,
 }
 
 /// Attributes the engine reads.
@@ -4552,8 +4637,17 @@ pub mod attribute {
     pub const GRAVITY: &str = "core:gravity";
     /// Share of knockback it shrugs off (0..1).
     pub const KNOCKBACK_RESISTANCE: &str = "core:knockback_resistance";
-    /// Added to each of its melee hits (0; strength +3 a level).
+    /// What its melee hits do before their charge and crit (`chain::MELEE`): 1, its kind's
+    /// `attack_damage`, what it holds of it (`core:weapon`, `BASE`), strength +3 a level.
     pub const ATTACK_DAMAGE: &str = "core:attack_damage";
+    /// What a critical hit multiplies by (1.5).
+    pub const CRIT_DAMAGE: &str = "core:crit_damage";
+    /// Share of a hit's damage a sweep adds to its 1 (0; vanilla's sweeping edge).
+    pub const SWEEPING_DAMAGE_RATIO: &str = "core:sweeping_damage_ratio";
+    /// Extra knockback of its melee hits (0; a full charged sprinting hit 1 more, `core:sprint_knockback`).
+    pub const ATTACK_KNOCKBACK: &str = "core:attack_knockback";
+    /// Ticks after a hurt in which a weaker one doesn't land (10).
+    pub const HURT_COOLDOWN: &str = "core:hurt_cooldown";
     /// Share of damage taken off, after armor and the `DAMAGE` chain (0..1; resistance 0.2 a
     /// level). What pierces invulnerability gets through.
     pub const DAMAGE_RESISTANCE: &str = "core:damage_resistance";
@@ -4572,16 +4666,6 @@ pub mod attribute {
     pub const SWIM_SPEED: &str = "core:swim_speed";
     /// Multiplier on how fast it flies (1), on top of a player's own flight speed (the wheel).
     pub const FLYING_SPEED: &str = "core:flying_speed";
-}
-
-/// How an attribute modifier applies, like vanilla: ADD amounts sum onto the base, then times
-/// (1 + the sum of MUL_BASE), then times (1 + each MUL_TOTAL).
-pub mod attr_op {
-    pub const ADD: u32 = 0;
-    pub const MULTIPLY_BASE: u32 = 1;
-    pub const MULTIPLY_TOTAL: u32 = 2;
-    /// The value is the amount, whatever the rest says (the last one given wins): `/attribute`.
-    pub const SET: u32 = 3;
 }
 
 crate::data! {

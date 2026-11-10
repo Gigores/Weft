@@ -541,12 +541,8 @@ impl Entities {
     /// Whether any of `stack` would fit in its inventory.
     pub fn can_insert(&self, c: &Content, id: u64, stack: ItemStack) -> bool {
         self.inventories.get(&id).is_some_and(|inv| {
-            inv.iter().any(|s| {
-                s.is_empty()
-                    || (s.item == stack.item
-                        && s.data == stack.data
-                        && s.count < c.max_stack(&stack))
-            })
+            inv.iter()
+                .any(|s| s.is_empty() || (s.item == stack.item && s.data == stack.data && s.count < c.max_stack(&stack)))
         })
     }
 

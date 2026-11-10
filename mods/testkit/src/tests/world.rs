@@ -845,9 +845,9 @@ pub async fn persistence(t: T) -> R {
     let made = STICK.stack(3).with_wear(5);
     t.check_eq((made.item, made.count, made.wear(), made.without(&DAMAGE).data), (STICK.id(), 3, 5, 0), "a stack made from a handle");
     t.check_eq(value(&t.op("attr me core:movement_speed").await?), 1.0, "speed without modifiers");
-    t.op("attr_mod me core:movement_speed testkit:haste 1 0.5 40")
+    t.op("attr_mod me core:movement_speed testkit:haste core:percent 0.5 40")
         .await?;
-    t.op("attr_mod me core:max_health testkit:vigor 0 10 0")
+    t.op("attr_mod me core:max_health testkit:vigor core:add 10 0")
         .await?;
     let speed = t.op("attr me core:movement_speed").await?;
     t.check_eq(value(&speed), 1.5, "speed with +50% of base");

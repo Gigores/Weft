@@ -889,7 +889,7 @@ pub async fn movement_attributes(t: T) -> R {
         Ok::<f64, String>(((end.x - start.x).powi(2) + (end.z - start.z).powi(2)).sqrt())
     };
     let slow = walk(t.clone()).await?;
-    t.op("attr_mod me core:movement_speed testkit:fast 1 1 0")
+    t.op("attr_mod me core:movement_speed testkit:fast core:percent 1 0")
         .await?;
     t.secs(0.2).await?;
     let fast = walk(t.clone()).await?;
@@ -908,7 +908,7 @@ pub async fn movement_attributes(t: T) -> R {
         Ok::<f64, String>(top - y0)
     };
     let low = jump(t.clone()).await?;
-    t.op("attr_mod me core:jump_strength testkit:spring 1 0.5 0")
+    t.op("attr_mod me core:jump_strength testkit:spring core:percent 0.5 0")
         .await?;
     t.secs(0.2).await?;
     let high = jump(t.clone()).await?;
@@ -1752,7 +1752,7 @@ pub async fn respawn(t: T) -> R {
         })
         .await?;
         if with_effect {
-            t.op("attr_mod me core:movement_speed testkit:fast 1 1 0")
+            t.op("attr_mod me core:movement_speed testkit:fast core:percent 1 0")
                 .await?;
         }
         t.cmd("/clear @s").await?;
