@@ -775,10 +775,10 @@ pub async fn rebind(t: T) -> R {
     t.secs(0.1).await?;
     t.c().input_key("KeyJ", 0.05);
     t.secs(0.5).await?;
-    t.check(t.c().ui_rect("text:Jx2").is_some(), "a key pressed twice binds a double tap");
+    t.check(t.c().ui_rect("text:J*2").is_some(), "a key pressed twice binds a double tap");
     t.click_ui("id:bind:core:forward:1", 1);
     t.frames(4).await?;
-    t.check(t.c().ui_rect("text:Jx2").is_none(), "a right click clears it");
+    t.check(t.c().ui_rect("text:J*2").is_none(), "a right click clears it");
     t.c().menu_close();
     t.no_screen().await?;
     t.check(k > 1.0, format!("K walks after rebinding forward to it (moved {k:.2})"));
