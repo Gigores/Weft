@@ -651,6 +651,15 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5])
             .to_string())
     }),
+    // A projectile from `x y z` flying `vx vy vz` blocks a second, shot by the player.
+    ("shoot", "<kind:entity> <x:float> <y:float> <z:float> <vx:float> <vy:float> <vz:float>", |w, cmd, player, _| {
+        let f = |n: &str| cmd.float(n).ok_or(format!("missing {n}"));
+        let how = Spawn::new()
+            .owner(player)
+            .velocity([f("vx")?, f("vy")?, f("vz")?]);
+        Ok(w.spawn_with(id(cmd, "kind")?, [f("x")?, f("y")?, f("z")?], &how)
+            .to_string())
+    }),
     ("spawnlit", "<kind:entity> <pos:pos>", |w, cmd, _, _| {
         let p = pos(cmd, "pos")?;
         let e = w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5]);
@@ -895,7 +904,7 @@ const OPS: &[(&str, &str, Run)] = &[
         ))
     }),
     ("look", "", |w, _, player, _| {
-        Ok(w.target_block(player, 5.0, false)
+        Ok(w.looked_at(player, 5.0, Ray::blocks())
             .map_or("none".into(), |l| format!("{} {} {} {} {}", l.body, l.pos.x, l.pos.y, l.pos.z, block_name(l.state))))
     }),
     ("place", "<template:word> <pos:pos>", |w, cmd, _, _| {

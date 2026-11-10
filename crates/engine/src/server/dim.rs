@@ -2650,8 +2650,8 @@ impl Dim {
                 let k = &c.game.entities[e.kind as usize];
                 let (mut fell, mut splash) = (None, false);
                 let mut crushed = Vec::new();
-                // Players move on their client, bodies moved above; the rest here.
-                if !e.player && !k.is(ef::SOLID) {
+                // Players move on their client, bodies moved above, projectiles after; the rest here.
+                if !e.player && !k.is(ef::SOLID) && k.projectile.is_none() {
                     let (wet, falling) = (e.in_liquid, -e.vel.y * crate::world::TICK);
                     let s = step(c, e, gravity, &block, bodies);
                     crushed = s.crushed;
@@ -2765,6 +2765,7 @@ impl Dim {
                 }
             }
         }
+        self.fly_projectiles(c);
         self.items(c);
         self.land_falling(c);
     }

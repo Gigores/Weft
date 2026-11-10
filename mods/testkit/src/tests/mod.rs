@@ -71,6 +71,7 @@ pub fn all() -> Vec<TestDef> {
         gameplay::inventory_tools,
         gameplay::swimming,
         gameplay::attack_charge,
+        gameplay::projectiles,
         gameplay::permissions,
         gameplay::armor,
         gameplay::slot_accepts,

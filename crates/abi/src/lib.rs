@@ -1373,6 +1373,9 @@ pub mod comp {
         pub const NO_FALL_DAMAGE: &str = "entity.no_fall_damage";
         /// Others don't push it away, which every kind does otherwise.
         pub const UNPUSHABLE: &str = "entity.unpushable";
+        /// It flies as a projectile (`Projectile`): the engine moves it, and each tick a ray along
+        /// its speed decides what it hits (`action::PROJECTILE_HIT`).
+        pub const PROJECTILE: &str = "entity.projectile";
     }
 
     /// A step's (`entry_kind::STEP`): `CHAIN` (`str`, the value it changes every time it is
@@ -2617,7 +2620,11 @@ pub mod damage_cause {
     /// What `World::heal` gives when nothing more specific healed.
     pub const HEAL: u32 = 11;
     /// Names, by id.
-    pub const NAMES: [&str; 12] = [
+    /// What a projectile does (`comp::entity::PROJECTILE`).
+    pub const PROJECTILE: u32 = 12;
+    /// Too many pushing at once (`core:max_entity_cramming`).
+    pub const CRAMMING: u32 = 13;
+    pub const NAMES: [&str; 14] = [
         "core:generic",
         "core:fall",
         "core:attack",
@@ -2630,7 +2637,66 @@ pub mod damage_cause {
         "core:suffocate",
         "core:explosion",
         "core:heal",
+        "core:projectile",
+        "core:cramming",
     ];
+}
+
+/// What a ray looks for (`Host::raycast`).
+pub mod ray {
+    pub const BLOCKS: u32 = 1;
+    /// Liquids stop it too.
+    pub const LIQUIDS: u32 = 2;
+    /// What can be hit: bodies, not dropped stacks, the dead or spectators.
+    pub const ENTITIES: u32 = 4;
+}
+
+/// What a ray hit (`Host::raycast`): an entity, or a block (`entity` 0). A block is at `pos`,
+/// its own cell for a big one, on a body (`body` its entity) in that body's blocks; `state` is the
+/// block of the cell it entered, the cell's main one or a part. `face` is the face it went in
+/// through, of the block's or the entity's box (-X, +X, -Y, +Y, -Z, +Z). `point` is where, in the
+/// caller's frame; `local` where on what it hit, from the block's or the box's low corner (a
+/// block's 0..1, times 16 its pixel).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RayHit {
+    pub entity: u64,
+    pub body: u64,
+    pub pos: BlockPos,
+    pub state: u32,
+    pub face: u32,
+    pub point: Vec3,
+    pub local: Vec3,
+    pub distance: f64,
+}
+
+crate::data! {
+    /// How a projectile flies and what it does where it hits: `damage` per block a tick of its
+    /// speed (rounded up, vanilla's arrow 2), the share of its speed kept each tick in the air and
+    /// in a liquid (0.99, 0.6), and whether it stays stuck in a block (`stuck_ticks` before it goes,
+    /// vanilla's arrow 1200) or goes at once.
+    pub struct Projectile {
+        pub damage: f32,
+        pub drag: f32,
+        pub liquid_drag: f32,
+        pub sticks: bool,
+        pub stuck_ticks: u32,
+    }
+}
+
+/// A projectile's hit (`action::PROJECTILE_HIT`): `target` 0 for a block at `pos`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectileHit {
+    pub projectile: u64,
+    pub target: u64,
+    pub owner: u64,
+    pub pos: BlockPos,
+    pub face: u32,
+    pub point: Vec3,
+}
+impl Schema for ProjectileHit {
+    const SCHEMA: &'static str = "{projectile:u64,target:u64,owner:u64,pos:[i32;3],face:u32,point:[f64;3]}";
 }
 
 /// What `Host::entity_spawn` makes. What `set` leaves out takes the kind's defaults: a random
@@ -2651,6 +2717,9 @@ pub struct SpawnEntityDesc {
     pub pickup_delay: u32,
     /// `spawn_cause`, what `action::SPAWN` is told.
     pub cause: u32,
+    /// Who it belongs to: what a projectile doesn't hit while it leaves them, and whose its hits
+    /// are.
+    pub owner: u64,
 }
 
 /// Why an entity came into the world (`action::SPAWN`).
@@ -2683,6 +2752,8 @@ pub mod removal {
     pub const LEFT: u32 = 8;
     /// Moving blocks set down, a block entity's block gone.
     pub const BLOCKS: u32 = 9;
+    /// A projectile that hit something and went.
+    pub const HIT: u32 = 10;
 }
 
 #[repr(C)]
@@ -3549,18 +3620,16 @@ pub struct Host {
     /// Whether `target` is within `id`'s `ENTITY_REACH` attribute, from its eyes to the nearest
     /// point of the target's box. Non-zero if so.
     pub entity_in_reach: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, target: u64) -> u32,
-    /// The first block a ray from `from` along `dir` hits within `max` blocks (liquids too if
-    /// `liquids`), in the world or on a body (`body`: its entity, 0 for the world, `pos` in its
-    /// blocks). `from` is in the caller's frame. Returns its state + 1, or 0 for none.
+    /// What a ray from `from` along `dir` hits first within `max` blocks, of what `flags` say
+    /// (`ray::*`), past entity `skip`; `from` in the caller's frame. Non-zero if it hit.
     pub raycast: unsafe extern "C" fn(
         world: *mut WorldCtx,
         from: *const Vec3,
         dir: *const Vec3,
         max: f64,
-        liquids: u32,
-        pos: *mut BlockPos,
-        face: *mut u32,
-        body: *mut u64,
+        flags: u32,
+        skip: u64,
+        out: *mut RayHit,
     ) -> u32,
     pub in_liquid: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const Vec3) -> u32,
     pub entity_swing_strength: unsafe extern "C" fn(world: *mut WorldCtx, id: u64) -> f32,
@@ -4564,6 +4633,9 @@ pub mod action {
     /// `EffectChange`. Asked with `entity` about to get effect `cause` at level `amount` for
     /// `state` ticks; vanilla's immunities are tags `immune_effect/<effect>` on the kind.
     pub const EFFECT: &str = "core:effect";
+    /// `ProjectileHit`. Asked with `entity` the projectile, `other` what it hits (0: the block at
+    /// `pos`), `amount` its speed in blocks a tick: no, and it flies on past them.
+    pub const PROJECTILE_HIT: &str = "core:projectile_hit";
 }
 
 pub mod question {
@@ -4684,6 +4756,9 @@ pub mod chain {
     pub const SWEEP_DAMAGE: &str = "core:sweep_damage";
     /// Health an entity gains (`entity` healed by `other`, `cause`).
     pub const HEAL: &str = "core:heal";
+    /// What projectile `entity` does to `other` it hits, from its `Projectile::damage`:
+    /// `core:by_speed` (`BASE`, times `amount`, its speed in blocks a tick, rounded up).
+    pub const PROJECTILE_DAMAGE: &str = "core:projectile_damage";
 }
 
 /// One step's run: what the value is about, where it began (`base`) and where this phase began

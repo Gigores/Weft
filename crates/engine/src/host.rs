@@ -617,6 +617,7 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
         if d.set & s::PICKUP_DELAY != 0 {
             e.pickup_delay = d.pickup_delay;
         }
+        e.owner = d.owner;
     }
     id
 }
@@ -790,27 +791,21 @@ unsafe extern "C" fn entity_walk(w: *mut abi::WorldCtx, id: u64, dir: *const [f3
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 unsafe extern "C" fn raycast(
     w: *mut abi::WorldCtx,
     from: *const abi::Vec3,
     dir: *const abi::Vec3,
     max: f64,
-    liquids: u32,
-    pos: *mut abi::BlockPos,
-    face: *mut u32,
-    body: *mut u64,
+    flags: u32,
+    skip: u64,
+    out: *mut abi::RayHit,
 ) -> u32 {
     unsafe {
-        let dir = crate::world::dvec(*dir).normalize_or_zero();
-        if dir == DVec3::ZERO || !max.is_finite() {
-            return 0;
+        let hit = dim(w).raycast(content(), crate::world::dvec(*from), crate::world::dvec(*dir), max.min(1024.0), flags, &[skip]);
+        if let Some(h) = hit {
+            *out = h;
         }
-        let Some(hit) = dim(w).ray(content(), crate::world::dvec(*from), dir, max.min(1024.0), liquids != 0) else { return 0 };
-        *pos = hit.block.to_array().into();
-        *face = hit.face as u32;
-        *body = hit.frame;
-        hit.state + 1
+        hit.is_some() as u32
     }
 }
 

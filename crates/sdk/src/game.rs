@@ -38,8 +38,15 @@ impl Spawn {
                 yaw: 0.0,
                 pickup_delay: 0,
                 cause: abi::spawn_cause::MOD,
+                owner: 0,
             },
         }
+    }
+    /// Who it belongs to: a projectile's shooter, which it doesn't hit as it leaves them and
+    /// whose hits its hits are.
+    pub fn owner(mut self, id: u64) -> Self {
+        self.desc.owner = id;
+        self
     }
     /// Why it comes (`spawn_cause`, `MOD` unless said), what `actions::SPAWN` is told.
     pub fn cause(mut self, cause: u32) -> Self {
@@ -252,20 +259,20 @@ impl World {
     pub fn walk(&self, id: u64, w: Walk) {
         unsafe { (host().entity_walk)(self.raw(), id, &w.dir, w.speed, w.keys) }
     }
-    /// The first block a ray from `from` along `dir` hits within `max` blocks (liquids count if
-    /// `liquids`): position, face hit (-X, +X, -Y, +Y, -Z, +Z) and state. A turret's line, a
-    /// mob checking whether it sees a player, an arrow's next step.
-    pub fn raycast(&self, from: impl Into<Vec3>, dir: impl Into<Vec3>, max: f64, liquids: bool) -> Option<LookAt> {
-        let from = from.into();
-        let dir = dir.into();
-        let (mut pos, mut face, mut body) = (BlockPos::ZERO, 0, 0);
-        let s = unsafe { (host().raycast)(self.raw(), &from, &dir, max, liquids as u32, &mut pos, &mut face, &mut body) };
-        (s != 0).then(|| LookAt { pos, face, state: s - 1, body })
+    /// What a ray from `from` along `dir` hits first within `max` blocks, of what `ray` looks for
+    /// (`Ray::blocks()`, `.liquids()`, `.entities()`, `.skip(id)`): a block or an entity, the face
+    /// it went in by and where on it (`RayHit::local`). A turret's line, a mob checking whether it
+    /// sees a player, which part of a block a player clicked.
+    pub fn raycast(&self, from: impl Into<Vec3>, dir: impl Into<Vec3>, max: f64, ray: Ray) -> Option<abi::RayHit> {
+        let (from, dir) = (from.into(), dir.into());
+        let mut out = abi::RayHit::default();
+        let hit = unsafe { (host().raycast)(self.raw(), &from, &dir, max, ray.flags, ray.skip, &mut out) };
+        (hit != 0).then_some(out)
     }
-    /// The block `id` looks at within `max` blocks: `raycast` from its eyes along its look.
-    pub fn target_block(&self, id: u64, max: f64, liquids: bool) -> Option<LookAt> {
+    /// What `id` looks at within `max` blocks: `raycast` from its eyes along its look, past itself.
+    pub fn looked_at(&self, id: u64, max: f64, ray: Ray) -> Option<abi::RayHit> {
         let s = self.entity(id)?;
-        self.raycast(s.eye(), crate::look_dir(s.yaw, s.pitch), max, liquids)
+        self.raycast(s.eye(), crate::look_dir(s.yaw, s.pitch), max, ray.skip(id))
     }
     /// Up to its maximum: `damage` with a negative amount.
     pub fn heal(&self, id: u64, amount: f32) -> bool {
@@ -1058,17 +1065,23 @@ impl EntityBuilder<'_> {
     /// How far it hits (the `ENTITY_REACH` attribute, from its eyes to the target's box); a
     /// modifier changes it like any attribute.
     pub fn reach(self, blocks: f64) -> Self {
-        self.attribute(abi::attribute::ENTITY_REACH, blocks)
+        self.attribute(&crate::attribute::ENTITY_REACH, blocks)
     }
     pub fn max_health(self, h: f32) -> Self {
-        self.attribute(abi::attribute::MAX_HEALTH, h as f64)
+        self.attribute(&crate::attribute::MAX_HEALTH, h as f64)
     }
-    /// The kind's own value of an attribute.
-    fn attribute(mut self, name: &str, v: f64) -> Self {
+    /// The kind's own base of an attribute: `.attribute(&attribute::GRAVITY, 0.625)` falls
+    /// like vanilla's arrow.
+    pub fn attribute(mut self, a: &crate::Attribute, v: f64) -> Self {
         self.e
             .ops
-            .push(Pending::value(name, "f64", crate::component::value_bytes(&v)));
+            .push(Pending::value(a.name(), "f64", crate::component::value_bytes(&v)));
         self
+    }
+    /// It flies as a projectile (`Projectile`): the engine moves it, a ray along its speed each
+    /// tick decides what it hits (`actions::PROJECTILE_HIT`), however fast.
+    pub fn projectile(self, p: Projectile) -> Self {
+        self.set(&comps::entity::PROJECTILE, p.0)
     }
     pub fn walk_speed(self, s: f32) -> Self {
         self.set(&comps::entity::SPEED, s)
@@ -2161,14 +2174,68 @@ pub mod entity_categories {
     pub static MISC: EntityCategory = EntityCategory::named("core:misc");
 }
 
-/// What an entity looks at (`World::target_block`): a block of the world (`body` 0) or of a
-/// moving body (`body` its entity, `pos` in its blocks).
+/// How a projectile flies (`EntityBuilder::projectile`): vanilla's arrow unless said otherwise,
+/// 2 damage per block a tick of speed, 0.99 of its speed kept a tick in the air and 0.6 in a
+/// liquid, gone where it hits a block.
+#[derive(Clone, Debug)]
+pub struct Projectile(abi::Projectile);
+
+impl Default for Projectile {
+    fn default() -> Self {
+        Projectile::new()
+    }
+}
+
+impl Projectile {
+    pub fn new() -> Projectile {
+        Projectile(abi::Projectile { damage: 2.0, drag: 0.99, liquid_drag: 0.6, sticks: false, stuck_ticks: 1200 })
+    }
+    /// Damage per block a tick of its speed, rounded up (`chain::PROJECTILE_DAMAGE`).
+    pub fn damage(mut self, per_speed: f32) -> Self {
+        self.0.damage = per_speed;
+        self
+    }
+    /// Shares of its speed kept each tick in the air and in a liquid.
+    pub fn drag(mut self, air: f32, liquid: f32) -> Self {
+        (self.0.drag, self.0.liquid_drag) = (air, liquid);
+        self
+    }
+    /// It stays stuck where it hits a block, for `ticks` (vanilla's arrow a minute).
+    pub fn sticks(mut self, ticks: u32) -> Self {
+        (self.0.sticks, self.0.stuck_ticks) = (true, ticks);
+        self
+    }
+}
+
+/// What a ray looks for (`World::raycast`): blocks unless said otherwise.
 #[derive(Clone, Copy, Debug)]
-pub struct LookAt {
-    pub pos: BlockPos,
-    pub face: u32,
-    pub state: u32,
-    pub body: u64,
+pub struct Ray {
+    flags: u32,
+    skip: u64,
+}
+
+impl Ray {
+    pub fn blocks() -> Ray {
+        Ray { flags: abi::ray::BLOCKS, skip: 0 }
+    }
+    /// Only what can be hit: bodies, not dropped stacks, the dead or spectators.
+    pub fn entities_only() -> Ray {
+        Ray { flags: abi::ray::ENTITIES, skip: 0 }
+    }
+    /// Liquids stop it too.
+    pub fn liquids(mut self) -> Ray {
+        self.flags |= abi::ray::LIQUIDS;
+        self
+    }
+    pub fn entities(mut self) -> Ray {
+        self.flags |= abi::ray::ENTITIES;
+        self
+    }
+    /// It goes through `id` (the one looking, the shooter).
+    pub fn skip(mut self, id: u64) -> Ray {
+        self.skip = id;
+        self
+    }
 }
 
 /// One tick of a mob's walking for `World::walk`: a direction and the keys a player would hold.

@@ -94,6 +94,12 @@ pub struct Entity {
     pub vehicle: Option<(u64, u8)>,
     /// The player whose client moves it, sitting in a seat that steers.
     pub driver: Option<u64>,
+    /// Who it belongs to (`SpawnEntityDesc::owner`): a projectile's shooter.
+    pub owner: u64,
+    /// A projectile has flown clear of its owner, who it may hit from then on.
+    pub left_owner: bool,
+    /// Ticks a projectile has been stuck in a block, 0 while it flies.
+    pub stuck: u32,
 }
 
 /// What an entity is breaking, and how far along by what it held and where it was each tick.
@@ -209,6 +215,9 @@ impl Entity {
             nav: None,
             vehicle: None,
             driver: None,
+            owner: 0,
+            left_owner: false,
+            stuck: 0,
         }
     }
 

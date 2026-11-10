@@ -15,6 +15,7 @@ mod load;
 pub mod lod_tops;
 pub mod path;
 mod player_file;
+mod projectile;
 pub mod signal;
 pub mod space;
 mod sync;

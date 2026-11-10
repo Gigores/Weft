@@ -2263,7 +2263,7 @@ impl Client {
             }
             let physics::Dims { half_width: hw, height: h, .. } = e.dims();
             let b = physics::Aabb::around(e.pos, hw, h);
-            if let Some(t) = physics::ray_aabb(eye, dir, &b, max) {
+            if let Some((t, _)) = physics::ray_aabb(eye, dir, &b, max) {
                 if best.is_none_or(|(bt, _)| t < bt) {
                     best = Some((t, id));
                 }

@@ -122,6 +122,8 @@ pub mod chain {
     /// What a sweep does to those beside the target, from the hit's damage.
     pub static SWEEP_DAMAGE: Chain = Chain::named(crate::abi::chain::SWEEP_DAMAGE);
     pub static HEAL: Chain = Chain::named(crate::abi::chain::HEAL);
+    /// What a projectile does to what it hits, from its damage: times its speed, rounded up.
+    pub static PROJECTILE_DAMAGE: Chain = Chain::named(crate::abi::chain::PROJECTILE_DAMAGE);
 }
 
 /// Attributes the engine reads.
@@ -284,6 +286,7 @@ schema_values!(
     abi::WeatherTick,
     abi::Spawned,
     abi::Removed,
+    abi::ProjectileHit,
     abi::EffectChange
 );
 
@@ -384,6 +387,9 @@ pub mod actions {
     /// Asked with `entity` about to get effect `cause` at level `amount` for `state` ticks (an
     /// immunity, a milk of your own); sent when it got it.
     pub static EFFECT: Action<abi::EffectChange> = Action::named(a::EFFECT);
+    /// Asked with `entity` the projectile, `other` what it hits (0: the block at `pos`), `amount`
+    /// its speed: no, and it flies on past them. Sent when it hit.
+    pub static PROJECTILE_HIT: Action<abi::ProjectileHit> = Action::named(a::PROJECTILE_HIT);
 }
 
 /// Every value of one event queued during a tick, in the order they happened.

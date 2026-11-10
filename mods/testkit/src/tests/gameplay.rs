@@ -1961,6 +1961,51 @@ pub async fn swimming(t: T) -> R {
 
 /// Modern combat: a hit right after the last does a fraction, a charged one all of it, and a
 /// stronger hit during the target's recovery still adds the difference.
+/// A projectile hits what its whole way through a tick crosses, however fast: a pig fifteen blocks
+/// a tick doesn't slip through; one into a wall sticks at the face it met, and stays.
+pub async fn projectiles(t: T) -> R {
+    t.flat().await?;
+    let f = t.feet();
+    let num = |s: &str, i: usize| {
+        s.split_whitespace()
+            .nth(i)
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(f64::NAN)
+    };
+    let pig = t
+        .op(&format!("spawn base:pig {} {} {}", f[0], f[1], f[2] - 8))
+        .await?;
+    t.fill(add(f, [-1, 0, -10]), add(f, [1, 2, -10]), "stone")
+        .await?;
+    t.secs(0.3).await?;
+    let before = num(&t.op(&format!("entity {pig}")).await?, 4);
+    let (x, y, z) = (f[0] as f64 + 0.5, f[1] as f64 + 0.45, f[2] as f64 - 1.5);
+    t.op(&format!("shoot base:arrow {x} {y} {z} 0 0 -300"))
+        .await?;
+    t.secs(0.5).await?;
+    // That fast it kills: gone is hit too.
+    let after = t
+        .op(&format!("entity {pig}"))
+        .await
+        .map_or(0.0, |s| num(&s, 4));
+    t.check(after < before, format!("a fast arrow hits the pig in its way: health {before} -> {after}"));
+
+    let lane = f[0] as f64 + 4.5;
+    t.fill(add(f, [4, 0, -6]), add(f, [4, 2, -6]), "stone")
+        .await?;
+    let arrow = t
+        .op(&format!("shoot base:arrow {lane} {y} {z} 0 0 -300"))
+        .await?;
+    t.secs(0.5).await?;
+    let at = num(&t.op(&format!("entity {arrow}")).await?, 3);
+    let face = (f[2] - 5) as f64;
+    t.check((face..face + 0.2).contains(&at), format!("stuck at the wall's face {face}: z {at}"));
+    t.secs(1.0).await?;
+    let still = num(&t.op(&format!("entity {arrow}")).await?, 3);
+    t.check_eq(still, at, "and it stays");
+    Ok(())
+}
+
 pub async fn attack_charge(t: T) -> R {
     t.flat().await?;
     t.op("put me 0 iron_sword 1").await?;

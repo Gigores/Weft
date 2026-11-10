@@ -140,6 +140,8 @@ pub struct EntityKind {
     pub template: Option<u32>,
     /// Where riders sit (`abi::Seat`).
     pub seats: Vec<Seat>,
+    /// How it flies when it is a projectile (`comp::entity::PROJECTILE`).
+    pub projectile: Option<abi::Projectile>,
     /// What the keys of a player steering it do (`abi::SteerArgs`), and where riders get off
     /// when a seat asks it (`abi::DismountArgs`).
     pub steer: Option<(ModId, Callback)>,
@@ -943,7 +945,7 @@ pub struct DamageCauseDef {
 
 fn engine_damage_causes() -> Vec<RawEntry> {
     use abi::comp::damage_cause as d;
-    let tags: [&[&str]; 12] = [
+    let tags: [&[&str]; 14] = [
         &[],
         &[d::BYPASSES_ARMOR],
         &[],
@@ -956,8 +958,25 @@ fn engine_damage_causes() -> Vec<RawEntry> {
         &[d::BYPASSES_ARMOR],
         &[],
         &[],
+        &[],
+        &[d::BYPASSES_ARMOR],
     ];
-    let messages = ["generic", "fall", "generic", "fire", "starve", "drown", "void", "lava", "crush", "suffocate", "explosion", "generic"];
+    let messages = [
+        "generic",
+        "fall",
+        "generic",
+        "fire",
+        "starve",
+        "drown",
+        "void",
+        "lava",
+        "crush",
+        "suffocate",
+        "explosion",
+        "generic",
+        "projectile",
+        "cramming",
+    ];
     abi::damage_cause::NAMES
         .iter()
         .zip(tags)
@@ -966,6 +985,9 @@ fn engine_damage_causes() -> Vec<RawEntry> {
             let mut e = RawEntry::engine(abi::entry_kind::DAMAGE_CAUSE, name).set(d::DEATH_MESSAGE, format!("death.{m}"));
             if *name == "core:attack" {
                 e = e.set(d::DEATH_MESSAGE_BY, "death.attack".to_string());
+            }
+            if *name == "core:projectile" {
+                e = e.set(d::DEATH_MESSAGE_BY, "death.projectile_by".to_string());
             }
             tags.iter().fold(e, |e, t| e.tag(t))
         })
@@ -1475,6 +1497,7 @@ pub const ENGINE_EVENTS: &[(&str, &str, u32)] = {
         (abi::event::ENTITY_REMOVED, abi::Removed::SCHEMA, size_of::<abi::Removed>() as u32),
         (abi::action::EFFECT, abi::EffectChange::SCHEMA, size_of::<abi::EffectChange>() as u32),
         (abi::event::EFFECT_ENDED, abi::EffectChange::SCHEMA, size_of::<abi::EffectChange>() as u32),
+        (abi::action::PROJECTILE_HIT, abi::ProjectileHit::SCHEMA, size_of::<abi::ProjectileHit>() as u32),
     ]
 };
 
@@ -1660,6 +1683,7 @@ fn bake_entity(e: &Entry) -> EntityKind {
             .take(255)
             .map(|s| Seat { pos: crate::world::dvec(s.pos), steers: s.steers, exit: s.exit, exit_at: crate::world::dvec(s.exit_at) })
             .collect(),
+        projectile: e.get::<abi::Projectile>(k::PROJECTILE),
         steer: e.callback(k::STEER),
         dismount: e.callback(k::DISMOUNT),
         ride_camera: e.or(k::RIDE_CAMERA, f32::NAN),

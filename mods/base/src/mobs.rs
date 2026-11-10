@@ -14,7 +14,6 @@ pub static ARROW: EntityKind = EntityKind::named("arrow");
 static EGG: Item = Item::named("egg");
 /// Ticks of whatever a mob counts: a creeper's fuse, a skeleton's reload, a chicken's next egg.
 static FUSE: Component<u32> = Component::named("fuse");
-static SHOOTER: Component<u64> = Component::named("shooter");
 
 pub static COW: EntityKind = EntityKind::named("cow");
 
@@ -57,7 +56,6 @@ pub fn register(r: &mut Registry) {
                 .neutral(),
         ));
     r.entity_component(&FUSE, 0u32, 0);
-    r.entity_component(&SHOOTER, 0u64, 0);
     r.entity(&CREEPER)
         .tag("hostile")
         .size(0.6, 1.7)
@@ -78,14 +76,15 @@ pub fn register(r: &mut Registry) {
         .burns_in_sun()
         .attach(&FUSE)
         .goals(skeleton());
+    // Vanilla's arrow: 0.05 a tick down, stuck a minute where it hits a block.
     r.entity(&ARROW)
         .no_egg()
         .size(0.5, 0.5)
         .unpushable()
         .max_health(1.0)
         .walk_speed(0.0)
-        .attach(&SHOOTER)
-        .goals(ai::Goals::new().then(arrow_flies));
+        .attribute(&attribute::GRAVITY, 0.625)
+        .projectile(Projectile::new().sticks(1200));
     r.entity(&SHEEP)
         .tag("livestock")
         .size(0.9, 1.3)
@@ -270,36 +269,15 @@ fn shoot(w: &World, id: u64, from: &EntityState, at: &EntityState) {
     let len = (flat * flat + d[1] * d[1]).sqrt().max(0.1);
     // A little above the target for the drop on the way.
     const SPEED: f64 = 32.0;
-    let arrow = w.spawn(&ARROW, [from.pos.x, eye, from.pos.z]);
-    if let Some(shooter) = w.component_mut(arrow, &SHOOTER) {
-        *shooter = id;
-    }
-    w.entity_modify(arrow)
-        .velocity([d[0] / len * SPEED, d[1] / len * SPEED + flat * 0.4, d[2] / len * SPEED])
-        .yaw(yaw_toward([0.0; 3], d));
-}
-
-/// An arrow in flight: gone when it hits something or has flown for five seconds.
-fn arrow_flies(w: &World, id: u64, st: &EntityState) -> bool {
-    let shooter = w.component(id, &SHOOTER).unwrap_or(0);
-    // Its own box against theirs: a tall mob is hit in the head too.
-    let tip = Shape::cuboid([st.pos.x - 0.25, st.pos.y, st.pos.z - 0.25], [st.pos.x + 0.25, st.pos.y + 0.5, st.pos.z + 0.25]);
-    let hit = w
-        .entities_in(&tip, EntityFilter::any().targets().touching())
-        .into_iter()
-        .find(|&e| e != id && e != shooter && w.entity(e).is_some_and(|s| s.kind != st.kind));
-    if let Some(target) = hit {
-        w.damage(
-            target,
-            Damage::new(3.0, damage_cause::ATTACK)
-                .by(shooter)
-                .through(id),
-        );
-        w.despawn(id);
-    } else if st.flags & entity_state::BLOCKED != 0 || st.on_ground != 0 || st.age > 100 {
-        w.despawn(id);
-    }
-    true
+    let v = [d[0] / len * SPEED, d[1] / len * SPEED + flat * 0.4, d[2] / len * SPEED];
+    w.spawn_with(
+        &ARROW,
+        [from.pos.x, eye, from.pos.z],
+        &Spawn::new()
+            .owner(id)
+            .velocity(v)
+            .yaw(yaw_toward([0.0; 3], d)),
+    );
 }
 
 /// A chicken: flutters down instead of falling, and lays an egg now and then.

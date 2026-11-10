@@ -332,6 +332,7 @@ schema_data!(
     Pickup,
     Spawned,
     Removed,
+    ProjectileHit,
     EffectChange,
     Energy,
     Vec3,

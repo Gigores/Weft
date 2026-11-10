@@ -497,7 +497,7 @@ pub fn sweep(c: &Content, block: &impl Cells, from: DVec3, to: DVec3, half: f64)
         let grown = Aabb { min: b.min - h, max: b.max + h };
         let inside = from.cmpgt(grown.min).all() && from.cmplt(grown.max).all();
         if !inside {
-            if let Some(hit) = ray_aabb(from, d, &grown, 1.0) {
+            if let Some((hit, _)) = ray_aabb(from, d, &grown, 1.0) {
                 t = t.min(hit);
             }
         }
@@ -655,23 +655,40 @@ pub fn pick(
     best
 }
 
-/// Where a ray enters box `b` (0 when it starts inside), within `max`: entities picked by the
-/// crosshair.
-pub fn ray_aabb(o: DVec3, d: DVec3, b: &Aabb, max: f64) -> Option<f64> {
-    let (mut t0, mut t1) = (0.0f64, max);
+/// Where a ray enters box `b` (0 when it starts inside), within `max`, and the face it went in
+/// through (-X, +X, -Y, +Y, -Z, +Z; inside: the one it looks most toward).
+pub fn ray_aabb(o: DVec3, d: DVec3, b: &Aabb, max: f64) -> Option<(f64, u8)> {
+    let (t0, t1, face) = slab(o, d, b.min, b.max, max)?;
+    if t0 < 0.0 {
+        let axis = (0..3)
+            .max_by(|&a, &b| d[a].abs().total_cmp(&d[b].abs()))
+            .unwrap_or(0);
+        return (t1 >= 0.0).then_some((0.0, (axis * 2) as u8 + (d[axis] < 0.0) as u8));
+    }
+    Some((t0, face))
+}
+
+/// The slab test: along `d`, where the ray enters and leaves the box, and the face it enters by.
+fn slab(o: DVec3, d: DVec3, lo: DVec3, hi: DVec3, max: f64) -> Option<(f64, f64, u8)> {
+    let (mut t0, mut t1, mut face) = (f64::NEG_INFINITY, max, 0u8);
     for i in 0..3 {
         if d[i].abs() < 1e-12 {
-            if o[i] < b.min[i] || o[i] > b.max[i] {
+            if o[i] < lo[i] || o[i] > hi[i] {
                 return None;
             }
             continue;
         }
-        let a = (b.min[i] - o[i]) / d[i];
-        let c = (b.max[i] - o[i]) / d[i];
-        t0 = t0.max(a.min(c));
-        t1 = t1.min(a.max(c));
+        let a = (lo[i] - o[i]) / d[i];
+        let c = (hi[i] - o[i]) / d[i];
+        let (near, far) = if a < c { (a, c) } else { (c, a) };
+        if near > t0 {
+            t0 = near;
+            // Entering through the low side means the -axis face.
+            face = (i * 2) as u8 + if d[i] > 0.0 { 0 } else { 1 };
+        }
+        t1 = t1.min(far);
     }
-    (t0 <= t1).then_some(t0)
+    (t0 <= t1).then_some((t0, t1, face))
 }
 
 /// Amanatides-Woo traversal. Blocks are hit where the ray crosses their selection boxes; of
@@ -747,28 +764,11 @@ pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: 
 
 /// Entry distance and entered face, `None` if missed or if the ray starts inside.
 fn ray_box(o: DVec3, d: DVec3, b: &[f32; 6], max: f64) -> Option<(f64, u8)> {
-    let mut t0 = f64::NEG_INFINITY;
-    let mut t1 = max;
-    let mut face = 0u8;
-    for i in 0..3 {
-        let (lo, hi) = (b[i] as f64, b[i + 3] as f64);
-        if d[i].abs() < 1e-12 {
-            if o[i] < lo || o[i] > hi {
-                return None;
-            }
-            continue;
-        }
-        let a = (lo - o[i]) / d[i];
-        let c = (hi - o[i]) / d[i];
-        let (near, far) = if a < c { (a, c) } else { (c, a) };
-        if near > t0 {
-            t0 = near;
-            // Entering through the low side means the -axis face.
-            face = (i * 2) as u8 + if d[i] > 0.0 { 0 } else { 1 };
-        }
-        t1 = t1.min(far);
-    }
-    (t0 <= t1 && t0 >= 0.0).then_some((t0, face))
+    let lo = DVec3::new(b[0] as f64, b[1] as f64, b[2] as f64);
+    let hi = DVec3::new(b[3] as f64, b[4] as f64, b[5] as f64);
+    slab(o, d, lo, hi, max)
+        .filter(|s| s.0 >= 0.0)
+        .map(|s| (s.0, s.2))
 }
 
 /// Whether liquid fills the block `level` above the feet at `pos` (0 the feet, the eye height for

@@ -214,6 +214,11 @@ fn hurt_cooldown(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc)
     }
 }
 
+/// Vanilla's arrow: its damage times its speed, rounded up.
+fn by_speed(_: &mut Dim, _: &'static Content, q: &abi::Query, s: &mut Calc) {
+    s.value = (s.value * q.amount).ceil();
+}
+
 /// A kind tagged `immune_effect/<effect>` never takes it.
 fn effect_immune(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let Some(kind) = d.entities.get(q.entity).map(|e| e.kind) else { return };
@@ -243,6 +248,7 @@ pub const NATIVE: &[(&str, Option<&str>, &str, Native)] = &[
     ("core:not_lethal", Some(abi::chain::DAMAGE), abi::phase::FINAL, not_lethal),
     ("core:hurt_cooldown", Some(abi::question::RECOVERING), abi::phase::BASE, hurt_cooldown),
     ("core:effect_immune", Some(abi::action::EFFECT), abi::phase::BASE, effect_immune),
+    ("core:by_speed", Some(abi::chain::PROJECTILE_DAMAGE), abi::phase::BASE, by_speed),
 ];
 
 /// The engine's phases and steps as entries, before every mod's.
