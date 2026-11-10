@@ -2658,6 +2658,9 @@ pub mod ray {
     pub const LIQUIDS: u32 = 2;
     /// What can be hit: bodies, not dropped stacks, the dead or spectators.
     pub const ENTITIES: u32 = 4;
+    /// Blocks by what stops a body (their collision), not by what is aimed at: what an arrow hits,
+    /// flying through grass.
+    pub const SOLID: u32 = 8;
 }
 
 /// What a ray hit (`Host::raycast`): an entity, or a block (`entity` 0). A block is at `pos`,
@@ -2741,6 +2744,8 @@ pub mod spawn_cause {
     pub const COMMAND: u32 = 2;
     /// A spawn egg.
     pub const EGG: u32 = 3;
+    /// A dropped stack: thrown, fallen out of something, a block's or a mob's loot.
+    pub const DROP: u32 = 4;
 }
 
 /// Why an entity left the world (`event::ENTITY_REMOVED`).
@@ -2759,10 +2764,8 @@ pub mod removal {
     pub const MERGED: u32 = 7;
     /// A player left the game.
     pub const LEFT: u32 = 8;
-    /// Moving blocks set down, a block entity's block gone.
-    pub const BLOCKS: u32 = 9;
     /// A projectile that hit something and went.
-    pub const HIT: u32 = 10;
+    pub const HIT: u32 = 9;
 }
 
 #[repr(C)]
@@ -4660,7 +4663,8 @@ pub mod action {
     /// the ticket's key.
     pub const FORCE_LOAD: &str = "core:force_load";
     /// `Spawned`. Asked with `entity` made but not yet seen, `cause` (`spawn_cause`), `pos`:
-    /// no, and it never was. Not for dropped stacks and moving blocks.
+    /// no, and it never was. Moving blocks and block entities are blocks: their comings and goings
+    /// are the blocks', neither asked here nor told as `event::ENTITY_REMOVED`.
     pub const SPAWN: &str = "core:spawn";
     /// `EffectChange`. Asked with `entity` about to get effect `cause` at level `amount` for
     /// `state` ticks; vanilla's immunities are tags `immune_effect/<effect>` on the kind.
@@ -4850,8 +4854,9 @@ pub mod attribute {
     pub const GRAVITY: &str = "core:gravity";
     /// Share of knockback it shrugs off (0..1).
     pub const KNOCKBACK_RESISTANCE: &str = "core:knockback_resistance";
-    /// What its melee hits do before their charge and crit (`chain::MELEE`): 1, its kind's
-    /// `attack_damage`, what it holds of it (`core:weapon`, `BASE`), strength +3 a level.
+    /// Its own melee damage, as vanilla's (1; a kind's `.attack_damage(..)`), what it holds adding
+    /// to it (`core:weapon`, `ADD`: a 6 sword's 5 over a bare hand), strength +3 a level; what a
+    /// hit does before its charge and crit (`chain::MELEE`).
     pub const ATTACK_DAMAGE: &str = "core:attack_damage";
     /// What a critical hit multiplies by (1.5).
     pub const CRIT_DAMAGE: &str = "core:crit_damage";

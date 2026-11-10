@@ -2011,6 +2011,37 @@ pub async fn projectiles(t: T) -> R {
     t.secs(0.5).await?;
     let height = num(&t.op(&format!("entity {up}")).await?, 2) - y;
     t.check((4.0..11.0).contains(&height), format!("an arrow shot up climbs and slows: {height:.2} blocks"));
+
+    // Its block taken away, the stuck one falls.
+    t.fill(add(f, [4, 0, -6]), add(f, [4, 2, -6]), "air")
+        .await?;
+    t.secs(1.0).await?;
+    let fell = num(&t.op(&format!("entity {arrow}")).await?, 2);
+    t.check(fell < y - 0.3, format!("the arrow falls once its block is gone: y {fell:.2} from {y:.2}"));
+
+    // Into a cow it stays in the cow, going about with it.
+    let (cx, cz) = (f[0] + 8, f[2] - 5);
+    let cow = t.op(&format!("spawn base:cow {cx} {} {cz}", f[1])).await?;
+    t.secs(0.3).await?;
+    let lane = cx as f64 + 0.5;
+    let in_cow = t
+        .op(&format!("shoot base:arrow {lane} {} {z} 0 0 -40", y + 0.3))
+        .await?;
+    t.secs(1.5).await?;
+    let (a, c) = (t.op(&format!("entity {in_cow}")).await?, t.op(&format!("entity {cow}")).await?);
+    let near = (num(&a, 1) - num(&c, 1)).hypot(num(&a, 3) - num(&c, 3));
+    t.check(near < 1.2, format!("the arrow stays in the cow: {near:.2} blocks off ({a} / {c})"));
+
+    // Off what takes no harm it bounces back instead of going.
+    t.cmd("/gamemode creative").await?;
+    t.secs(0.2).await?;
+    let me = t.state().pos;
+    let back = t
+        .op(&format!("shoot base:arrow {} {} {} 0 0 40", me.x, me.y + 1.0, me.z - 4.0))
+        .await?;
+    t.secs(0.6).await?;
+    let after = t.op(&format!("entity {back}")).await;
+    t.check(after.as_ref().is_ok_and(|s| num(s, 3) < me.z), format!("an arrow that did no harm bounced off and stayed: {after:?}"));
     Ok(())
 }
 

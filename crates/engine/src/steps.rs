@@ -88,8 +88,9 @@ fn fixed_dimension(d: &mut Dim, c: &'static Content, _: &abi::Query, s: &mut Cal
     }
 }
 
-/// What the attacker holds takes over its `ATTACK_DAMAGE` base: the stack `q.item` says (data
-/// and all while it still holds it), else what is in its hand.
+/// What the attacker holds adds to its own `ATTACK_DAMAGE`, as vanilla's: an item's damage is
+/// what it hits for in a bare hand of the attribute's default (1), so a 6 sword adds 5. The
+/// stack `q.item` says (data and all while it still holds it), else what is in its hand.
 fn weapon(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let held = d.entities.held(q.entity);
     let stack = if q.item == 0 || held.item == q.item { held } else { abi::ItemStack::new(q.item, 1) };
@@ -97,7 +98,7 @@ fn weapon(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
         .stack_value::<f32>(&stack, c.ids.attack_damage)
         .filter(|_| !stack.is_empty());
     if let Some(v) = from_item {
-        s.value = v as f64;
+        s.value += v as f64 - c.game.attributes[crate::registry::attr::ATTACK_DAMAGE as usize].default;
     }
 }
 
@@ -239,7 +240,7 @@ pub const NATIVE: &[(&str, Option<&str>, &str, Native)] = &[
     (abi::step::PERCENT, None, abi::phase::PERCENT, percent),
     ("core:fixed_dimension", Some(abi::action::BREAK_BLOCK), abi::phase::BASE, fixed_dimension),
     ("core:fixed_dimension_place", Some(abi::action::PLACE_BLOCK), abi::phase::BASE, fixed_dimension),
-    ("core:weapon", Some(abi::attribute::ATTACK_DAMAGE), abi::phase::BASE, weapon),
+    ("core:weapon", Some(abi::attribute::ATTACK_DAMAGE), abi::phase::ADD, weapon),
     ("core:charge", Some(abi::chain::MELEE), abi::phase::MULTIPLY, charge),
     ("core:crit", Some(abi::chain::MELEE), abi::phase::MULTIPLY, crit),
     ("core:vanilla_crit", Some(abi::question::CRIT), abi::phase::BASE, vanilla_crit),

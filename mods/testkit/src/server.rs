@@ -1170,7 +1170,7 @@ const OPS: &[(&str, &str, Run)] = &[
     ("attack_damage", "<item:item> <fall:float>", |w, cmd, player, _| {
         let fall = cmd.float("fall").ok_or("missing fall")?;
         w.entity_modify(player).fall_distance(fall as f32);
-        let base = 6.0;
+        let base = 1.0;
         let q = abi::Query { entity: player, item: id(cmd, "item")?, amount: base, ..query() };
         let fell = w.entity(player).map_or(-1.0, |s| s.fall_distance);
         Ok(format!("{} {fell}", w.chain_compute(&attribute::ATTACK_DAMAGE, base, &q)))

@@ -1067,8 +1067,8 @@ impl EntityBuilder<'_> {
     pub fn picks_up_items(self) -> Self {
         self.tag(abi::comp::entity::PICKS_UP)
     }
-    /// Damage of its bare handed melee hits (`World::attack`): its `attribute::ATTACK_DAMAGE`
-    /// base, what it holds of it taking over.
+    /// Its own melee damage (`World::attack`), the base of its `attribute::ATTACK_DAMAGE`; what it
+    /// holds adds to it, as vanilla's.
     pub fn attack_damage(self, damage: f32) -> Self {
         self.attribute(&crate::attribute::ATTACK_DAMAGE, damage as f64)
     }
@@ -2243,6 +2243,11 @@ impl Ray {
     }
     pub fn entities(mut self) -> Ray {
         self.flags |= abi::ray::ENTITIES;
+        self
+    }
+    /// Blocks by what stops a body, not what is aimed at: through grass, as an arrow flies.
+    pub fn solid(mut self) -> Ray {
+        self.flags |= abi::ray::SOLID;
         self
     }
     /// It goes through `id` (the one looking, the shooter).

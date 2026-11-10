@@ -320,15 +320,16 @@ impl Dim {
         let e = self.entities.get(id)?;
         let eye = e.pos + DVec3::Y * e.eye(c);
         let from = if self.frame != 0 { self.place.to_local(eye) } else { eye };
-        self.ray(c, from, crate::physics::look_dir(e.yaw, e.pitch), max, liquids)
+        let flags = if liquids { weft_abi::ray::LIQUIDS } else { weft_abi::ray::BLOCKS };
+        self.ray(c, from, crate::physics::look_dir(e.yaw, e.pitch), max, flags)
     }
 
     /// The first block along a ray from `from` (in this dimension's frame: a body's blocks when
-    /// asked from them), bodies included when asked from the world.
-    pub fn ray(&self, c: &Content, from: DVec3, dir: DVec3, max: f64, liquids: bool) -> Option<crate::physics::Hit> {
+    /// asked from them), bodies included when asked from the world; `flags` as `physics::pick`'s.
+    pub fn ray(&self, c: &Content, from: DVec3, dir: DVec3, max: f64, flags: u32) -> Option<crate::physics::Hit> {
         // Asked from a body's blocks, it looks along those.
         if self.frame != 0 {
-            return crate::physics::pick(c, &*self.space, &[], from, dir, max, liquids);
+            return crate::physics::pick(c, &*self.space, &[], from, dir, max, flags);
         }
         let structures: Vec<(u64, crate::physics::Transform, &dyn crate::physics::Blocks)> = self
             .bodies
@@ -339,6 +340,6 @@ impl Dim {
                     .map(|b| (sid, crate::physics::Transform::of(b.pos), &**s as &dyn crate::physics::Blocks))
             })
             .collect();
-        crate::physics::pick(c, &*self.space, &structures, from, dir, max, liquids)
+        crate::physics::pick(c, &*self.space, &structures, from, dir, max, flags)
     }
 }

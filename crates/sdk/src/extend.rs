@@ -165,7 +165,8 @@ pub mod attribute {
     pub static GRAVITY: Attribute = Attribute::named(crate::abi::attribute::GRAVITY);
     /// Share of knockback shrugged off (0..1).
     pub static KNOCKBACK_RESISTANCE: Attribute = Attribute::named(crate::abi::attribute::KNOCKBACK_RESISTANCE);
-    /// Added to each melee hit (0).
+    /// Its own melee damage as vanilla's (1; a kind's `.attack_damage(..)`), what it holds adding
+    /// to it.
     pub static ATTACK_DAMAGE: Attribute = Attribute::named(crate::abi::attribute::ATTACK_DAMAGE);
     /// Share of damage taken off after armor (0..1).
     pub static DAMAGE_RESISTANCE: Attribute = Attribute::named(crate::abi::attribute::DAMAGE_RESISTANCE);

@@ -22,8 +22,10 @@ const MAX_NEIGHBOR_UPDATES: usize = 1 << 16;
 /// Missed ticks are made up in at most this many parts, all in one tick (`run_systems`).
 const CATCH_UP_PARTS: u64 = 20;
 const ITEM_LIFETIME: u64 = crate::world::TPS as u64 * 60 * 5;
-/// The removal of an entity whose spawn was refused: nobody was told it came, nor that it went.
-pub const REFUSED: u32 = u32::MAX;
+/// The removal of what nobody was told came and so isn't told went: a refused spawn, and what is
+/// blocks (moving blocks set down, a block entity whose block went), whose comings and goings are
+/// the blocks'.
+pub const UNTOLD: u32 = u32::MAX;
 
 pub enum DimEvent {
     /// An entity started using an item that takes time (ticks, off hand), or stopped.
@@ -1237,7 +1239,7 @@ impl Dim {
 
     /// Block entities go with their blocks from the cell at `p` and come with new ones, what one
     /// held dropped.
-    fn block_entities_follow(&mut self, c: &Content, p: IVec3, before: &[u32], after: &[u32]) {
+    fn block_entities_follow(&mut self, c: &'static Content, p: IVec3, before: &[u32], after: &[u32]) {
         let blocks = |parts: &[u32]| -> Vec<u32> { parts.iter().map(|&s| c.states[s as usize].block).collect() };
         let (was, now) = (blocks(before), blocks(after));
         for &b in was.iter().filter(|b| !now.contains(b)) {
@@ -1254,7 +1256,7 @@ impl Dim {
                     self.spawn_item(c, p.as_dvec3() + DVec3::splat(0.5), s);
                 }
             }
-            self.entities.remove(id, abi::removal::BLOCKS);
+            self.entities.remove(id, UNTOLD);
         }
         for b in now.iter().filter(|b| !was.contains(b)) {
             if let Some(&kind) = c.game.block_entities.get(b) {
@@ -1531,7 +1533,7 @@ impl Dim {
         for (id, pos, blocks, ground, on) in landed {
             // One without its blocks (loaded from a save mid-fall) just goes.
             if blocks.is_empty() {
-                self.entities.remove(id, abi::removal::BLOCKS);
+                self.entities.remove(id, UNTOLD);
                 continue;
             }
             let entities: Vec<Option<u64>> = blocks
@@ -1556,7 +1558,7 @@ impl Dim {
                     }
                 }
                 if down.is_empty() {
-                    d.entities.remove(id, abi::removal::BLOCKS);
+                    d.entities.remove(id, UNTOLD);
                 } else {
                     d.put_down(c, id, down, Vec::new(), None);
                 }
@@ -1574,7 +1576,7 @@ impl Dim {
 
     /// `stack` thrown by `player`: from just below its eyes where it looks, not to be picked up
     /// for two seconds.
-    pub fn throw(&mut self, c: &Content, player: u64, stack: ItemStack) -> u64 {
+    pub fn throw(&mut self, c: &'static Content, player: u64, stack: ItemStack) -> u64 {
         let Some(e) = self.entities.get(player) else { return 0 };
         let (from, look) = (e.drop_point(c), crate::physics::look_dir(e.yaw, e.pitch));
         let id = self.spawn_item(c, from, stack);
@@ -1585,7 +1587,9 @@ impl Dim {
         id
     }
 
-    pub fn spawn_item(&mut self, c: &Content, pos: DVec3, stack: ItemStack) -> u64 {
+    /// A dropped stack, asked about and told of as any new entity (`spawn_cause::DROP`): its id,
+    /// 0 if refused.
+    pub fn spawn_item(&mut self, c: &'static Content, pos: DVec3, stack: ItemStack) -> u64 {
         // A liquid by the millibucket spills away instead: it only lives in liquid slots.
         if stack.is_empty() || c.item_fluid.contains_key(&stack.item) {
             return 0;
@@ -1597,7 +1601,7 @@ impl Dim {
         let (a, b) = (self.rng.float() - 0.5, self.rng.float() - 0.5);
         e.vel = DVec3::new(a as f64 * 2.0, 3.0, b as f64 * 2.0);
         self.entities.insert(c, e);
-        id
+        self.announce(c, id, abi::spawn_cause::DROP)
     }
 
     /// Calls a mod callback with this dimension as its world.
@@ -2039,7 +2043,7 @@ impl Dim {
     }
 
     /// What a dead player carried falls where it died.
-    pub fn drop_inventory(&mut self, c: &Content, id: u64) {
+    pub fn drop_inventory(&mut self, c: &'static Content, id: u64) {
         let Some(items) = self.entities.inventories.get(&id).cloned() else { return };
         let pos = self
             .entities
@@ -2082,7 +2086,7 @@ impl Dim {
             .entities
             .list
             .iter()
-            .filter(|e| e.removed && e.removal != REFUSED)
+            .filter(|e| e.removed && e.removal != UNTOLD)
             .map(|e| abi::Removed { entity: e.id, kind: e.kind, reason: e.removal, pos: self.place.to_local(e.pos).to_array().into() })
             .collect();
         for r in &gone {
@@ -2097,12 +2101,16 @@ impl Dim {
         let id = self.spawn(c, kind, pos);
         let Some(e) = self.entities.get_mut(id) else { return 0 };
         init(e);
-        let at = self
-            .place
-            .to_local(self.entities.get(id).map_or(pos, |e| e.pos));
+        self.announce(c, id, cause)
+    }
+
+    /// A new entity asked about (`action::SPAWN`) and told of: its id, 0 if refused.
+    fn announce(&mut self, c: &'static Content, id: u64, cause: u32) -> u64 {
+        let Some(e) = self.entities.get(id) else { return 0 };
+        let (kind, at) = (e.kind, self.place.to_local(e.pos));
         let q = abi::Query { entity: id, cause, pos: abi::Vec3::from(at.to_array()).block(), ..abi::Query::DEFAULT };
         if !self.ask(c, abi::action::SPAWN, &q) {
-            self.entities.remove(id, REFUSED);
+            self.entities.remove(id, UNTOLD);
             return 0;
         }
         self.emit_engine(c, abi::action::SPAWN, &abi::Spawned { entity: id, kind, cause, pos: at.to_array().into() });
@@ -2182,7 +2190,7 @@ impl Dim {
             .map(|e| e.id)
             .collect();
         for id in orphans {
-            self.entities.remove(id, abi::removal::BLOCKS);
+            self.entities.remove(id, UNTOLD);
         }
         for b in self.bodies.values_mut() {
             b.signals.now = self.time;

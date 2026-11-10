@@ -182,12 +182,12 @@ pub async fn entity_modify(t: T) -> R {
         (p.next().unwrap_or(f64::NAN), p.next().unwrap_or(f64::NAN))
     };
     t.check_eq(fell, 5.0, "the fall distance a mod set");
-    t.check_eq(dmg, 22.0, "a mace after five blocks: 6 + 4 * 3 + 2 * 2");
+    t.check_eq(dmg, 22.0, "a mace after five blocks: a hand's 1 and the mace's 5, + 4 * 3 + 2 * 2");
     let (plain, _) = {
         let s = t.op("attack_damage base:stick 5").await?;
         (s.split_whitespace().next().unwrap_or("").to_string(), ())
     };
-    t.check_eq(plain, "6".to_string(), "anything else doesn't care how far it fell");
+    t.check_eq(plain, "1".to_string(), "anything else doesn't care how far it fell");
     let ground = t.state().pos.y;
     t.check_eq(t.op("edit_me 1.5 4 1 60").await?, "4 60".to_string(), "slot and fire on the server");
     t.until("the client follows", Duration::from_secs(10), |t| {

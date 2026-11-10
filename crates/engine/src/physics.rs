@@ -633,7 +633,7 @@ pub struct Hit {
 /// The one way to find what a ray from `eye` hits within `reach`: the nearest selection box of
 /// the world's blocks and of moving structures (`(entity, where its blocks are, its blocks)`), by
 /// where the ray enters it. The client's crosshair, the server's and mods'
-/// `look_at` all ask this.
+/// `look_at` all ask this. `flags`: `abi::ray::LIQUIDS`, `SOLID`.
 pub fn pick(
     c: &Content,
     world: &impl Cells,
@@ -641,11 +641,11 @@ pub fn pick(
     eye: DVec3,
     dir: DVec3,
     reach: f64,
-    liquids: bool,
+    flags: u32,
 ) -> Option<Hit> {
-    let mut best = raycast(c, world, eye, dir, reach, liquids);
+    let mut best = raycast(c, world, eye, dir, reach, flags);
     for &(id, place, blocks) in structures {
-        if let Some(mut h) = raycast(c, &BodyCells(blocks), place.to_local(eye), dir, reach, liquids) {
+        if let Some(mut h) = raycast(c, &BodyCells(blocks), place.to_local(eye), dir, reach, flags) {
             if best.is_none_or(|b| h.dist < b.dist) {
                 h.frame = id;
                 best = Some(h);
@@ -693,8 +693,10 @@ fn slab(o: DVec3, d: DVec3, lo: DVec3, hi: DVec3, max: f64) -> Option<(f64, f64,
 
 /// Amanatides-Woo traversal. Blocks are hit where the ray crosses their selection boxes; of
 /// blocks the ray starts inside, only what is solid where it starts (a head stuck in a block).
-/// First targetable block along the ray; with `liquids` liquids stop it too.
-pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: f64, liquids: bool) -> Option<Hit> {
+/// First targetable block along the ray; with `abi::ray::LIQUIDS` liquids stop it too, with
+/// `SOLID` blocks are hit by their collision instead, what stops a body.
+pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: f64, flags: u32) -> Option<Hit> {
+    let (liquids, solid) = (flags & weft_abi::ray::LIQUIDS != 0, flags & weft_abi::ray::SOLID != 0);
     let dir = dir.normalize();
     let mut p = origin.floor().as_ivec3();
     let step = dir.signum().as_ivec3();
@@ -716,7 +718,7 @@ pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: 
             for state in std::iter::once(main).chain(extras.iter().copied()) {
                 let s = &c.states[state as usize];
                 let wanted = liquids && s.liquid.is_some();
-                if s.flags & bf::NOT_TARGETABLE != 0 && !wanted {
+                if s.flags & bf::NOT_TARGETABLE != 0 && !wanted && !solid {
                     continue;
                 }
                 let stuck = t == 0.0
@@ -730,7 +732,8 @@ pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: 
                         .unwrap_or(0);
                     Some((0.0, (axis * 2) as u8 + (dir[axis] < 0.0) as u8))
                 } else {
-                    s.selection
+                    let boxes = if solid && !wanted { &s.collision } else { &s.selection };
+                    boxes
                         .iter()
                         .filter_map(|b| ray_box(local, dir, b, max))
                         .min_by(|a, b| a.0.total_cmp(&b.0))

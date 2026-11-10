@@ -2,12 +2,13 @@
 //! projectile's speed decides what it hits before it moves, so nothing is flown through however
 //! fast, and where it sticks is where the ray met the block.
 
-use glam::DVec3;
+use glam::{DVec3, IVec3};
 use weft_abi as abi;
 
 use super::dim::Dim;
+use super::entity::{Stuck, StuckIn};
 use crate::content::Content;
-use crate::physics::{Aabb, Transform};
+use crate::physics::{Aabb, Cells, Transform};
 
 /// At most this many hits refused in one tick before a projectile just flies on.
 const MAX_REFUSED: usize = 4;
@@ -22,7 +23,7 @@ impl Dim {
         }
         let mut best: Option<abi::RayHit> = None;
         if flags & (abi::ray::BLOCKS | abi::ray::LIQUIDS) != 0 {
-            if let Some(h) = self.ray(c, from, dir, max, flags & abi::ray::LIQUIDS != 0) {
+            if let Some(h) = self.ray(c, from, dir, max, flags) {
                 let point = from + dir * h.dist;
                 // On a body's block, where in that body's blocks.
                 let on = match self.entities.get(h.frame).filter(|_| h.frame != 0) {
@@ -52,10 +53,8 @@ impl Dim {
                 if e.pos.cmplt(lo).any() || e.pos.cmpgt(hi).any() {
                     continue;
                 }
-                // A body with blocks is hit by those; projectiles fly past each other; the dead are
-                // hit no more.
-                let projectile = c.game.entities[e.kind as usize].projectile.is_some();
-                if e.removed || !e.is_body() || !e.alive() || projectile || skip.contains(&e.id) || self.bodies.contains_key(&e.id) {
+                // A body with blocks is hit by those; the dead are hit no more.
+                if e.removed || !e.is_body() || !e.alive() || skip.contains(&e.id) || self.bodies.contains_key(&e.id) {
                     continue;
                 }
                 let b = e.aabb(c);
@@ -102,12 +101,9 @@ impl Dim {
             .collect();
         let gravity = crate::physics::gravity_per_tick(c.dims[self.id as usize].gravity as f64);
         for (id, p) in flying {
-            let Some(e) = self.entities.get_mut(id) else { continue };
-            if e.stuck > 0 {
-                e.stuck += 1;
-                if e.stuck > p.stuck_ticks {
-                    e.gone(abi::removal::EXPIRED);
-                }
+            let Some(e) = self.entities.get(id) else { continue };
+            if let Some(st) = e.stuck {
+                self.stay_stuck(c, id, st, &p);
                 continue;
             }
             let gravity = gravity * self.attribute(c, id, crate::registry::attr::GRAVITY, false);
@@ -131,9 +127,11 @@ impl Dim {
                 }
             }
             let mut to = pos + v;
-            let mut stopped = false;
+            // What it goes on with: `None` stopped (stuck or gone), else its speed.
+            let mut after = Some(v);
             for _ in 0..MAX_REFUSED {
-                let Some(h) = self.raycast(c, pos, v, speed, abi::ray::BLOCKS | abi::ray::ENTITIES, &skip) else { break };
+                let flags = abi::ray::BLOCKS | abi::ray::SOLID | abi::ray::ENTITIES;
+                let Some(h) = self.raycast(c, pos, v, speed, flags, &skip) else { break };
                 let q = abi::Query { entity: id, other: h.entity, pos: h.pos, state: h.state, amount: speed, ..abi::Query::DEFAULT };
                 if !self.ask(c, abi::action::PROJECTILE_HIT, &q) {
                     if h.entity == 0 {
@@ -155,26 +153,45 @@ impl Dim {
                         knock: v.to_array().into(),
                         ..abi::Damage::DEFAULT
                     };
-                    self.damage(c, h.entity, &d);
-                    if let Some(e) = self.entities.get_mut(id) {
-                        e.gone(abi::removal::HIT);
-                    }
-                } else if let Some(e) = self.entities.get_mut(id) {
-                    if p.sticks {
-                        // Just short of the face it went in through, as vanilla's arrow.
-                        to = point - v.normalize_or_zero() * 0.05;
-                        e.stuck = 1;
+                    if self.damage(c, h.entity, &d) {
+                        // In their box a little way, going about with them, as vanilla's arrows.
+                        to = point + v.normalize_or_zero() * 0.15;
+                        let yaw = self.entities.get(id).map_or(0.0, |e| e.yaw);
+                        let stuck = p
+                            .sticks
+                            .then(|| self.stuck_at(StuckIn::Entity(h.entity), to, yaw));
+                        if let Some(e) = self.entities.get_mut(id) {
+                            match stuck {
+                                Some(st) => e.stuck = Some(st),
+                                None => e.gone(abi::removal::HIT),
+                            }
+                        }
+                        after = None;
                     } else {
-                        e.gone(abi::removal::HIT);
+                        // Refused or not landing, it bounces back off them as vanilla's does.
+                        to = point;
+                        after = Some(-v * 0.1);
                     }
+                } else {
+                    // Just short of the face it went in through, as vanilla's arrow.
+                    to = point - v.normalize_or_zero() * 0.05;
+                    let block = StuckIn::Block { body: h.body, block: IVec3::from_array(h.pos.to_array()) };
+                    let yaw = self.entities.get(id).map_or(0.0, |e| e.yaw);
+                    let stuck = p.sticks.then(|| self.stuck_at(block, to, yaw));
+                    if let Some(e) = self.entities.get_mut(id) {
+                        match stuck {
+                            Some(st) => e.stuck = Some(st),
+                            None => e.gone(abi::removal::HIT),
+                        }
+                    }
+                    after = None;
                 }
-                stopped = true;
                 break;
             }
             let wet = crate::physics::Cells::liquid(&super::space::CubeCells(&self.space.cubes), c, to.floor().as_ivec3()).is_some();
             let Some(e) = self.entities.get_mut(id) else { continue };
             e.pos = self.place.to_world(to);
-            let v = if stopped { DVec3::ZERO } else { v * if wet { p.liquid_drag } else { p.drag } as f64 - DVec3::Y * gravity };
+            let v = after.map_or(DVec3::ZERO, |v| v * if wet { p.liquid_drag } else { p.drag } as f64 - DVec3::Y * gravity);
             e.vel = v * crate::world::TPS as f64;
             e.in_liquid = wet;
             // Pointing where it flies.
@@ -184,4 +201,75 @@ impl Dim {
             }
         }
     }
+
+    /// Stuck at `to` (this dimension's frame) in what `into` says, pointing `yaw`.
+    fn stuck_at(&self, into: StuckIn, to: DVec3, yaw: f32) -> Stuck {
+        let world = self.place.to_world(to);
+        let (at, yaw) = match into {
+            StuckIn::Block { body, .. } => match self.entities.get(body).filter(|_| body != 0) {
+                Some(b) => (Transform::of(b.pos).to_local(world), yaw),
+                None => (to, yaw),
+            },
+            StuckIn::Entity(id) => match self.entities.get(id) {
+                Some(t) => (turn(world - t.pos, -t.yaw), yaw - t.yaw),
+                None => (to, yaw),
+            },
+        };
+        Stuck { into, at, yaw, ticks: 0 }
+    }
+
+    /// A stuck projectile rides what holds it: the body its block is on, falling once that block
+    /// is gone, or the entity it went into, going with it. It goes after its `stuck_ticks`.
+    fn stay_stuck(&mut self, c: &Content, id: u64, st: Stuck, p: &abi::Projectile) {
+        let solid = |s: u32| !c.states[s as usize].collision.is_empty();
+        let held = |cells: &dyn Fn(IVec3) -> (Option<u32>, Vec<u32>), block: IVec3| {
+            let (main, extras) = cells(block);
+            main.is_some_and(solid) || extras.iter().any(|&s| solid(s))
+        };
+        // Where it is now, or `None` once nothing holds it.
+        let now: Option<(Option<DVec3>, f32)> = match st.into {
+            StuckIn::Block { body: 0, block } => {
+                let cells = super::space::CubeCells(&self.space.cubes);
+                held(&|b| (cells.main(b), cells.extras(b).to_vec()), block).then_some((None, st.yaw))
+            }
+            StuckIn::Block { body, block } => {
+                let holds = self.bodies.get(&body).is_some_and(|d| {
+                    let cells = super::space::DeckCells(d);
+                    held(&|b| (cells.main(b), cells.extras(b).to_vec()), block)
+                });
+                let place = self.entities.get(body).map(|b| Transform::of(b.pos));
+                holds.then(|| (place.map(|t| t.to_world(st.at)), st.yaw))
+            }
+            StuckIn::Entity(target) => self
+                .entities
+                .get(target)
+                .filter(|t| t.alive())
+                .map(|t| (Some(t.pos + turn(st.at, t.yaw)), st.yaw + t.yaw)),
+        };
+        let Some(e) = self.entities.get_mut(id) else { return };
+        let Some((pos, yaw)) = now else {
+            match st.into {
+                // Its block went: it falls from where it was.
+                StuckIn::Block { .. } => (e.stuck, e.vel) = (None, DVec3::ZERO),
+                // Who it was in is gone.
+                StuckIn::Entity(_) => e.gone(abi::removal::HIT),
+            }
+            return;
+        };
+        if let Some(pos) = pos {
+            e.pos = pos;
+        }
+        e.yaw = yaw;
+        let ticks = st.ticks + 1;
+        e.stuck = Some(Stuck { ticks, ..st });
+        if ticks > p.stuck_ticks {
+            e.gone(abi::removal::EXPIRED);
+        }
+    }
+}
+
+/// `v` turned about the up axis by `yaw` radians, as entity yaws turn.
+fn turn(v: DVec3, yaw: f32) -> DVec3 {
+    let (s, c) = (yaw as f64).sin_cos();
+    DVec3::new(v.x * c - v.z * s, v.y, v.x * s + v.z * c)
 }

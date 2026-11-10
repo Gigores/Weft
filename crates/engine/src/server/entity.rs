@@ -35,8 +35,8 @@ pub struct Entity {
     /// Its `SAFE_FALL` this tick: how far its paths go down at once.
     pub safe_fall: f32,
     pub removed: bool,
-    /// Why it was removed (`abi::removal`), what `event::ENTITY_REMOVED` says; `REFUSED` for one
-    /// whose spawn was refused, which nobody was told of.
+    /// Why it was removed (`abi::removal`), what `event::ENTITY_REMOVED` says; `dim::UNTOLD` for what
+    /// nobody was told came.
     pub removal: u32,
     pub item: ItemStack,
     pub pickup_delay: u32,
@@ -94,10 +94,30 @@ pub struct Entity {
     pub owner: u64,
     /// A projectile has flown clear of its owner, who it may hit from then on.
     pub left_owner: bool,
-    /// Ticks a projectile has been stuck in a block, 0 while it flies.
-    pub stuck: u32,
+    /// Its kind flies as a projectile (`EntityKind::projectile`), which nothing hits.
+    pub projectile: bool,
+    /// Where a projectile is stuck, `None` while it flies.
+    pub stuck: Option<Stuck>,
     /// A player's actions held down, by key id, with the tick each went down at.
     pub keys: Vec<(u32, u64)>,
+}
+
+/// Where a projectile sits stuck, where it is in the frame of what holds it, its yaw there,
+/// and for how many ticks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stuck {
+    pub into: StuckIn,
+    pub at: DVec3,
+    pub yaw: f32,
+    pub ticks: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StuckIn {
+    /// A block, on `body` (in its blocks; 0: this dimension's).
+    Block { body: u64, block: IVec3 },
+    /// An entity's box: it goes and turns with it.
+    Entity(u64),
 }
 
 /// What an entity is breaking, and how far along by what it held and where it was each tick.
@@ -212,7 +232,8 @@ impl Entity {
             driver: None,
             owner: 0,
             left_owner: false,
-            stuck: 0,
+            projectile: false,
+            stuck: None,
             keys: Vec::new(),
         }
     }
@@ -276,9 +297,10 @@ impl Entity {
         self.in_world() || !self.removed && !c.game.entities[self.kind as usize].shown_slots.is_empty()
     }
 
-    /// Something that stands in the world and can be hit: not a dropped item or a spectator either.
+    /// Something that stands in the world and can be hit: not a dropped item, a projectile or a
+    /// spectator either.
     pub fn is_body(&self) -> bool {
-        self.in_world() && self.item.is_empty() && !self.mode.has(crate::tag_bits::game_mode::HIDDEN)
+        self.in_world() && self.item.is_empty() && !self.projectile && !self.mode.has(crate::tag_bits::game_mode::HIDDEN)
     }
 
     /// It comes and goes with the world's cube it is in: players have a file of their own, what is
@@ -391,6 +413,7 @@ impl Entities {
         // Saved mid-fall, it still lands.
         e.falls |= e.kind == c.game.falling_kind;
         let kind = &c.game.entities[e.kind as usize];
+        e.projectile = kind.projectile.is_some();
         for &comp in &kind.components {
             self.comps
                 .entry((id, comp))

@@ -241,7 +241,7 @@ pub fn tick(m: &mut OpenMenu, dim: &mut Dim, c: &Content, player: u64) {
 
 /// Returns temp slots and the cursor to the player (dropping what does not fit). Output slots are
 /// previews, not real items, and are discarded.
-pub fn close(m: OpenMenu, dim: &mut Dim, c: &Content, player: u64) {
+pub fn close(m: OpenMenu, dim: &mut Dim, c: &'static Content, player: u64) {
     let outputs: Vec<u32> = m
         .slots
         .iter()

@@ -348,7 +348,12 @@ impl ClientEntity {
     /// Something that can be bumped into or hit, like the server's `Entity::is_body`: what isn't
     /// a thing to hit never gets here, and the dead lie there only to be seen.
     pub fn is_body(&self) -> bool {
-        self.item.is_empty() && self.dying.is_none()
+        let projectile = content()
+            .game
+            .entities
+            .get(self.kind as usize)
+            .is_some_and(|k| k.projectile.is_some());
+        self.item.is_empty() && self.dying.is_none() && !projectile
     }
 
     /// What its kind's client tick gets (`client` filled in by the caller).
@@ -699,7 +704,7 @@ impl Client {
         labels.retain(|(pos, ..)| {
             let d = *pos - eye;
             let len = d.length();
-            len < 24.0 && (len < 0.2 || physics::raycast(c, &opaque, eye, d / len, len - 0.1, false).is_none())
+            len < 24.0 && (len < 0.2 || physics::raycast(c, &opaque, eye, d / len, len - 0.1, weft_abi::ray::BLOCKS).is_none())
         });
         (self.gizmo_lines, self.gizmo_fills, self.gizmo_labels) = (lines, fills, labels);
     }
@@ -2504,7 +2509,7 @@ impl Client {
                     .map(|s| (id, physics::Transform::of(e.pose(now)), s as &dyn physics::Blocks))
             })
             .collect();
-        physics::pick(content(), &world::SeenCells { world, air_if_missing: false }, &structures, eye, look, reach, false)
+        physics::pick(content(), &world::SeenCells { world, air_if_missing: false }, &structures, eye, look, reach, weft_abi::ray::BLOCKS)
     }
 
     /// Server tick (fractional) bodies are shown at when the client clock reads `clock`.

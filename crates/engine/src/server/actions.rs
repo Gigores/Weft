@@ -661,7 +661,7 @@ fn sees(c: &Content, d: &Dim, eye: DVec3, target: &Entity) -> bool {
             let dir = (to - eye) / left.max(1e-9);
             // Plants and the like are seen through: only what stops a walker blocks the view.
             for _ in 0..16 {
-                let Some(hit) = d.ray(c, from, dir, left, false) else { return true };
+                let Some(hit) = d.ray(c, from, dir, left, abi::ray::BLOCKS) else { return true };
                 if c.states[hit.state as usize].flags & weft_abi::block_flags::SOLID != 0 {
                     return false;
                 }
