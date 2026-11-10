@@ -20,6 +20,7 @@ static HUD_FOOD: HudElement = HudElement::named("food");
 static HUD_AIR: HudElement = HudElement::named("air");
 static HUD_ATTACK: HudElement = HudElement::named("attack_indicator");
 static WATER_LIKE: Tag = Tag::named("water");
+static ALWAYS_EATABLE: Tag = Tag::named("can_always_eat");
 
 const MAX_AIR: f32 = 300.0;
 
@@ -61,6 +62,9 @@ pub fn register(r: &mut Registry) {
     r.world_tick(tick_players);
     // Not hungry, it doesn't start eating; the other way round it would only find out at the end.
     r.before_event(&actions::USE_ITEM, |q| {
+        if ALWAYS_EATABLE.on_item(q.item()) {
+            return Verdict::Abstain;
+        }
         let full = FOOD.on_item(q.item()).is_some()
             && q.world()
                 .component(q.entity(), &HUNGER)
