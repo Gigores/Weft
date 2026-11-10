@@ -101,9 +101,11 @@ fn leaves(r: &mut Registry, handle: &'static Block, tex: &str) {
         .mined_by("shears", tool_tier::HAND)
         .tab(&crate::tabs::NATURAL);
     // Vanilla: a sapling one time in 20, oak leaves an apple one time in 200.
-    let mut table = r
-        .loot(handle)
-        .pool(Pool::new().when(Cond::tool("#tools/shears")).item(handle.name()));
+    let mut table = r.loot(handle).pool(
+        Pool::new()
+            .when(Cond::tool("#tools/shears"))
+            .item(handle.name()),
+    );
     let no_shears = !Cond::tool("#tools/shears");
     table = table.pool(
         Pool::new()
@@ -120,13 +122,7 @@ fn leaves(r: &mut Registry, handle: &'static Block, tex: &str) {
         );
     }
 }
-fn berry_leaves(
-    r: &mut Registry,
-    handle: &'static Block,
-    texture: &'static str,
-    texture_berried: &'static str,
-    item: &'static Item
-) {
+fn berry_leaves(r: &mut Registry, handle: &'static Block, texture: &'static str, texture_berried: &'static str, item: &'static Item) {
     r.block(handle)
         .sound_group("grass")
         .prop("berried", ["false", "true"])
@@ -141,8 +137,16 @@ fn berry_leaves(
         .states(|p, s| s.texture(if p.is("berried", "true") { texture_berried } else { texture }))
         .on_use(move |u| pick_berries(u, item));
     r.loot(handle)
-        .pool(Pool::new().when(Cond::tool("#tools/shears")).item(handle.name()))
-        .pool(Pool::new().when(Cond::state("berried=true")).items(item.name(), 1, 2));
+        .pool(
+            Pool::new()
+                .when(Cond::tool("#tools/shears"))
+                .item(handle.name()),
+        )
+        .pool(
+            Pool::new()
+                .when(Cond::state("berried=true"))
+                .items(item.name(), 1, 2),
+        );
 }
 
 fn plant(r: &mut Registry, handle: &'static Block, tex: &str) {
@@ -362,8 +366,8 @@ pub fn register(r: &mut Registry) {
     leaves(r, &OAK_LEAVES, "leaves_oak");
     leaves(r, &BIRCH_LEAVES, "leaves_birch");
     leaves(r, &SPRUCE_LEAVES, "leaves_spruce");
-    berry_leaves(r, &RASPBERRY_LEAVES, "raspberry_leaves", "raspberry_leaves_berried" , &crate::items::RASPBERRY);
-    berry_leaves(r, &SNOWBERRY_LEAVES, "raspberry_leaves", "snowberry_leaves_berried" , &crate::items::SNOWBERRY);
+    berry_leaves(r, &RASPBERRY_LEAVES, "raspberry_leaves", "raspberry_leaves_berried", &crate::items::RASPBERRY);
+    berry_leaves(r, &SNOWBERRY_LEAVES, "raspberry_leaves", "snowberry_leaves_berried", &crate::items::SNOWBERRY);
     // Vanilla numbers: water steps every 5 ticks and reaches 7 blocks, lava every 30 and 3.
     // Players swim in water; what they wear may add more (`SWIMS_IN` on an item).
     r.edit(&PLAYER).set_text(&SWIMS_IN, "#water");

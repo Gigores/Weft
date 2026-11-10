@@ -126,7 +126,9 @@ pub fn register(r: &mut Registry) {
     for m in &MATERIALS {
         // `.tool(kind)` tags it `tools/<kind>`; `<kind>s/<material>` picks its recipe.
         let tool = |r: &mut Registry, kind: &str, damage: f32, speed: f32| {
-            if kind == "shears" && m.level < tool_tier::IRON && m.name != "gold" { return; }
+            if kind == "shears" && m.level < tool_tier::IRON && m.name != "gold" {
+                return;
+            }
             let b = r
                 .item(Item::generated(format!("{}_{kind}", m.name)))
                 .tool(kind, m.level)
