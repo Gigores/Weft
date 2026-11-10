@@ -9,6 +9,9 @@ use weft_sdk::noise::*;
 use weft_sdk::terrain::*;
 use weft_sdk::abi::entry_kind as ek;
 
+use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+
 pub const SEA: i32 = 63;
 
 static PLANT_SOIL: Tag = Tag::named("plant_soil");
@@ -244,17 +247,39 @@ pub fn register(r: &mut Registry) {
             let BlockPos { x, y, z } = s.pos();
             if y < 70 || !gentle(s, 2, 2) { return; }
             let mut rng = Rng(s.random());
-            let mut place_ball = |rng: &mut Rng, ox, oy, oz| {
-                for (dx, dy, dz) in sphere(1.5) {
-                    s.put([ox + dx, oy + dy, oz + dz], if rng.float() < 0.5 { COBBLESTONE.id() } else { MOSSY_COBBLESTONE.id() });
-                }
-            };
-            place_ball(&mut rng, x, y, z);
+            let mut cells = Vec::new();
+            place_boulder(s, &mut rng, x, y, z, &mut cells);
             if rng.float() < 0.5 {
                 let dx = x + (rng.float() * 2.0) as i32;
                 let dy = y + (rng.float() * 2.0 - 0.5) as i32;
                 let dz = z + (rng.float() * 2.0) as i32;
-                place_ball(&mut rng, dx, dy, dz);
+                place_boulder(s, &mut rng, dx, dy, dz, &mut cells);
+            }
+            let blocks: BTreeSet<[i32; 3]> = cells.into_iter().collect();
+            let mut carpets: BTreeMap<[i32; 3], u8> = BTreeMap::new();
+            for b in &blocks {
+                for &d in &Dir::ALL {
+                    if d == Dir::Down { continue; }
+                    let o = d.offset();
+                    let n = [b[0] + o.x, b[1] + o.y, b[2] + o.z];
+                    if blocks.contains(&n) { continue; }
+                    let face = d.opposite().face() as u8;
+                    *carpets.entry(n).or_insert(0) |= 1u8 << face;
+                }
+            }
+            for (p, mask) in carpets {
+                if rng.float() > 0.2 { continue; }
+                let props: Vec<(&str, &str)> = Dir::ALL
+                    .iter()
+                    .map(|&d| {
+                        let on = mask & (1u8 << d.face() as u8) != 0;
+                        (d.name(), if on { "true" } else { "false" })
+                    })
+                    .collect();
+                let state = MOSS.with(&props);
+                if state != u32::MAX {
+                    s.put(p, state);
+                }
             }
         });
     r.scatter(&RASPBERRY_SITES)
@@ -280,6 +305,15 @@ pub fn register(r: &mut Registry) {
             )
         });
     r.decoration(decorate);
+}
+
+fn place_boulder(s: &mut Site, rng: &mut Rng, ox: i32, oy: i32, oz: i32, cells: &mut Vec<[i32; 3]>) {
+    for (dx, dy, dz) in sphere(1.5) {
+        let pos = [ox + dx, oy + dy, oz + dz];
+        let block = if rng.float() < 0.5 { COBBLESTONE.id() } else { MOSSY_COBBLESTONE.id() };
+        s.put(pos, block);
+        cells.push(pos);
+    }
 }
 
 static SNOWBERRY_SITES: Scatter = Scatter::named("snowberries");
