@@ -453,6 +453,16 @@ command.tick.sprinting = course de {0} ticks
 command.tick.sprinted = course de {0} ticks en {1} ms
 command.regions.done = régions {0}
 command.seed.done = graine: {0}
+command.structure.bad = /structure save ne prend pas cette zone, ou {0} n'est pas un nom simple
+command.structure.no_folder = ce monde n'a pas de dossier où enregistrer
+command.structure.saved = {0} enregistré : {1} blocs
+command.structure.not_saved = impossible d'enregistrer : {0}
+command.structure.unknown = aucun modèle ni structure enregistrée {0}
+command.structure.placed = {0} placé
+command.structure.undone = annulé
+command.structure.nothing = rien à annuler ici
+command.structure.found = {0} en {1} {2} {3}
+command.structure.none = aucun {0} à moins de {1} blocs
 command.rule.value = {0} = {1}
 command.rule.unknown = pas de règle {0}
 command.rule.locked = les règles de ce monde sont verrouillées

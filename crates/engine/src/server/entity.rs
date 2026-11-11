@@ -654,6 +654,11 @@ impl Entities {
             .collect();
     }
 
+    /// How many slots `owner` has, 0 for none.
+    pub fn inventory_len(&self, owner: u64) -> usize {
+        self.inventories.get(&owner).map_or(0, |i| i.len())
+    }
+
     pub fn inventory_slot(&self, owner: u64, slot: u32) -> ItemStack {
         self.inventories
             .get(&owner)

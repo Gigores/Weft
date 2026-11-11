@@ -413,6 +413,16 @@ command.tick.sprinting = ускорение на {0} тиков
 command.tick.sprinted = {0} тиков пройдено за {1} мс
 command.regions.done = регионы {0}
 command.seed.done = сид: {0}
+command.structure.bad = такую область /structure save не сохранит, или {0} не простое имя
+command.structure.no_folder = у этого мира нет папки, куда сохранить
+command.structure.saved = сохранено {0}: блоков {1}
+command.structure.not_saved = не удалось сохранить: {0}
+command.structure.unknown = нет шаблона или сохранённой постройки {0}
+command.structure.placed = поставлено {0}
+command.structure.undone = отменено
+command.structure.nothing = здесь нечего отменять
+command.structure.found = {0} в {1} {2} {3}
+command.structure.none = нет {0} ближе {1} блоков
 command.rule.value = {0} = {1}
 command.rule.unknown = нет правила {0}
 command.rule.locked = правила этого мира заблокированы

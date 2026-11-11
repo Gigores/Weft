@@ -71,7 +71,7 @@ static INGREDIENTS: CreativeTab = CreativeTab::named("base:ingredients");
 fn init(r: &mut Registry) {
     r.block(&RUBY_ORE).hardness(3.0).mined_by("pickaxe", tool_tier::IRON).drops("ruby", 1);
     r.item(&RUBY).tag("gems/ruby").tab(&INGREDIENTS);
-    r.ore(&RUBY_ORE).y(-64, 16).veins(2).vein_size(5).replaces("#stone_ore_replaceables");
+    r.ore(&RUBY_ORE).y(-64, 16).per_cube(2).vein_size(5).replaces("#stone_ore_replaceables");
 }
 ```
 
@@ -110,7 +110,7 @@ In your own mod you write just `ruby` and it becomes `mymod:ruby`, the same when
 Other mods' things go by their full name: `base:furnace`. The engine's own are `core:..`.
 
 ### References
-Wherever something is named as text (recipes, loot, ore and structure filters, `.biome(..)`, dimension lists, `r.set`, support rules, spawn rules, `.ctm` files, `{block:..}` and `{item:..}`, commands), it is written the same way, whatever kind it is:
+Wherever something is named as text (recipes, loot, what features replace and stand on, `.biome(..)`, dimension lists, `r.set`, support rules, spawn rules, `.ctm` files, `{block:..}` and `{item:..}`, commands), it is written the same way, whatever kind it is:
 - `base:stone` is that thing, `base:furnace[lit=true]` the furnace's states with that value
 - `#logs` is anything with the tag, `#ingots/*` anything with a tag starting with `ingots/`; components count too, so `#fuel` is anything that burns
 - where one thing goes (a recipe's result, a loot line, a tab's icon, `{item:..}`) it takes a name, as a tag stands for several. A recipe made per material is the one exception: the result of `"#planks/{m}"` is the first item with that tag
@@ -164,7 +164,7 @@ All of it works in any text the game shows, chat and command replies included, s
 
 ## How registering works
 Everything you register is an entry: a kind (block, item, ore, recipe, sky object, weather...), a name, and the components it is made of.\
-Builder methods are shortcuts for components: `.hardness(3.0)` sets `hardness`, `.veins(6)` on an ore sets `comps::ore::VEINS`. `comps::<kind>` lists what the engine reads off each kind, and every builder has `.set(&C, v)`, `.unset(&C)`, `.tag("t")` and `.untag("t")`, so nothing is out of reach when a shortcut is missing.
+Builder methods are shortcuts for components: `.hardness(3.0)` sets `hardness`, `.vein_size(6)` on an ore sets `comps::feature::SIZE`. `comps::<kind>` lists what the engine reads off each kind, and every builder has `.set(&C, v)`, `.unset(&C)`, `.tag("t")` and `.untag("t")`, so nothing is out of reach when a shortcut is missing.
 
 Because it's all components, anything registered, yours, another mod's or the engine's, changes the same way:
 - `r.block(&X)`, `r.ore(..)` and the rest register it once; the same name twice is a load error
@@ -398,8 +398,8 @@ Every liquid is also an item of its name and tags, its count in millibuckets: wh
 - `r.sky_body(&DIM, &OBJECT)`, `r.sky_stars`, `r.sky_dome`, `r.sky_clouds` for what is in its sky, the sun and the moon included; `OVERWORLD.sky(&MOON)` is one of them for `r.edit` and `r.remove`
 - `r.terrain(&DIM)` for your dimension's terrain, `r.edit(OVERWORLD.terrain())` for another mod's
 - `r.ore(block)`, in every dimension whose stone it replaces (`.dimension(..)` limits it). `.replaces_with("#granite", &GRANITE_IRON_ORE)` makes the same vein go on as another block where it meets granite, so veins don't stop at stone borders; `.exposed(0.5)` leaves out half of what would touch a cave, as vanilla's gold and diamonds. `r.edit(IRON_ORE.ore())` changes another mod's ore: what you set, a `replaces` taking the place of its own and `replaces_with` added to its own (a block tagged `#stone_ore_replaceables` is in every ore's way at once)
-- `r.scatter(&TREES)` for trees and the like, `r.decoration(f)` for plants (named `<mod>:decoration`, `/2`..), in every dimension
-- `r.template(&T)` (layers and keys, or `fill` boxes) for a shape of blocks, then `r.structure(&T)` (`T.structure()` to edit it), `.body(&T)` on an entity or `w.place_template(&T, pos)`
+- everything generation puts into the world is a feature: `r.ore`, `r.structure`, `r.scatter(&TREES)` for trees and the like, `r.decoration(f)` for plants (named `<mod>:decoration`, `/2`..) are presets of `r.feature(&F)`, which takes any spread (`per_cube`, `spacing`), shape (`vein`, `template`, `plan` for a layout of your own) and order (`stage`, `after`, `before`). Those on a grid give way to higher `priority` ones
+- `r.template(&T)` (layers and keys, or `fill` boxes, `@slot` keys, `.loot`, `.entity`, `.joint`) or a file `structures/<name>.json` for a shape of blocks, then `r.structure(&T)` (`T.structure()` to edit it, `.turns_and_mirrors()`, `.palette(&P)` after `r.palette(&P).slot("wall", "base:bricks")`), `.body(&T)` on an entity, `p.grow(..)` in a plan to join pieces by their joints, or `w.place_template(&T, pos, transform, palette)` / `w.place_feature(&F, pos)` now (`w.unplace(id)` takes it back). `/structure save|load|undo|locate` in the game
 - `r.natural_spawn(&ENTITY).biome("#animals").light(7, 15)`, named `<mod>:<entity>`, `/2`..
 
 The terrain has presets like hills, canyons, dunes, caves, lava lakes if you don't want to write noise by hand.\
@@ -584,7 +584,7 @@ You can contact me on Discord: `@vortex_so`
 - [CTM](ctm.md): connected and varied block textures (glass, logs, random stone)
 - [Redstone](redstone.md): wire on any face, gates, pistons, and blocks of your own that join in
 - [Localization](localization.md): all text, item tooltips, rich text and effects, icons and meters, lines by tag, adding them from other mods and packs
-- [Worldgen](worldgen.md): ores, structures, biomes, spawns, new dimensions and terrain, also in other mods' dimensions
+- [Worldgen](worldgen.md): features (ores, structures, plans, trees, grass), biomes, spawns, new dimensions and terrain, also in other mods' dimensions
 - [Sky](sky.md): suns, moons, stars and skyboxes in any dimension, changing or removing the ones there
 - [Models and animations](models.md): mob models in code or Blockbench, keyframes and actions, items in the hands, armor
 - [UI](ui.md): screens, HUD, menus, looks, GUI textures

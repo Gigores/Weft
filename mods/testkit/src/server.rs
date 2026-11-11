@@ -72,6 +72,8 @@ pub static NO_USE: Config<bool> = Config::named("no_use");
 pub static CHAT_HOOKS: Config<bool> = Config::named("chat_hooks");
 /// What the last `actions::CHAT` said.
 static LAST_SAID: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+/// Features placed in generated cubes: (feature, start).
+static PLACED: std::sync::Mutex<Vec<(u32, BlockPos)>> = std::sync::Mutex::new(Vec::new());
 /// Fired by `after` timers; counted.
 static RANG: Event<u64> = Event::named("rang");
 static RINGS: AtomicU32 = AtomicU32::new(0);
@@ -168,7 +170,7 @@ pub fn register(r: &mut Registry) {
         .size(0.9, 2.5)
         .set(&WARMTH, 3.0)
         .attach(&MARK);
-    r.edit(TIN_ORE.ore()).veins(7);
+    r.edit(TIN_ORE.ore()).per_cube(7);
     r.block(&LAMP)
         .prop("lit", ["false", "true"])
         .states(|p, s| if p.is("lit", "true") { s.light(13) } else { s })
@@ -262,6 +264,12 @@ pub fn register(r: &mut Registry) {
     r.before_event(&actions::USE_ITEM, |_| if NO_USE.get() { Verdict::Deny } else { Verdict::Abstain });
     r.on_event(&RANG, |b| {
         RINGS.fetch_add(b.len() as u32, Ordering::Relaxed);
+    });
+    r.on_event(&FEATURE_PLACED, |b| {
+        PLACED
+            .lock()
+            .unwrap()
+            .extend(b.iter().map(|v| (v.feature, v.pos)));
     });
     r.config(&HALF_DAMAGE).bool(false).world();
     r.before_event(&actions::BREAK_BLOCK, |q| if GOLD.is(q.state()) && PROTECT_GOLD.get() { Verdict::Deny } else { Verdict::Abstain });
@@ -954,8 +962,21 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(w.looked_at(player, 5.0, Ray::blocks())
             .map_or("none".into(), |l| format!("{} {} {} {} {}", l.body, l.pos.x, l.pos.y, l.pos.z, block_name(l.state))))
     }),
+    // Features placed in generated cubes so far: `name x y z` each.
+    ("placed", "", |_, _, _, _| {
+        let placed = PLACED.lock().unwrap();
+        let parts: Vec<String> = placed
+            .iter()
+            .map(|(f, p)| format!("{} {} {} {}", name_of(ek::FEATURE, *f), p.x, p.y, p.z))
+            .collect();
+        Ok(parts.join(", "))
+    }),
     ("place", "<template:word> <pos:pos>", |w, cmd, _, _| {
-        Ok((w.place_template(&Template::generated(word(cmd, "template")?.to_string()), pos(cmd, "pos")?) as u32).to_string())
+        let t = Template::generated(word(cmd, "template")?.to_string());
+        Ok((w
+            .place_template(&t, pos(cmd, "pos")?, Transform::NONE, None)
+            .is_some() as u32)
+            .to_string())
     }),
     ("heal", "", |w, _, player, _| {
         w.heal(player, f32::MAX);

@@ -453,6 +453,16 @@ command.tick.sprinting = sprinting {0} ticks
 command.tick.sprinted = sprinted {0} ticks in {1} ms
 command.regions.done = regions {0}
 command.seed.done = seed: {0}
+command.structure.bad = not a box /structure save can take, or {0} is not a plain name
+command.structure.no_folder = this world has no folder to save to
+command.structure.saved = saved {0}: {1} blocks
+command.structure.not_saved = could not save: {0}
+command.structure.unknown = no template or saved structure {0}
+command.structure.placed = placed {0}
+command.structure.undone = undone
+command.structure.nothing = nothing to undo here
+command.structure.found = {0} at {1} {2} {3}
+command.structure.none = no {0} within {1} blocks
 command.rule.value = {0} = {1}
 command.rule.unknown = no rule {0}
 command.rule.locked = the rules of this world are locked
