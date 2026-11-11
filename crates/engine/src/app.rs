@@ -29,7 +29,7 @@ use crate::ui::lang::Lang;
 use crate::ui::look::Look;
 use crate::ui::render::UiRenderer;
 use crate::ui::text::{self, Arg, Msg};
-use crate::ui::{Kind, Ui};
+use crate::ui::{Kind, Style, Ui};
 
 pub type BackendFactory = fn(&BackendDesc) -> Result<Box<dyn Backend>, weft_render::Error>;
 
@@ -226,6 +226,8 @@ pub(crate) struct Running {
     after_list: CommandList,
     input: Input,
     touches: crate::touch::Touches,
+    /// The phone's keyboard is up (`soft_keyboard`).
+    keyboard: bool,
     pub(crate) settings: Settings,
     lang: Lang,
     languages: Vec<(String, String)>,
@@ -495,6 +497,7 @@ impl App {
             after_list: CommandList::default(),
             input,
             touches: Default::default(),
+            keyboard: false,
             settings,
             lang,
             languages: Vec::new(),
@@ -512,6 +515,7 @@ impl App {
             hud: {
                 let mut h = Hud::default();
                 h.load_layout(&self.opts.run_dir);
+                crate::touch::load(&self.opts.run_dir);
                 h
             },
             game: None,
@@ -633,15 +637,25 @@ impl Running {
             self.languages = Lang::available(&self.assets);
         }
         let mut ui = Ui::new();
-        s.build(&mut ui, &self.build_cx());
+        let depth = self.screens.len() + 1;
+        self.build_screen(&mut *s, &mut ui, depth);
         self.screens.push((s, ui));
         self.quads_dirty = true;
         self.set_capture(false);
     }
 
+    /// A screen's tree, and over it an X closing it as Escape would (`escape`): there is no Escape
+    /// on a phone, and on a computer it is one more way.
+    fn build_screen(&self, s: &mut dyn Screen, ui: &mut Ui, depth: usize) {
+        s.build(ui, &self.build_cx());
+        if s.escape_closes() && !s.draws_close() && (depth > 1 || self.game.is_some()) {
+            ui.container(Style::default().at_from([1.0, 0.0], -4.0, 4.0, [1.0, 0.0]), |ui| screens::close_button(ui, 16.0));
+        }
+    }
+
     fn rebuild_all(&mut self) {
         let mut screens = std::mem::take(&mut self.screens);
-        for (s, ui) in &mut screens {
+        for (depth, (s, ui)) in screens.iter_mut().enumerate() {
             let (hover, focus) = (ui.hovered, ui.focused);
             let focus_id = focus
                 .and_then(|f| ui.nodes.get(f))
@@ -655,7 +669,7 @@ impl Running {
                 })
                 .collect();
             ui.clear();
-            s.build(ui, &self.build_cx());
+            self.build_screen(&mut **s, ui, depth + 1);
             // Typed text survives rebuilds (language switch, resize).
             for (id, v, c) in inputs {
                 if let Some(n) = ui.find(&id) {
@@ -714,11 +728,28 @@ impl Running {
             self.set_capture(true);
         }
         let at = Vec2::new(t.location.x as f32, t.location.y as f32);
-        let scale = self.gui_scale();
+        let (scale, aim) = (self.gui_scale(), self.aim());
         let hud = &self.hud;
         let stick = hud.element_rect(crate::touch::STICK);
+        let element = |p| {
+            hud.element_at(p)
+                .and_then(|e| hud.element_rect(&e).map(|r| (e, r)))
+        };
         self.touches
-            .finger(&mut self.input, t.id, t.phase, at, scale, world, &|p| hud.element_at(p), stick);
+            .finger(&mut self.input, t.id, t.phase, at, scale, world, aim, &element, stick);
+    }
+
+    /// What the crosshair is on, for what a finger on the view does.
+    fn aim(&self) -> crate::touch::Aim {
+        let Some(g) = &self.game else { return Default::default() };
+        let held = [g.client.shown_held(), g.client.off_held()];
+        crate::touch::Aim {
+            entity: g.client.target_entity.is_some(),
+            block: g.client.target.is_some(),
+            holding_item: held
+                .iter()
+                .any(|s| crate::content::use_ticks(content(), s) > 0),
+        }
     }
 
     fn grab_cursor(&self) {
@@ -1826,7 +1857,8 @@ impl ApplicationHandler for App {
                 r.input.cursor = Vec2::new(position.x as f32, position.y as f32);
             }
             WindowEvent::RedrawRequested => {
-                r.touches.tick(&mut r.input);
+                let aim = r.aim();
+                r.touches.tick(&mut r.input, aim);
                 if frame(r, &self.opts) || r.quit {
                     r.leave_world_silent();
                     el.exit();
@@ -1896,6 +1928,7 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
     window_keys(r);
     r.screen_input(scale, &mut requests);
     r.handle(requests);
+    soft_keyboard(r);
     if !r.gpu.compiling()
         && let Some(meta) = r.waiting_world.take()
     {
@@ -1949,6 +1982,25 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
     }
     count_fps(r);
     false
+}
+
+/// A phone's keyboard comes up while a text field has the focus (the chat) and goes away after.
+/// A computer's text comes with its keys: asking for an input method there would turn it into
+/// composition events instead.
+fn soft_keyboard(r: &mut Running) {
+    if !cfg!(target_os = "android") {
+        return;
+    }
+    let typing = r
+        .screens
+        .last()
+        .and_then(|(_, ui)| ui.focused.and_then(|f| ui.nodes.get(f)))
+        .map(|n| matches!(n.kind, Kind::Input { .. }))
+        .unwrap_or(false);
+    if typing != r.keyboard {
+        r.keyboard = typing;
+        r.window.set_ime_allowed(typing);
+    }
 }
 
 fn start_frame(r: &mut Running, opts: &Options, dt: f64) {
@@ -2316,22 +2368,40 @@ fn layout_uis(r: &mut Running, scale: f32) -> f32 {
     // Whole physical pixels per pixel of the font's design.
     let p = r.ui.font.pixel;
     let text_unit = (scale * 0.5 * p).round().max(1.0) / (scale * p);
+    // A phone's keyboard covers the bottom of the window: screens are laid out above it, so the
+    // chat line stays in sight while it is typed in. The HUD keeps the whole window.
+    let screen_size = Vec2::new(gui_size.x, visible_height(r).map_or(gui_size.y, |h| (h / scale).min(gui_size.y)));
     {
-        let mut uis: Vec<&mut Ui> = Vec::new();
+        let mut uis: Vec<(&mut Ui, Vec2)> = Vec::new();
         if r.game.is_some() {
-            uis.push(&mut r.hud.ui);
+            uis.push((&mut r.hud.ui, gui_size));
         }
-        uis.extend(r.screens.iter_mut().map(|(_, u)| u));
-        for ui in uis {
-            if ui.dirty || ui.size != gui_size || ui.text_unit != text_unit {
+        uis.extend(r.screens.iter_mut().map(|(_, u)| (u, screen_size)));
+        for (ui, size) in uis {
+            if ui.dirty || ui.size != size || ui.text_unit != text_unit {
                 ui.text_unit = text_unit;
-                ui.layout(gui_size, &r.ui.font);
+                ui.layout(size, &r.ui.font);
                 ui.dirty = false;
                 r.quads_dirty = true;
             }
         }
     }
     text_unit
+}
+
+/// Physical pixels from the window's top down to what covers it (a phone's keyboard).
+fn visible_height(r: &Running) -> Option<f32> {
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::WindowExtAndroid;
+        let rect = r.window.content_rect();
+        (rect.bottom > rect.top).then_some(rect.bottom as f32)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = r;
+        None
+    }
 }
 
 fn build_ui_quads(r: &mut Running, scale: f32) {

@@ -78,6 +78,11 @@ pub trait Screen: std::any::Any {
     fn escape_closes(&self) -> bool {
         true
     }
+    /// It puts its X (`close_button`) in a place of its own; others get one in the window's
+    /// corner.
+    fn draws_close(&self) -> bool {
+        false
+    }
     fn closes_on_respawn(&self) -> bool {
         false
     }
@@ -118,6 +123,7 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         "core:shader_packs" => Box::new(crate::packs::ShaderPacks),
         "core:world_rules" => Box::new(ConfigScreen { shown: Shown::World }),
         "core:hud_editor" => Box::new(crate::hud_editor::HudEditor::default()),
+        "core:touch_buttons" => Box::new(crate::touch::TouchButtons::default()),
         "core:debug_options" => Box::new(crate::hud_editor::DebugOptions),
         "core:tags" => Box::new(crate::game_screens::TagList::default()),
         "core:mods" => Box::new(ModList::default()),
@@ -436,6 +442,17 @@ pub fn button(ui: &mut Ui, cx: &BuildCx, key: &str, args: &[Arg], width: f32, ac
             t.wrap = false;
         }
     })
+}
+
+/// The X that closes a screen as Escape does, its picture `side` GUI pixels.
+pub fn close_button(ui: &mut Ui, side: f32) {
+    let style = Style::default()
+        .size(side + 2.0, side + 2.0)
+        .pad(1.0)
+        .center();
+    ui.button("button", style, Rc::new(|c: &mut Ctx| c.requests.push(Request::Close)), |ui| {
+        ui.add(Kind::Image { texture: "core:gui/close".into(), color: 0xFFFFFFFF }, Style::default().size(side, side));
+    });
 }
 
 /// A menu button with an icon (class `icon`, 9x9 like a glyph and its shadow) at its left edge;
@@ -1145,6 +1162,12 @@ impl Screen for Controls {
             ui.set_id(list, "controls");
             ui.container(Style::row().gap(6.0), |ui| {
                 button(ui, cx, "controls.reset", &[], 120.0, |c| c.requests.push(Request::ResetBinds));
+                if crate::settings::touch_controls() {
+                    button(ui, cx, "touch.title", &[], 120.0, |c| {
+                        c.requests
+                            .push(Request::Screen("core:touch_buttons".into()))
+                    });
+                }
                 button(ui, cx, "menu.done", &[], 120.0, |c| c.requests.push(Request::Close));
             });
         });
