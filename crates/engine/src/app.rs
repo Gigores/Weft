@@ -430,6 +430,7 @@ impl App {
             height: size.height,
             vsync: crate::settings::vsync(),
             debug: self.opts.gpu_debug,
+            cache: Some(&self.opts.cache_dir),
         };
         // The chosen renderer, and the others if it can't start on this machine.
         let chosen = crate::settings::renderer();

@@ -12,6 +12,8 @@ use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, 
 use weft_render::*;
 
 const FRAMES: usize = 2;
+/// Set 0 has the textures, 1 each draw's buffers, this one the samplers.
+const SAMPLER_SET: u32 = 2;
 /// Timestamp queries per frame: start, after uploads, marks, end.
 const MAX_MARKS: u32 = 16;
 const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
@@ -109,6 +111,10 @@ pub struct VulkanBackend {
     /// Several indirect draws in one call.
     multi_draw: bool,
     passes: HashMap<PassKey, vk::RenderPass>,
+    /// Compiled pipelines, kept in `cache_file` between runs; `cache_dirty` once one was added.
+    pipeline_cache: vk::PipelineCache,
+    cache_file: Option<std::path::PathBuf>,
+    cache_dirty: bool,
     allocator: ManuallyDrop<Allocator>,
     swapchain: Option<Swapchain>,
     frames: Vec<Frame>,
@@ -127,6 +133,9 @@ pub struct VulkanBackend {
     global_layout: vk::DescriptorSetLayout,
     global_pool: vk::DescriptorPool,
     global_set: vk::DescriptorSet,
+    sampler_layout: vk::DescriptorSetLayout,
+    sampler_pool: vk::DescriptorPool,
+    sampler_set: vk::DescriptorSet,
     samplers: [vk::Sampler; 4],
     free_tex: Vec<u32>,
     next_tex: u32,
@@ -438,6 +447,16 @@ impl VulkanBackend {
 
             let swapchain_fn = khr::swapchain::Device::new(&instance, &device);
             let draw_count_fn = draw_count.then(|| khr::draw_indirect_count::Device::new(&instance, &device));
+            // The driver checks the data is its own and starts empty otherwise.
+            let cache_file = desc.cache.map(|d| d.join("vulkan_pipelines.bin"));
+            let cached = cache_file
+                .as_ref()
+                .and_then(|f| std::fs::read(f).ok())
+                .unwrap_or_default();
+            let pipeline_cache = device
+                .create_pipeline_cache(&vk::PipelineCacheCreateInfo::default().initial_data(&cached), None)
+                .or_else(|_| device.create_pipeline_cache(&Default::default(), None))
+                .map_err(err("pipeline cache"))?;
 
             let mut frames = Vec::new();
             for _ in 0..FRAMES {
@@ -476,70 +495,6 @@ impl VulkanBackend {
                 });
             }
 
-            let mut flags = vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND;
-            if unused_while_pending {
-                flags |= vk::DescriptorBindingFlags::UPDATE_UNUSED_WHILE_PENDING;
-            }
-            let binding_flags = [flags, vk::DescriptorBindingFlags::empty(), Default::default(), Default::default(), Default::default()];
-            let bindings = [
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(0)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .descriptor_count(MAX_TEXTURES)
-                    .stage_flags(vk::ShaderStageFlags::ALL),
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(1)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::ALL),
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(2)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::ALL),
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(3)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::ALL),
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(4)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::ALL),
-            ];
-            let mut flag_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
-            let global_layout = device
-                .create_descriptor_set_layout(
-                    &vk::DescriptorSetLayoutCreateInfo::default()
-                        .bindings(&bindings)
-                        .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
-                        .push_next(&mut flag_info),
-                    None,
-                )
-                .map_err(err("global set layout"))?;
-            let sizes = [
-                vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: MAX_TEXTURES },
-                vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: 4 },
-            ];
-            let global_pool = device
-                .create_descriptor_pool(
-                    &vk::DescriptorPoolCreateInfo::default()
-                        .pool_sizes(&sizes)
-                        .max_sets(1)
-                        .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND),
-                    None,
-                )
-                .map_err(err("descriptor pool"))?;
-            let layouts = [global_layout];
-            let global_set = device
-                .allocate_descriptor_sets(
-                    &vk::DescriptorSetAllocateInfo::default()
-                        .descriptor_pool(global_pool)
-                        .set_layouts(&layouts),
-                )
-                .map_err(err("global set"))?[0];
-
             let sampler = |filter: vk::Filter, mode: vk::SamplerAddressMode, mips: bool| {
                 // The filtered sampler gets anisotropy: block faces at grazing angles stay sharp.
                 let aniso = filter == vk::Filter::LINEAR && mips;
@@ -563,22 +518,79 @@ impl VulkanBackend {
                 sampler(vk::Filter::NEAREST, vk::SamplerAddressMode::CLAMP_TO_EDGE, true).map_err(err("sampler"))?,
                 sampler(vk::Filter::LINEAR, vk::SamplerAddressMode::CLAMP_TO_EDGE, true).map_err(err("sampler"))?,
             ];
-            let infos: Vec<[vk::DescriptorImageInfo; 1]> = samplers
-                .iter()
-                .map(|&s| [vk::DescriptorImageInfo::default().sampler(s)])
-                .collect();
-            let writes: Vec<_> = infos
+
+            let mut flags = vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND;
+            if unused_while_pending {
+                flags |= vk::DescriptorBindingFlags::UPDATE_UNUSED_WHILE_PENDING;
+            }
+            let binding_flags = [flags];
+            let bindings = [vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(MAX_TEXTURES)
+                .stage_flags(vk::ShaderStageFlags::ALL)];
+            let mut flag_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+            let global_layout = device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default()
+                        .bindings(&bindings)
+                        .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+                        .push_next(&mut flag_info),
+                    None,
+                )
+                .map_err(err("global set layout"))?;
+            let sizes = [vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: MAX_TEXTURES }];
+            let global_pool = device
+                .create_descriptor_pool(
+                    &vk::DescriptorPoolCreateInfo::default()
+                        .pool_sizes(&sizes)
+                        .max_sets(1)
+                        .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND),
+                    None,
+                )
+                .map_err(err("descriptor pool"))?;
+            let layouts = [global_layout];
+            let global_set = device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::default()
+                        .descriptor_pool(global_pool)
+                        .set_layouts(&layouts),
+                )
+                .map_err(err("global set"))?[0];
+
+            // The samplers, a set of their own (`SAMPLER_SET`): in the textures' set, Mali's driver
+            // samples nothing through them. Fixed in the layout, as they never change.
+            let sampler_bindings: Vec<_> = samplers
                 .iter()
                 .enumerate()
-                .map(|(i, info)| {
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(global_set)
-                        .dst_binding(1 + i as u32)
+                .map(|(i, s)| {
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(i as u32)
                         .descriptor_type(vk::DescriptorType::SAMPLER)
-                        .image_info(info)
+                        .stage_flags(vk::ShaderStageFlags::ALL)
+                        .immutable_samplers(std::slice::from_ref(s))
                 })
                 .collect();
-            device.update_descriptor_sets(&writes, &[]);
+            let sampler_layout = device
+                .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&sampler_bindings), None)
+                .map_err(err("sampler set layout"))?;
+            let sizes = [vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: samplers.len() as u32 }];
+            let sampler_pool = device
+                .create_descriptor_pool(
+                    &vk::DescriptorPoolCreateInfo::default()
+                        .pool_sizes(&sizes)
+                        .max_sets(1),
+                    None,
+                )
+                .map_err(err("sampler pool"))?;
+            let layouts = [sampler_layout];
+            let sampler_set = device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::default()
+                        .descriptor_pool(sampler_pool)
+                        .set_layouts(&layouts),
+                )
+                .map_err(err("sampler set"))?[0];
 
             let queries = device
                 .create_query_pool(
@@ -602,6 +614,9 @@ impl VulkanBackend {
                 compaction: None,
                 multi_draw,
                 passes: HashMap::new(),
+                pipeline_cache,
+                cache_file,
+                cache_dirty: false,
                 allocator: ManuallyDrop::new(allocator),
                 swapchain: None,
                 frames,
@@ -618,6 +633,9 @@ impl VulkanBackend {
                 global_layout,
                 global_pool,
                 global_set,
+                sampler_layout,
+                sampler_pool,
+                sampler_set,
                 samplers,
                 free_tex: Vec::new(),
                 next_tex: 0,
@@ -864,6 +882,23 @@ impl VulkanBackend {
         let deferred = std::mem::take(&mut frame.deferred);
         for d in deferred {
             self.destroy_now(d);
+        }
+    }
+
+    /// Writes the compiled pipelines out, if any were added: once a frame at most, as a phone's
+    /// app may be ended without notice.
+    fn save_pipeline_cache(&mut self) {
+        let Some(file) = self.cache_file.as_ref().filter(|_| self.cache_dirty) else { return };
+        self.cache_dirty = false;
+        let Ok(data) = (unsafe { self.device.get_pipeline_cache_data(self.pipeline_cache) }) else { return };
+        let part = file.with_extension("part");
+        let written = file
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::write(&part, &data))
+            .and_then(|_| std::fs::rename(&part, file));
+        if let Err(e) = written {
+            log::warn!("{}: {e}", file.display());
         }
     }
 
@@ -1328,6 +1363,44 @@ fn raw_buffer(
     }
 }
 
+/// Marks `NonUniform` each sampled image made of a texture that is: naga 30 marks only the texture,
+/// and the rule wants the operand the sampling reads. NVIDIA doesn't mind; Mali samples zeros.
+fn non_uniform_samples(words: &mut Vec<u32>) {
+    const DECORATE: u32 = 71;
+    const SAMPLED_IMAGE: u32 = 86;
+    const NON_UNIFORM: u32 = 5300;
+    // After the five words of the header: (word count << 16 | opcode) and the operands.
+    let mut marked = Vec::new();
+    let mut add = Vec::new();
+    let mut first_decoration = None;
+    let mut at = 5;
+    while at < words.len() {
+        let (count, op) = ((words[at] >> 16) as usize, words[at] & 0xffff);
+        if count == 0 {
+            return;
+        }
+        let operands = &words[at + 1..(at + count).min(words.len())];
+        match op {
+            DECORATE => {
+                first_decoration.get_or_insert(at);
+                if operands.get(1) == Some(&NON_UNIFORM) {
+                    marked.push(operands[0]);
+                }
+            }
+            // Result type, result, image, sampler.
+            SAMPLED_IMAGE if operands.len() == 4 && marked.contains(&operands[2]) => add.push(operands[1]),
+            _ => {}
+        }
+        at += count;
+    }
+    let Some(first) = first_decoration else { return };
+    let new: Vec<u32> = add
+        .iter()
+        .flat_map(|&id| [3 << 16 | DECORATE, id, NON_UNIFORM])
+        .collect();
+    words.splice(first..first, new);
+}
+
 fn compare_op(c: Compare) -> vk::CompareOp {
     match c {
         Compare::Always => vk::CompareOp::ALWAYS,
@@ -1342,14 +1415,22 @@ impl VulkanBackend {
     fn spirv(&self, shader: &Shader, stage: naga::ShaderStage, entry: &str) -> Result<vk::ShaderModule, Error> {
         let mut options = naga::back::spv::Options::default();
         options.lang_version = (1, 3);
+        // The prelude's samplers, group 0 bindings 1 to 4, are a set of their own here.
+        for binding in 1..5 {
+            options.binding_map.insert(
+                naga::ResourceBinding { group: 0, binding },
+                naga::back::spv::BindingInfo { descriptor_set: SAMPLER_SET, binding: binding - 1, binding_array_size: None },
+            );
+        }
         options.force_loop_bounding = false;
-        let words = naga::back::spv::write_vec(
+        let mut words = naga::back::spv::write_vec(
             &shader.module,
             &shader.info,
             &options,
             Some(&naga::back::spv::PipelineOptions { shader_stage: stage, entry_point: entry.to_string() }),
         )
         .map_err(|e| Error(format!("SPIR-V for {entry}: {e}")))?;
+        non_uniform_samples(&mut words);
         unsafe {
             self.device
                 .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
@@ -1384,7 +1465,7 @@ impl VulkanBackend {
                 .device
                 .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None)
                 .map_err(err("buffer set layout"))?;
-            let sets = [self.global_layout, set_layout];
+            let sets = [self.global_layout, set_layout, self.sampler_layout];
             let ranges = [vk::PushConstantRange { stage_flags: vk::ShaderStageFlags::ALL, offset: 0, size: shader.push_constant_size }];
             let mut info = vk::PipelineLayoutCreateInfo::default().set_layouts(&sets);
             if shader.push_constant_size > 0 {
@@ -1719,7 +1800,7 @@ impl Backend for VulkanBackend {
             .render_pass(pass);
         let result = unsafe {
             self.device
-                .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
+                .create_graphics_pipelines(self.pipeline_cache, &[info], None)
         };
         unsafe {
             self.device.destroy_shader_module(vs, None);
@@ -1728,6 +1809,7 @@ impl Backend for VulkanBackend {
             }
         }
         let raw = result.map_err(|(_, e)| Error(format!("pipeline {}: {e:?}", desc.label)))?[0];
+        self.cache_dirty = true;
         Ok(PipelineId(
             self.pipelines
                 .insert(Pipeline { raw, layout, set_layout, bind_point: vk::PipelineBindPoint::GRAPHICS, buffers }),
@@ -1747,10 +1829,11 @@ impl Backend for VulkanBackend {
             .layout(layout);
         let result = unsafe {
             self.device
-                .create_compute_pipelines(vk::PipelineCache::null(), &[info], None)
+                .create_compute_pipelines(self.pipeline_cache, &[info], None)
         };
         unsafe { self.device.destroy_shader_module(cs, None) };
         let raw = result.map_err(|(_, e)| Error(format!("compute pipeline {}: {e:?}", desc.label)))?[0];
+        self.cache_dirty = true;
         Ok(PipelineId(
             self.pipelines
                 .insert(Pipeline { raw, layout, set_layout, bind_point: vk::PipelineBindPoint::COMPUTE, buffers }),
@@ -1860,6 +1943,8 @@ impl Backend for VulkanBackend {
                             self.device.cmd_bind_pipeline(cmd, pl.bind_point, pl.raw);
                             self.device
                                 .cmd_bind_descriptor_sets(cmd, pl.bind_point, pl.layout, 0, &sets, &[]);
+                            self.device
+                                .cmd_bind_descriptor_sets(cmd, pl.bind_point, pl.layout, SAMPLER_SET, &[self.sampler_set], &[]);
                             if let Some((start, len)) = pushed {
                                 let bytes = &list.data[start as usize..(start + len) as usize];
                                 self.device
@@ -1977,6 +2062,8 @@ impl Backend for VulkanBackend {
                         self.device.cmd_bind_pipeline(cmd, pl.bind_point, pl.raw);
                         self.device
                             .cmd_bind_descriptor_sets(cmd, pl.bind_point, pl.layout, 0, &sets, &[]);
+                        self.device
+                            .cmd_bind_descriptor_sets(cmd, pl.bind_point, pl.layout, SAMPLER_SET, &[self.sampler_set], &[]);
                         current = Some(p.0);
                         stale = true;
                     }
@@ -2145,6 +2232,7 @@ impl Backend for VulkanBackend {
             }
         }
         self.slot = (self.slot + 1) % FRAMES;
+        self.save_pipeline_cache();
     }
 
     fn request_capture(&mut self) {
@@ -2229,7 +2317,13 @@ impl Drop for VulkanBackend {
             for (_, p) in self.passes.drain() {
                 self.device.destroy_render_pass(p, None);
             }
+            self.save_pipeline_cache();
+            self.device
+                .destroy_pipeline_cache(self.pipeline_cache, None);
             self.device.destroy_descriptor_pool(self.global_pool, None);
+            self.device.destroy_descriptor_pool(self.sampler_pool, None);
+            self.device
+                .destroy_descriptor_set_layout(self.sampler_layout, None);
             self.device
                 .destroy_descriptor_set_layout(self.global_layout, None);
             if let Some(sc) = self.swapchain.take() {
@@ -2243,5 +2337,36 @@ impl Drop for VulkanBackend {
             }
             self.instance.destroy_instance(None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every sampled image of a texture picked per pixel ends up marked, whatever naga does.
+    #[test]
+    fn sampled_images_of_varying_textures_are_non_uniform() {
+        let shader = weft_render::Shader::from_wgsl(
+            "test",
+            "@fragment fn fs(@location(0) @interpolate(flat) t: u32, @location(1) uv: vec2<f32>) -> @location(0) vec4<f32> {
+                return textureSampleLevel(textures[t], nearest_clamp, uv, 0.0);
+            }",
+        )
+        .unwrap();
+        let options = naga::back::spv::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: "fs".into() };
+        let mut words = naga::back::spv::write_vec(&shader.module, &shader.info, &Default::default(), Some(&options)).unwrap();
+        super::non_uniform_samples(&mut words);
+        let (mut marked, mut sampled) = (Vec::new(), Vec::new());
+        let mut at = 5;
+        while at < words.len() {
+            let count = (words[at] >> 16) as usize;
+            match words[at] & 0xffff {
+                71 if words[at + 2] == 5300 => marked.push(words[at + 1]),
+                86 => sampled.push(words[at + 2]),
+                _ => {}
+            }
+            at += count;
+        }
+        assert!(!sampled.is_empty());
+        assert!(sampled.iter().all(|s| marked.contains(s)), "sampled {sampled:?}, marked {marked:?}");
     }
 }

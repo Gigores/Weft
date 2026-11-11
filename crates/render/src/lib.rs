@@ -409,6 +409,9 @@ pub struct BackendDesc<'a> {
     pub height: u32,
     pub vsync: bool,
     pub debug: bool,
+    /// Where compiled shaders may be kept between runs: a phone's driver takes most of a minute
+    /// over the terrain shader.
+    pub cache: Option<&'a std::path::Path>,
 }
 
 pub trait Backend: Send {
