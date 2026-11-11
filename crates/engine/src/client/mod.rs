@@ -512,7 +512,6 @@ pub struct ClientMenu {
 pub enum ClientEvent {
     OpenMenu,
     CloseMenu,
-    Died,
 }
 
 /// Player physics runs at vanilla's tick rate; the camera is interpolated between ticks.

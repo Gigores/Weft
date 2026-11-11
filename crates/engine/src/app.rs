@@ -988,6 +988,7 @@ impl Running {
                 Request::Respawn => {
                     if let Some(g) = &mut self.game {
                         g.client.send(net::ToServer::Respawn);
+                        g.client.dead = false;
                     }
                     self.close_screens(|s| s.closes_on_respawn());
                 }
@@ -2231,11 +2232,13 @@ fn client_events(r: &mut Running) {
                 r.open(Box::new(crate::game_screens::MenuScreen::new(kind)));
             }
             crate::client::ClientEvent::CloseMenu => r.close_screens(|s| s.shows_menu()),
-            crate::client::ClientEvent::Died => {
-                r.screens.clear();
-                r.open(screens::engine("core:death"));
-            }
         }
+    }
+    let dead = r.game.as_ref().is_some_and(|g| g.client.dead);
+    let shown = r.entering.as_ref().is_none_or(|e| e.shown.is_some());
+    if dead && shown && !r.screens.iter().any(|(s, _)| s.name() == "core:death") {
+        r.screens.clear();
+        r.open(screens::engine("core:death"));
     }
 }
 
