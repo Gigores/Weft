@@ -83,8 +83,8 @@ pub fn register(r: &mut Registry) {
         .set(&GRASS_COVER, 0.7)
         .set(&TALL_GRASS_COVER, 0.2)
         .set(&BOULDER_COVER, 0.03)
-        .set(&RASPBERRY_COVER, 0.05)
-        .set(&SNOWBERRY_COVER, 0.025);
+        .set(&RASPBERRY_COVER, 0.02)
+        .set(&SNOWBERRY_COVER, 0.01);
     r.biome(&FOREST)
         .humidity(0.25..)
         .surface("grass", "dirt", 3)
@@ -500,8 +500,6 @@ fn decorate(g: &mut Gen) {
                     let wave = fixed::fbm(fixed::seed32(seed, 0x7A11), wx * 16, wz * 16, 48 * 16, 3);
                     if wave > 0 {
                         place_tall_grass(g, x, y, z);
-                    } else {
-                        place_grass(g, x, y, z);
                     }
                 // roll ∈ [tall_grass_chance; grass_chance)
                 } else if roll < grass_chance {
