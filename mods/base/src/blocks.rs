@@ -627,7 +627,7 @@ pub fn register(r: &mut Registry) {
         .shares_cell_with("#water")
         .hardness(0.1)
         .signal_blocker()
-        .tab(&crate::tabs::BUILDING);
+        .tab(&crate::tabs::NATURAL);
 
     // What may grow or stand where, from the common `dirt` and `sand` tags like modern vanilla:
     // a mod's sand tagged `sand` gets cactus and sugar cane, in the world and from players.

@@ -59,6 +59,7 @@ pub fn register(r: &mut Registry) {
         ("shovels", &["X", "#", "#"]),
         ("hoes", &["XX", " #", " #"]),
         ("swords", &["X", "X", "#"]),
+        ("shearss", &[" X", "X "]),
     ] {
         r.shaped(C, &format!("#{tool}/{{m}}"), 1, pattern, &[('X', "#materials/{m}"), ('#', "#stick")]);
     }
@@ -75,4 +76,5 @@ pub fn register(r: &mut Registry) {
     {
         r.shapeless(S, output, 1, &[input], ticks);
     }
+    r.shapeless(C, "mossy_cobblestone", 1, &["cobblestone", "moss"], 0);
 }
