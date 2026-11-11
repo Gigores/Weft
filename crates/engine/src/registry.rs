@@ -140,6 +140,10 @@ pub struct EntityKind {
     pub template: Option<u32>,
     /// Where riders sit (`abi::Seat`).
     pub seats: Vec<Seat>,
+    /// How it flies when it is a projectile (`comp::entity::PROJECTILE`).
+    pub projectile: Option<abi::Projectile>,
+    /// What hits land on, part by part (`comp::entity::HITBOXES`); none: its box.
+    pub hitboxes: Option<abi::Hitboxes>,
     /// What the keys of a player steering it do (`abi::SteerArgs`), and where riders get off
     /// when a seat asks it (`abi::DismountArgs`).
     pub steer: Option<(ModId, Callback)>,
@@ -207,8 +211,11 @@ pub struct GroupDef {
     pub cols: u32,
     pub rows: u32,
     pub flags: u32,
-    /// Tag or component name, empty for any item.
+    /// What items it takes, a reference (`#fuel #mymod:fire_starter !base:lava_bucket`), empty
+    /// for any.
     pub accepts: String,
+    /// `accepts` as a bit per item, made at the freeze; `None` any.
+    pub accepted: Option<std::sync::Arc<[u64]>>,
     pub limit: u32,
     pub size: f32,
     pub background: Option<String>,
@@ -280,10 +287,23 @@ impl Ingredient {
     }
 }
 
+/// What a run of a recipe does to an ingredient (`abi::RecipeUse`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Use {
+    /// Used up; the last of a stack leaves its item's `remainder`.
+    Consume,
+    Keep,
+    Wear(u32),
+    /// Used up, this item left in its place.
+    Leaves(u32),
+}
+
 pub struct Recipe {
     /// Shaped: width, height, cells (row major).
     pub shaped: Option<(u32, u32, Vec<Ingredient>)>,
     pub inputs: Vec<Ingredient>,
+    /// Per cell of a shaped one, else per input: what a run does to it.
+    pub uses: Vec<Use>,
     /// How many of each input (millibuckets for fluids).
     pub input_counts: Vec<u32>,
     /// The main result, then each its pools can give (`extras`) with the most of it and its chance.
@@ -391,9 +411,7 @@ pub struct Game {
     pub keys: Vec<KeyDef>,
     pub events: Vec<EventDef>,
     pub event_names: FxHashMap<String, u32>,
-    pub interceptors: FxHashMap<String, Vec<(ModId, Callback)>>,
-    /// Steps per chain in run order: (stage, owner, modifier).
-    pub modifiers: FxHashMap<String, Vec<(u32, ModId, Callback)>>,
+    pub steps: crate::steps::Steps,
     pub attributes: Vec<AttrDef>,
     pub attr_names: FxHashMap<String, u32>,
     /// The engine component holding entities' attribute modifiers.
@@ -406,6 +424,8 @@ pub struct Game {
     pub world_ticks: Vec<(ModId, Callback)>,
     /// `abi::comp::NAME` as an entity component.
     pub name_comp: u32,
+    /// `abi::comp::PERSISTENT` as an entity component.
+    pub persistent_comp: u32,
     /// Components with `component_flags::CARRIED`: between a block's item and its block entity.
     pub carried: Vec<u32>,
     pub fields: FieldComps,
@@ -428,6 +448,8 @@ pub struct Game {
     pub rules_locked: u32,
     /// Config id of `core:keep_inventory`.
     pub keep_inventory: u32,
+    /// Config id of `core:max_entity_cramming`.
+    pub max_cramming: u32,
     /// Config id of `core:simulation_distance`.
     pub simulation_distance: u32,
     /// (owner, component, system) in mod order.
@@ -661,7 +683,7 @@ fn engine_components() -> Vec<RawEntry> {
     let energy = (<abi::Energy as abi::Schema>::SCHEMA, cf::SAVE | cf::SYNC_MENU, vec![0; size_of::<abi::Energy>()]);
     // What items, entity kinds, poses and entity effects give (`content::SourceMods`).
     let modifiers = <Vec<abi::Modifier> as abi::data::Data>::schema();
-    let mut all = vec![decl(abi::comp::CONTENTS, "bytes"), decl(abi::comp::LAYERS, "bytes"), decl(abi::comp::MODIFIERS, &modifiers)];
+    let mut all = vec![decl(abi::comp::CONTENTS, "bytes"), decl(abi::comp::LAYERS, "str"), decl(abi::comp::MODIFIERS, &modifiers)];
     // Variable length (no bytes): attribute modifiers, timers, a block entity's own name (a
     // renamed chest).
     for (name, schema, flags, default) in [
@@ -669,6 +691,7 @@ fn engine_components() -> Vec<RawEntry> {
         (MODIFIERS, "bytes", cf::SAVE, Vec::new()),
         (TIMERS, "bytes", cf::SAVE, Vec::new()),
         (abi::comp::NAME, "bytes", cf::SAVE | cf::CARRIED, Vec::new()),
+        (abi::comp::PERSISTENT, "bytes", cf::SAVE, Vec::new()),
         (HEALTH, "[f32;2]", own, vec![0; 8]),
         (BURNING, "u8", shown, vec![0]),
         (abi::comp::LIGHT, "[u8;3]", own, vec![0; 3]),
@@ -683,10 +706,12 @@ fn engine_components() -> Vec<RawEntry> {
         (EFFECT, "bytes", own | cf::SAVE, Vec::new()),
         (FORCED_POSE, "bytes", own | shown, Vec::new()),
         (RIDING, "bytes", own | shown | cf::SAVE, Vec::new()),
+        (STUCK, "bytes", shown, Vec::new()),
         (GAME_MODE, "u32", cf::SYNC_OWNER, vec![0; 4]),
         (PERMISSION, "u32", cf::SYNC_OWNER, vec![0; 4]),
         (ATTRIBUTES, "bytes", cf::SYNC_OWNER, Vec::new()),
         (SIMULATED, "u64", cf::SAVE, vec![0; 8]),
+        (TRASH, "bytes", 0, Vec::new()),
     ] {
         all.push(entity(name, schema, flags, default));
     }
@@ -734,6 +759,7 @@ pub struct RawRecipe {
     pub time: u32,
     /// Pools for what else it gives; a liquid is its item.
     pub outputs: Vec<abi::LootPool>,
+    pub uses: Vec<abi::RecipeUse>,
     /// Its entry: recipes expanded from one share it.
     pub entry: u32,
 }
@@ -758,9 +784,6 @@ pub struct RawGame {
     pub command_permissions: Vec<(String, u32)>,
     /// (owner, event, schema, handler).
     pub event_handlers: Vec<(ModId, String, String, Callback)>,
-    pub interceptors: Vec<(ModId, String, Callback)>,
-    /// (owner, chain, stage, modifier).
-    pub modifiers: Vec<(ModId, String, u32, Callback)>,
     /// (owner, component, schema, system).
     pub systems: Vec<(ModId, String, String, Callback)>,
 }
@@ -941,7 +964,7 @@ pub struct DamageCauseDef {
 
 fn engine_damage_causes() -> Vec<RawEntry> {
     use abi::comp::damage_cause as d;
-    let tags: [&[&str]; 12] = [
+    let tags: [&[&str]; 14] = [
         &[],
         &[d::BYPASSES_ARMOR],
         &[],
@@ -954,8 +977,25 @@ fn engine_damage_causes() -> Vec<RawEntry> {
         &[d::BYPASSES_ARMOR],
         &[],
         &[],
+        &[],
+        &[d::BYPASSES_ARMOR],
     ];
-    let messages = ["generic", "fall", "generic", "fire", "starve", "drown", "void", "lava", "crush", "suffocate", "explosion", "generic"];
+    let messages = [
+        "generic",
+        "fall",
+        "generic",
+        "fire",
+        "starve",
+        "drown",
+        "void",
+        "lava",
+        "crush",
+        "suffocate",
+        "explosion",
+        "generic",
+        "projectile",
+        "cramming",
+    ];
     abi::damage_cause::NAMES
         .iter()
         .zip(tags)
@@ -964,6 +1004,9 @@ fn engine_damage_causes() -> Vec<RawEntry> {
             let mut e = RawEntry::engine(abi::entry_kind::DAMAGE_CAUSE, name).set(d::DEATH_MESSAGE, format!("death.{m}"));
             if *name == "core:attack" {
                 e = e.set(d::DEATH_MESSAGE_BY, "death.attack".to_string());
+            }
+            if *name == "core:projectile" {
+                e = e.set(d::DEATH_MESSAGE_BY, "death.projectile_by".to_string());
             }
             tags.iter().fold(e, |e, t| e.tag(t))
         })
@@ -1184,27 +1227,31 @@ fn engine_game_modes() -> Vec<RawEntry> {
             .unwrap()
             .0
     };
-    let modifier =
-        |attribute: &str, op: u32, amount: f64| abi::Modifier { attribute: attribute.to_string(), op, amount, ..Default::default() };
+    let modifier = |attribute: &str, step: &str, amount: f64| abi::Modifier {
+        attribute: attribute.to_string(),
+        step: step.to_string(),
+        amount,
+        ..Default::default()
+    };
     let mode = |name: &str, flags: &[u32], modifiers: Vec<abi::Modifier>| {
         flags
             .iter()
             .fold(RawEntry::engine(abi::entry_kind::GAME_MODE, name), |e, f| e.tag(tag(*f)))
             .set(abi::comp::MODIFIERS, modifiers)
     };
-    let flies = || modifier(abi::attribute::CAN_FLY, abi::attr_op::ADD, 1.0);
-    let spared = || modifier(abi::attribute::INVULNERABLE, abi::attr_op::SET, 1.0);
+    let flies = || modifier(abi::attribute::CAN_FLY, abi::step::ADD, 1.0);
+    let spared = || modifier(abi::attribute::INVULNERABLE, abi::step::SET, 1.0);
     use crate::tag_bits::game_mode as f;
     // Unseen by mobs outside survival; creative reaches further.
-    let unseen = || modifier(abi::attribute::VISIBILITY, abi::attr_op::MULTIPLY_TOTAL, -1.0);
+    let unseen = || modifier(abi::attribute::VISIBILITY, abi::step::MUL, 0.0);
     vec![
         mode("core:survival", &[], Vec::new()),
         mode(
             "core:creative",
             &[f::INSTANT_BREAK, f::NO_COSTS, f::CREATIVE_INVENTORY],
             vec![
-                modifier(abi::attribute::BLOCK_REACH, abi::attr_op::ADD, 0.5),
-                modifier(abi::attribute::ENTITY_REACH, abi::attr_op::ADD, 2.0),
+                modifier(abi::attribute::BLOCK_REACH, abi::step::ADD, 0.5),
+                modifier(abi::attribute::ENTITY_REACH, abi::step::ADD, 2.0),
                 unseen(),
                 flies(),
                 spared(),
@@ -1248,7 +1295,7 @@ fn bake_precipitation(e: &Entry) -> PrecipitationDef {
 }
 
 /// A shader effect on entities: the snippet that draws it, `ns:name`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EntityEffectDef {
     pub name: String,
     /// Empty: none.
@@ -1272,6 +1319,8 @@ pub struct EntityEffectDef {
     pub hazards: Vec<crate::content::Hazard>,
     /// Given off while it is on.
     pub light: [u8; 3],
+    /// Its tick with every entity that has it (`comp::ENTITY_EFFECT_ON_TICK`).
+    pub on_tick: Option<(ModId, Callback)>,
 }
 
 /// Whether an entity effect is good for who has it (`EntityEffectDef::kind`).
@@ -1388,6 +1437,15 @@ pub mod attr {
     pub const SUBMERGED_MINING_SPEED: u32 = 21;
     pub const AIRBORNE_MINING_SPEED: u32 = 22;
     pub const NIGHT_VISION: u32 = 23;
+    pub const SWIM_SPEED: u32 = 24;
+    pub const FLYING_SPEED: u32 = 25;
+    pub const CRIT_DAMAGE: u32 = 26;
+    pub const SWEEPING_DAMAGE_RATIO: u32 = 27;
+    pub const ATTACK_KNOCKBACK: u32 = 28;
+    pub const HURT_COOLDOWN: u32 = 29;
+    pub const AIR_CONTROL: u32 = 30;
+    pub const SLIPPERINESS: u32 = 31;
+    pub const CLIMB_SPEED: u32 = 32;
 }
 
 fn engine_attributes() -> Vec<RawEntry> {
@@ -1411,13 +1469,22 @@ fn engine_attributes() -> Vec<RawEntry> {
         (a::STEP_HEIGHT, 0.6, 0.0, 10.0),
         (a::GRAVITY, 1.0, -8.0, 8.0),
         (a::KNOCKBACK_RESISTANCE, 0.0, 0.0, 1.0),
-        (a::ATTACK_DAMAGE, 0.0, -1024.0, 1024.0),
+        (a::ATTACK_DAMAGE, 1.0, 0.0, 2048.0),
         (a::DAMAGE_RESISTANCE, 0.0, 0.0, 1.0),
         (a::FIRE_RESISTANCE, 0.0, 0.0, 1.0),
         (a::BURNING_TIME, 1.0, 0.0, 100.0),
         (a::SUBMERGED_MINING_SPEED, 0.2, 0.0, 20.0),
         (a::AIRBORNE_MINING_SPEED, 0.2, 0.0, 20.0),
         (a::NIGHT_VISION, 0.0, 0.0, 1.0),
+        (a::SWIM_SPEED, 1.0, 0.0, 16.0),
+        (a::FLYING_SPEED, 1.0, 0.0, 16.0),
+        (a::CRIT_DAMAGE, 1.5, 0.0, 1024.0),
+        (a::SWEEPING_DAMAGE_RATIO, 0.0, 0.0, 1024.0),
+        (a::ATTACK_KNOCKBACK, 0.0, 0.0, 16.0),
+        (a::HURT_COOLDOWN, 10.0, 0.0, 1024.0),
+        (a::AIR_CONTROL, 1.0, 0.0, 16.0),
+        (a::SLIPPERINESS, 1.0, 0.0, 2.0),
+        (a::CLIMB_SPEED, 1.0, 0.0, 16.0),
     ]
     .iter()
     .map(|&(name, default, min, max)| {
@@ -1451,6 +1518,12 @@ pub const ENGINE_EVENTS: &[(&str, &str, u32)] = {
         (abi::action::MOUNT, abi::Mounting::SCHEMA, size_of::<abi::Mounting>() as u32),
         (abi::action::DISMOUNT, abi::Mounting::SCHEMA, size_of::<abi::Mounting>() as u32),
         (abi::action::ENTER_DIMENSION, abi::DimensionChange::SCHEMA, size_of::<abi::DimensionChange>() as u32),
+        (abi::action::SPAWN, abi::Spawned::SCHEMA, size_of::<abi::Spawned>() as u32),
+        (abi::event::ENTITY_REMOVED, abi::Removed::SCHEMA, size_of::<abi::Removed>() as u32),
+        (abi::action::EFFECT, abi::EffectChange::SCHEMA, size_of::<abi::EffectChange>() as u32),
+        (abi::event::EFFECT_ENDED, abi::EffectChange::SCHEMA, size_of::<abi::EffectChange>() as u32),
+        (abi::action::PROJECTILE_HIT, abi::ProjectileHit::SCHEMA, size_of::<abi::ProjectileHit>() as u32),
+        (abi::event::KEY, abi::KeyChange::SCHEMA, size_of::<abi::KeyChange>() as u32),
     ]
 };
 
@@ -1485,6 +1558,7 @@ pub fn engine_entries(kind: u32) -> Vec<RawEntry> {
             .iter()
             .map(|n| RawEntry::engine(kind, n))
             .collect(),
+        ek::PHASE | ek::STEP => crate::steps::engine_entries(kind),
         _ => Vec::new(),
     }
 }
@@ -1635,6 +1709,10 @@ fn bake_entity(e: &Entry) -> EntityKind {
             .take(255)
             .map(|s| Seat { pos: crate::world::dvec(s.pos), steers: s.steers, exit: s.exit, exit_at: crate::world::dvec(s.exit_at) })
             .collect(),
+        projectile: e.get::<abi::Projectile>(k::PROJECTILE),
+        hitboxes: e
+            .get::<abi::Hitboxes>(k::HITBOXES)
+            .filter(|h| !h.parts.is_empty()),
         steer: e.callback(k::STEER),
         dismount: e.callback(k::DISMOUNT),
         ride_camera: e.or(k::RIDE_CAMERA, f32::NAN),
@@ -1662,6 +1740,7 @@ fn bake_menu(e: &Entry) -> MenuDef {
                 rows: g.rows.max(1),
                 flags: g.flags,
                 accepts: g.accepts,
+                accepted: None,
                 limit: g.limit,
                 size: if g.size > 0.0 { g.size } else { 18.0 },
                 background: text(g.background),
@@ -1707,7 +1786,7 @@ fn engine_entities() -> Vec<RawEntry> {
                 abi::comp::MODIFIERS,
                 vec![abi::Modifier {
                     attribute: abi::attribute::INVULNERABLE.into(),
-                    op: abi::attr_op::SET,
+                    step: abi::step::SET.into(),
                     amount: 1.0,
                     ..Default::default()
                 }],
@@ -1753,6 +1832,7 @@ fn raw_recipe(e: &Entry) -> RawRecipe {
         count: e.or(r::COUNT, 1u32).max(1),
         time: e.or(r::TIME, 0),
         outputs: e.or(r::OUTPUTS, Vec::new()),
+        uses: e.or(r::USES, Vec::new()),
         entry: 0,
     }
 }
@@ -1813,9 +1893,16 @@ pub const EFFECT: &str = "core:effect";
 pub const FORCED_POSE: &str = "core:forced_pose";
 /// What it rides (`u64` id) and its seat (`u32`), empty: nothing. Saved, and seen by everyone.
 pub const RIDING: &str = "core:riding";
+/// A projectile stuck in an entity: that entity (`u64`), where in its box (`[f32; 3]`, turned
+/// with its body) and its own yaw there (`f32`); empty while it isn't. Clients hold it on the
+/// bone of the model it went into.
+pub const STUCK: &str = "core:stuck";
 /// Entity component (`[u32]`, synced to watchers): the items in its kind's `SHOWN_SLOTS`, 0 empty.
 pub const SHOWN: &str = "core:shown";
 use abi::comp::{ATTRIBUTES, GAME_MODE, PERMISSION};
+/// Entity component (`ItemStack`, not saved): what a player last put in its trash
+/// (`slot_flags::TRASH`).
+pub const TRASH: &str = "core:trash";
 /// Entity component (`u64`, saved): the world time a system last simulated it to, so it can
 /// catch up on what it missed (`Dim::run_systems`).
 pub const SIMULATED: &str = "core:simulated";
@@ -1835,10 +1922,12 @@ pub struct FieldComps {
     pub effect: u32,
     pub forced: u32,
     pub riding: u32,
+    pub stuck: u32,
     pub game_mode: u32,
     pub permission: u32,
     pub attributes: u32,
     pub shown: u32,
+    pub trash: u32,
 }
 
 /// Entity kinds, frozen before components (which attach to them).
@@ -1905,6 +1994,7 @@ pub fn freeze(
     tables: &mut crate::entries::Tables,
     conds: &mut crate::conditions::Texts,
     mod_name: &dyn Fn(ModId) -> String,
+    step_order: &str,
     errors: &mut Vec<String>,
 ) -> Game {
     let mut g = Game::default();
@@ -1912,8 +2002,6 @@ pub fn freeze(
     let mut packets: Vec<(ModId, String, String, u32, Callback)> = Vec::new();
     let mut event_handlers: Vec<(ModId, String, String, Callback)> = Vec::new();
     let mut systems: Vec<(ModId, String, String, Callback)> = Vec::new();
-    let mut interceptors: Vec<(ModId, String, Callback)> = Vec::new();
-    let mut modifiers: Vec<(ModId, String, u32, Callback)> = Vec::new();
     let mut entries: Vec<RawEntry> = raws
         .iter_mut()
         .flat_map(|r| std::mem::take(&mut r.entries))
@@ -1923,8 +2011,6 @@ pub fn freeze(
         packets.extend(r.packets);
         event_handlers.extend(r.event_handlers);
         systems.extend(r.systems);
-        interceptors.extend(r.interceptors);
-        modifiers.extend(r.modifiers);
         world_ticks.extend(r.world_ticks);
         g.chat_format = r.chat_format.or(g.chat_format);
     }
@@ -2011,6 +2097,15 @@ pub fn freeze(
     });
     (g.damage_causes, g.damage_cause_names) =
         tables.bake(kind(ek::DAMAGE_CAUSE), ek::DAMAGE_CAUSE, mod_name, errors, |e, _| bake_damage_cause(e));
+    let (phases, _) = tables.bake(kind(ek::PHASE), ek::PHASE, mod_name, errors, |e, _| e.clone());
+    let phases = crate::steps::order_phases(&phases, errors);
+    let (steps, _) = tables.bake(kind(ek::STEP), ek::STEP, mod_name, errors, |e, _| e.clone());
+    g.steps = crate::steps::freeze(phases, &steps, step_order, errors);
+    g.steps.attributes = g
+        .attributes
+        .iter()
+        .map(|a| g.steps.chains.get(&a.name).cloned().unwrap_or_default())
+        .collect();
     // The settings, with a binding per key.
     let keys: Vec<(String, String)> = g
         .keys
@@ -2065,6 +2160,7 @@ pub fn freeze(
     g.rules_locked = g.config_names["core:rules_locked"];
     g.mob_spawning = g.config_names["core:mob_spawning"];
     g.keep_inventory = g.config_names["core:keep_inventory"];
+    g.max_cramming = g.config_names["core:max_entity_cramming"];
     g.simulation_distance = g.config_names["core:simulation_distance"];
     (g.categories, _) = tables.bake(kind(ek::ENTITY_CATEGORY), ek::ENTITY_CATEGORY, mod_name, errors, |e, _| bake_category(e));
     for k in g
@@ -2139,6 +2235,7 @@ pub fn freeze(
             hides: e.has(abi::comp::ENTITY_EFFECT_HIDES),
             raw_hazards: e.or(abi::comp::ENTITY_EFFECT_HAZARDS, Vec::new()),
             hazards: Vec::new(),
+            on_tick: e.callback(abi::comp::ENTITY_EFFECT_ON_TICK),
             light: e.or(abi::comp::LIGHT, [0; 3]),
         });
     (g.conditions, g.condition_names) = tables.bake(kind(ek::CONDITION), ek::CONDITION, mod_name, errors, |e, _| ConditionDef {
@@ -2203,7 +2300,7 @@ pub fn freeze(
     let (spawns, _) =
         tables.bake(kind(ek::SPAWN), ek::SPAWN, mod_name, errors, |e, errors| bake_spawn(e, &g, c, conds, dim_names, biome_names, errors));
     g.spawns = spawns.into_iter().flatten().collect();
-    link_handlers(&mut g, event_handlers, interceptors, modifiers, packets, order, errors);
+    link_handlers(&mut g, event_handlers, packets, order, errors);
 
     freeze_entity_storage(&mut g, c, decls, systems, entities.attach, order, errors);
 
@@ -2238,13 +2335,10 @@ pub fn freeze(
     g
 }
 
-/// Events with their handlers, interceptors, value chain modifiers and packet channels, each in
-/// mod order.
+/// Events with their handlers and packet channels, each in mod order.
 fn link_handlers(
     g: &mut Game,
     mut event_handlers: Vec<(ModId, String, String, Callback)>,
-    mut interceptors: Vec<(ModId, String, Callback)>,
-    mut modifiers: Vec<(ModId, String, u32, Callback)>,
     mut packets: Vec<(ModId, String, String, u32, Callback)>,
     order: &dyn Fn(ModId) -> u32,
     errors: &mut Vec<String>,
@@ -2269,17 +2363,6 @@ fn link_handlers(
         .collect();
     g.block_tick = g.event_names[abi::event::BLOCK_TICK];
     g.events = events;
-    interceptors.sort_by_key(|h| order(h.0));
-    for (owner, name, cb) in interceptors {
-        g.interceptors.entry(name).or_default().push((owner, cb));
-    }
-    modifiers.sort_by_key(|m| (m.2, order(m.0)));
-    for (owner, name, stage, cb) in modifiers {
-        g.modifiers
-            .entry(name)
-            .or_default()
-            .push((stage, owner, cb));
-    }
     packets.sort_by(|a, b| a.1.cmp(&b.1).then(a.3.cmp(&b.3)));
     for (owner, name, schema, side, cb) in packets {
         let id = *g.packet_names.entry(name.clone()).or_insert_with(|| {
@@ -2331,6 +2414,7 @@ fn freeze_entity_storage(
     g.modifiers_comp = g.component_names[MODIFIERS];
     g.timers_comp = g.component_names[TIMERS];
     g.name_comp = g.component_names[abi::comp::NAME];
+    g.persistent_comp = g.component_names[abi::comp::PERSISTENT];
     g.carried = g
         .components
         .iter()
@@ -2352,10 +2436,12 @@ fn freeze_entity_storage(
         effect: id(EFFECT),
         forced: id(FORCED_POSE),
         riding: id(RIDING),
+        stuck: id(STUCK),
         game_mode: id(GAME_MODE),
         permission: id(PERMISSION),
         attributes: id(ATTRIBUTES),
         shown: id(SHOWN),
+        trash: id(TRASH),
     };
     g.simulated_comp = g.component_names[SIMULATED];
     let with_flag = |f: u32| {
@@ -2476,7 +2562,8 @@ fn lay_out_slots(
                     cols: 1,
                     rows: 1,
                     flags: if off { weft_abi::slot_flags::OFF_HAND } else { 0 },
-                    accepts: if off { String::new() } else { format!("worn/{}", e.name) },
+                    accepts: if off { String::new() } else { format!("#worn/{}", e.name) },
+                    accepted: None,
                     limit: if off { 0 } else { 1 },
                     size: 18.0,
                     background: (!e.background.is_empty()).then(|| e.background.clone()),
@@ -2589,6 +2676,37 @@ fn freeze_recipes(
             Some((w, h, cells))
         };
         let inputs: Vec<Ingredient> = r.inputs.iter().map(|s| ing(s, errors)).collect();
+        // What runs do to each ingredient, by its pattern key or its place among the inputs.
+        let keys: Vec<String> = match &shaped {
+            Some((w, _, cells)) => (0..cells.len())
+                .map(|i| {
+                    let row = &r.pattern[i / *w as usize];
+                    row.chars().nth(i % *w as usize).unwrap_or(' ').to_string()
+                })
+                .collect(),
+            None => (0..inputs.len()).map(|i| i.to_string()).collect(),
+        };
+        let uses: Vec<Use> = keys
+            .iter()
+            .map(|k| match r.uses.iter().rfind(|u| u.key == *k) {
+                None => Use::Consume,
+                Some(u) => match u.how {
+                    abi::recipe_use::KEEP => Use::Keep,
+                    abi::recipe_use::WEAR => Use::Wear(u.amount.max(1)),
+                    abi::recipe_use::LEAVES => match one(&u.item) {
+                        Ok(i) => Use::Leaves(i),
+                        Err(e) => {
+                            errors.push(format!("recipe for {}: leaves {e}", r.output));
+                            Use::Consume
+                        }
+                    },
+                    _ => Use::Consume,
+                },
+            })
+            .collect();
+        for u in r.uses.iter().filter(|u| !keys.contains(&u.key)) {
+            errors.push(format!("recipe for {}: no ingredient {} to say how it is used", r.output, u.key));
+        }
         let input_counts = (0..inputs.len())
             .map(|i| r.input_counts.get(i).copied().unwrap_or(1).max(1))
             .collect();
@@ -2618,10 +2736,16 @@ fn freeze_recipes(
                     }),
             );
         }
-        g.recipes
-            .entry(r.kind)
-            .or_default()
-            .push(Recipe { shaped, inputs, input_counts, outputs, extras, time: r.time, entry: r.entry });
+        g.recipes.entry(r.kind).or_default().push(Recipe {
+            shaped,
+            inputs,
+            uses,
+            input_counts,
+            outputs,
+            extras,
+            time: r.time,
+            entry: r.entry,
+        });
     }
 }
 
@@ -2648,6 +2772,12 @@ impl Game {
     /// Finds the recipe whose pattern fits the grid (any position, mirrored allowed) or whose
     /// shapeless inputs match the grid contents exactly.
     pub fn match_grid(&self, kind: &str, grid: &[u32], w: u32, h: u32, tags: &Components) -> Option<&Recipe> {
+        self.match_cells(kind, grid, w, h, tags).map(|m| m.0)
+    }
+
+    /// `match_grid`, and per grid slot the recipe's ingredient there (its cell of a shaped one,
+    /// its input of another), what says how the slot is used up.
+    pub fn match_cells(&self, kind: &str, grid: &[u32], w: u32, h: u32, tags: &Components) -> Option<(&Recipe, Vec<Option<usize>>)> {
         let list = self.recipes.get(kind)?;
         // Trim the grid to the bounding box of its items.
         let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
@@ -2666,41 +2796,50 @@ impl Game {
         }
         let (bw, bh) = (x1 - x0, y1 - y0);
         let at = |x: u32, y: u32| grid[((y0 + y) * w + x0 + x) as usize];
-        let items: Vec<u32> = grid.iter().copied().filter(|&i| i != 0).collect();
-        list.iter().find(|r| match &r.shaped {
-            Some((rw, rh, cells)) => {
-                if *rw != bw || *rh != bh {
-                    return false;
-                }
-                let fits = |mirror: bool| {
-                    (0..bh).all(|y| {
-                        (0..bw).all(|x| {
-                            let cx = if mirror { bw - 1 - x } else { x };
-                            cells[(y * rw + cx) as usize].matches(at(x, y), tags)
-                        })
-                    })
-                };
-                fits(false) || fits(true)
-            }
-            None => {
-                if r.inputs.len() != items.len() {
-                    return false;
-                }
-                let mut used = vec![false; items.len()];
-                r.inputs.iter().all(|ing| {
-                    let found = items
-                        .iter()
-                        .enumerate()
-                        .find(|(i, it)| !used[*i] && ing.matches(**it, tags));
-                    match found {
-                        Some((i, _)) => {
-                            used[i] = true;
-                            true
-                        }
-                        None => false,
+        list.iter().find_map(|r| {
+            let mut cells = vec![None; grid.len()];
+            match &r.shaped {
+                Some((rw, rh, pattern)) => {
+                    if *rw != bw || *rh != bh {
+                        return None;
                     }
-                })
+                    let fits = |mirror: bool| {
+                        (0..bh).all(|y| {
+                            (0..bw).all(|x| {
+                                let cx = if mirror { bw - 1 - x } else { x };
+                                pattern[(y * rw + cx) as usize].matches(at(x, y), tags)
+                            })
+                        })
+                    };
+                    let mirror = if fits(false) {
+                        false
+                    } else if fits(true) {
+                        true
+                    } else {
+                        return None;
+                    };
+                    for y in 0..bh {
+                        for x in 0..bw {
+                            let cx = if mirror { bw - 1 - x } else { x };
+                            cells[((y0 + y) * w + x0 + x) as usize] = Some((y * rw + cx) as usize);
+                        }
+                    }
+                }
+                None => {
+                    let filled: Vec<usize> = (0..grid.len()).filter(|&i| grid[i] != 0).collect();
+                    if r.inputs.len() != filled.len() {
+                        return None;
+                    }
+                    for (k, ing) in r.inputs.iter().enumerate() {
+                        let i = filled
+                            .iter()
+                            .copied()
+                            .find(|&i| cells[i].is_none() && ing.matches(grid[i], tags))?;
+                        cells[i] = Some(k);
+                    }
+                }
             }
+            Some((r, cells))
         })
     }
 
@@ -2992,6 +3131,11 @@ fn expand_variables(r: RawRecipe, tags: &FxHashMap<&str, u32>) -> Result<Vec<Raw
                             .collect(),
                         ..p.clone()
                     })
+                    .collect(),
+                uses: r
+                    .uses
+                    .iter()
+                    .map(|u| abi::RecipeUse { item: sub(&u.item), ..u.clone() })
                     .collect(),
                 entry: r.entry,
             });

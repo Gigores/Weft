@@ -180,7 +180,8 @@ fn init(r: &mut Registry) {
     r.item(&EDITED).max_stack(16).attack_damage(3.0);
     // Faces the file leaves to the block (`#top`, `#side`) show these.
     r.block(&PEDESTAL)
-        .textures("machine_top", "generator", "machine_top")
+        .texture("generator")
+        .ends("machine_top")
         // Without its crystal, a state on a model of its own with a texture of its own.
         .prop("crystal", ["true", "false"])
         .states(|p, s| {
@@ -227,7 +228,8 @@ fn init(r: &mut Registry) {
         .category(&MACHINES)
         .pitch(0.45, 0.5);
     r.block(&GENERATOR)
-        .textures("machine_top", "generator", "machine_top")
+        .texture("generator")
+        .ends("machine_top")
         .hardness(3.0)
         .mined_by("pickaxe", 0)
         .entity(|e| {
@@ -241,9 +243,9 @@ fn init(r: &mut Registry) {
         .group(
             "fuel",
             Slots::single()
-                .accepts("fuel")
+                .accepts("#fuel")
                 .input()
-                .tooltip("testmod.fuel_slot")
+                .tooltip("block.testmod.fuel_slot")
                 .holder(),
         )
         .player_inventory()
@@ -260,7 +262,7 @@ fn init(r: &mut Registry) {
         });
     // Eight buckets of one liquid, in and out by bucket.
     r.block(&TANK)
-        .textures("machine_top", "machine_top", "machine_top")
+        .texture("machine_top")
         .hardness(3.0)
         .entity(|e| e.inventory(1))
         .opens(&TANK_MENU);
@@ -269,7 +271,8 @@ fn init(r: &mut Registry) {
         .player_inventory()
         .screen(|ui| machine_screen(ui, |ui| ui.group("liquid")));
     r.block(&ELECTRIC_FURNACE)
-        .textures("machine_top", "electric_furnace", "machine_top")
+        .texture("electric_furnace")
+        .ends("machine_top")
         .hardness(3.0)
         .mined_by("pickaxe", 0)
         .entity(|e| {
@@ -298,7 +301,8 @@ fn init(r: &mut Registry) {
     // No tick of its own: only the grid fills and drains it, so its bar shows that components
     // reach open menus whoever changed them.
     r.block(&BATTERY)
-        .textures("machine_top", "battery", "machine_top")
+        .texture("battery")
+        .ends("machine_top")
         .hardness(3.0)
         .mined_by("pickaxe", 0)
         .entity(|e| e.attach_with(&ENERGY, Energy { stored: 0, capacity: 100_000, max_in: 400, max_out: 400 }))
@@ -313,6 +317,21 @@ fn init(r: &mut Registry) {
     r.shaped(&CRAFTING, "generator", 1, &["iii", "ifi", "iii"], &[('i', "#ingots/iron"), ('f', "#furnaces")]);
     r.shaped(&CRAFTING, "electric_furnace", 1, &["iii", "iFi", "ici"], &[('i', "#ingots/iron"), ('F', "#furnaces"), ('c', "#cables")]);
     r.shaped(&CRAFTING, "cable", 8, &["iii"], &[('i', "#ingots/iron")]);
+    // What a recipe does to its ingredients besides using them up: a hammer stays and wears a
+    // point a run (a shift-click crushes as much as it lasts for at once), the water bucket
+    // leaves its bucket in its slot (the lava one does by its own `remainder`).
+    static HAMMER: Item = Item::named("hammer");
+    r.item(&HAMMER)
+        .texture("base:iron_pickaxe")
+        .tint(0xC08060)
+        .durability(16)
+        .max_stack(1)
+        .handheld()
+        .tab(&BASE_TOOLS);
+    r.shapeless(&CRAFTING, "base:gravel", 1, &["hammer", "base:cobblestone"], 0)
+        .wear(0, 1);
+    r.shapeless(&CRAFTING, "base:obsidian", 1, &["base:lava_bucket", "base:water_bucket"], 0)
+        .leaves(1, "base:bucket");
 
     r.block(&REGOLITH)
         .hardness(0.5)
@@ -377,7 +396,7 @@ fn init(r: &mut Registry) {
     // May face up, north or east only: three states, not six.
     r.block(&VENT)
         .facing(Facings::only(&[Dir::Up, Dir::North, Dir::East]), Toward::Player)
-        .states(|_, s| s.front_faces("vent_side", "vent_side", "vent_front"))
+        .states(|_, s| s.texture("vent_side").front("vent_front"))
         .hardness(2.0)
         .mined_by("pickaxe", tool_tier::HAND)
         .tab(&BASE_BUILDING);
@@ -650,7 +669,10 @@ fn dynamite(r: &mut Registry) {
         .states(|p, s| {
             let lit = !p.is("fuse", "0");
             let side = "dynamite_side";
-            let s = s.faces([side, side, "dynamite_top", if lit { "dynamite_top_lit" } else { "dynamite_top" }, side, side]);
+            let s = s
+                .texture(side)
+                .bottom("dynamite_top")
+                .top(if lit { "dynamite_top_lit" } else { "dynamite_top" });
             if lit { s.light_rgb(12, 7, 2) } else { s }
         })
         .hardness(0.0)

@@ -30,12 +30,14 @@ pub struct Entity {
     pub walk: Option<Walk>,
     /// Jump strength attribute when its walk was set (1 = vanilla's).
     pub jump_mul: f32,
-    /// Its `STEP_HEIGHT` and `GRAVITY` attributes this tick, which physics goes by.
-    pub step_height: f64,
-    pub gravity_mul: f64,
+    /// What its attributes say of how it moves this tick, which physics goes by.
+    pub moves: physics::Moves,
     /// Its `SAFE_FALL` this tick: how far its paths go down at once.
     pub safe_fall: f32,
     pub removed: bool,
+    /// Why it was removed (`abi::removal`), what `event::ENTITY_REMOVED` says; `dim::UNTOLD` for what
+    /// nobody was told came.
+    pub removal: u32,
     pub item: ItemStack,
     pub pickup_delay: u32,
     pub player: bool,
@@ -57,6 +59,13 @@ pub struct Entity {
     /// The solid body it rides (stands on, or flies above within its carry height).
     /// The body it is on: what it rides, or whose blocks hold it if it has an `anchor`.
     pub frame: Option<u64>,
+    /// Where its body faces (`physics::turn_body`), and where it was when that last turned.
+    pub body_yaw: f32,
+    pub body_from: DVec3,
+    /// How far its legs have walked and its stride (`model::walk_limbs`, by the tick): where its
+    /// legs are.
+    pub strode: f32,
+    pub stride: f32,
     pub motion: Motion,
     /// A body that falls under its weight and is put down as blocks where it lands, whatever
     /// its kind would do otherwise (`World::body_fall`, every falling block).
@@ -88,6 +97,34 @@ pub struct Entity {
     pub vehicle: Option<(u64, u8)>,
     /// The player whose client moves it, sitting in a seat that steers.
     pub driver: Option<u64>,
+    /// Who it belongs to (`SpawnEntityDesc::owner`): a projectile's shooter.
+    pub owner: u64,
+    /// A projectile has flown clear of its owner, who it may hit from then on.
+    pub left_owner: bool,
+    /// Its kind flies as a projectile (`EntityKind::projectile`), which nothing hits.
+    pub projectile: bool,
+    /// Where a projectile is stuck, `None` while it flies.
+    pub stuck: Option<Stuck>,
+    /// A player's actions held down, by key id, with the tick each went down at.
+    pub keys: Vec<(u32, u64)>,
+}
+
+/// Where a projectile sits stuck, where it is in the frame of what holds it, its yaw there,
+/// and for how many ticks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stuck {
+    pub into: StuckIn,
+    pub at: DVec3,
+    pub yaw: f32,
+    pub ticks: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StuckIn {
+    /// A block, on `body` (in its blocks; 0: this dimension's).
+    Block { body: u64, block: IVec3 },
+    /// An entity's box: it goes and turns with its body.
+    Entity(u64),
 }
 
 /// What an entity is breaking, and how far along by what it held and where it was each tick.
@@ -143,6 +180,12 @@ impl Entity {
         self.anchor.and(self.frame).unwrap_or(0)
     }
 
+    /// Out of the world for `why` (`abi::removal`), dropped at the end of the tick.
+    pub fn gone(&mut self, why: u32) {
+        self.removed = true;
+        self.removal = why;
+    }
+
     pub fn new(id: u64, kind: u32, pos: DVec3, health: f32) -> Entity {
         Entity {
             id,
@@ -152,6 +195,10 @@ impl Entity {
             blocked: false,
             yaw: 0.0,
             pitch: 0.0,
+            body_yaw: 0.0,
+            body_from: pos,
+            strode: 0.0,
+            stride: 0.0,
             on_ground: false,
             in_liquid: false,
             fall: 0.0,
@@ -161,10 +208,10 @@ impl Entity {
             hurt_cooldown: 0,
             walk: None,
             jump_mul: 1.0,
-            step_height: 0.6,
-            gravity_mul: 1.0,
+            moves: physics::Moves::default(),
             safe_fall: 3.0,
             removed: false,
+            removal: 0,
             item: ItemStack::EMPTY,
             pickup_delay: 0,
             player: false,
@@ -194,6 +241,11 @@ impl Entity {
             nav: None,
             vehicle: None,
             driver: None,
+            owner: 0,
+            left_owner: false,
+            projectile: false,
+            stuck: None,
+            keys: Vec::new(),
         }
     }
 
@@ -204,6 +256,25 @@ impl Entity {
     }
 
     /// Its box: its own size if a mod gave it one, else its kind's; crouching lowers either.
+    /// How it stands for what hits it (`hitbox`), at `pos` in the caller's frame.
+    pub fn hit_body(&self, c: &Content, pos: DVec3) -> crate::hitbox::Body {
+        crate::hitbox::Body {
+            pos,
+            body_yaw: self.body_yaw,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            walk: self.strode,
+            stride: self.stride,
+            size: self
+                .size
+                .unwrap_or(c.game.entities[self.kind as usize].size()),
+            scale: self
+                .size
+                .map_or(1.0, |s| (s.height / c.game.entities[self.kind as usize].size().height.max(1e-3)) as f64),
+            pose: self.pose,
+        }
+    }
+
     pub fn dims(&self, c: &Content) -> physics::Dims {
         physics::posed(
             self.size
@@ -256,9 +327,10 @@ impl Entity {
         self.in_world() || !self.removed && !c.game.entities[self.kind as usize].shown_slots.is_empty()
     }
 
-    /// Something that stands in the world and can be hit: not a dropped item or a spectator either.
+    /// Something that stands in the world and can be hit: not a dropped item, a projectile or a
+    /// spectator either.
     pub fn is_body(&self) -> bool {
-        self.in_world() && self.item.is_empty() && !self.mode.has(crate::tag_bits::game_mode::HIDDEN)
+        self.in_world() && self.item.is_empty() && !self.projectile && !self.mode.has(crate::tag_bits::game_mode::HIDDEN)
     }
 
     /// It comes and goes with the world's cube it is in: players have a file of their own, what is
@@ -289,6 +361,11 @@ impl Entity {
             selected: self.selected,
             moved: self.moved,
             size: self.dims(c).size(),
+            body_yaw: self.body_yaw,
+            using: self.use_done.map_or(0, |u| u.0),
+            using_ticks: self
+                .use_done
+                .map_or(0, |(_, left, _)| self.using.0.saturating_sub(left)),
         }
     }
 }
@@ -371,6 +448,7 @@ impl Entities {
         // Saved mid-fall, it still lands.
         e.falls |= e.kind == c.game.falling_kind;
         let kind = &c.game.entities[e.kind as usize];
+        e.projectile = kind.projectile.is_some();
         for &comp in &kind.components {
             self.comps
                 .entry((id, comp))
@@ -485,9 +563,10 @@ impl Entities {
             .collect()
     }
 
-    pub fn remove(&mut self, id: u64) {
+    /// Takes `id` out of the world for `why` (`abi::removal`).
+    pub fn remove(&mut self, id: u64, why: u32) {
         if let Some(e) = self.get_mut(id) {
-            e.removed = true;
+            e.gone(why);
             if let Some(a) = e.anchor {
                 let frame = e.block_frame();
                 self.unanchor((frame, a), id);
@@ -536,12 +615,8 @@ impl Entities {
     /// Whether any of `stack` would fit in its inventory.
     pub fn can_insert(&self, c: &Content, id: u64, stack: ItemStack) -> bool {
         self.inventories.get(&id).is_some_and(|inv| {
-            inv.iter().any(|s| {
-                s.is_empty()
-                    || (s.item == stack.item
-                        && s.data == stack.data
-                        && s.count < c.items.get(stack.item as usize).map_or(64, |i| i.max_stack))
-            })
+            inv.iter()
+                .any(|s| s.is_empty() || (s.item == stack.item && s.data == stack.data && s.count < c.max_stack(&stack)))
         })
     }
 
@@ -598,7 +673,7 @@ impl Entities {
 
     /// Merges into matching stacks, then empty slots. Returns the rest.
     pub fn insert_item(&mut self, c: &Content, owner: u64, mut stack: ItemStack) -> ItemStack {
-        let max = c.max_stack(stack.item);
+        let max = c.max_stack(&stack);
         // Pickups never go into equipment.
         let Some(e) = self.get(owner) else { return stack };
         let k = &c.game.entities[e.kind as usize];
@@ -748,7 +823,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     e.sprinting = sprint && !sneak && !using && dir != DVec3::ZERO && (e.flying || swimming || !e.in_liquid);
     e.jumped = false;
     if e.flying {
-        let speed = walk.map_or(1.0, |w| w.speed as f64) * if e.sprinting { 2.0 } else { 1.0 };
+        let speed = walk.map_or(1.0, |w| w.speed as f64) * e.moves.fly * if e.sprinting { 2.0 } else { 1.0 };
         let f = physics::Flight { wish: dir, up, down: sneak, speed };
         let mut v = e.vel * DT;
         // Down on the ground it stops flying, as a player does, unless it goes up again.
@@ -765,7 +840,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     // The step players take, in blocks per tick: a mob walks at its target speed on plain
     // ground, faster on ice, slower in lava, and climbs ladders it walks into. Its keys do what a
     // player's do.
-    let mut ctl = physics::Control { swim: k.is(ef::SWIMS), ..Default::default() };
+    let mut ctl = physics::Control { swim: k.is(ef::SWIMS), liquid: physics::SWIM * e.moves.swim, ..Default::default() };
     if let Some(w) = walk {
         // Using something (eating), at a fifth of the speed, as a player.
         let slow = if using {
@@ -793,8 +868,8 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     let frame = physics::Frame {
         half_width: hw,
         height: h,
-        step: if e.item.is_empty() { e.step_height } else { 0.0 },
-        gravity: if k.is(ef::NO_GRAVITY) && !e.falls { 0.0 } else { physics::gravity_per_tick(gravity) * e.gravity_mul },
+        gravity: if k.is(ef::NO_GRAVITY) && !e.falls { 0.0 } else { physics::gravity_per_tick(gravity) * e.moves.gravity },
+        moves: physics::Moves { step: if e.item.is_empty() { e.moves.step } else { 0.0 }, ..e.moves },
     };
     let mut v = e.vel * DT;
     let r = physics::walk(c, block, bodies, e.id, &mut e.pos, &mut v, e.on_ground, &ctl, &frame);
@@ -819,11 +894,12 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
 
 /// Soft bodies (`PUSHABLE`) overlapping each other drift apart like vanilla mobs: a push of up
 /// to 1 block/s per neighbor. `pushers` may push without being pushed (players move on their
-/// clients). Returns the velocity change per entity.
-/// Vanilla's `maxEntityCramming`.
-const MAX_CRAMMING: u32 = 24;
-
-pub fn soft_push(c: &Content, list: &[Entity]) -> Vec<(usize, DVec3)> {
+/// clients). Returns the velocity change per entity, and whether `cram` or more pushed on it
+/// (`core:max_entity_cramming`, 0: never).
+pub fn soft_push(c: &Content, list: &[Entity], cram: u32) -> Vec<(usize, DVec3, bool)> {
+    // Each mob feels at most this many others, so a thousand in one spot cost a thousand times
+    // that, not a million pairs.
+    let most = cram.max(24);
     let soft = |e: &Entity| {
         let k = &c.game.entities[e.kind as usize];
         k.is(ef::PUSHABLE) && !k.is(ef::SOLID) && e.is_body() && e.alive()
@@ -842,14 +918,12 @@ pub fn soft_push(c: &Content, list: &[Entity]) -> Vec<(usize, DVec3)> {
         .filter_map(|(i, e)| {
             let (cx, cz) = ((e.pos.x / 2.0).floor() as i32, (e.pos.z / 2.0).floor() as i32);
             let mut push = DVec3::ZERO;
-            // Each mob feels at most this many others (vanilla's cramming limit), so a thousand in
-            // one spot cost a thousand times that, not a million pairs.
             let (mut felt, mut looked) = (0, 0);
             'near: for dz in -1..=1 {
                 for dx in -1..=1 {
                     for &j in cells.get(&(cx + dx, cz + dz)).into_iter().flatten() {
                         looked += 1;
-                        if felt == MAX_CRAMMING || looked > 4 * MAX_CRAMMING {
+                        if felt == most || looked > 4 * most {
                             break 'near;
                         }
                         let o = &list[j];
@@ -865,7 +939,7 @@ pub fn soft_push(c: &Content, list: &[Entity]) -> Vec<(usize, DVec3)> {
                     }
                 }
             }
-            (push != DVec3::ZERO).then_some((i, push * crate::world::TPS as f64))
+            (push != DVec3::ZERO).then_some((i, push * crate::world::TPS as f64, cram > 0 && felt >= cram))
         })
         .collect()
 }

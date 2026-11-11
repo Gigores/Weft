@@ -147,6 +147,9 @@ pub fn shader_pack() -> Option<String> {
 pub fn occlusion_culling() -> bool {
     number("core:occlusion_culling") != 0.0
 }
+pub fn frustum_culling() -> bool {
+    number("core:frustum_culling") != 0.0
+}
 
 pub fn show_avatars() -> bool {
     number("core:show_avatars") != 0.0

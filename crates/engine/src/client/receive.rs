@@ -102,15 +102,30 @@ impl Client {
                 }
             }
             ToClient::Despawn(ids) => {
+                let arriving = self.arriving_tick();
                 self.entity_components
                     .retain(|(e, _), _| !ids.iter().any(|g| g.0 == *e));
-                for (id, killed) in ids {
+                for &(id, killed) in &ids {
                     self.showing_blocks.remove(&id);
+                    // What is stuck in one that died goes down with it.
+                    let host = self.entities.get(&id).and_then(|e| e.stuck).map(|s| s.host);
+                    let host_dies = host.is_some_and(|h| {
+                        ids.contains(&(h, true))
+                            || self.entities.get(&h).is_some_and(|h| h.dying.is_some())
+                            || (h == self.player_id && self.me.dying.is_some())
+                    });
                     // Killed mobs stay a moment for the death animation, taken items until
                     // they reach the taker.
                     match self.entities.get_mut(&id) {
                         Some(e) if e.pulled.is_some() => {}
-                        Some(e) if (killed || e.health <= 0.0) && e.item.is_empty() && e.dying.is_none() => e.dying = Some(0.0),
+                        Some(e) if host_dies => {
+                            if let Some(s) = &mut e.stuck {
+                                s.leaving = true;
+                            }
+                        }
+                        Some(e) if (killed || e.health <= 0.0) && e.item.is_empty() && e.dying.is_none() => {
+                            (e.dying, e.died_at) = (Some(0.0), arriving);
+                        }
                         _ => {
                             self.entities.remove(&id);
                         }
@@ -160,6 +175,8 @@ impl Client {
             ToClient::CloseMenu => {
                 self.menu = None;
                 self.drag = None;
+                self.sweep.clear();
+                self.picking.clear();
                 self.events.push(ClientEvent::CloseMenu);
             }
             ToClient::BreakRefused { frame, pos } => {
@@ -167,13 +184,17 @@ impl Client {
                 self.breaking = None;
             }
             ToClient::Using(ticks) => {
-                self.using = ticks.map(|(t, _)| (t as f32, t as f32));
+                self.using = ticks.map(|(t, _)| (0.0, t as f32));
                 self.using_off = ticks.is_some_and(|(_, off)| off);
             }
 
             ToClient::EntitySwing { id, off } => {
+                let arriving = self.arriving_tick();
                 if let Some(e) = self.entities.get_mut(&id) {
-                    restart_swing(&mut e.arm_swing);
+                    // Past halfway it starts over, as vanilla's.
+                    if e.arm_swing.is_none_or(|p| p >= 0.5) {
+                        e.swing_at = Some(arriving);
+                    }
                     e.swing_off = off;
                 }
             }
@@ -181,10 +202,10 @@ impl Client {
             ToClient::StopSprint => self.sprint_stopped = true,
             ToClient::LodColumns { dim, all, cols } => self.lod.set_columns(dim, all, &cols),
             ToClient::Camera { mode, locked, transition, easing } => self.camera_from_server(mode, locked, transition, easing),
-            ToClient::Knock { away } => {
-                let away = Vec3::from_array(away).as_dvec3();
+            ToClient::Knock { push } => {
+                let push = Vec3::from_array(push).as_dvec3();
                 let resist = self.attribute(crate::registry::attr::KNOCKBACK_RESISTANCE) as f64;
-                self.player.vel = physics::knock(self.player.vel, away, self.player.on_ground, resist);
+                self.player.vel = physics::knock(self.player.vel, push, self.player.on_ground, resist);
             }
             ToClient::Velocity { add } => self.player.vel += Vec3::from_array(add).as_dvec3(),
             ToClient::SetVelocity(v) => self.player.vel = Vec3::from_array(v).as_dvec3(),
@@ -234,11 +255,13 @@ impl Client {
                 .push((entity, std::sync::Arc::new(avatar))),
             ToClient::PlayerGone { entity } => self.entity_render.gone_pending.push(entity),
             ToClient::PlayAction(list) => {
+                let arriving = self.arriving_tick();
                 for (id, name, looping) in list {
                     if id == self.player_id {
                         self.me.action = (!name.is_empty()).then(|| (name, self.me.age, looping));
                     } else if let Some(e) = self.entities.get_mut(&id) {
-                        e.action = (!name.is_empty()).then(|| (name, e.age, looping));
+                        let start = ((arriving - e.born).max(0.0) / crate::world::TPS as f64) as f32;
+                        e.action = (!name.is_empty()).then(|| (name, start, looping));
                     }
                 }
             }
@@ -279,7 +302,10 @@ impl Client {
     fn spawn_entities(&mut self, list: Vec<crate::net::EntityView>) {
         for e in list {
             let to = if content().game.is_block_entity(e.kind) { &mut self.showing_blocks } else { &mut self.entities };
-            to.insert(e.id, ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch, e.item));
+            let mut shown = ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch, e.item);
+            (shown.born, shown.body_yaw, shown.body_target) = (e.born as f64, e.body_yaw, e.body_yaw);
+            (shown.walk, shown.walk_target, shown.swing, shown.swing_target) = (e.strode, e.strode, e.stride, e.stride);
+            to.insert(e.id, shown);
         }
     }
 
@@ -295,6 +321,31 @@ impl Client {
         let keep = ((self.tick_rate * STEP).ceil() as usize * 2 + 4).max(8);
         // The mount this client steers goes where it moves it.
         let driving = self.me.vehicle.map(|v| v.0);
+        // Bodies turn by the tick from these moves (`physics::turn_body`), as the server turned
+        // them, by how they moved on what they stand on.
+        let deltas: rustc_hash::FxHashMap<u64, DVec3> = list
+            .iter()
+            .filter_map(|&(id, pos, ..)| self.entities.get(&id).map(|e| (id, pos - e.target)))
+            .collect();
+        // Limbs swing and crouching turns by the tick too, the clips' clock.
+        for &(id, _, yaw, _, pose, _, frame) in &list {
+            let Some(&d) = deltas.get(&id) else { continue };
+            let carried = deltas
+                .get(&frame)
+                .filter(|_| frame != 0)
+                .copied()
+                .unwrap_or_default();
+            if let Some(e) = self.entities.get_mut(&id) {
+                let walked = d - carried;
+                e.body_target = crate::physics::turn_body(e.body_target, yaw, walked);
+                let speed = (walked.with_y(0.0).length() * crate::world::TPS as f64) as f32;
+                crate::model::walk_limbs(&mut e.walk_target, &mut e.swing_target, speed, crate::world::TICK as f32);
+                let crouching = pose == Pose::CROUCH;
+                if crouching != e.crouch_at.2 {
+                    e.crouch_at = (tick as f64, e.crouched, crouching);
+                }
+            }
+        }
         for &(id, pos, yaw, pitch, pose, sprinting, frame) in &list {
             if Some(id) == driving {
                 continue;
@@ -304,7 +355,7 @@ impl Client {
                 let was = e.target;
                 e.target = pos;
                 e.target_yaw = yaw;
-                e.pitch = pitch;
+                e.target_pitch = pitch;
                 e.frame = frame;
                 if solid(e.kind) {
                     // A paused server keeps sending the same tick: one sample per

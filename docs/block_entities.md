@@ -28,7 +28,7 @@ r.block(&FURNACE)
     .opens(&FURNACE_MENU);
 r.menu(&FURNACE_MENU)
     .group("input", Slots::single().holder())
-    .group("fuel", Slots::single().accepts("fuel").holder())
+    .group("fuel", Slots::single().accepts("#fuel").holder())
     .group("output", Slots::single().output().holder())
     .player_inventory()
     .screen(|ui| { /* see below */ });
@@ -43,7 +43,7 @@ Slots come in named groups. The block entity's inventory holds all of its `holde
 | `Slots::single()`, `row(n)`, `column(n)`, `grid(cols, rows)`, `chest(rows)` | how many slots and how the screen lays them out |
 | `output()` | items only come out (results) |
 | `input()` | items only go in, nothing comes back out by hand (fuel it burns) |
-| `accepts("fuel")` | only items with that tag or component, any mod's |
+| `accepts("#fuel")` | only the items a reference names, any mod's: `"#fuel #mymod:fire_starter"`, `"#fuel !base:lava_bucket"` |
 | `liquid(capacity)` | a liquid slot of that many millibuckets |
 | `limit(16)` | at most this many items per slot |
 | `large()`, `size(px)` | a bigger slot, 18 GUI pixels by default |
@@ -129,7 +129,7 @@ r.menu(&FURNACE_MENU)
 if let Some((output, time)) = recipe_process(&SMELTING_RECIPES, input.item) { .. }
 ```
 `recipe_process` gives the output and the time in ticks for one input. Recipes are added the usual way, `r.shapeless(&SMELTING_RECIPES, "ruby", 1, &["ruby_ore"], 200)`, so everything that uses the kind smelts it, whichever mod it comes from. `recipes(..)` makes the menu's `ui.recipe_arrow_bind(..)` (or `ui.recipe_arrow()` without progress) open the kind in the recipe viewer, with "Recipes" over it, and shows the blocks opening it there as where those recipes are made.
-An ordinary menu works the same way: `r.menu(&CRAFTING).recipes(&CRAFTING_RECIPES)`, and a block with `.opens(&CRAFTING)` opens it and becomes a station of those recipes (that's the whole crafting table). The grid's size comes from its group, `m.group("grid").cols()`.
+An ordinary menu works the same way: `r.menu(&CRAFTING).recipes(&CRAFTING_RECIPES)`, and a block with `.opens(&CRAFTING)` opens it and becomes a station of those recipes (that's the whole crafting table). A group made `Slots::grid(3, 3).crafting()` is its crafting grid: the engine shows what it makes in the menu's `output()` group and uses it up when that is taken, as each recipe says (`.keep`, `.wear`, `.leaves`), and a shift-click crafts all the runs whose results fit in the inventory at once. `on_take` is still called, `m.times()` saying how many runs it was. Machines get the same from `recipe.consume(&mut stacks)`, except that what an ingredient leaves takes its slot only once it is used up.
 
 A recipe can say more than one output and a time:
 ```rust

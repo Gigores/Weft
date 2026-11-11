@@ -926,11 +926,11 @@ pub fn layout_with(spans: &[Span], font: &Font, max_width: Option<f32>, line_hei
 
 /// A key's name for players: translated (`keyname.ShiftLeft`) when the language has it.
 /// `Ctrl+T`: the modifiers (`keyname.ctrl` ..., either side's key), then the key.
-/// What a player reads for a binding: its keys, `x2` after a double tap's (`Wx2`).
+/// What a player reads for a binding: its keys, `*2` after a double tap's (`W*2`).
 pub fn display_binding(lang: &Lang, b: crate::input::Binding) -> String {
     let chord = display_chord(lang, b.chord);
     match b.trigger {
-        crate::input::Trigger::Double => format!("{chord}x2"),
+        crate::input::Trigger::Double => format!("{chord}*2"),
         _ => chord,
     }
 }

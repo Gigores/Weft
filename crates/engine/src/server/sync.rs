@@ -261,6 +261,10 @@ fn send_entities(
                     yaw: e.yaw,
                     pitch: e.pitch,
                     item: crate::stack::for_client(e.item),
+                    born: tick.saturating_sub(e.age),
+                    body_yaw: e.body_yaw,
+                    strode: e.strode,
+                    stride: e.stride,
                 });
             }
         }
@@ -362,9 +366,8 @@ fn send_entities(
         .filter(|m| p.known.contains(&m.0) && visible.contains(&m.0))
         .copied()
         .collect();
-    if !moves.is_empty() {
-        p.conn.send(ToClient::Moves { tick, moves });
-    }
+    // Every tick, moving or not: clients show what they see by its timeline, clips included.
+    p.conn.send(ToClient::Moves { tick, moves });
     p.known = visible;
 }
 
@@ -373,7 +376,7 @@ fn send_own_state(c: &'static Content, p: &mut Player, dim: &mut DimSet) {
     let Some(reg) = dim.entity_region(p.entity) else { return };
     for &(_, told) in reg.entities.told.iter().filter(|h| h.0 == p.entity) {
         p.conn.send(match told {
-            entity::Told::Knock(away) => ToClient::Knock { away },
+            entity::Told::Knock(push) => ToClient::Knock { push },
             entity::Told::Add(add) => ToClient::Velocity { add },
             entity::Told::Velocity(v) => ToClient::SetVelocity(v),
             entity::Told::Look(look) => ToClient::Look(look),
