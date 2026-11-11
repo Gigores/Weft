@@ -32,6 +32,10 @@ fn android_main(app: AndroidApp) {
     weft_engine::log::init(Some(&data.join("logs").join("latest.log")), false, &options.log);
     weft_engine::diag::install_crash_handler(&data);
     log::info!("game folder {}, unpacked into {}", data.display(), game.display());
+    // There from the start, for whoever opens the folder to see where mods and packs go.
+    for dir in ["mods", "resourcepacks", "shaderpacks"] {
+        let _ = std::fs::create_dir_all(data.join(dir));
+    }
     if let Err(e) = unpack(&app, &game) {
         log::error!("unpacking the game: {e}");
         return;

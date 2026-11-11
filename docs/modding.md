@@ -90,6 +90,7 @@ run/mods/mymod/
 The folder has to hold the library that's what gets packed.
 
 The library is built for one system, so that zip only runs on yours, but you write your mod once and just build it three times. Put `mymod.dll`, `libmymod.so` and `libmymod.dylib` in the folder and `pack-mod` takes them all, then the same zip works everywhere: the game picks the file of its system.\
+Phones too: build for `aarch64-linux-android` with the Android NDK and put that `libmymod.so` in an `android` folder inside yours, since it has the same name as the Linux one. On the phone the zip goes into `Android/data/org.weft.game/files/mods`.\
 `examples/examplemod/.github/workflows/release.yml` builds all three on GitHub and publishes the zip when you push a tag, the top of the file says what to set up.
 
 To get your mod into the launcher, its source has to be public and its `Cargo.toml` has to take the SDK from the game's repository at a release tag, `weft_sdk = { git = "https://github.com/Weft-Rust/Weft", tag = "v26.11.3" }`. Commit, push, and run `weft submit-mod path/to/mymod`: it builds the mod once to be sure, then sends that commit to the [mod index](https://github.com/Weft-Rust/Weft-Mods-Index) as a pull request (with the GitHub CLI logged in, by itself; otherwise in the browser, filled in). The index builds the mod there for all three systems, and builds it again for each new Weft release. It shows as not verified until a maintainer reads the source. The id is yours from the first submission.
