@@ -214,7 +214,6 @@ pub fn register(r: &mut Registry) {
     }
 }
 
-
 /// Vanilla's skeleton: keeps to about 10 blocks and shoots once in two seconds.
 fn skeleton() -> ai::Goals {
     ai::Goals::new()
