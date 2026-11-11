@@ -629,6 +629,19 @@ pub fn register(r: &mut Registry) {
         .signal_blocker()
         .tab(&crate::tabs::NATURAL);
 
+    r.shapes_of("hollow_log", "#logs", "_hollow")
+        .sound_group("wood")
+        .model_file("hollow_log")
+        .model_texture("inside", "{source.mod}:block/{source.name}_inner")
+        .axis()
+        .signal_blocker()
+        .shares_cell_with("#water")
+        .liquid_walls(&[Dir::North, Dir::South, Dir::East, Dir::West])
+        .outline([0.0; 3], [16.0; 3])
+        .outline([2.0, 0.0, 2.0], [14.0, 16.0, 14.0])
+        .tag("hollow_log")
+        .tab(&crate::tabs::NATURAL);
+
     // What may grow or stand where, from the common `dirt` and `sand` tags like modern vanilla:
     // a mod's sand tagged `sand` gets cactus and sugar cane, in the world and from players.
     r.tag("plant_soil", &["#dirt"]);

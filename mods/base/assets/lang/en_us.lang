@@ -98,6 +98,7 @@ block.base.wool = Wool
 block.base.red_wool = Red Wool
 block.base.green_wool = Green Wool
 block.base.blue_wool = Blue Wool
+shape.hollow_log = Hollow {0}
 item.base.stick = Stick
 item.base.coal = Coal
 item.base.iron_ingot = Iron Ingot
