@@ -145,7 +145,7 @@ fn berry_leaves(r: &mut Registry, handle: &'static Block, texture: &'static str,
         .pool(
             Pool::new()
                 .when(Cond::state("berried=true"))
-                .items(item.name(), 1, 2),
+                .items(item.name(), 1, 1),
         );
 }
 
@@ -169,10 +169,7 @@ fn pick_berries(u: &mut Use, berry: &'static Item) -> bool {
     if !w.prop_set(p, "berried", "false") {
         return false;
     }
-    let count = 1 + w.random_below(2);
-    for _ in 0..count {
-        w.spawn_item(block_center(p), berry.stack(2));
-    }
+    w.spawn_item(block_center(p), berry.stack(1));
     true
 }
 
