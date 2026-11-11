@@ -32,6 +32,6 @@ pub fn register(r: &mut Registry) {
             .pitch(0.5, 0.55);
     }
     r.music(&SHEEP)
-        .tracks(&["music/418 Dreaming Sheep"])
+        .tracks(&["music/418DreamingSheep"])
         .when(&conditions::SURFACE);
 }
