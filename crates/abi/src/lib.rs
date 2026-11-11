@@ -3142,7 +3142,7 @@ pub const INFINITE_TICKS: u32 = u32::MAX;
 
 /// The engine's entity effects, registered first in this order.
 pub mod entity_effect {
-    /// White, a creeper about to go off.
+    /// White, a flash (something about to go off).
     pub const FLASH: u32 = 0;
     /// Red, what taking damage shows by itself.
     pub const HURT: u32 = 1;

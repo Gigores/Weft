@@ -134,8 +134,8 @@ Anything else is yours to name. Started from code, everyone who sees the entity 
 ```rust
 world.action_play(entity_id, "bow", false);    // false plays once, true repeats
 world.action_play(entity_id, "", false);       // back to normal
-world.action_override(creeper, "walk", "flee_cat"); // plays flee_cat wherever it would walk
-world.action_override_clear(creeper, "walk");
+world.action_override(mob, "walk", "flee_cat"); // plays flee_cat wherever it would walk
+world.action_override_clear(mob, "walk");
 ```
 `action_override` is the one for a mob's goal, and `ai::with_action_override("walk", "flee_cat", goal)` does it for as long as the goal runs. Without a `flee_cat` clip it just goes on walking.
 

@@ -132,7 +132,7 @@ impl World {
         self.action_play(id, "", false);
     }
 
-    /// While this holds, entity `id` plays action `to` wherever it would play `from`: a creeper
+    /// While this holds, entity `id` plays action `to` wherever it would play `from`: a mob
     /// running from a cat plays its own run instead of `walk`. Everyone who sees it sees it, and
     /// without a clip for `to` it goes on playing `from`.
     pub fn action_override(&self, id: u64, from: &str, to: &str) {
@@ -486,7 +486,7 @@ impl World {
         out
     }
 
-    /// A white flash on an entity for everyone who sees it (a creeper about to go off).
+    /// A white flash on an entity for everyone who sees it (something about to go off).
     pub fn flash(&self, id: u64) {
         self.entity_effect(id, &crate::entity_effects::FLASH, 1, 2)
     }
