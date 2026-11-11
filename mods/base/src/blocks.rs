@@ -545,7 +545,7 @@ pub fn register(r: &mut Registry) {
         .outline([0.0; 3], [16.0; 3])
         .outline([2.0, 0.0, 2.0], [14.0, 16.0, 14.0])
         .tag("hollow_log")
-        .tab(&NATURAL);
+        .tab(&crate::tabs::NATURAL);
 
     // What may grow or stand where, from the common `dirt` and `sand` tags like modern vanilla:
     // a mod's sand tagged `sand` gets cactus and sugar cane, in the world and from players.
