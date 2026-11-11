@@ -444,6 +444,14 @@ pub trait Backend: Send {
 
     fn create_pipeline(&mut self, desc: &PipelineDesc) -> Result<PipelineId, Error>;
     fn create_compute(&mut self, desc: &ComputeDesc) -> Result<PipelineId, Error>;
+    /// Compiles `desc` on another thread into the kept shaders (`BackendDesc::cache`), so that
+    /// `create_compute` of it later takes no time: a phone's driver needs most of a minute over a
+    /// big shader. Without a cache of its own a backend compiles nothing ahead.
+    fn precompile(&mut self, _desc: &ComputeDesc) {}
+    /// Whether what `precompile` started is still compiling.
+    fn compiling(&self) -> bool {
+        false
+    }
     fn destroy_pipeline(&mut self, pipeline: PipelineId);
 
     /// `None` when the surface cannot be drawn to right now (minimized).

@@ -2994,7 +2994,6 @@ impl Client {
             })
             .collect();
         self.wires.draw(list, &cam, scene_buf, &frames, &lit);
-        list.push(weft_render::Cmd::Mark);
         let mut late = std::mem::take(&mut self.late);
         late.clear();
         // The sky fills what the opaque world left, and translucent things are seen against it.

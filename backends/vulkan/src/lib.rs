@@ -115,6 +115,11 @@ pub struct VulkanBackend {
     pipeline_cache: vk::PipelineCache,
     cache_file: Option<std::path::PathBuf>,
     cache_dirty: bool,
+    /// `precompile`'s threads, how many are still at it, and whether one finished since the
+    /// cache was last written.
+    compile_threads: Vec<std::thread::JoinHandle<()>>,
+    compiling: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    compiled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     allocator: ManuallyDrop<Allocator>,
     swapchain: Option<Swapchain>,
     frames: Vec<Frame>,
@@ -617,6 +622,9 @@ impl VulkanBackend {
                 pipeline_cache,
                 cache_file,
                 cache_dirty: false,
+                compile_threads: Vec::new(),
+                compiling: Default::default(),
+                compiled: Default::default(),
                 allocator: ManuallyDrop::new(allocator),
                 swapchain: None,
                 frames,
@@ -888,8 +896,11 @@ impl VulkanBackend {
     /// Writes the compiled pipelines out, if any were added: once a frame at most, as a phone's
     /// app may be ended without notice.
     fn save_pipeline_cache(&mut self) {
-        let Some(file) = self.cache_file.as_ref().filter(|_| self.cache_dirty) else { return };
-        self.cache_dirty = false;
+        let added = std::mem::take(&mut self.cache_dirty)
+            | self
+                .compiled
+                .swap(false, std::sync::atomic::Ordering::Relaxed);
+        let Some(file) = self.cache_file.as_ref().filter(|_| added) else { return };
         let Ok(data) = (unsafe { self.device.get_pipeline_cache_data(self.pipeline_cache) }) else { return };
         let part = file.with_extension("part");
         let written = file
@@ -1840,6 +1851,46 @@ impl Backend for VulkanBackend {
         ))
     }
 
+    fn precompile(&mut self, desc: &ComputeDesc) {
+        use std::sync::atomic::Ordering;
+        let Ok(cs) = self.spirv(desc.shader, naga::ShaderStage::Compute, desc.entry) else { return };
+        let Ok((layout, set_layout, _)) = self.layout_for(desc.shader) else {
+            unsafe { self.device.destroy_shader_module(cs, None) };
+            return;
+        };
+        let (device, cache, entry, label) =
+            (self.device.clone(), self.pipeline_cache, CString::new(desc.entry).unwrap(), desc.label.to_string());
+        let (left, done) = (self.compiling.clone(), self.compiled.clone());
+        left.fetch_add(1, Ordering::SeqCst);
+        // The pipeline itself goes: what stays is the driver's compiled code in the cache, which a
+        // layout made alike finds again.
+        self.compile_threads
+            .push(std::thread::spawn(move || unsafe {
+                let started = std::time::Instant::now();
+                let stage = vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::COMPUTE)
+                    .module(cs)
+                    .name(&entry);
+                let info = vk::ComputePipelineCreateInfo::default()
+                    .stage(stage)
+                    .layout(layout);
+                match device.create_compute_pipelines(cache, &[info], None) {
+                    Ok(p) => device.destroy_pipeline(p[0], None),
+                    Err((_, e)) => log::warn!("compiling {label} ahead: {e:?}"),
+                }
+                device.destroy_shader_module(cs, None);
+                device.destroy_pipeline_layout(layout, None);
+                device.destroy_descriptor_set_layout(set_layout, None);
+                log::info!("compiled {label} in {:.1} s", started.elapsed().as_secs_f32());
+                done.store(true, Ordering::Relaxed);
+                left.fetch_sub(1, Ordering::SeqCst);
+            }));
+    }
+
+    fn compiling(&self) -> bool {
+        self.compiling.load(std::sync::atomic::Ordering::SeqCst) > 0
+    }
+
     fn destroy_pipeline(&mut self, pipeline: PipelineId) {
         if let Some(p) = self.pipelines.remove(pipeline.0) {
             self.defer(Deferred::Pipeline(p.raw, p.layout, p.set_layout));
@@ -2263,6 +2314,9 @@ impl Backend for VulkanBackend {
 
 impl Drop for VulkanBackend {
     fn drop(&mut self) {
+        for t in self.compile_threads.drain(..) {
+            let _ = t.join();
+        }
         unsafe {
             self.device.device_wait_idle().ok();
             for i in 0..self.frames.len() {

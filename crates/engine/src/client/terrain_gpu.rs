@@ -271,20 +271,39 @@ pub struct GpuTerrain {
     pub on: Arc<AtomicBool>,
 }
 
+/// The terrain's pipelines: label and entry point.
+const PIPELINES: [(&str, &str); 2] = [("terrain", "generate"), ("terrain lod", "lod")];
+
 impl GpuTerrain {
+    /// Its pipelines compiled ahead on another thread (`Backend::precompile`), from the title
+    /// screen on: a phone's driver needs most of a minute for them the first time.
+    pub fn precompile(gpu: &mut dyn Backend, assets: &crate::assets::Assets) {
+        if !enabled() {
+            return;
+        }
+        match Self::shader(assets) {
+            Ok(s) => {
+                for (label, entry) in PIPELINES {
+                    gpu.precompile(&ComputeDesc { label, shader: &s, entry });
+                }
+            }
+            Err(e) => log::error!("terrain shader: {e}"),
+        }
+    }
+
+    // Not a shader packs may replace: it has to make the CPU's blocks exactly.
+    fn shader(assets: &crate::assets::Assets) -> Result<weft_render::Shader, String> {
+        crate::packs::engine_shader(assets, "terrain.wgsl", &layout::prelude()).map_err(|e| e.0)
+    }
+
     pub fn new(gpu: &mut dyn Backend, assets: &crate::assets::Assets, rx: Receiver<Job>, on: Arc<AtomicBool>) -> GpuTerrain {
-        // Not a shader packs may replace: it has to make the CPU's blocks exactly.
-        let pipelines = crate::packs::engine_shader(assets, "terrain.wgsl", &layout::prelude())
-            .map_err(|e| e.0)
-            .and_then(|s| {
-                let terrain = gpu
-                    .create_compute(&ComputeDesc { label: "terrain", shader: &s, entry: "generate" })
-                    .map_err(|e| e.0)?;
-                let lod = gpu
-                    .create_compute(&ComputeDesc { label: "terrain lod", shader: &s, entry: "lod" })
-                    .map_err(|e| e.0)?;
-                Ok((terrain, lod))
+        let pipelines = Self::shader(assets).and_then(|s| {
+            let [terrain, lod] = PIPELINES.map(|(label, entry)| {
+                gpu.create_compute(&ComputeDesc { label, shader: &s, entry })
+                    .map_err(|e| e.0)
             });
+            Ok((terrain?, lod?))
+        });
         let (pipeline, lod_pipeline) = match pipelines {
             Ok((p, l)) => (Some(p), Some(l)),
             Err(e) => {

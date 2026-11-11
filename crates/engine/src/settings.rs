@@ -89,6 +89,10 @@ pub fn language() -> String {
 pub fn gui_scale() -> u32 {
     number("core:gui_scale") as u32
 }
+/// The part of the screen's size the world is drawn at.
+pub fn render_scale() -> f32 {
+    number("core:render_scale") as f32
+}
 pub fn view_distance() -> i32 {
     number("core:view_distance") as i32
 }

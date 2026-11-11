@@ -1189,6 +1189,28 @@ pub struct Message {
     pub args: Vec<Arg>,
 }
 
+/// While shaders compile ahead (`Backend::precompile`) and a world waits for them: once, on a
+/// phone's first start, which it says so nobody takes it for every time.
+pub struct Compiling;
+
+impl Screen for Compiling {
+    fn name(&self) -> &str {
+        "core:compiling"
+    }
+
+    fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
+        ui.root_style(Style::default().stretch());
+        ui.panel("background", Style::default().grow().center().pad(12.0).gap(10.0), |ui| {
+            label(ui, cx, "world.compiling", &[], "title");
+            label(ui, cx, "world.compiling.once", &[], "label");
+        });
+    }
+
+    fn escape_closes(&self) -> bool {
+        false
+    }
+}
+
 impl Screen for Message {
     fn name(&self) -> &str {
         "core:message"

@@ -36,9 +36,6 @@ const GRID: usize = (CELLS + 2) as usize;
 /// Words per tile coming back from the GPU.
 pub const LOD_WORDS_PER_TILE: usize = SAMPLES * 2;
 pub const MAX_LEVEL: u32 = 5;
-/// A tile splits into the level below while nearer than this many of its widths: a cell stays
-/// about the same size on screen (a 32-block cell at 4096 blocks).
-const SPLIT: f64 = 4.0;
 /// Blocks under the land from where distant terrain is left out.
 const UNDERGROUND: i32 = 32;
 /// Tiles asked for and not back yet, at most.
@@ -867,6 +864,10 @@ impl Lod {
     /// The tiles to show: level 5 tiles within `reach`, split while near, leaving out what
     /// lies inside `hide` (where the view's cubes are always shown).
     fn pick(&mut self, p: glam::DVec2, hide: f64, reach: f64) {
+        // A tile splits into the level below while nearer than this many of its widths
+        // (`core:lod_detail`): a cell stays about the same size on screen, at 4 a 32-block cell
+        // at 4096 blocks. Half of it has a fourth of the tiles, what a phone's GPU can draw.
+        let split = config::by_name("core:lod_detail").map_or(4.0, config::get);
         let top = CELLS << MAX_LEVEL;
         let (lo, hi) = (((p - reach) / top as f64).floor().as_ivec2(), ((p + reach) / top as f64).floor().as_ivec2());
         let mut out = Vec::new();
@@ -881,7 +882,7 @@ impl Lod {
             if near > reach || far < hide {
                 continue;
             }
-            if key.level > 1 && near < SPLIT * key.size() as f64 {
+            if key.level > 1 && near < split * key.size() as f64 {
                 stack.extend(key.children());
             } else {
                 out.push((near, key));

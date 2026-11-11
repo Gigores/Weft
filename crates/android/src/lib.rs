@@ -28,14 +28,15 @@ fn android_main(app: AndroidApp) {
     let game = private.join("game");
     weft_engine::paths::set_shipped(game.clone());
     weft_engine::paths::set_config(data.join("config"));
-    weft_engine::log::init(Some(&data.join("logs").join("latest.log")), false, "");
+    let options = Launch::read(&data.join("options.txt"));
+    weft_engine::log::init(Some(&data.join("logs").join("latest.log")), false, &options.log);
     weft_engine::diag::install_crash_handler(&data);
     log::info!("game folder {}, unpacked into {}", data.display(), game.display());
     if let Err(e) = unpack(&app, &game) {
         log::error!("unpacking the game: {e}");
         return;
     }
-    let opts = Options {
+    let mut opts = Options {
         run_dir: data.clone(),
         cache_dir: private.join("cache"),
         // A player's copy of a mod comes first, as on a computer.
@@ -43,16 +44,21 @@ fn android_main(app: AndroidApp) {
         mods_off: Vec::new(),
         // A debug package carries the validation layer (`build.py --validation`).
         gpu_debug: weft_engine::paths::libraries().is_some_and(|d| d.join("libVkLayer_khronos_validation.so").is_file()),
-        world: None,
-        seed: None,
+        world: options.world,
+        seed: options.seed,
         screen: None,
         size: (0, 0),
         dev: false,
         automated: false,
         no_vsync: false,
-        view: None,
+        view: options.view,
         renderer: None,
     };
+    opts.automated = options
+        .extra
+        .iter()
+        .any(|(k, _)| k == "script" || k == "test");
+    weft_engine::set_launch_options(options.extra);
     weft_engine::init_workers();
     if let Err(e) = weft_engine::run_android(app, RENDERERS, opts) {
         log::error!("{e}");
@@ -77,4 +83,39 @@ fn unpack(app: &AndroidApp, dir: &Path) -> Result<(), String> {
         .and_then(|mut z| z.extract(dir))
         .map_err(|e| e.to_string())?;
     std::fs::write(&marker, stamp).map_err(|e| e.to_string())
+}
+
+/// What a computer gets on the command line, from `options.txt` in the game folder, as the same
+/// words (`--world test --view 6 --log frame=debug`): a phone has no command line.
+#[derive(Default)]
+struct Launch {
+    log: String,
+    world: Option<String>,
+    seed: Option<u64>,
+    view: Option<i32>,
+    /// What the engine doesn't know goes to mods (`--script x.txt`).
+    extra: Vec<(String, String)>,
+}
+
+impl Launch {
+    fn read(file: &Path) -> Launch {
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        let mut words = text.split_whitespace().peekable();
+        let mut l = Launch::default();
+        while let Some(w) = words.next() {
+            let Some(name) = w.strip_prefix("--") else { continue };
+            let value = words
+                .next_if(|v| !v.starts_with("--"))
+                .unwrap_or("1")
+                .to_string();
+            match name {
+                "log" => l.log = value,
+                "world" => l.world = Some(value),
+                "seed" => l.seed = value.parse().ok(),
+                "view" => l.view = value.parse().ok(),
+                _ => l.extra.push((name.to_string(), value)),
+            }
+        }
+        l
+    }
 }

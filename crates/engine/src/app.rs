@@ -266,6 +266,8 @@ pub(crate) struct Running {
     preview_shot: Option<(PathBuf, bool)>,
     /// Going into a world from its picture in the list (`Request::EnterWorld`).
     entering: Option<Entering>,
+    /// The world opened while shaders were compiling ahead, opening once they are done.
+    waiting_world: Option<WorldMeta>,
     /// When the world around the player was first loaded, the HUD coming in from then.
     seen_since: Option<Instant>,
     /// The HUD's quads among the cached ones.
@@ -470,6 +472,7 @@ impl App {
         let lang = Lang::load(&assets, &crate::settings::language(), self.opts.dev);
         let look = Look::new(&assets, &mod_ids(), &lang);
         let textures = GameTextures::new(&mut *gpu, content(), &assets);
+        crate::client::terrain_gpu::GpuTerrain::precompile(&mut *gpu, &assets);
         let ui = UiRenderer::new(&mut *gpu, &assets)?;
         let post = crate::post::Post::new(&mut *gpu, &assets);
         let mut input = Input::default();
@@ -536,6 +539,7 @@ impl App {
             world_dir: None,
             preview_shot: None,
             entering: None,
+            waiting_world: None,
             seen_since: None,
             hud_quads: 0..0,
             reload_requested: false,
@@ -581,6 +585,14 @@ impl App {
         }
         Ok(r)
     }
+}
+
+/// The frame the world is drawn in: the screen's, or smaller (`core:render_scale`) to be
+/// stretched over it.
+fn world_frame(r: &Running, info: &weft_render::FrameInfo) -> weft_render::FrameInfo {
+    let scale = if r.game.is_some() && r.post.stretches() { crate::settings::render_scale().clamp(0.25, 1.0) } else { 1.0 };
+    let size = |n: u32| ((n as f32 * scale).round() as u32).max(1);
+    weft_render::FrameInfo { width: size(info.width), height: size(info.height), ..*info }
 }
 
 fn make_depth(gpu: &mut dyn Backend, w: u32, h: u32) -> (TextureId, u32, u32) {
@@ -738,6 +750,13 @@ impl Running {
         }
         for m in meta.missing_mods(content()) {
             log::warn!("the world was played with mod {m}, which is not loaded");
+        }
+        if self.gpu.compiling() {
+            log::info!("waiting for shaders to compile");
+            self.waiting_world = Some(meta);
+            self.screens.clear();
+            self.open(Box::new(screens::Compiling));
+            return;
         }
         let storage = saves::Storage::open(meta.clone(), content());
         let server = server::spawn(
@@ -1877,6 +1896,11 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
     window_keys(r);
     r.screen_input(scale, &mut requests);
     r.handle(requests);
+    if !r.gpu.compiling()
+        && let Some(meta) = r.waiting_world.take()
+    {
+        r.start_world(meta);
+    }
     update_game(r, dt, now);
     r.entity_ticks(dt as f32);
     r.client_packets();
@@ -1894,9 +1918,10 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
     let Some(info) = r.gpu.begin_frame() else { return false };
     let t2 = Instant::now();
     r.prof[2] = t2.duration_since(t).as_secs_f32() * 1000.0;
-    if (r.depth.1, r.depth.2) != (info.width, info.height) {
+    let world = world_frame(r, &info);
+    if (r.depth.1, r.depth.2) != (world.width, world.height) {
         r.gpu.destroy_texture(r.depth.0);
-        r.depth = make_depth(&mut *r.gpu, info.width, info.height);
+        r.depth = make_depth(&mut *r.gpu, world.width, world.height);
     }
     // Block items in slots take the colors of the biome the player is in.
     let biome = r.game.as_ref().and_then(|g| {
@@ -2499,10 +2524,11 @@ fn record_passes(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
         .game
         .as_ref()
         .map_or([0.02, 0.02, 0.03, 1.0], |g| g.client.fog_color());
-    // Screen effects need the world in an image they can read.
+    // Screen effects need the world in an image they can read, and so does stretching it.
     effect_screens(r);
-    let post = r.post.on() && r.game.is_some();
-    let world_target = if post { Target::Texture(r.post.scene_target(&mut *r.gpu, info.width, info.height)) } else { Target::Surface };
+    let world = world_frame(r, info);
+    let post = r.game.is_some() && (r.post.on() || (world.width, world.height) != (info.width, info.height));
+    let world_target = if post { Target::Texture(r.post.scene_target(&mut *r.gpu, world.width, world.height)) } else { Target::Surface };
     if let Some(g) = &mut r.game {
         g.client
             .gpu_terrain
@@ -2514,17 +2540,20 @@ fn record_passes(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
         g.client.update_wires(&mut *r.gpu, &r.textures);
     }
     // What the world's draws go by has to be done before its pass, and is known only making them.
-    let (mut world, mut after) = (std::mem::take(&mut r.world_list), std::mem::take(&mut r.after_list));
-    world.clear();
+    let (mut world_list, mut after) = (std::mem::take(&mut r.world_list), std::mem::take(&mut r.after_list));
+    world_list.clear();
     after.clear();
     if let Some(g) = &mut r.game {
         g.client
-            .render(&mut *r.gpu, &mut world, &mut after, &mut r.list, info, &r.textures);
+            .render(&mut *r.gpu, &mut world_list, &mut after, &mut r.list, &world, &r.textures);
     }
     r.list
         .push(Cmd::BeginPass { color: Some((world_target, Some(clear))), depth: Some((r.depth.0, Some(0.0))) });
-    r.list.append(&mut world);
+    r.list.append(&mut world_list);
     r.list.push(Cmd::EndPass);
+    // Between passes: a tiled GPU (phones) draws a pass all at once, so a mark inside one tells
+    // nothing there.
+    r.list.push(Cmd::Mark);
     // The solid world's depth: clouds and the hand would hide chunks behind them in the next frame.
     if let Some(g) = &mut r.game {
         g.client
@@ -2538,7 +2567,7 @@ fn record_passes(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
         r.list.append(&mut after);
         r.list.push(Cmd::EndPass);
     }
-    (r.world_list, r.after_list) = (world, after);
+    (r.world_list, r.after_list) = (world_list, after);
     if post {
         r.post.apply(&mut *r.gpu, &mut r.list, info);
     } else {
