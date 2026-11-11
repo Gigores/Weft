@@ -606,8 +606,10 @@ gpu_struct! {
         pub light: u32,
         /// Entity effect slot (`shaders/entity_effect/<name>.wgsl`, 0 none).
         pub effect: u32,
+        /// 1: something worn, drawn on the kind's worn geometry instead of its skin's (read when
+        /// queued).
+        pub worn: u32,
         // Whole 16 bytes: WGSL rounds the array stride up to them.
-        pub pad0: u32,
         pub pad1: u32,
     }
 }
@@ -621,8 +623,9 @@ gpu_struct! {
         pub inflate: f32,
         pub faces: [[f32; 4]; 6],
         pub role: u32,
-        // Three words, not a vec3: WGSL would align that to 16 bytes.
-        pub pad0: u32,
+        /// The bone whose covering draws it: its own, or the one it is worn on.
+        pub cover: u32,
+        // Whole 16 bytes: WGSL rounds the array stride up to them.
         pub pad1: u32,
         pub pad2: u32,
     }
@@ -634,7 +637,8 @@ gpu_struct! {
         pub bone: u32,
         pub uv: [f32; 2],
         pub role: u32,
-        pub pad: u32,
+        /// As `GpuCuboid::cover`.
+        pub cover: u32,
     }
 }
 
