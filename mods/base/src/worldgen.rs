@@ -5,7 +5,6 @@ use weft_sdk::*;
 
 use crate::blocks::*;
 
-use weft_sdk::abi::entry_kind as ek;
 use weft_sdk::noise::*;
 use weft_sdk::terrain::*;
 
@@ -50,17 +49,16 @@ pub static OCEAN: Biome = Biome::named("ocean");
 pub static BEACH: Biome = Biome::named("beach");
 pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
 
-fn gentle(s: &Site, r: i32, max_range: i32) -> bool {
-    let p = s.pos();
-    let dim = Dimension::named(name_of(ek::DIMENSION, s.dimension()));
-    let seed = s.seed();
+/// Whether the ground within `r` blocks of a start is flat enough for it.
+fn gentle(p: &Plan, r: i32, max_range: i32) -> bool {
+    let at = p.pos();
 
     let mut lo = i32::MAX;
     let mut hi = i32::MIN;
 
     for dz in -r..=r {
         for dx in -r..=r {
-            let h = dim.column(seed, p.x + dx, p.z + dz).height;
+            let h = p.ground(at.x + dx, at.z + dz).height;
             if h == i32::MIN {
                 return false;
             }
@@ -180,7 +178,6 @@ pub fn register(r: &mut Registry) {
         .sea(SEA, "water")
         .field("temperature", Expr::fbm(0x22, 2200.0, 3) * Expr::value(1.4))
         .field("humidity", Expr::fbm(0x33, 1600.0, 3) * Expr::value(1.4))
-
         .landform(preset::continents(18.0))
         // Biomes shape the land through their climate, not their borders, so nothing seams:
         // the cold flattens hills into tundra, deserts get dunes.
@@ -245,10 +242,10 @@ pub fn register(r: &mut Registry) {
             });
         });
     r.scatter(&BOULDER_SITES)
-        .cell(5)
+        .spacing(5)
         .reach(3)
         .density(&BOULDER_COVER)
-        .shape(|s| {
+        .plan(|s| {
             let BlockPos { x, y, z } = s.pos();
             if y < 70 || !gentle(s, 2, 2) {
                 return;
@@ -296,10 +293,10 @@ pub fn register(r: &mut Registry) {
             }
         });
     r.scatter(&RASPBERRY_SITES)
-        .cell(5)
+        .spacing(5)
         .reach(3)
         .density(&RASPBERRY_COVER)
-        .shape(|s| {
+        .plan(|s| {
             place_bush(
                 s,
                 |r| if r.float() < 0.5 { RASPBERRY_LEAVES.id() } else { RASPBERRY_LEAVES.with(&[("berried", "true")]) },
@@ -307,10 +304,10 @@ pub fn register(r: &mut Registry) {
             )
         });
     r.scatter(&SNOWBERRY_SITES)
-        .cell(5)
+        .spacing(5)
         .reach(3)
         .density(&SNOWBERRY_COVER)
-        .shape(|s| {
+        .plan(|s| {
             place_bush(
                 s,
                 |r| if r.float() < 0.5 { SNOWBERRY_LEAVES.id() } else { SNOWBERRY_LEAVES.with(&[("berried", "true")]) },
@@ -320,7 +317,7 @@ pub fn register(r: &mut Registry) {
     r.decoration(decorate);
 }
 
-fn place_boulder(s: &mut Site, rng: &mut Rng, ox: i32, oy: i32, oz: i32, cells: &mut Vec<[i32; 3]>) {
+fn place_boulder(s: &mut Plan, rng: &mut Rng, ox: i32, oy: i32, oz: i32, cells: &mut Vec<[i32; 3]>) {
     for (dx, dy, dz) in sphere(1.5) {
         let pos = [ox + dx, oy + dy, oz + dz];
         let block = if rng.float() < 0.5 { COBBLESTONE.id() } else { MOSSY_COBBLESTONE.id() };
@@ -329,9 +326,9 @@ fn place_boulder(s: &mut Site, rng: &mut Rng, ox: i32, oy: i32, oz: i32, cells: 
     }
 }
 
-static SNOWBERRY_SITES: Scatter = Scatter::named("snowberries");
+static SNOWBERRY_SITES: Feature = Feature::named("snowberries");
 
-pub fn place_bush(s: &mut Site, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
+pub fn place_bush(s: &mut Plan, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
     let BlockPos { x, y, z } = s.pos();
     let mut rng = Rng(s.random());
     let bush_size = {
@@ -356,7 +353,7 @@ pub fn place_bush(s: &mut Site, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
     place_ball(&mut rng, dx, y, dz, bush_size - 0.5);
 }
 
-static RASPBERRY_SITES: Scatter = Scatter::named("raspberries");
+static RASPBERRY_SITES: Feature = Feature::named("raspberries");
 
 pub fn sphere(radius: f32) -> impl Iterator<Item = (i32, i32, i32)> {
     let extent = radius.floor() as i32;
@@ -372,7 +369,7 @@ pub fn sphere(radius: f32) -> impl Iterator<Item = (i32, i32, i32)> {
     })
 }
 
-static BOULDER_SITES: Scatter = Scatter::named("boulders");
+static BOULDER_SITES: Feature = Feature::named("boulders");
 
 static TREE_SITES: Feature = Feature::named("trees");
 

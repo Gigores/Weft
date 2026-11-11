@@ -63,12 +63,6 @@ pub static MOSS: Block = Block::named("moss");
 
 static TILLABLE: Tag = Tag::named("tillable");
 
-fn panel(texture: &'static str, along_x: bool) -> [(&'static str, [f32; 4]); 6] {
-    let face = (texture, [0.0, 0.0, 16.0, 16.0]);
-    let none = (texture, UV_NO_FACE);
-
-    if along_x { [none, none, none, none, face, face] } else { [face, face, none, none, none, none] }
-}
 /// A log that grows into a tree of `leaves` (a cone, like a spruce, when `cone`).
 fn log(r: &mut Registry, handle: &'static Block, wood: &str, leaves: &str, cone: bool) {
     let side = format!("log_{wood}");
