@@ -126,6 +126,10 @@ pub fn debug_groups() -> u32 {
 pub fn invert_y() -> bool {
     number("core:invert_y") != 0.0
 }
+/// The HUD's buttons and steering for fingers.
+pub fn touch_controls() -> bool {
+    number("core:touch_controls") != 0.0
+}
 pub fn name() -> String {
     config::text(id("core:name"))
 }

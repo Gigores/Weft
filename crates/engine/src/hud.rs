@@ -34,6 +34,10 @@ enum Part {
     DebugMod(usize),
     DebugHelp,
     Mod(weft_abi::ModId, weft_abi::Callback),
+    /// `touch::BUTTONS[i]`.
+    Touch(usize),
+    /// Where a finger steers from (`touch::STICK`).
+    Stick,
 }
 pub const TAG_CROSSHAIR: u32 = 2;
 /// A status effect's icon in its frame (`data` the effect), fading its last ten seconds.
@@ -250,13 +254,15 @@ struct Placed {
 #[derive(Default)]
 pub struct Hud {
     pub ui: Ui,
-    key: Option<(bool, usize, [u32; 3], bool, bool, u32, u8, (i32, i32), (u32, u32, u8), u64)>,
+    key: Option<(bool, usize, [u32; 3], bool, bool, u32, u8, (i32, i32), (u32, u32, u8), u64, (bool, [i32; 2]))>,
     /// Player overrides from `config/hud.txt` by element name.
     layout: rustc_hash::FxHashMap<String, Placement>,
     file: std::path::PathBuf,
     edit: Option<Edit>,
     /// The elements of the current tree.
     names: Vec<String>,
+    /// Where the joystick's knob is from its middle (`touch::Touches::knob`).
+    pub knob: glam::Vec2,
 }
 
 impl Hud {
@@ -395,6 +401,7 @@ impl Hud {
             h.wrapping_mul(31)
                 .wrapping_add((f.0 as u64) << 8 | f.1 as u64)
         });
+        let (touch, knob) = (crate::settings::touch_controls(), self.knob);
         let key = (
             debug,
             chat_visible,
@@ -406,6 +413,7 @@ impl Hud {
             size,
             (held.item, held.data, fade),
             shown_steps,
+            (touch, knob.round().as_ivec2().to_array()),
         );
         if self.key == Some(key) {
             return false;
@@ -443,6 +451,12 @@ impl Hud {
             ("core:chat".into(), CHAT.into(), 0, Part::Chat),
             ("core:debug.help".into(), a::DEBUG_LEFT.into(), i32::MAX, Part::DebugHelp),
         ];
+        if touch {
+            all.push((crate::touch::STICK.into(), a::BOTTOM_LEFT.into(), 0, Part::Stick));
+            for (i, b) in crate::touch::BUTTONS.iter().enumerate() {
+                all.push((b.0.into(), b.1.into(), b.2, Part::Touch(i)));
+            }
+        }
         for (i, p) in places()
             .iter()
             .enumerate()
@@ -574,6 +588,22 @@ impl Hud {
                 modui::build(ui, lang, Some(input), o, cb, Some(client))
             }),
             Part::DebugHelp => debug_help(ui, groups, align, &mods_debug),
+            Part::Touch(i) => {
+                let name = crate::touch::BUTTONS[i].0;
+                let icon = format!("core:gui/touch_{}", name.rsplit('.').next().unwrap_or(name));
+                ui.panel("touch_button", Style::default().size(24.0, 24.0).center(), |ui| {
+                    ui.add(Kind::Image { texture: icon, color: 0xFFFFFFC0 }, Style::default().size(16.0, 16.0));
+                });
+            }
+            Part::Stick => {
+                use crate::touch::{KNOB_REACH, STICK_SIZE};
+                ui.panel("touch_stick", Style::default().size(STICK_SIZE, STICK_SIZE), |ui| {
+                    let at = Style::default()
+                        .size(STICK_SIZE - 2.0 * KNOB_REACH, STICK_SIZE - 2.0 * KNOB_REACH)
+                        .at_from([0.5, 0.5], knob.x, knob.y, [0.5, 0.5]);
+                    ui.add(Kind::Container { class: Some("touch_knob".into()) }, at);
+                });
+            }
         };
         let selected = edit.as_ref().and_then(|e| e.selected.clone());
         let labels = edit.as_ref().is_some_and(|e| e.labels);

@@ -225,6 +225,7 @@ pub(crate) struct Running {
     /// What is drawn over the world after its depth was taken (`Client::render`).
     after_list: CommandList,
     input: Input,
+    touches: crate::touch::Touches,
     pub(crate) settings: Settings,
     lang: Lang,
     languages: Vec<(String, String)>,
@@ -315,7 +316,24 @@ struct App {
 }
 
 pub fn run(renderers: Renderers, opts: Options) -> Result<(), String> {
-    let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
+    run_on(EventLoop::new().map_err(|e| e.to_string())?, renderers, opts)
+}
+
+/// `run` in an Android app's activity.
+#[cfg(target_os = "android")]
+pub fn run_android(app: winit::platform::android::activity::AndroidApp, renderers: Renderers, opts: Options) -> Result<(), String> {
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+    run_on(
+        EventLoop::builder()
+            .with_android_app(app)
+            .build()
+            .map_err(|e| e.to_string())?,
+        renderers,
+        opts,
+    )
+}
+
+fn run_on(event_loop: EventLoop<()>, renderers: Renderers, opts: Options) -> Result<(), String> {
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App { renderers, opts, run: None, error: None };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
@@ -325,13 +343,11 @@ pub fn run(renderers: Renderers, opts: Options) -> Result<(), String> {
     }
 }
 
-/// The engine's own assets: next to the executable in a distribution, else (a build run from the
-/// source tree, or `--dev`) the source tree's.
+/// The engine's own assets: those a distribution ships, else (a build run from the source tree, or
+/// `--dev`) the source tree's.
 fn engine_assets(dev: bool) -> PathBuf {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    let shipped = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("assets").join("core")));
+    let shipped = crate::paths::shipped().map(|d| d.join("assets").join("core"));
     match shipped {
         Some(s) if !dev && s.is_dir() => s,
         _ => source,
@@ -474,6 +490,7 @@ impl App {
             world_list: CommandList::default(),
             after_list: CommandList::default(),
             input,
+            touches: Default::default(),
             settings,
             lang,
             languages: Vec::new(),
@@ -669,6 +686,26 @@ impl Running {
             self.window.set_cursor_visible(true);
         }
         self.input.captured = on;
+    }
+
+    /// A finger on a touch screen (`touch`).
+    fn touch(&mut self, t: winit::event::Touch) {
+        // Off, a computer's touch screen is the system's mouse (Windows makes one of it); a phone
+        // has only fingers, which then still work the menus, the setting among them.
+        let controls = crate::settings::touch_controls();
+        if !controls && !cfg!(target_os = "android") {
+            return;
+        }
+        let world = controls && self.game.is_some() && self.screens.is_empty();
+        if world && !self.input.captured && t.phase == winit::event::TouchPhase::Started {
+            self.set_capture(true);
+        }
+        let at = Vec2::new(t.location.x as f32, t.location.y as f32);
+        let scale = self.gui_scale();
+        let hud = &self.hud;
+        let stick = hud.element_rect(crate::touch::STICK);
+        self.touches
+            .finger(&mut self.input, t.id, t.phase, at, scale, world, &|p| hud.element_at(p), stick);
     }
 
     fn grab_cursor(&self) {
@@ -1668,7 +1705,8 @@ fn text_condition(text: &str, client: Option<&Client>, debug: bool, dev: bool) -
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
-        if self.run.is_some() {
+        if let Some(r) = &mut self.run {
+            r.gpu.set_surface(Some(&*r.window));
             return;
         }
         match self.start(el) {
@@ -1677,6 +1715,19 @@ impl ApplicationHandler for App {
                 self.error = Some(e);
                 el.exit();
             }
+        }
+    }
+
+    /// An Android app sent to the background: its window has no surface until it comes back.
+    fn suspended(&mut self, _el: &ActiveEventLoop) {
+        if let Some(r) = &mut self.run {
+            r.input.release_all();
+            r.touches = Default::default();
+            // At once: `pause` waits for a frame to take the world's picture, and none comes now.
+            if r.game.is_some() && r.screens.is_empty() {
+                r.open(screens::engine("core:pause"));
+            }
+            r.gpu.set_surface(None);
         }
     }
 
@@ -1703,13 +1754,17 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Focused(false) if !self.opts.automated => {
                 r.input.release_all();
+                r.touches = Default::default();
                 if r.game.is_some() && r.screens.is_empty() {
                     r.pause();
                 }
                 r.set_capture(false);
             }
+            WindowEvent::Touch(t) => r.touch(t),
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
+                    // A phone's back button: what Escape does.
+                    let code = if code == KeyCode::BrowserBack { KeyCode::Escape } else { code };
                     match event.state {
                         ElementState::Pressed if event.repeat => r.input.key_repeat(Key::Code(code)),
                         ElementState::Pressed => r.input.key_down(Key::Code(code)),
@@ -1751,6 +1806,7 @@ impl ApplicationHandler for App {
                 r.input.cursor = Vec2::new(position.x as f32, position.y as f32);
             }
             WindowEvent::RedrawRequested => {
+                r.touches.tick(&mut r.input);
                 if frame(r, &self.opts) || r.quit {
                     r.leave_world_silent();
                     el.exit();
@@ -2202,6 +2258,7 @@ fn refresh_hud(r: &mut Running) {
         {
             r.hud.set_edit(None);
         }
+        r.hud.knob = r.touches.knob();
         if r.hud
             .update(&g.client, r.debug, crate::settings::debug_groups(), chat_open, &r.lang, &r.input)
         {

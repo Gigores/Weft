@@ -401,6 +401,8 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:brightness", ck::FLOAT, 0.5, 0.0, 1.0, 0.0),
         number("core:debug_groups", ck::INT, u32::MAX as f64, 0.0, u32::MAX as f64, 1.0),
         number("core:invert_y", ck::BOOL, 0.0, 0.0, 1.0, 0.0),
+        // Buttons and steering for fingers (`touch`), on where the screen is the only input.
+        number("core:touch_controls", ck::BOOL, cfg!(target_os = "android") as u8 as f64, 0.0, 1.0, 0.0),
         string("core:debug_lines", ""),
         string("core:name", &user),
         string("core:relays", ""),
@@ -435,7 +437,7 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         // What anyone changes now and then; the rest is a page away.
         ("core:settings", &["fov", "view_distance"]),
         ("core:video", &["gui_scale", "brightness", "lod_distance", "cloud_height", "vsync", "fullscreen", "renderer"]),
-        ("core:controls", &["sensitivity", "invert_y"]),
+        ("core:controls", &["sensitivity", "invert_y", "touch_controls"]),
         ("core:accessibility", &["fov_effects"]),
         ("core:profile", &["first_person_model", "show_avatars"]),
         ("core:chat_settings", &["chat_width", "chat_height", "chat_height_closed", "chat_opacity", "chat_visibility"]),

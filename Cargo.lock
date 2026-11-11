@@ -5285,6 +5285,18 @@ name = "weft_abi"
 version = "26.11.3"
 
 [[package]]
+name = "weft_android"
+version = "26.11.3"
+dependencies = [
+ "log",
+ "weft_engine",
+ "weft_noise",
+ "weft_render",
+ "weft_vulkan",
+ "zip",
+]
+
+[[package]]
 name = "weft_engine"
 version = "26.11.3"
 dependencies = [

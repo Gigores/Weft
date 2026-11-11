@@ -44,12 +44,17 @@ pub mod shape;
 pub mod stack;
 pub mod steps;
 pub mod tag_bits;
+pub mod touch;
 pub mod ui;
 pub mod wire;
 pub mod world;
 
 pub use app::api::{exit_code, set_launch_options};
+#[cfg(target_os = "android")]
+pub use app::run_android;
 pub use app::{BackendFactory, Options, Renderers, run};
+#[cfg(target_os = "android")]
+pub use winit::platform::android::activity::AndroidApp;
 
 /// Background workers (generation, meshing, region ticks) leave two cores to the render and
 /// server threads: a full pool starved the render thread during loading and frames missed vsync.
