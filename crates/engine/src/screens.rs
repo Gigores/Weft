@@ -126,8 +126,7 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         "core:touch_buttons" => Box::new(crate::touch::TouchButtons::default()),
         "core:debug_options" => Box::new(crate::hud_editor::DebugOptions),
         "core:tags" => Box::new(crate::game_screens::TagList::default()),
-        "core:mods" => Box::new(ModList::default()),
-        "core:mod_catalog" => Box::new(crate::mod_index::Catalog::default()),
+        "core:mods" => Box::new(crate::mods_screen::ModsScreen::default()),
         "core:profile" => Box::new(Profile::default()),
         _ => return None,
     })
@@ -153,169 +152,6 @@ pub fn parts(ui: &mut Ui, cx: &BuildCx, screen: &str, area: &str) {
 /// A mod's name as players see it: `mod.<id>.name` from the language files, else its id.
 pub fn mod_name(lang: &Lang, id: &str) -> Vec<text::Span> {
     text::Name::Mod(id.to_string()).spans(lang, None)
-}
-
-// ---------------------------------------------------------------- mods
-
-/// Every loaded mod with its icon, version, authors and description (translations
-/// `mod.<id>.description`, `.authors`, `.url`; icon `textures/gui/icon.png`), and its settings.
-#[derive(Default)]
-pub struct ModList {
-    selected: Rc<std::cell::Cell<usize>>,
-}
-
-impl Screen for ModList {
-    fn name(&self) -> &str {
-        "core:mods"
-    }
-
-    fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
-        let c = crate::content::content();
-        let mut mods: Vec<&crate::content::ModMeta> = c.mods.iter().collect();
-        mods.sort_by_key(|m| m.order);
-        mods.extend(crate::modloader::turned_off());
-        let sel = self.selected.get().min(mods.len().saturating_sub(1));
-        let tall = (cx.size.y - 120.0).clamp(80.0, 300.0);
-        let icon = |id: &str| {
-            let name = format!("{id}:gui/icon");
-            crate::assets::texture_size(&name).map(|_| name)
-        };
-        frame(ui, cx, "mods.title", |ui| {
-            ui.container(Style::row().gap(6.0), |ui| {
-                let list = ui.panel(
-                    "well",
-                    Style::default()
-                        .pad(4.0)
-                        .gap(2.0)
-                        .w(184.0)
-                        .h(tall)
-                        .scroll()
-                        .stretch(),
-                    |ui| {
-                        for (i, m) in mods.iter().enumerate() {
-                            let s = self.selected.clone();
-                            let b = ui.button(
-                                "button",
-                                Style::row().min_h(22.0).pad_xy(4.0, 2.0).gap(2.0).w(172.0),
-                                Rc::new(move |c: &mut Ctx| {
-                                    s.set(i);
-                                    c.requests.push(Request::Rebuild);
-                                }),
-                                |ui| {
-                                    ui.container(Style::row().gap(4.0).grow().center(), |ui| {
-                                        match icon(&m.id) {
-                                            Some(t) => drop(
-                                                ui.add(Kind::Image { texture: t, color: 0xFFFFFFFF }, Style::default().size(16.0, 16.0)),
-                                            ),
-                                            None => drop(ui.add(Kind::Container { class: None }, Style::default().size(16.0, 16.0))),
-                                        }
-                                        ui.text(mod_name(cx.lang, &m.id), "button");
-                                    });
-                                    // Takes effect on the next start: nothing here changes what is running.
-                                    let id = m.id.clone();
-                                    let on = crate::modloader::wanted_on(&m.id);
-                                    let led = ui.button(
-                                        "",
-                                        Style::default().size(14.0, 18.0),
-                                        Rc::new(move |c: &mut Ctx| {
-                                            crate::modloader::toggle(&id);
-                                            c.requests.push(Request::Rebuild);
-                                        }),
-                                        |ui| {
-                                            ui.add(
-                                                Kind::Image {
-                                                    texture: format!("core:gui/led_{}", if on { "on" } else { "off" }),
-                                                    color: 0xFFFFFFFF,
-                                                },
-                                                Style::default().size(6.0, 6.0),
-                                            );
-                                        },
-                                    );
-                                    ui.set_id(led, &format!("mod_led:{}", m.id));
-                                },
-                            );
-                            if let Kind::Button { selected, .. } = &mut ui.nodes[b].kind {
-                                *selected = i == sel;
-                            }
-                            ui.set_id(b, &format!("mod:{}", m.id));
-                        }
-                    },
-                );
-                ui.set_id(list, "mod_list");
-                let Some(m) = mods.get(sel) else { return };
-                let key = |k: &str| format!("mod.{}.{k}", m.id);
-                ui.panel(
-                    "panel",
-                    Style::default()
-                        .pad(8.0)
-                        .gap(4.0)
-                        .w(300.0)
-                        .h(tall)
-                        .scroll()
-                        .stretch(),
-                    |ui| {
-                        ui.container(Style::row().gap(6.0), |ui| {
-                            if let Some(t) = icon(&m.id) {
-                                ui.add(Kind::Image { texture: t, color: 0xFFFFFFFF }, Style::default().size(32.0, 32.0));
-                            }
-                            ui.container(Style::default().gap(1.0), |ui| {
-                                ui.text(mod_name(cx.lang, &m.id), "default");
-                                label(ui, cx, "mods.version", &[Arg::Text(m.version.clone()), Arg::Text(m.id.clone())], "dim");
-                            });
-                        });
-                        for (k, line) in [("authors", "mods.authors"), ("url", "mods.url")] {
-                            if cx.lang.has(&key(k)) {
-                                label(ui, cx, line, &[Arg::Key(key(k))], "dim");
-                            }
-                        }
-                        if !m.deps.is_empty() {
-                            let deps: Vec<String> = m
-                                .deps
-                                .iter()
-                                .map(|d| text::Name::Mod(d.clone()).text(cx.lang))
-                                .collect();
-                            label(ui, cx, "mods.deps", &[Arg::Text(deps.join(", "))], "dim");
-                        }
-                        ui.add(Kind::Container { class: None }, Style::default().h(4.0));
-                        if cx.lang.has(&key("description")) {
-                            let d = ui.text(cx.t(&key("description"), &[]), "default");
-                            ui.set_id(d, "mod_description");
-                        } else {
-                            label(ui, cx, "mods.no_description", &[], "dim");
-                        }
-                    },
-                );
-            });
-            ui.container(Style::row().gap(6.0), |ui| {
-                let id = mods.get(sel).map(|m| m.id.clone()).unwrap_or_default();
-                let has_settings = c
-                    .game
-                    .configs
-                    .iter()
-                    .any(|d| on_config_screen(d, &Shown::Mod(id.clone())));
-                let b = button(ui, cx, "mods.settings", &[], 120.0, move |c| {
-                    c.requests
-                        .push(Request::Open(Box::new(ConfigScreen { shown: Shown::Mod(id.clone()) })))
-                });
-                if let Kind::Button { enabled, .. } = &mut ui.nodes[b].kind {
-                    *enabled = has_settings;
-                }
-                button(ui, cx, "mods.catalog", &[], 120.0, |c| c.requests.push(Request::Screen("core:mod_catalog".into())));
-                let dir = cx.settings.run_dir.join("mods");
-                button(ui, cx, "mods.folder", &[], 120.0, move |_| crate::packs::open_folder(&dir));
-                button(ui, cx, "menu.done", &[], 120.0, |c| c.requests.push(Request::Close));
-            });
-            if crate::modloader::restart_pending() || crate::mod_index::changed() {
-                ui.container(Style::row().gap(6.0).align(crate::ui::Align::Center), |ui| {
-                    label(ui, cx, "mods.restart_note", &[], "dim");
-                    // A phone's game can't start itself again: it closes, to be opened again.
-                    let key = if cfg!(target_os = "android") { "mods.close" } else { "mods.restart" };
-                    let b = button(ui, cx, key, &[], 120.0, |c| c.requests.push(Request::Restart));
-                    ui.set_id(b, "mods_restart");
-                });
-            }
-        });
-    }
 }
 
 // ---------------------------------------------------------------- profile
@@ -666,7 +502,7 @@ pub enum Shown {
 
 /// Whether a setting shows on that screen. Text settings have their own screens (keys, packs,
 /// profile), and a mod's rules are with the world's.
-fn on_config_screen(d: &crate::config::ConfigDef, shown: &Shown) -> bool {
+pub(crate) fn on_config_screen(d: &crate::config::ConfigDef, shown: &Shown) -> bool {
     use weft_abi::{config_kind as ck, config_scope as scope};
     let Some((owner, _)) = d.name.split_once(':') else { return false };
     match shown {
