@@ -5,12 +5,12 @@ use weft_sdk::*;
 
 use crate::blocks::*;
 
+use weft_sdk::abi::entry_kind as ek;
 use weft_sdk::noise::*;
 use weft_sdk::terrain::*;
-use weft_sdk::abi::entry_kind as ek;
 
-use std::collections::BTreeSet;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 pub const SEA: i32 = 63;
 
@@ -245,7 +245,9 @@ pub fn register(r: &mut Registry) {
         .density(&BOULDER_COVER)
         .shape(|s| {
             let BlockPos { x, y, z } = s.pos();
-            if y < 70 || !gentle(s, 2, 2) { return; }
+            if y < 70 || !gentle(s, 2, 2) {
+                return;
+            }
             let mut rng = Rng(s.random());
             let mut cells = Vec::new();
             place_boulder(s, &mut rng, x, y, z, &mut cells);
@@ -259,16 +261,22 @@ pub fn register(r: &mut Registry) {
             let mut carpets: BTreeMap<[i32; 3], u8> = BTreeMap::new();
             for b in &blocks {
                 for &d in &Dir::ALL {
-                    if d == Dir::Down { continue; }
+                    if d == Dir::Down {
+                        continue;
+                    }
                     let o = d.offset();
                     let n = [b[0] + o.x, b[1] + o.y, b[2] + o.z];
-                    if blocks.contains(&n) { continue; }
+                    if blocks.contains(&n) {
+                        continue;
+                    }
                     let face = d.opposite().face() as u8;
                     *carpets.entry(n).or_insert(0) |= 1u8 << face;
                 }
             }
             for (p, mask) in carpets {
-                if rng.float() > 0.2 { continue; }
+                if rng.float() > 0.2 {
+                    continue;
+                }
                 let props: Vec<(&str, &str)> = Dir::ALL
                     .iter()
                     .map(|&d| {
