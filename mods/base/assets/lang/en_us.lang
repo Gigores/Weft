@@ -369,3 +369,7 @@ item.base.snowberry_leaves = Snowberry Leaves
 block.base.snowberry_leaves = Snowberry Leaves
 item.base.raspberry = Raspberry
 item.base.snowberry = Snowberry
+item.base.iron_shears = Iron Shears
+item.base.gold_shears = Golden Shears
+item.base.diamond_shears = Diamond Shears
+item.base.moss = Moss

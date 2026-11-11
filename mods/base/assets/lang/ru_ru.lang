@@ -339,3 +339,7 @@ item.base.snowberry_leaves = Листья волчьей ягоды
 block.base.snowberry_leaves = Листья волчьей ягоды
 item.base.raspberry = Малина
 item.base.snowberry = Волчья ягода
+item.base.iron_shears = Железные ножницы
+item.base.gold_shears = Золотые ножницы
+item.base.diamond_shears = Алмазные ножницы
+item.base.moss = Мох
