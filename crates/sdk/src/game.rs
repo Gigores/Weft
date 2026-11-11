@@ -132,7 +132,7 @@ impl World {
         self.action_play(id, "", false);
     }
 
-    /// While this holds, entity `id` plays action `to` wherever it would play `from`: a creeper
+    /// While this holds, entity `id` plays action `to` wherever it would play `from`: a mob
     /// running from a cat plays its own run instead of `walk`. Everyone who sees it sees it, and
     /// without a clip for `to` it goes on playing `from`.
     pub fn action_override(&self, id: u64, from: &str, to: &str) {
@@ -184,11 +184,31 @@ impl World {
         let mut s = EntityState::default();
         (unsafe { (host().entity_get)(self.raw(), id, &mut s) } != 0).then_some(s)
     }
-    /// Places `template` with its lowest corner at `pos`; false (and nothing placed) when part
-    /// of it isn't loaded.
-    pub fn place_template(&self, template: &crate::Template, pos: impl Into<BlockPos>) -> bool {
+    /// Places `template` with its lowest corner at `pos` once placed with `transform`, its slots
+    /// filled from `palette` (else its defaults). What undoes it (`unplace`), `None` (and nothing
+    /// placed) when part of it isn't loaded.
+    pub fn place_template(
+        &self,
+        template: &crate::Template,
+        pos: impl Into<BlockPos>,
+        transform: crate::Transform,
+        palette: Option<&crate::Palette>,
+    ) -> Option<u64> {
         let pos = pos.into();
-        unsafe { (host().place_template)(self.raw(), Str::new(template.name()), &pos) != 0 }
+        let palette = Str::new(palette.map_or("", |p| p.name()));
+        let id = unsafe { (host().place)(self.raw(), Str::new(template.name()), &pos, transform.0 as u32, palette) };
+        (id != 0).then_some(id)
+    }
+    /// Puts feature `feature` into the world now as if it started at `pos` (its plan or template,
+    /// with what they bring). What undoes it, `None` when part of it isn't loaded.
+    pub fn place_feature(&self, feature: &crate::Feature, pos: impl Into<BlockPos>) -> Option<u64> {
+        let pos = pos.into();
+        let id = unsafe { (host().place)(self.raw(), Str::new(feature.name()), &pos, 0, Str::new("")) };
+        (id != 0).then_some(id)
+    }
+    /// Puts back what a placing replaced (the last 16 of a dimension are kept); whether it could.
+    pub fn unplace(&self, placing: u64) -> bool {
+        unsafe { (host().unplace)(self.raw(), placing) != 0 }
     }
     /// Changes what the entity is now, only what is named, when the edit is dropped:
     /// `w.entity_modify(id).velocity(v).yaw(y);`. Players' own clients follow.
@@ -466,7 +486,7 @@ impl World {
         out
     }
 
-    /// A white flash on an entity for everyone who sees it (a creeper about to go off).
+    /// A white flash on an entity for everyone who sees it (something about to go off).
     pub fn flash(&self, id: u64) {
         self.entity_effect(id, &crate::entity_effects::FLASH, 1, 2)
     }

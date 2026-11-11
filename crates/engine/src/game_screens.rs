@@ -20,11 +20,13 @@ pub struct MenuScreen {
     /// Creative inventory filter and open tab.
     search: Rc<RefCell<String>>,
     tab: Rc<std::cell::Cell<usize>>,
+    /// Its panel has its X in the corner (`Screen::draws_close`).
+    closes: bool,
 }
 
 impl MenuScreen {
     pub fn new(kind: u32) -> MenuScreen {
-        MenuScreen { kind, effects: Vec::new(), search: Default::default(), tab: Default::default() }
+        MenuScreen { kind, effects: Vec::new(), search: Default::default(), tab: Default::default(), closes: false }
     }
 }
 
@@ -181,6 +183,10 @@ impl Screen for MenuScreen {
         "core:menu"
     }
 
+    fn draws_close(&self) -> bool {
+        self.closes
+    }
+
     /// Built again when an effect comes, goes or changes level while it is open.
     fn pointer(&mut self, _cursor: glam::Vec2, _ui: &mut Ui, ctx: &mut Ctx, _hud: &mut crate::hud::Hud) -> bool {
         let c = content();
@@ -219,9 +225,10 @@ impl Screen for MenuScreen {
                         let first = ui.nodes.len();
                         modui::build(ui, cx.lang, Some(cx.input), by, cb, cx.client);
                         // What mods add in the top right corner inside the menu's panel: this
-                        // menu's place, then every menu's.
+                        // menu's place, then every menu's, then the X closing it.
                         let corner = [(def.name.as_str(), "corner"), (MENUS, "corner")];
-                        if first < ui.nodes.len() && has_parts(&corner) {
+                        self.closes = first < ui.nodes.len();
+                        if self.closes {
                             ui.open_existing(first);
                             ui.container(
                                 Style::row()
@@ -231,6 +238,7 @@ impl Screen for MenuScreen {
                                     for (screen, area) in corner {
                                         crate::client::modui::parts(ui, cx.lang, Some(cx.input), cx.client, screen, area);
                                     }
+                                    crate::screens::close_button(ui, 8.0);
                                 },
                             );
                             ui.close();

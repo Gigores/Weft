@@ -6,7 +6,6 @@ use weft_sdk::*;
 pub static ZOMBIE: EntityKind = EntityKind::named("zombie");
 pub static SPIDER: EntityKind = EntityKind::named("spider");
 pub static PIG: EntityKind = EntityKind::named("pig");
-pub static CREEPER: EntityKind = EntityKind::named("creeper");
 pub static SKELETON: EntityKind = EntityKind::named("skeleton");
 pub static SHEEP: EntityKind = EntityKind::named("sheep");
 pub static CHICKEN: EntityKind = EntityKind::named("chicken");
@@ -14,7 +13,7 @@ pub static ARROW: EntityKind = EntityKind::named("arrow");
 pub static BOW: Item = Item::named("bow");
 static ARROW_ITEM: Item = Item::named("arrow");
 static EGG: Item = Item::named("egg");
-/// Ticks of whatever a mob counts: a creeper's fuse, a skeleton's reload, a chicken's next egg.
+/// Ticks of whatever a mob counts: a skeleton's reload, a chicken's next egg.
 static FUSE: Component<u32> = Component::named("fuse");
 
 pub static COW: EntityKind = EntityKind::named("cow");
@@ -61,15 +60,6 @@ pub fn register(r: &mut Registry) {
                 .neutral(),
         ));
     r.entity_component(&FUSE, 0u32, 0);
-    r.entity(&CREEPER)
-        .hitboxes(creeper_parts())
-        .tag("hostile")
-        .size(0.6, 1.7)
-        .max_health(20.0)
-        .walk_speed(2.5)
-        .hostile()
-        .attach(&FUSE)
-        .goals(creeper());
     r.entity(&SKELETON)
         .hitboxes(Hitboxes::humanoid().slim(2.0).reaching())
         .tag("hostile")
@@ -170,7 +160,6 @@ pub fn register(r: &mut Registry) {
                 .when(Cond::chance(0.33))
                 .item("spider_eye"),
         );
-    r.loot(&CREEPER).pool(Pool::new().items("gunpowder", 0, 2));
     r.loot(&SKELETON)
         .pool(Pool::new().items("arrow", 0, 2))
         .pool(Pool::new().items("bone", 0, 2));
@@ -209,7 +198,6 @@ pub fn register(r: &mut Registry) {
     // Natural spawning, as rules the engine runs: monsters in the dark (spiders more in deep
     // caves), animals in small herds on grass by day, rarely once the world is loaded.
     r.natural_spawn(&ZOMBIE).light(0, 6).weight(2);
-    r.natural_spawn(&CREEPER).light(0, 6).weight(2);
     r.natural_spawn(&SKELETON).light(0, 6).weight(2);
     r.natural_spawn(&SPIDER).light(0, 6);
     r.natural_spawn(&SPIDER)
@@ -224,59 +212,6 @@ pub fn register(r: &mut Registry) {
             .pack_size(2, 3)
             .chance(0.05);
     }
-}
-
-/// Vanilla's creeper: comes for the player, and within 3 blocks starts its 30 tick fuse, which
-/// runs back down once the player is 7 away. A radius 3 blast at the end.
-fn creeper() -> ai::Goals {
-    ai::Goals::new()
-        .aggressive(16.0)
-        .then(|w: &World, id: u64, st: &EntityState| {
-            let near = ai::target(w, id, st, 7.0);
-            let d2 = near
-                .as_ref()
-                .map_or(f64::MAX, |(_, p)| (p.pos - st.pos).length_squared());
-            let Some(fuse) = w.component_mut(id, &FUSE) else { return false };
-            if d2 < 9.0 || (*fuse > 0 && d2 < 49.0) {
-                *fuse += 1;
-            } else {
-                *fuse = fuse.saturating_sub(1);
-            }
-            let lit = *fuse;
-            // Faster as it nears the end.
-            if lit > 0 && lit % (if lit > 20 { 3 } else { 8 }) == 0 {
-                w.flash(id);
-            }
-            if lit >= 30 {
-                blast(w, id, st.pos.to_array().into(), 3.0);
-                return true;
-            }
-            lit > 0
-        })
-        .then(ai::watch_player(8.0))
-        .then(ai::chase_target(16.0, 1.0))
-        .then(ai::wander(0.6, 10.0))
-}
-
-/// Vanilla's explosion in short: a hole, and damage falling off to nothing at twice the radius.
-fn blast(w: &World, id: u64, at: Vec3, radius: f64) {
-    for other in w.entities_near(at, radius * 2.0, None) {
-        let Some(s) = w.entity(other).filter(|_| other != id) else { continue };
-        let d = (s.pos - at).length_squared().sqrt();
-        let impact = (1.0 - d / (radius * 2.0)).max(0.0);
-        let damage = (impact * impact + impact) / 2.0 * 7.0 * radius * 2.0 + 1.0;
-        w.damage(other, Damage::new(damage as f32, damage_cause::EXPLOSION).by(id));
-    }
-    // Vanilla's: one going off in a liquid breaks nothing, and liquids don't break at all.
-    if w.block_flags(block_pos_of(at)) & abi::block_flags::LIQUID == 0 {
-        w.fill(Shape::blast(at, radius, w.random()), 0)
-            .keep("#unbreakable #liquids");
-    }
-    w.spawn_particles(&Particle::named("core:poof"), at)
-        .count(40)
-        .spread(radius as f32 * 0.5)
-        .speed(2.0);
-    w.despawn(id);
 }
 
 /// Vanilla's skeleton: keeps to about 10 blocks and shoots once in two seconds.
@@ -423,13 +358,6 @@ fn pig_parts() -> Hitboxes {
         .head("head", [-4.0, 8.0, -15.0], [4.0, 16.0, -6.0], [0.0, 12.0, -6.0])
         .part("body", [-5.0, 6.0, -8.0], [5.0, 14.0, 9.0]);
     four_legs(h, [1.0, 5.0], 6.0, [-7.0, -3.0], [5.0, 9.0])
-}
-
-fn creeper_parts() -> Hitboxes {
-    let h = Hitboxes::new()
-        .head("head", [-4.0, 18.0, -4.0], [4.0, 26.0, 4.0], [0.0, 18.0, 0.0])
-        .part("body", [-4.0, 6.0, -2.0], [4.0, 18.0, 2.0]);
-    four_legs(h, [0.0, 4.0], 6.0, [-6.0, -2.0], [2.0, 6.0])
 }
 
 fn chicken_parts() -> Hitboxes {

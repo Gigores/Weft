@@ -418,33 +418,31 @@ pub mod entry_kind {
     pub const RECIPE: u32 = 32;
     /// Named like the block or entity kind that drops it, or a table of its own.
     pub const LOOT: u32 = 33;
-    /// Named like its block.
-    pub const ORE: u32 = 34;
+    /// Anything generation puts into the world (`comp::feature`): an ore is named like its block,
+    /// a structure like its template, a decoration `<mod>:decoration`, `/2`.. by default.
+    pub const FEATURE: u32 = 34;
     /// Named like its block (16 states, see `comp::liquid`).
     pub const LIQUID: u32 = 35;
     /// What happens where two liquids meet, `<mod>:<liquid>><touching>` by default.
     pub const REACTION: u32 = 36;
-    pub const SCATTER: u32 = 37;
-    /// `<mod>:decoration`, `/2`.. by default.
-    pub const DECORATION: u32 = 38;
-    /// Named like its template.
-    pub const STRUCTURE: u32 = 39;
-    pub const TEMPLATE: u32 = 40;
+    pub const TEMPLATE: u32 = 37;
+    /// Blocks for templates' material slots (`comp::palette`).
+    pub const PALETTE: u32 = 38;
     /// A natural spawning rule, `<mod>:<entity>`, `/2`.. by default.
-    pub const SPAWN: u32 = 41;
+    pub const SPAWN: u32 = 39;
     /// A dimension's terrain, named like the dimension.
-    pub const TERRAIN: u32 = 42;
+    pub const TERRAIN: u32 = 40;
     /// How a bone of a model file moves by itself, named `<model>/<bone>`.
-    pub const BONE_MOTION: u32 = 43;
+    pub const BONE_MOTION: u32 = 41;
     /// Code that changes a value (`comp::step`): on a chain, or used by modifiers.
-    pub const STEP: u32 = 44;
+    pub const STEP: u32 = 42;
     /// A place in the order steps run in (`comp::phase`).
-    pub const PHASE: u32 = 45;
+    pub const PHASE: u32 = 43;
     /// How many kinds there are; each has a component table (`ComponentTable`), empty for word
     /// sets and component declarations.
     pub const COUNT: usize = NAMES.len();
     /// Each kind's name for messages, by value.
-    pub const NAMES: [&str; 46] = [
+    pub const NAMES: [&str; 44] = [
         "block",
         "item",
         "entity",
@@ -479,13 +477,11 @@ pub mod entry_kind {
         "component",
         "recipe",
         "loot table",
-        "ore",
+        "feature",
         "liquid",
         "liquid reaction",
-        "scatter",
-        "decoration",
-        "structure",
         "template",
+        "palette",
         "spawn rule",
         "terrain",
         "bone motion",
@@ -983,33 +979,85 @@ pub mod comp {
         pub const SWAPS: &str = "loot.swaps";
     }
 
-    /// Where an ore, scatter, structure, decoration or spawn rule goes; what isn't set doesn't
-    /// limit it. `DIMENSIONS` (`[str]`, references to dimensions; none: every one but
-    /// `dimension::BARE` ones), `BIOME` (`str`, a reference to biomes: `#cave`, `base:plains`,
-    /// `#forest !base:birch_forest`), `Y` (`[i32;2]`, inclusive heights: where
-    /// an ore's veins start, a scatter's site, a structure's ground, a spawn spot). A decoration
-    /// decides biome and height itself.
+    /// Where a feature or a spawn rule goes; what isn't set doesn't limit it. `DIMENSIONS`
+    /// (`[str]`, references to dimensions; none: every one but `dimension::BARE` ones), `BIOME`
+    /// (`str`, a reference to biomes: `#cave`, `base:plains`, `#forest !base:birch_forest`), `Y`
+    /// (`[i32;2]`, inclusive heights: where a feature starts, its ground for one standing on it,
+    /// a spawn spot). A feature generating whole cubes decides biome and height itself.
     pub mod common {
         pub const DIMENSIONS: &str = "dimensions";
         pub const BIOME: &str = "biome";
         pub const Y: &str = "y";
     }
 
-    /// An ore's (`entry_kind::ORE`), scattered after the dimension's generator: `VEINS` (`u32`,
-    /// started per cube, 4), `SIZE` (`u32`, blocks per vein, 8), `SHAPE` (`VeinShape`, a walk;
-    /// `vein_shape::STEPS`: `STEPS`, `[ShapeStep]`, any shape about its start, a geode's shell),
-    /// `HEIGHT` (`OreHeight`, how the starts spread over `common::Y`, evenly), `REPLACES`
-    /// (`match`: what it may replace), `REPLACES_WITH` (`[OreVariant]`), `EXPOSED`
-    /// (`f32`, share of its blocks left out where they would touch air, 0).
-    pub mod ore {
-        pub const VEINS: &str = "ore.veins";
-        pub const SIZE: &str = "ore.size";
-        pub const SHAPE: &str = "ore.shape";
-        pub const STEPS: &str = "ore.steps";
-        pub const HEIGHT: &str = "ore.height";
-        pub const REPLACES: &str = "ore.replaces";
-        pub const REPLACES_WITH: &str = "ore.replaces_with";
-        pub const EXPOSED: &str = "ore.exposed";
+    /// A feature (`entry_kind::FEATURE`): where (`common`), how its starts spread, its shape, and
+    /// how it writes its blocks. Everything generation puts into the world after the terrain is
+    /// one: ores, geodes, trees, boulders, structures, villages, grass.
+    ///
+    /// Order: `STAGE` (`u32`, `stage`, by its spread unless set), then `AFTER` and `BEFORE`
+    /// (`[str]`, other features), then load order.
+    ///
+    /// Spread (`SPREAD`, `u32`, `spread`):
+    /// - `PER_CUBE`: `COUNT` (`u32`, 4) starts in every cube, over `common::Y` as `HEIGHT`
+    ///   (`HeightCurve`, evenly) says;
+    /// - `GRID`: one start per `SPACING` x `SPACING` square (`i32`, 32) at a seeded spot on the
+    ///   ground, kept with `CHANCE` (`f32`, 1) or the chance the biome's `DENSITY` component gives
+    ///   (`str`, an `f32` 0..1 on biomes; none there: no starts); on `GROUND` (`match`; none:
+    ///   any), not under the terrain's sea unless tagged `OVER_WATER`, not where caves took the
+    ///   ground unless `OVER_CAVES`, where its footprint's ground varies by at most `MAX_SLOPE`
+    ///   blocks (`i32`, any), its bottom `BURIED` blocks into the ground (`i32`, 0). One of a
+    ///   higher `PRIORITY` (`i32`, 0) keeps it `SEPARATION` blocks away (`i32`, 0); only what
+    ///   really stands counts.
+    /// - `EVERY_CUBE`: `GENERATE` (`callback`, `GenArgs`) runs on every generated cube, pure like a
+    ///   generator.
+    ///
+    /// Shape (`SHAPE`, `u32`, `shape`, from what is set unless said):
+    /// - `VEIN`: `VEIN` (`VeinShape`, a walk) of `SIZE` blocks (`u32`, 8) about its start;
+    /// - `STEPS`: `STEPS` (`[ShapeStep]`), any shape about its start (a geode's shell);
+    /// - `TEMPLATE`: `TEMPLATE` (`str`) from its lowest corner, turned and mirrored as
+    ///   `TRANSFORMS` (`u32`, bits of the 8 `transform`s allowed, 1: as drawn) and its slots filled
+    ///   by one of `PALETTES` (`[str]`, the seed picks one; none: the template's defaults);
+    /// - `PLAN`: `PLAN` (`callback`, `PlanArgs`, pure), worked out once per start: blocks,
+    ///   templates and entities up to `REACH` (`[i32;3]`, sideways, up, down: 0, 32, 16) from it.
+    ///
+    /// Writing (veins and steps put `BLOCK`, `str`): only into what `REPLACES` takes (`match`;
+    /// none: anything), `REPLACES_WITH` (`[Variant]`) what they meet; `EXPOSED` (`f32`, 0) of
+    /// what would touch air left out. A template's or plan's pieces stand on `FOUNDATION` (`str`,
+    /// a block or `ground`: the column's own top block), the ground above them cut away with tag
+    /// `CLEAR_ABOVE`.
+    pub mod feature {
+        pub const STAGE: &str = "feature.stage";
+        pub const AFTER: &str = "feature.after";
+        pub const BEFORE: &str = "feature.before";
+        pub const SPREAD: &str = "feature.spread";
+        pub const COUNT: &str = "feature.count";
+        pub const HEIGHT: &str = "feature.height";
+        pub const SPACING: &str = "feature.spacing";
+        pub const CHANCE: &str = "feature.chance";
+        pub const DENSITY: &str = "feature.density";
+        pub const GROUND: &str = "feature.ground";
+        pub const OVER_WATER: &str = "feature.over_water";
+        pub const OVER_CAVES: &str = "feature.over_caves";
+        pub const MAX_SLOPE: &str = "feature.max_slope";
+        pub const BURIED: &str = "feature.buried";
+        pub const PRIORITY: &str = "feature.priority";
+        pub const SEPARATION: &str = "feature.separation";
+        pub const GENERATE: &str = "feature.generate";
+        pub const SHAPE: &str = "feature.shape";
+        pub const VEIN: &str = "feature.vein";
+        pub const SIZE: &str = "feature.size";
+        pub const STEPS: &str = "feature.steps";
+        pub const TEMPLATE: &str = "feature.template";
+        pub const TRANSFORMS: &str = "feature.transforms";
+        pub const PALETTES: &str = "feature.palettes";
+        pub const PLAN: &str = "feature.plan";
+        pub const REACH: &str = "feature.reach";
+        pub const BLOCK: &str = "feature.block";
+        pub const REPLACES: &str = "feature.replaces";
+        pub const REPLACES_WITH: &str = "feature.replaces_with";
+        pub const EXPOSED: &str = "feature.exposed";
+        pub const FOUNDATION: &str = "feature.foundation";
+        pub const CLEAR_ABOVE: &str = "feature.clear_above";
     }
 
     /// A liquid's flow (`entry_kind::LIQUID`; its block has 16 states: 0 the source, 1..7 flowing
@@ -1044,44 +1092,27 @@ pub mod comp {
         pub const FALLS_INTO: &str = "reaction.falls_into";
     }
 
-    /// Something scattered over the ground on a grid (`entry_kind::SCATTER`, trees): one site per
-    /// `CELL` x `CELL` square (`i32`, 8) at a seeded spot, kept with the chance the biome's
-    /// `DENSITY` component gives (`str`, the name of an `f32` 0..1 on biomes; none there: no
-    /// sites), on `GROUND` (`match`; none: any), not under the terrain's sea
-    /// nor where caves took the ground. `SHAPE` (`callback`, `ScatterArgs`, pure: called for each
-    /// cube the site reaches) puts blocks up to `REACH` (`i32`, 0) sideways, `REACH_UP` (`i32`,
-    /// 32) above and `REACH_DOWN` (`i32`, 16) below the site; what goes further is left out.
-    pub mod scatter {
-        pub const CELL: &str = "scatter.cell";
-        pub const REACH: &str = "scatter.reach";
-        pub const REACH_UP: &str = "scatter.reach_up";
-        pub const REACH_DOWN: &str = "scatter.reach_down";
-        pub const DENSITY: &str = "scatter.density";
-        pub const GROUND: &str = "scatter.ground";
-        pub const SHAPE: &str = "scatter.shape";
-    }
-
-    /// A decoration's `GENERATE` (`callback`, `GenArgs`): runs on every generated cube after the
-    /// generator and the scatters, pure like a generator.
-    pub mod decoration {
-        pub const GENERATE: &str = "decoration.generate";
-    }
-
-    /// A structure's (`entry_kind::STRUCTURE`, named like the template it places): a scatter
-    /// whose blocks are its template, a `CHANCE` (`f32`, 0.5) per `SPACING` x `SPACING` cell
-    /// (`u32`, 32) of the world, standing on the surface sunk by `BURIED` (`i32`, 0) blocks,
-    /// turned a random quarter about the vertical with tag `TURNS`.
-    pub mod structure {
-        pub const SPACING: &str = "structure.spacing";
-        pub const CHANCE: &str = "structure.chance";
-        pub const BURIED: &str = "structure.buried";
-        pub const TURNS: &str = "structure.turns";
-    }
-
-    /// A template's `BLOCKS` (`[TemplateBlock]`): a fixed shape for world structures, moving
-    /// bodies and `Host::place_template`, checked when the game loads.
+    /// A template (`entry_kind::TEMPLATE`): a fixed shape of blocks for features, moving bodies,
+    /// `Host::place` and `/structure`, checked when the game loads. `BLOCKS` (`[TemplateBlock]`)
+    /// from its lowest corner, cells it doesn't name left as they are; `SLOTS`
+    /// (`[PaletteSlot]`, the blocks its `@slot`s take unless a palette says); `ENTITIES`
+    /// (`[TemplateEntity]`); `LOOT` (`[TemplateLoot]`, what a block entity's inventory is filled
+    /// with when it is placed); `DATA` (`[TemplateData]`, a block entity as it was saved);
+    /// `JOINTS` (`[TemplateJoint]`, where pieces of a plan join). A mod's `structures/<path>.json`
+    /// (or structgen's `.wst`) is template `<mod>:<path>` by itself; an entry of that name adds to it.
     pub mod template {
         pub const BLOCKS: &str = "template.blocks";
+        pub const SLOTS: &str = "template.slots";
+        pub const ENTITIES: &str = "template.entities";
+        pub const LOOT: &str = "template.loot";
+        pub const DATA: &str = "template.data";
+        pub const JOINTS: &str = "template.joints";
+    }
+
+    /// A palette (`entry_kind::PALETTE`): `SLOTS` (`[PaletteSlot]`), the block each slot of a
+    /// template takes. A slot `@wall:stairs` takes the stairs `shapes_of` made of `wall`'s block.
+    pub mod palette {
+        pub const SLOTS: &str = "palette.slots";
     }
 
     /// A natural spawning rule's (`entry_kind::SPAWN`). Every two seconds the engine tries a few
@@ -1104,8 +1135,8 @@ pub mod comp {
     /// A dimension's terrain (`entry_kind::TERRAIN`): `STONE` (`str`, the block it is made of),
     /// `BASE_HEIGHT` (`f64`, the ground before features, 64), `SEA` (`TerrainSea`, none), `CAVES`
     /// (`TerrainCaves`, none), `FIELDS` (`[TerrainField]`, after the engine's `temperature`,
-    /// `humidity` and `continent`; one named again takes the earlier one's place), `FEATURES`
-    /// (`[TerrainFeature]`), `MASKS` (`[FeatureMask]`), `RULES` (`[BiomeRule]`, tried in order:
+    /// `humidity` and `continent`; one named again takes the earlier one's place), `LANDFORMS`
+    /// (`[Landform]`), `MASKS` (`[LandformMask]`), `RULES` (`[BiomeRule]`, tried in order:
     /// the first that fits wins, the last where none does), `RULE_EDITS` (`[BiomeRule]`: what
     /// each one's `fields` give replaces that of the rule of its name), `CAVE_BIOMES`
     /// (`[CaveBiome]`).
@@ -1115,7 +1146,7 @@ pub mod comp {
         pub const SEA: &str = "terrain.sea";
         pub const CAVES: &str = "terrain.caves";
         pub const FIELDS: &str = "terrain.fields";
-        pub const FEATURES: &str = "terrain.features";
+        pub const LANDFORMS: &str = "terrain.landforms";
         pub const MASKS: &str = "terrain.masks";
         pub const RULES: &str = "terrain.rules";
         pub const RULE_EDITS: &str = "terrain.rule_edits";
@@ -2134,29 +2165,123 @@ pub struct GenArgs {
     pub columns: *const TerrainColumn,
 }
 
+/// What a plan works on (`Host::plan_op`), the engine's.
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ScatterBlock {
-    /// From `ScatterArgs::pos`.
-    pub offset: BlockPos,
-    pub state: u32,
-    /// 1: replaces anything; 0: only air.
-    pub force: u32,
+pub struct PlanCtx {
+    _private: [u8; 0],
 }
 
+/// A feature's plan (`comp::feature::PLAN`), once per start.
 #[repr(C)]
-pub struct ScatterArgs {
+pub struct PlanArgs {
     pub seed: u64,
     pub dim: u32,
-    /// The block above the ground at the site.
+    /// The start: the block above the ground for a feature on a grid.
     pub pos: BlockPos,
     pub biome: u32,
-    /// Random bits of this site.
+    /// Random bits of this start, the same every time.
     pub random: u64,
-    /// Output: up to `cap` blocks, `len` written.
-    pub out: *mut ScatterBlock,
-    pub cap: u32,
-    pub len: u32,
+    pub ctx: *mut PlanCtx,
+}
+
+/// One thing a plan puts (`Host::plan_op`), in world coordinates.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PlanOp {
+    /// `plan_op`.
+    pub kind: u32,
+    /// `TEMPLATE`: `transform`.
+    pub transform: u32,
+    pub pos: BlockPos,
+    /// `FILL`, `REPLACE`: the opposite corner.
+    pub to: BlockPos,
+    /// The state put; `TEMPLATE`: its foundation's (0 none, `u32::MAX` the ground's own).
+    pub state: u32,
+    /// `TEMPLATE`: `piece_flags`.
+    pub flags: u32,
+    /// `TEMPLATE`: its name; `ENTITY`: the kind; `LOOT`: the table; `REPLACE`: what it replaces
+    /// (a block matcher).
+    pub name: Str,
+    /// `TEMPLATE`: the palette (empty: the plan's, or the template's defaults).
+    pub extra: Str,
+}
+
+/// `PlanOp::kind`.
+pub mod plan_op {
+    /// `state` where there is air.
+    pub const PUT: u32 = 0;
+    /// `state` whatever is there.
+    pub const SET: u32 = 1;
+    /// A box of `state`.
+    pub const FILL: u32 = 2;
+    /// What `name` takes in the box becomes `state`.
+    pub const REPLACE: u32 = 3;
+    /// Template `name`, its lowest corner at `pos` once transformed.
+    pub const TEMPLATE: u32 = 4;
+    /// An entity of kind `name` at the middle of block `pos`.
+    pub const ENTITY: u32 = 5;
+    /// The block entity at `pos` filled from loot table `name` when placed.
+    pub const LOOT: u32 = 6;
+}
+
+/// `PlanOp::flags` of a template.
+pub mod piece_flags {
+    /// The ground above it is cut away.
+    pub const CLEAR_ABOVE: u32 = 1;
+}
+
+/// How a template is placed: `TURN` quarters (`& 3`) clockwise seen from above, after a mirror
+/// across x (`MIRROR`) if set; 8 in all, 0 as drawn. Blocks turn and mirror with it, a door's hinge
+/// and a stair's corner too.
+pub mod transform {
+    pub const TURN: u32 = 3;
+    pub const MIRROR: u32 = 4;
+    /// `comp::feature::TRANSFORMS` bits: any quarter turn.
+    pub const TURNS: u32 = 0x0F;
+    /// Any turn, mirrored or not.
+    pub const ALL: u32 = 0xFF;
+}
+
+/// Where a feature's turn comes in generation (`comp::feature::STAGE`).
+pub mod stage {
+    /// Ores, geodes, fossils: in the ground the terrain made.
+    pub const UNDERGROUND: u32 = 0;
+    /// Structures and other templates on the ground.
+    pub const STRUCTURES: u32 = 1;
+    /// Trees and other things scattered over the ground.
+    pub const VEGETATION: u32 = 2;
+    /// Grass, flowers and the rest decided column by column.
+    pub const DECORATION: u32 = 3;
+}
+
+/// `comp::feature::SPREAD`.
+pub mod spread {
+    pub const PER_CUBE: u32 = 0;
+    pub const GRID: u32 = 1;
+    pub const EVERY_CUBE: u32 = 2;
+}
+
+/// `comp::feature::SHAPE`.
+pub mod shape {
+    pub const VEIN: u32 = 0;
+    pub const STEPS: u32 = 1;
+    pub const TEMPLATE: u32 = 2;
+    pub const PLAN: u32 = 3;
+}
+
+/// A joint of a template (`Host::template_joints`), as placed.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Joint {
+    /// From the template's lowest corner once transformed.
+    pub pos: BlockPos,
+    /// The way it faces (`FACE_DIRS` index): a piece joined to it goes there.
+    pub face: u32,
+    pub name: Str,
+    /// What the joint of a piece joined here must be called.
+    pub target: Str,
+    /// Where that piece comes from (a plan's pool).
+    pub pool: Str,
 }
 
 #[repr(C)]
@@ -2178,8 +2303,43 @@ pub struct ColumnArgs {
 
 crate::data! {
     /// A block of a template (`comp::template::BLOCKS`) from its lowest corner: a block or one of
-    /// its states (`base:furnace[lit=true]`), `core:air` clearing what is there.
+    /// its states (`base:furnace[lit=true]`), `core:air` clearing what is there, or a slot
+    /// (`@wall`, `@wall:stairs[facing=north]`, `@ground`: the column's own top block).
     pub struct TemplateBlock { pub pos: [i32; 3], pub block: alloc::string::String }
+}
+
+crate::data! {
+    /// The block a slot takes (`comp::template::SLOTS`, `comp::palette::SLOTS`).
+    pub struct PaletteSlot { pub name: alloc::string::String, pub block: alloc::string::String }
+}
+
+crate::data! {
+    /// An entity of a template (`comp::template::ENTITIES`): where, from the lowest corner; its
+    /// kind; and as it was saved (`data`, the save's bytes, empty for a new one).
+    pub struct TemplateEntity { pub pos: [f32; 3], pub kind: alloc::string::String, pub data: alloc::vec::Vec<u8> }
+}
+
+crate::data! {
+    /// What the block entity at `pos` holds when placed (`comp::template::LOOT`): loot table `table`.
+    pub struct TemplateLoot { pub pos: [i32; 3], pub table: alloc::string::String }
+}
+
+crate::data! {
+    /// The block entity at `pos` as it was saved (`comp::template::DATA`): its inventory and
+    /// components, the save's bytes.
+    pub struct TemplateData { pub pos: [i32; 3], pub data: alloc::vec::Vec<u8> }
+}
+
+crate::data! {
+    /// Where pieces of a plan join (`comp::template::JOINTS`, see `Joint`): `face` a `FACE_DIRS`
+    /// index.
+    pub struct TemplateJoint {
+        pub pos: [i32; 3],
+        pub face: u32,
+        pub name: alloc::string::String,
+        pub target: alloc::string::String,
+        pub pool: alloc::string::String,
+    }
 }
 
 // ---------------------------------------------------------------- callback args
@@ -2982,7 +3142,7 @@ pub const INFINITE_TICKS: u32 = u32::MAX;
 
 /// The engine's entity effects, registered first in this order.
 pub mod entity_effect {
-    /// White, a creeper about to go off.
+    /// White, a flash (something about to go off).
     pub const FLASH: u32 = 0;
     /// Red, what taking damage shows by itself.
     pub const HURT: u32 = 1;
@@ -4147,13 +4307,24 @@ pub struct Host {
     pub navigating: unsafe extern "C" fn(world: *mut WorldCtx, id: u64) -> u32,
     /// A `blocks` component value's list: (state, weight) pairs.
     pub block_list: unsafe extern "C" fn(index: u32) -> Slice<[u32; 2]>,
-    /// Places template `name` with its lowest corner at `pos`; 0 if it doesn't exist or part of
-    /// it isn't loaded (nothing is placed then).
-    pub place_template: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, pos: *const BlockPos) -> u32,
+    /// Places template `name` with its lowest corner at `pos` once turned by `transform`, its slots
+    /// filled by `palette` (empty: its defaults); or feature `name` as if it started at `pos`. Returns
+    /// what undoes it for `unplace`, 0 if there is no such thing or part of it isn't loaded
+    /// (nothing is placed then).
+    pub place: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, pos: *const BlockPos, transform: u32, palette: Str) -> u64,
+    /// Puts back what `place` replaced (the last 16 placings of a dimension are kept). 0 if it
+    /// is gone.
+    pub unplace: unsafe extern "C" fn(world: *mut WorldCtx, placing: u64) -> u32,
+    /// A plan puts something (`PlanOp`); 0 where it goes past the feature's reach (left out).
+    pub plan_op: unsafe extern "C" fn(ctx: *mut PlanCtx, op: *const PlanOp) -> u32,
+    /// Template `name`'s size once transformed; 0 if there is no such template.
+    pub template_size: unsafe extern "C" fn(name: Str, transform: u32, out: *mut BlockPos) -> u32,
+    /// Template `name`'s joints once transformed, up to `cap` into `out`; how many it has.
+    pub template_joints: unsafe extern "C" fn(name: Str, transform: u32, out: *mut Joint, cap: u32) -> u32,
     /// The world's seed, the one terrain is generated from.
     pub world_seed: unsafe extern "C" fn(world: *mut WorldCtx) -> u64,
-    /// The nearest structure `name` within `radius` blocks of `pos` (whether generated yet or
-    /// not): its lowest corner in `out`. Returns 0 if none.
+    /// The nearest start of feature `name` (one on a grid) within `radius` blocks of `pos`, whether
+    /// generated yet or not, in `out`. Returns 0 if none.
     pub structure_near: unsafe extern "C" fn(world: *mut WorldCtx, name: Str, pos: *const BlockPos, radius: i32, out: *mut BlockPos) -> u32,
     /// The block at `pos` falls as an entity and is placed again where it lands; returns the
     /// entity (0 if there was no block).
@@ -4619,6 +4790,24 @@ pub mod event {
     pub const KEY: &str = "core:key";
     /// `EffectChange`: an effect ran out or was taken off.
     pub const EFFECT_ENDED: &str = "core:effect_ended";
+    /// `FeaturePlaced`: a feature on a grid stands in the world now, its start's cube generated
+    /// (a village to put on a map, its guards to name).
+    pub const FEATURE_PLACED: &str = "core:feature_placed";
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FeaturePlaced {
+    /// The feature's id (`Host::find` with `entry_kind::FEATURE`).
+    pub feature: u32,
+    pub dim: u32,
+    /// Its start.
+    pub pos: BlockPos,
+    /// How its template was placed (`transform`), 0 for a plan.
+    pub transform: u32,
+}
+impl Schema for FeaturePlaced {
+    const SCHEMA: &'static str = "{feature:u32,dim:u32,pos:[i32;3],transform:u32}";
 }
 
 #[repr(C)]
@@ -5400,21 +5589,21 @@ pub mod client_text {
 }
 
 crate::data! {
-    /// What an ore's veins look like (`comp::ore::SHAPE`): `kind` (`vein_shape`), the `radius` of
-    /// a sphere or a disk and the `thickness` of a disk.
+    /// What a vein looks like (`comp::feature::VEIN`): `kind` (`vein_shape`), the `radius` of a
+    /// sphere or a disk and the `thickness` of a disk.
     pub struct VeinShape { pub kind: u32, pub radius: f32, pub thickness: f32 }
 }
 
 crate::data! {
-    /// How an ore's veins spread over its heights (`comp::ore::HEIGHT`): `curve`
+    /// How starts spread over a feature's heights (`comp::feature::HEIGHT`): `curve`
     /// (`height_curve`), and how many blocks in the middle a trapezoid is at its most.
-    pub struct OreHeight { pub curve: u32, pub plateau: i32 }
+    pub struct HeightCurve { pub curve: u32, pub plateau: i32 }
 }
 
 crate::data! {
-    /// Where an ore's vein meets what `name` takes (a block matcher), block `ore` goes there instead of
-    /// the ore (granite iron ore in granite).
-    pub struct OreVariant { pub name: alloc::string::String, pub ore: alloc::string::String }
+    /// Where a vein meets what `name` takes (a block matcher), `block` goes there instead (granite
+    /// iron ore in granite).
+    pub struct Variant { pub name: alloc::string::String, pub block: alloc::string::String }
 }
 
 pub mod vein_shape {
@@ -5425,8 +5614,6 @@ pub mod vein_shape {
     pub const SPHERE: u32 = 2;
     /// Flat and round, like clay and gravel under water.
     pub const DISK: u32 = 3;
-    /// The ore's `comp::ore::STEPS`, a shape like a fill's, about its start.
-    pub const STEPS: u32 = 4;
 }
 
 pub mod height_curve {
@@ -5502,7 +5689,7 @@ crate::data! {
     /// Adds `height` (Q4) to every column of a terrain at the strength of its `mask` (0 to 4096;
     /// nothing is added where it isn't above 0; empty: everywhere at full strength). Other mods
     /// find it by its full `name`.
-    pub struct TerrainFeature {
+    pub struct Landform {
         pub name: alloc::string::String,
         pub height: alloc::vec::Vec<ExprStep>,
         pub mask: alloc::vec::Vec<ExprStep>,
@@ -5511,7 +5698,7 @@ crate::data! {
 
 crate::data! {
     /// Multiplied into the mask of the feature `name` (`comp::terrain::MASKS`).
-    pub struct FeatureMask { pub name: alloc::string::String, pub mask: alloc::vec::Vec<ExprStep> }
+    pub struct LandformMask { pub name: alloc::string::String, pub mask: alloc::vec::Vec<ExprStep> }
 }
 
 crate::data! {

@@ -167,7 +167,7 @@ pub fn register(r: &mut Registry) {
     ] {
         r.ore(ore)
             .y(i32::MIN, max_y)
-            .veins(veins)
+            .per_cube(veins)
             .vein_size(size)
             .replaces("#stone_ore_replaceables")
             .exposed(exposed);
@@ -178,15 +178,14 @@ pub fn register(r: &mut Registry) {
         .stone("stone")
         .base_height(SEA as f64 - 8.0)
         .sea(SEA, "water")
-        .feature(preset::continents(22.0))
         .field("temperature", Expr::fbm(0x22, 2200.0, 3) * Expr::value(1.4))
         .field("humidity", Expr::fbm(0x33, 1600.0, 3) * Expr::value(1.4))
+
+        .landform(preset::continents(18.0))
         // Biomes shape the land through their climate, not their borders, so nothing seams:
         // the cold flattens hills into tundra, deserts get dunes.
-        .feature(
-            Feature::new(Expr::fbm(fixed::salt::HILLS, 110.0, 7) * Expr::blocks(16.0)).mask(Expr::temperature().ramp(-0.35, -0.6).not()),
-        )
-        .feature(
+        .landform(preset::hills(16.0, 110.0).mask(Expr::temperature().ramp(-0.35, -0.6).not()))
+        .landform(
             preset::dunes(4.0, 26.0).mask(
                 Expr::temperature()
                     .ramp(0.25, 0.45)
@@ -200,8 +199,8 @@ pub fn register(r: &mut Registry) {
                 .ramp(-0.1, 0.3)
                 .and(Expr::continent().ramp(0.0, 0.2)),
         )
-        .feature(
-            preset::mountains(150.0, 350.0)
+        .landform(
+            preset::mountains(150.0, 260.0)
                 .mask(Expr::field("base:mountains"))
                 .named("mountains"),
         )
@@ -226,18 +225,24 @@ pub fn register(r: &mut Registry) {
 
     // Trees wherever a biome asks for them, in any dimension.
     r.scatter(&TREE_SITES)
-        .cell(5)
+        .spacing(5)
         .reach(3)
         .density(&TREES)
         .ground("#plant_soil")
-        .shape(|s| {
+        .plan(|s| {
             let BlockPos { x, y, z } = s.pos();
             let log = TREE_KINDS
                 .on_biome(s.biome())
                 .and_then(|l| l.pick(s.random() >> 40))
                 .unwrap_or(OAK_LOG.id());
             let Some(t) = tree_at(log, x, y, z, s.random() >> 32) else { return };
-            tree_blocks(&t, |x, y, z, state, force| if force { s.put_force([x, y, z], state) } else { s.put([x, y, z], state) });
+            tree_blocks(&t, |x, y, z, state, force| {
+                if force {
+                    s.set([x, y, z], state);
+                } else {
+                    s.put([x, y, z], state);
+                }
+            });
         });
     r.scatter(&BOULDER_SITES)
         .cell(5)
@@ -369,7 +374,7 @@ pub fn sphere(radius: f32) -> impl Iterator<Item = (i32, i32, i32)> {
 
 static BOULDER_SITES: Scatter = Scatter::named("boulders");
 
-static TREE_SITES: Scatter = Scatter::named("trees");
+static TREE_SITES: Feature = Feature::named("trees");
 
 struct TreeAt {
     x: i32,

@@ -87,6 +87,8 @@ pub struct Style {
     pub self_align: Option<Align>,
     /// Children scroll inside this node (mouse wheel) and are clipped to it.
     pub scroll: bool,
+    /// Its scroll bar goes just past its right edge, taking nothing from what it holds.
+    pub bar_outside: bool,
     /// A plain color behind the node, RGBA.
     pub fill: Option<u32>,
     /// Placed at a point instead of in the flow: (x, y) in GUI pixels from the parent's inner
@@ -113,6 +115,7 @@ impl Default for Style {
             justify: Justify::Start,
             self_align: None,
             scroll: false,
+            bar_outside: false,
             fill: None,
             at: None,
             at_from: [0.0; 2],
@@ -184,6 +187,12 @@ impl Style {
     }
     pub fn scroll(mut self) -> Self {
         self.scroll = true;
+        self
+    }
+    /// `scroll` with the bar just past the right edge (in the gap beside it).
+    pub fn scroll_outside(mut self) -> Self {
+        self.scroll = true;
+        self.bar_outside = true;
         self
     }
     pub fn stretch(mut self) -> Self {
@@ -334,6 +343,8 @@ impl Scrollbar {
     /// Width the bar takes from the content, its gap included.
     pub const ROOM: f32 = 14.0;
     pub const HANDLE: [f32; 2] = [12.0, 15.0];
+    /// From a node's edge to its bar outside it (`Style::scroll_outside`).
+    pub const OUTSIDE_GAP: f32 = 3.0;
 
     /// The handle's rect.
     pub fn handle(&self) -> Rect {
@@ -696,7 +707,7 @@ impl Ui {
                         cross = cross.max(cc);
                     }
                     // A column that will scroll is wider by its bar, so the bar covers nothing.
-                    if style.scroll && !style.row && main + pad_h > fixed_h.unwrap_or(avail[1]) {
+                    if style.scroll && !style.bar_outside && !style.row && main + pad_h > fixed_h.unwrap_or(avail[1]) {
                         cross += Scrollbar::ROOM;
                     }
                     if style.row { [main, cross] } else { [cross, main] }
@@ -811,8 +822,13 @@ impl Ui {
             past_end = max - scrolled;
             free = free.max(0.0);
             if max > 0.0 && !style.row && cross_size > Scrollbar::ROOM * 2.0 {
-                cross_size -= Scrollbar::ROOM;
-                let track = Rect { x: inner.x + inner.w - Scrollbar::HANDLE[0], y: inner.y, w: Scrollbar::HANDLE[0], h: inner.h };
+                let r = self.nodes[id].rect;
+                let track = if style.bar_outside {
+                    Rect { x: r.x + r.w + Scrollbar::OUTSIDE_GAP, y: r.y, w: Scrollbar::HANDLE[0], h: r.h }
+                } else {
+                    cross_size -= Scrollbar::ROOM;
+                    Rect { x: inner.x + inner.w - Scrollbar::HANDLE[0], y: inner.y, w: Scrollbar::HANDLE[0], h: inner.h }
+                };
                 let offset = if style.justify == Justify::End { max - scrolled } else { scrolled };
                 self.nodes[id].scrollbar = Some(Scrollbar { track, offset, max });
             }

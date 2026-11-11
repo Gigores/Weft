@@ -244,8 +244,8 @@ pub fn generate(c: &Content, dim: u32, seed: u64, pos: IVec3) -> Cube {
 }
 
 /// Everything generation does after the terrain (which the GPU may have made): the
-/// dimension's generator, scattered things, decorations, ores and structures. `builtin`: the
-/// blocks came from a built-in dimension, which has none of the first three.
+/// dimension's generator, then its features (`features::place`). `builtin`: the blocks came from a
+/// built-in dimension, which has no generator.
 #[allow(clippy::too_many_arguments)]
 pub fn finish_generated(
     c: &Content,
@@ -258,381 +258,42 @@ pub fn finish_generated(
     builtin: bool,
 ) -> Cube {
     let def = &c.dims[dim as usize];
-    if !builtin {
-        let columns = cols.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let columns = cols.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    if !builtin && let Some((by, cb)) = def.generator {
         let mut args =
             abi::GenArgs { seed, cube: pos.to_array().into(), blocks: blocks.as_mut_ptr(), biomes: biomes.as_mut_ptr(), dim, columns };
-        if let Some((by, cb)) = def.generator {
-            host::invoke(by, cb, &mut args);
-        }
-        place_scatters(c, def, dim, seed, pos, &mut blocks);
-        let mut args = abi::GenArgs { blocks: blocks.as_mut_ptr(), biomes: biomes.as_mut_ptr(), ..args };
-        for &(owner, cb) in &def.decorations {
-            host::invoke(owner, cb, &mut args);
-        }
+        host::invoke(by, cb, &mut args);
     }
-    // One look over the blocks for what is asked of them below: most cubes are all one thing.
-    let max = c.states.len() as u32;
-    let (top, varied) = blocks
-        .iter()
-        .fold((0, 0), |(top, varied), &b| (top.max(b), varied | (b ^ blocks[0])));
-    if top >= max {
-        for b in blocks.iter_mut().filter(|b| **b >= max) {
-            *b = AIR;
+    let check = |blocks: &mut [u32], what: &'static str| {
+        let max = c.states.len() as u32;
+        let top = blocks.iter().copied().max().unwrap_or(0);
+        if top >= max {
+            for b in blocks.iter_mut().filter(|b| **b >= max) {
+                *b = AIR;
+            }
+            host::misuse(what, || format!("{} wrote state {top}, which does not exist (air instead)", def.name));
         }
-        host::misuse("generator", || format!("{} wrote state {top}, which does not exist (air instead)", def.name));
+    };
+    check(&mut blocks, "generator");
+    let (changed, generated) = crate::features::place(c, dim, seed, pos, &mut blocks, &mut biomes, columns);
+    if changed {
+        check(&mut blocks, "feature");
     }
-    let uniform = varied == 0 && top < max;
-    let ores = place_ores(c, def, seed, pos, &mut blocks, &biomes, uniform);
-    let mut cube = if uniform && !ores { Cube::uniform(blocks[0], 0) } else { Cube::from_states(blocks.as_slice().try_into().unwrap()) };
+    let mut cube = if blocks.iter().all(|&b| b == blocks[0]) {
+        Cube::uniform(blocks[0], 0)
+    } else {
+        Cube::from_states(blocks.as_slice().try_into().unwrap())
+    };
     if biomes.iter().any(|&b| b != 0) {
         cube.biomes = Some(Box::new(biomes));
+    }
+    if !generated.extras.is_empty() || !generated.placed.is_empty() {
+        cube.generated = Some(Box::new(generated));
     }
     cube
 }
 
 use weft_noise::hash;
-
-/// Veins start in this and the 26 neighboring cubes and wander a block per step, so the result
-/// does not depend on which cube is generated first.
-/// Returns whether any went in. `uniform`: the cube is all one state.
-fn place_ores(
-    c: &Content,
-    def: &crate::content::DimensionDef,
-    seed: u64,
-    pos: IVec3,
-    blocks: &mut [u32],
-    biomes: &[u16; 256],
-    uniform: bool,
-) -> bool {
-    let o = pos * 16;
-    let mut placed = false;
-    // The states in the cube: a vein has nothing to do where it could replace none of them
-    // (air and water, the most of what is generated), and a look costs far less than its veins.
-    let mut present: Vec<u32> = vec![blocks[0]];
-    if !uniform {
-        let mut last = blocks[0];
-        for &b in blocks.iter() {
-            if b != last {
-                last = b;
-                if !present.contains(&b) {
-                    present.push(b);
-                }
-            }
-        }
-    }
-    for ore in &def.ores {
-        let reach = ore.reach();
-        if o.y > ore.max_y.saturating_add(reach) || o.y + 15 < ore.min_y.saturating_sub(reach) {
-            continue;
-        }
-        if !present
-            .iter()
-            .any(|&s| ore.state_in(&c.matchers, s).is_some())
-        {
-            continue;
-        }
-        for nz in pos.z - 1..=pos.z + 1 {
-            for ny in pos.y - 1..=pos.y + 1 {
-                for nx in pos.x - 1..=pos.x + 1 {
-                    for v in 0..ore.tries() {
-                        let h = hash(seed ^ ore.salt, nx as i64, ny as i64 * 31 + v as i64, nz as i64);
-                        let start =
-                            IVec3::new(nx * 16 + (h % 16) as i32, ny * 16 + ((h >> 4) % 16) as i32, nz * 16 + ((h >> 8) % 16) as i32);
-                        // Veins starting farther away than they reach never get here.
-                        let far = (o - start).max(start - o - IVec3::splat(15)).max_element();
-                        if start.y > ore.max_y || start.y < ore.min_y || far > reach {
-                            continue;
-                        }
-                        if weft_noise::unit(hash(h, 7, 7, 7)) >= ore.weight(start.y) {
-                            continue;
-                        }
-                        for p in vein(ore, start, h) {
-                            let l = p - o;
-                            if l.cmpge(IVec3::ZERO).all() && l.cmplt(IVec3::splat(16)).all() {
-                                let i = local_index(l);
-                                let biome_ok = ore
-                                    .biome
-                                    .as_ref()
-                                    .is_none_or(|b| crate::refs::has(b, biomes[(l.z * 16 + l.x) as usize] as u32));
-                                // Vanilla's ores in caves: some of what would touch air is left out.
-                                let bare = ore.exposed > 0.0
-                                    && crate::world::DIRS.iter().any(|d| {
-                                        let n = l + *d;
-                                        n.cmpge(IVec3::ZERO).all()
-                                            && n.cmplt(IVec3::splat(16)).all()
-                                            && blocks[local_index(n)] == crate::content::AIR
-                                    })
-                                    && weft_noise::unit(hash(h, p.x as i64, p.y as i64, p.z as i64)) < ore.exposed as f64;
-                                if biome_ok
-                                    && !bare
-                                    && let Some(s) = ore.state_in(&c.matchers, blocks[i])
-                                {
-                                    blocks[i] = s;
-                                    placed = true;
-                                    if !present.contains(&s) {
-                                        present.push(s);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    placed
-}
-
-/// The blocks of one vein from `start`, decided by `h` alone, so every cube it reaches agrees.
-fn vein(ore: &crate::content::OreDef, start: IVec3, h: u64) -> Vec<IVec3> {
-    use abi::vein_shape as v;
-    let ball = |c: IVec3, r: f32, out: &mut Vec<IVec3>| {
-        let n = r.ceil() as i32;
-        for z in -n..=n {
-            for y in -n..=n {
-                for x in -n..=n {
-                    if ((x * x + y * y + z * z) as f32) <= r * r {
-                        out.push(c + IVec3::new(x, y, z));
-                    }
-                }
-            }
-        }
-    };
-    let mut out = Vec::new();
-    match ore.shape {
-        v::STEPS => {
-            if let Some((lo, hi)) = ore.steps.as_ref().map(|s| s.bounds()) {
-                let (lo, hi) = (lo.floor().as_ivec3(), hi.ceil().as_ivec3());
-                for z in lo.z..=hi.z {
-                    for y in lo.y..=hi.y {
-                        for x in lo.x..=hi.x {
-                            let d = IVec3::new(x, y, z);
-                            if ore
-                                .steps
-                                .as_ref()
-                                .is_some_and(|s| s.contains(d.as_dvec3() + DVec3::splat(0.5)))
-                            {
-                                out.push(start + d);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        v::SPHERE => ball(start, ore.shape_size[0], &mut out),
-        v::DISK => {
-            let (r, t) = (ore.shape_size[0], ore.shape_size[1].max(1.0) as i32);
-            let n = r.ceil() as i32;
-            for z in -n..=n {
-                for x in -n..=n {
-                    if ((x * x + z * z) as f32) <= r * r {
-                        for y in 0..t {
-                            out.push(start + IVec3::new(x, y - t / 2, z));
-                        }
-                    }
-                }
-            }
-        }
-        v::BLOB => {
-            // Small balls along a short random line, about `size` blocks in all.
-            let r = (ore.size as f32 * 3.0 / (4.0 * std::f32::consts::PI))
-                .cbrt()
-                .max(0.8);
-            let dir = IVec3::new((h >> 20) as i32 % 3 - 1, (h >> 24) as i32 % 3 - 1, (h >> 28) as i32 % 3 - 1);
-            ball(start, r * 0.8, &mut out);
-            ball(start + dir, r * 0.8, &mut out);
-            out.sort_unstable_by_key(|p| (p.x, p.y, p.z));
-            out.dedup();
-        }
-        _ => {
-            let mut p = start;
-            for k in 0..ore.size {
-                let hk = hash(h, k as i64, 0, 0);
-                p += IVec3::new((hk % 3) as i32 - 1, ((hk >> 2) % 3) as i32 - 1, ((hk >> 4) % 3) as i32 - 1);
-                out.push(p);
-            }
-        }
-    }
-    let reach = ore.reach();
-    out.retain(|p| (*p - start).abs().max_element() <= reach);
-    out
-}
-
-/// The site of scatter `s` in its grid cell, if it has one there: the block above the ground,
-/// the biome and the site's random bits. Depends only on the seed and the columns.
-pub fn scatter_site(
-    def: &crate::content::DimensionDef,
-    c: &Content,
-    s: &crate::content::ScatterDef,
-    seed: u64,
-    cell: (i32, i32),
-) -> Option<(IVec3, u32, u64)> {
-    use crate::content::{Chance, SiteShape};
-    let h = hash(seed ^ s.salt, cell.0 as i64, 0, cell.1 as i64);
-    // A template stands within the cell from its lowest corner, its ground the column in its middle.
-    let random = hash(h, 1, 2, 3);
-    let (room, mid, sink) = match &s.shape {
-        SiteShape::Template { extent, sink, turns, .. } => {
-            let across = *turns && quarter(random) % 2 == 1;
-            let mid = if across { (extent.z / 2, extent.x / 2) } else { (extent.x / 2, extent.z / 2) };
-            ((s.cell - extent.x.max(extent.z)).max(1), mid, *sink)
-        }
-        SiteShape::Callback(..) => (s.cell, (0, 0), 0),
-    };
-    let (x, z) = (cell.0 * s.cell + (h % room as u64) as i32, cell.1 * s.cell + ((h >> 8) % room as u64) as i32);
-    let col = def.column(seed, x + mid.0, z + mid.1)?;
-    if col.height == i32::MIN
-        || def.sea_level().is_some_and(|l| col.height < l)
-        || !(s.y[0]..=s.y[1]).contains(&(col.height + 1))
-        || s.biome
-            .as_ref()
-            .is_some_and(|b| !crate::refs::has(b, col.biome))
-    {
-        return None;
-    }
-    if let Some(ground) = s.ground {
-        // A zero surface state means there is no usable terrain surface.
-        let state = def.surface_block(seed, x, z);
-        if state == 0 || !c.matchers.has(ground, state) {
-            return None;
-        }
-    }
-    let chance = match s.chance {
-        Chance::Fixed(f) => f,
-        Chance::Density(d) => d
-            .and_then(|d| c.components.get::<f32>(comps::BIOME, col.biome, d))
-            .unwrap_or(0.0),
-    };
-    if weft_noise::unit(h.rotate_left(17)) >= chance as f64 || def.carved(seed, x + mid.0, z + mid.1) {
-        return None;
-    }
-    Some((IVec3::new(x, col.height + 1 - sink, z), col.biome, random))
-}
-
-/// Which quarter a turning template at a site is turned (0..4), by its random bits.
-fn quarter(random: u64) -> usize {
-    (random >> 40) as usize % 4
-}
-
-/// A template's blocks at a site, from its lowest corner, turned a quarter `random` picks when
-/// it `turns` (its states with it), all put over what is there.
-fn template_blocks(c: &Content, blocks: &[(IVec3, u32)], turns: bool, random: u64) -> Vec<abi::ScatterBlock> {
-    // East to south, west, north: quarters about the vertical.
-    let turn = if turns { [1, 5, 0, 4][quarter(random)] } else { 1 };
-    let t = abi::Turn { east: turn, up: 3 };
-    let moved: Vec<(IVec3, u32)> = blocks
-        .iter()
-        .map(|&(p, s)| (IVec3::from_array(t.vector(p.to_array())), c.turned_state(s, t)))
-        .collect();
-    let lo = moved.iter().fold(IVec3::MAX, |m, b| m.min(b.0));
-    moved
-        .into_iter()
-        .map(|(p, state)| abi::ScatterBlock { offset: (p - lo).to_array().into(), state, force: 1 })
-        .collect()
-}
-
-/// A scattered thing: where it stands and its blocks (the shape callback's, made once and
-/// shared by every cube it reaches), with the corners of the box around them.
-pub struct Site {
-    pos: IVec3,
-    blocks: Vec<abi::ScatterBlock>,
-    lo: IVec3,
-    hi: IVec3,
-}
-
-/// Every site whose thing may reach into cube column (`x`, `z`), from this and neighboring
-/// cells: the same for every cube of the column, so worked out once for it.
-fn scatter_sites(c: &Content, def: &crate::content::DimensionDef, dim: u32, seed: u64, x: i32, z: i32) -> std::sync::Arc<Vec<Site>> {
-    def.scatter_cache.get(seed, x, z, || {
-        let o = IVec3::new(x, 0, z) * 16;
-        let mut out = Vec::new();
-        let mut buf = vec![abi::ScatterBlock { offset: [0; 3].into(), state: 0, force: 0 }; 4096];
-        let states = c.states.len() as u32;
-        for s in &def.scatters {
-            let cells = |lo: i32| (lo - s.reach).div_euclid(s.cell)..=(lo + 15 + s.reach).div_euclid(s.cell);
-            for cz in cells(o.z) {
-                for cx in cells(o.x) {
-                    let Some((pos, biome, random)) = scatter_site(def, c, s, seed, (cx, cz)) else { continue };
-                    let blocks: Vec<abi::ScatterBlock> = match &s.shape {
-                        crate::content::SiteShape::Callback(owner, shape) => {
-                            let mut args = abi::ScatterArgs {
-                                seed,
-                                dim,
-                                pos: pos.to_array().into(),
-                                biome,
-                                random,
-                                out: buf.as_mut_ptr(),
-                                cap: buf.len() as u32,
-                                len: 0,
-                            };
-                            host::invoke(*owner, *shape, &mut args);
-                            buf[..(args.len as usize).min(buf.len())]
-                                .iter()
-                                .filter(|b| b.state < states && (-s.reach_y[0]..=s.reach_y[1]).contains(&b.offset.y))
-                                .copied()
-                                .collect()
-                        }
-                        crate::content::SiteShape::Template { blocks, turns, .. } => template_blocks(c, blocks, *turns, random),
-                    };
-                    let (lo, hi) = blocks.iter().fold((IVec3::MAX, IVec3::MIN), |(lo, hi), b| {
-                        (lo.min(pos + crate::world::ivec(b.offset)), hi.max(pos + crate::world::ivec(b.offset)))
-                    });
-                    if !blocks.is_empty() {
-                        out.push(Site { pos, blocks, lo, hi });
-                    }
-                }
-            }
-        }
-        out
-    })
-}
-
-/// Works out the scattered things of cube column (`x`, `z`) ahead of its cubes: they all need
-/// them, and the ones finished meanwhile waited for whichever was working them out.
-pub fn warm_scatters(c: &Content, dim: u32, seed: u64, x: i32, z: i32) {
-    let def = &c.dims[dim as usize];
-    if !def.scatters.is_empty() {
-        scatter_sites(c, def, dim, seed, x, z);
-    }
-}
-
-/// The parts of scattered things (trees) that fall into this cube, from sites in this and
-/// neighboring cells.
-fn place_scatters(c: &Content, def: &crate::content::DimensionDef, dim: u32, seed: u64, pos: IVec3, blocks: &mut [u32]) {
-    if def.scatters.is_empty() {
-        return;
-    }
-    let o = pos * 16;
-    let sites = scatter_sites(c, def, dim, seed, pos.x, pos.z);
-    for site in sites
-        .iter()
-        .filter(|s| s.lo.cmple(o + 15).all() && s.hi.cmpge(o).all())
-    {
-        let p = site.pos;
-        for b in &site.blocks {
-            let l = p + crate::world::ivec(b.offset) - o;
-            if l.cmpge(IVec3::ZERO).all() && l.cmplt(IVec3::splat(16)).all() {
-                let i = local_index(l);
-                if b.force != 0 || blocks[i] == AIR {
-                    blocks[i] = b.state;
-                }
-            }
-        }
-    }
-}
-
-/// Whether a scattered thing stands within its reach of column (`x`, `z`): spawn search keeps
-/// players out of trees.
-pub fn scattered_near(def: &crate::content::DimensionDef, c: &Content, seed: u64, x: i32, z: i32) -> bool {
-    def.scatters.iter().any(|s| {
-        let r = s.reach.max(1);
-        let cells = |v: i32| (v - r).div_euclid(s.cell)..=(v + r).div_euclid(s.cell);
-        cells(z).any(|cz| {
-            cells(x).any(|cx| scatter_site(def, c, s, seed, (cx, cz)).is_some_and(|(p, ..)| (p.x - x).abs() <= r && (p.z - z).abs() <= r))
-        })
-    })
-}
 
 /// A timer on a dimension: when, the event and its value.
 pub type DimTimer = (u64, u32, Box<[u8]>);
@@ -1535,16 +1196,23 @@ impl Dim {
     }
 
     /// Falling bodies that came down: each block placed where it landed, on what it landed on,
-    /// else dropped as loot.
+    /// else dropped as loot. One resting on another that is still falling (layers of sand) rides
+    /// it down and lands once that one has; what it stood on being gone, it stands on the world.
     fn land_falling(&mut self, c: &'static Content) {
-        let bodies = &self.bodies;
+        let (bodies, entities) = (&self.bodies, &self.entities);
+        let falling = |id: u64| entities.get(id).is_some_and(|e| e.falls && !e.removed);
         let landed: Vec<(u64, DVec3, Vec<(IVec3, u32)>, bool, Option<u64>)> = self
             .entities
             .list
             .iter()
             .filter(|e| e.falls && !e.removed && e.motion != Motion::Parked)
-            .filter(|e| e.on_ground || e.age > 600 || bodies.get(&e.id).is_none_or(|s| s.all_blocks().is_empty()))
-            .map(|e| (e.id, e.pos, bodies.get(&e.id).map_or(Vec::new(), |s| s.all_blocks()), e.on_ground, e.frame))
+            .filter(|e| {
+                (e.on_ground && !e.frame.is_some_and(falling)) || e.age > 600 || bodies.get(&e.id).is_none_or(|s| s.all_blocks().is_empty())
+            })
+            .map(|e| {
+                let on = e.frame.filter(|f| bodies.contains_key(f));
+                (e.id, e.pos, bodies.get(&e.id).map_or(Vec::new(), |s| s.all_blocks()), e.on_ground, on)
+            })
             .collect();
         for (id, pos, blocks, ground, on) in landed {
             // One without its blocks (loaded from a save mid-fall) just goes.
@@ -3716,7 +3384,7 @@ impl Dim {
             }
         }
         let opens = c.block_of(state).opens;
-        if c.block_of(state).cb.on_use.is_some() || opens.is_some() {
+        if c.block_of(state).usable() {
             let mut q = abi::Query { entity: player, pos: p.to_array().into(), state, ..abi::Query::DEFAULT };
             if !self.ask(c, abi::action::USE_BLOCK, &mut q) {
                 // Refused uses are consumed: no item use or placement behind them.

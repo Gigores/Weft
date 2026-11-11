@@ -1603,7 +1603,7 @@ impl Occlusion {
             let dst = src + s[0] * s[1];
             list.push_constants(&crate::gpu_layout::OcclusionArgs { size: s, src, dst, count: 0, pad: 0 });
             s = s.map(|v| v.div_ceil(2));
-            list.push(Cmd::Dispatch { x: s[0].div_ceil(32), y: s[1].div_ceil(32), z: 1 });
+            list.push(Cmd::Dispatch { x: s[0].div_ceil(16), y: s[1].div_ceil(16), z: 1 });
             list.push(Cmd::Barrier);
             src = dst;
         }

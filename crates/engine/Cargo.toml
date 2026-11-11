@@ -19,12 +19,15 @@ libloading.workspace = true
 lz4_flex.workspace = true
 png.workspace = true
 rustc-hash.workspace = true
-arboard.workspace = true
 iroh.workspace = true
 tokio.workspace = true
 zip.workspace = true
 kira.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+sha2.workspace = true
 mimalloc.workspace = true
 
 [dev-dependencies]
@@ -32,3 +35,11 @@ naga.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+# NativeActivity: no Java of our own to build.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }
+
+# Android's clipboard is only reached through Java.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard.workspace = true

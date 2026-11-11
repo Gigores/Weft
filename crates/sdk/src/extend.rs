@@ -292,7 +292,8 @@ schema_values!(
     abi::Removed,
     abi::ProjectileHit,
     abi::KeyChange,
-    abi::EffectChange
+    abi::EffectChange,
+    abi::FeaturePlaced
 );
 
 /// The engine's events with no question before them; the others are `actions`.
@@ -310,6 +311,9 @@ pub static WEATHER_TICK: Event<abi::WeatherTick> = Event::named(abi::event::WEAT
 pub static KEY: Event<abi::KeyChange> = Event::named(abi::event::KEY);
 /// An entity left the world, and why (`removal`): died, despawned, unloaded, picked up..
 pub static ENTITY_REMOVED: Event<abi::Removed> = Event::named(abi::event::ENTITY_REMOVED);
+/// A feature on a grid stands in the world now, its start's cube generated: `feature` is its id
+/// (`VILLAGE.id()`).
+pub static FEATURE_PLACED: Event<abi::FeaturePlaced> = Event::named(abi::event::FEATURE_PLACED);
 /// An effect ran out or was taken off.
 pub static EFFECT_ENDED: Event<abi::EffectChange> = Event::named(abi::event::EFFECT_ENDED);
 

@@ -512,7 +512,6 @@ pub struct ClientMenu {
 pub enum ClientEvent {
     OpenMenu,
     CloseMenu,
-    Died,
 }
 
 /// Player physics runs at vanilla's tick rate; the camera is interpolated between ticks.
@@ -1670,7 +1669,7 @@ impl Client {
             .filter(|_| hit.frame == 0 && !held.is_empty() && !self.mode.has(crate::tag_bits::game_mode::NO_PLACE))?;
         // A block that takes the click itself goes first.
         let clicked = c.block_of(hit.state);
-        if (clicked.cb.on_use.is_some() || clicked.opens.is_some()) && (!sneak || clicked.sneak_use == weft_abi::sneak_use::ALWAYS) {
+        if clicked.usable() && (!sneak || clicked.sneak_use == weft_abi::sneak_use::ALWAYS) {
             return None;
         }
         let replaceable = |s: u32| c.states[s as usize].flags & bf::REPLACEABLE != 0;
@@ -2994,7 +2993,6 @@ impl Client {
             })
             .collect();
         self.wires.draw(list, &cam, scene_buf, &frames, &lit);
-        list.push(weft_render::Cmd::Mark);
         let mut late = std::mem::take(&mut self.late);
         late.clear();
         // The sky fills what the opaque world left, and translucent things are seen against it.

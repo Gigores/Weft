@@ -875,25 +875,27 @@ impl EntityRenderer {
             glow: glow(&k.texture),
             ..Default::default()
         };
-        // An avatar is painted its own way, which armor's textures know nothing of.
-        if let Some(a) = self.avatar_of(entity, kind) {
-            let size = self
-                .models
-                .kinds
-                .get(a.kind as usize)
-                .and_then(|m| m.texture)
-                .unwrap_or(a.size);
-            out.0[0] = Instance { tex: a.index, tex_size: size.map(|v| v as f32), glow: a.glow.map_or(u32::MAX, |g| g.1), ..base };
-            out.1 = 1;
-            return out;
-        }
-        out.0[0] = base;
+        // An avatar is painted its own way; what it wears goes on its own worn geometry.
+        let avatar = self.avatar_of(entity, kind);
+        out.0[0] = match avatar {
+            Some(a) => {
+                let size = self
+                    .models
+                    .kinds
+                    .get(a.kind as usize)
+                    .and_then(|m| m.texture)
+                    .unwrap_or(a.size);
+                Instance { tex: a.index, tex_size: size.map(|v| v as f32), glow: a.glow.map_or(u32::MAX, |g| g.1), ..base }
+            }
+            None => base,
+        };
         out.1 = 1;
+        let model = avatar.map_or(kind, |a| a.kind);
         for &i in worn {
             if let Some((w, t)) = c.worn(i) {
                 if let Some(Some((_, idx, size))) = self.skins.get(t).filter(|_| out.1 < MAX_LAYERS) {
                     let names = c.worn_bones(i);
-                    let bone_mask = self.models.kinds.get(kind as usize).map_or(0, |m| {
+                    let bone_mask = self.models.kinds.get(model as usize).map_or(0, |m| {
                         m.parts
                             .iter()
                             .take(32)
@@ -908,6 +910,7 @@ impl EntityRenderer {
                         bone_mask,
                         inflate: w.inflate,
                         glow: glow(t),
+                        worn: 1,
                         ..base
                     };
                     out.1 += 1;
