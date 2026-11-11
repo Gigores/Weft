@@ -314,6 +314,11 @@ pub struct Prop {
 }
 
 impl BlockDef {
+    /// Using it does something of its own (opens, switches), before any item in hand.
+    pub fn usable(&self) -> bool {
+        self.cb.on_use.is_some() || self.opens.is_some()
+    }
+
     /// The value index of every property in state `i` of this block (0-based within the block).
     pub fn prop_values(&self, i: u32) -> impl Iterator<Item = (&Prop, u32)> {
         self.props

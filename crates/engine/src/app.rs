@@ -746,6 +746,10 @@ impl Running {
         crate::touch::Aim {
             entity: g.client.target_entity.is_some(),
             block: g.client.target.is_some(),
+            usable: g
+                .client
+                .target
+                .is_some_and(|h| content().block_of(h.state).usable()),
             holding_item: held
                 .iter()
                 .any(|s| crate::content::use_ticks(content(), s) > 0),

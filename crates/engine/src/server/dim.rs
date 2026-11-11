@@ -3716,7 +3716,7 @@ impl Dim {
             }
         }
         let opens = c.block_of(state).opens;
-        if c.block_of(state).cb.on_use.is_some() || opens.is_some() {
+        if c.block_of(state).usable() {
             let mut q = abi::Query { entity: player, pos: p.to_array().into(), state, ..abi::Query::DEFAULT };
             if !self.ask(c, abi::action::USE_BLOCK, &mut q) {
                 // Refused uses are consumed: no item use or placement behind them.

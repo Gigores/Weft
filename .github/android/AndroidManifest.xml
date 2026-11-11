@@ -7,7 +7,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="Weft"
-        android:icon="@drawable/icon"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Weft"
         android:hasCode="false"
         android:extractNativeLibs="true"
         android:appCategory="game"
@@ -18,7 +19,7 @@
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
             android:screenOrientation="sensorLandscape"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:theme="@style/Weft"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density">
             <meta-data android:name="android.app.lib_name" android:value="main" />
             <intent-filter>

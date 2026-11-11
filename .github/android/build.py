@@ -120,8 +120,8 @@ def main():
         (tmp / "assets").mkdir()
         (tmp / "assets/game.zip").write_bytes(game.getvalue())
 
-        (tmp / "res/drawable").mkdir(parents=True)
-        shutil.copy(ROOT / "crates/engine/assets/icon.png", tmp / "res/drawable/icon.png")
+        # The icon (made from the engine's) and the black theme.
+        shutil.copytree(ROOT / ".github/android/res", tmp / "res")
         aapt2 = tools / f"aapt2{exe}"
         run(aapt2, "compile", "--dir", tmp / "res", "-o", tmp / "res.zip")
         unsigned = tmp / "unsigned.apk"

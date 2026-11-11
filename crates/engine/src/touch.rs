@@ -4,7 +4,7 @@
 //! joystick (`STICK`, or near it) steers from its middle, as Bedrock's (pushed past its edge
 //! forward it sprints); one on the hotbar picks that slot; one anywhere else turns the view, aimed
 //! at the crosshair: a tap attacks what is there if it is a creature and uses it otherwise
-//! (placing, opening; with nothing there an item used by holding swings instead), holding still
+//! (placing, opening; an item used by holding only opens what opens, or swings in the air), holding still
 //! breaks the block there, or uses the item in hand where there is none or the item is one used
 //! by holding (a bow, food).
 
@@ -254,6 +254,8 @@ fn icon(k: Key) -> Option<&'static str> {
 pub struct Aim {
     pub entity: bool,
     pub block: bool,
+    /// The block does something of its own when used (a chest, a door).
+    pub usable: bool,
     /// The item in hand is used by holding (food, a bow, a shield).
     pub holding_item: bool,
 }
@@ -425,10 +427,21 @@ impl Touches {
                     Role::Stick { held, .. } => held.into_iter().for_each(|k| input.key_up(k)),
                     Role::Look { held: Some(keys), .. } => keys.iter().rev().for_each(|&k| input.key_up(k)),
                     Role::Look { moved: false, .. } if f.since.elapsed() < HOLD => {
-                        // An item used by holding isn't started by a tap (a bow would twitch);
-                        // on a block the tap still opens or places.
-                        let attack = aim.entity || (!aim.block && aim.holding_item);
-                        tap(input, &keys_of(input, if attack { "core:attack" } else { "core:use" }));
+                        // An item used by holding isn't started by a tap (a bow would twitch): with
+                        // one a tap opens what opens, swings in the air, and on another block does
+                        // nothing (an attack would break it in creative).
+                        let action = if aim.entity {
+                            Some("core:attack")
+                        } else if !aim.holding_item || aim.usable {
+                            Some("core:use")
+                        } else if !aim.block {
+                            Some("core:attack")
+                        } else {
+                            None
+                        };
+                        if let Some(action) = action {
+                            tap(input, &keys_of(input, action));
+                        }
                     }
                     Role::Look { .. } => {}
                 }

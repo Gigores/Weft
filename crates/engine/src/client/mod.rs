@@ -1670,7 +1670,7 @@ impl Client {
             .filter(|_| hit.frame == 0 && !held.is_empty() && !self.mode.has(crate::tag_bits::game_mode::NO_PLACE))?;
         // A block that takes the click itself goes first.
         let clicked = c.block_of(hit.state);
-        if (clicked.cb.on_use.is_some() || clicked.opens.is_some()) && (!sneak || clicked.sneak_use == weft_abi::sneak_use::ALWAYS) {
+        if clicked.usable() && (!sneak || clicked.sneak_use == weft_abi::sneak_use::ALWAYS) {
             return None;
         }
         let replaceable = |s: u32| c.states[s as usize].flags & bf::REPLACEABLE != 0;
