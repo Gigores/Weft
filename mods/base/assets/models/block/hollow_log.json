@@ -1,7 +1,7 @@
 {
 	"format_version": "26.3",
     "textures": {
-        "inside": "base:block/log_oak_inner"
+        "inside": "base:block/oak_log_inner"
     },
 	"elements": [
 		{
