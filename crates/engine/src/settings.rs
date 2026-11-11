@@ -89,6 +89,10 @@ pub fn language() -> String {
 pub fn gui_scale() -> u32 {
     number("core:gui_scale") as u32
 }
+/// The part of the screen's size the world is drawn at.
+pub fn render_scale() -> f32 {
+    number("core:render_scale") as f32
+}
 pub fn view_distance() -> i32 {
     number("core:view_distance") as i32
 }
@@ -125,6 +129,10 @@ pub fn debug_groups() -> u32 {
 /// Mouse up looks down instead.
 pub fn invert_y() -> bool {
     number("core:invert_y") != 0.0
+}
+/// The HUD's buttons and steering for fingers.
+pub fn touch_controls() -> bool {
+    number("core:touch_controls") != 0.0
 }
 pub fn name() -> String {
     config::text(id("core:name"))

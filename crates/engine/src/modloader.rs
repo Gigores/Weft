@@ -55,12 +55,10 @@ pub fn mod_id_name(m: ModId) -> &'static str {
 
 /// Mods found in `mod_dirs`, earlier dirs winning: a folder (`assets/` and the library) or the
 /// same packed into `<name>.zip`, unpacked into `cache` once per version of the file. A folder's
-/// library may also sit next to the engine executable instead (development builds,
-/// `target/<profile>/`).
+/// library may also sit beside the engine's instead (development builds, `target/<profile>/`;
+/// an Android package's).
 pub fn discover(mod_dirs: &[PathBuf], cache: &Path) -> Vec<(String, PathBuf, PathBuf)> {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf));
+    let exe_dir = crate::paths::libraries();
     let mut found = Vec::new();
     for dir in mod_dirs {
         let Ok(entries) = std::fs::read_dir(dir) else { continue };
@@ -97,7 +95,9 @@ pub fn discover(mod_dirs: &[PathBuf], cache: &Path) -> Vec<(String, PathBuf, Pat
                 path
             };
             let file = libloading::library_filename(&name);
-            let lib = [Some(root.join(&file)), exe_dir.as_ref().map(|d| d.join(&file))]
+            // Android's is named as Linux's, so it has a folder of its own (`ANDROID`).
+            let android = cfg!(target_os = "android").then(|| root.join(ANDROID).join(&file));
+            let lib = [android, Some(root.join(&file)), exe_dir.as_ref().map(|d| d.join(&file))]
                 .into_iter()
                 .flatten()
                 .find(|p| p.exists());
@@ -144,16 +144,20 @@ fn unpack(archive: &Path, cache: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
+/// Where a mod keeps its library for Android phones: the same file name as Linux's.
+const ANDROID: &str = "android";
+
 /// The libraries of mod `name` to pack, with their file names: those in its folder, one per
 /// system, so that one zip serves them all (`discover` picks the system's own), and this system's
 /// from next to the engine executable if the folder has none.
 fn libraries(dir: &Path, name: &str) -> Vec<(String, PathBuf)> {
-    let mut libs: Vec<(String, PathBuf)> = [format!("{name}.dll"), format!("lib{name}.so"), format!("lib{name}.dylib")]
-        .into_iter()
-        .map(|f| (dir.join(&f), f))
-        .filter(|(p, _)| p.exists())
-        .map(|(p, f)| (f, p))
-        .collect();
+    let mut libs: Vec<(String, PathBuf)> =
+        [format!("{name}.dll"), format!("lib{name}.so"), format!("lib{name}.dylib"), format!("{ANDROID}/lib{name}.so")]
+            .into_iter()
+            .map(|f| (dir.join(&f), f))
+            .filter(|(p, _)| p.exists())
+            .map(|(p, f)| (f, p))
+            .collect();
     let own = libloading::library_filename(name)
         .to_string_lossy()
         .into_owned();
@@ -363,7 +367,7 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
     for (name, dir, lib_path) in discover(mod_dirs, cache) {
         // Windows locks loaded libraries; loading a copy keeps the original rebuildable.
         let copy = shadow.join(format!("{}-{}", std::process::id(), lib_path.file_name().unwrap().to_string_lossy()));
-        let load_from = if std::fs::copy(&lib_path, &copy).is_ok() { copy } else { lib_path.clone() };
+        let load_from = if cfg!(windows) && std::fs::copy(&lib_path, &copy).is_ok() { copy } else { lib_path.clone() };
         let lib = match unsafe { libloading::Library::new(&load_from) } {
             Ok(lib) => lib,
             // A mod that won't load is a good reason to have turned it off.

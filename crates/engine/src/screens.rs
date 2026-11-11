@@ -78,6 +78,11 @@ pub trait Screen: std::any::Any {
     fn escape_closes(&self) -> bool {
         true
     }
+    /// It puts its X (`close_button`) in a place of its own; others get one in the window's
+    /// corner.
+    fn draws_close(&self) -> bool {
+        false
+    }
     fn closes_on_respawn(&self) -> bool {
         false
     }
@@ -118,9 +123,11 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         "core:shader_packs" => Box::new(crate::packs::ShaderPacks),
         "core:world_rules" => Box::new(ConfigScreen { shown: Shown::World }),
         "core:hud_editor" => Box::new(crate::hud_editor::HudEditor::default()),
+        "core:touch_buttons" => Box::new(crate::touch::TouchButtons::default()),
         "core:debug_options" => Box::new(crate::hud_editor::DebugOptions),
         "core:tags" => Box::new(crate::game_screens::TagList::default()),
         "core:mods" => Box::new(ModList::default()),
+        "core:mod_catalog" => Box::new(crate::mod_index::Catalog::default()),
         "core:profile" => Box::new(Profile::default()),
         _ => return None,
     })
@@ -293,14 +300,17 @@ impl Screen for ModList {
                 if let Kind::Button { enabled, .. } = &mut ui.nodes[b].kind {
                     *enabled = has_settings;
                 }
+                button(ui, cx, "mods.catalog", &[], 120.0, |c| c.requests.push(Request::Screen("core:mod_catalog".into())));
                 let dir = cx.settings.run_dir.join("mods");
                 button(ui, cx, "mods.folder", &[], 120.0, move |_| crate::packs::open_folder(&dir));
                 button(ui, cx, "menu.done", &[], 120.0, |c| c.requests.push(Request::Close));
             });
-            if crate::modloader::restart_pending() {
+            if crate::modloader::restart_pending() || crate::mod_index::changed() {
                 ui.container(Style::row().gap(6.0).align(crate::ui::Align::Center), |ui| {
                     label(ui, cx, "mods.restart_note", &[], "dim");
-                    let b = button(ui, cx, "mods.restart", &[], 120.0, |c| c.requests.push(Request::Restart));
+                    // A phone's game can't start itself again: it closes, to be opened again.
+                    let key = if cfg!(target_os = "android") { "mods.close" } else { "mods.restart" };
+                    let b = button(ui, cx, key, &[], 120.0, |c| c.requests.push(Request::Restart));
                     ui.set_id(b, "mods_restart");
                 });
             }
@@ -436,6 +446,17 @@ pub fn button(ui: &mut Ui, cx: &BuildCx, key: &str, args: &[Arg], width: f32, ac
             t.wrap = false;
         }
     })
+}
+
+/// The X that closes a screen as Escape does, its picture `side` GUI pixels.
+pub fn close_button(ui: &mut Ui, side: f32) {
+    let style = Style::default()
+        .size(side + 2.0, side + 2.0)
+        .pad(1.0)
+        .center();
+    ui.button("button", style, Rc::new(|c: &mut Ctx| c.requests.push(Request::Close)), |ui| {
+        ui.add(Kind::Image { texture: "core:gui/close".into(), color: 0xFFFFFFFF }, Style::default().size(side, side));
+    });
 }
 
 /// A menu button with an icon (class `icon`, 9x9 like a glyph and its shadow) at its left edge;
@@ -1145,6 +1166,12 @@ impl Screen for Controls {
             ui.set_id(list, "controls");
             ui.container(Style::row().gap(6.0), |ui| {
                 button(ui, cx, "controls.reset", &[], 120.0, |c| c.requests.push(Request::ResetBinds));
+                if crate::settings::touch_controls() {
+                    button(ui, cx, "touch.title", &[], 120.0, |c| {
+                        c.requests
+                            .push(Request::Screen("core:touch_buttons".into()))
+                    });
+                }
                 button(ui, cx, "menu.done", &[], 120.0, |c| c.requests.push(Request::Close));
             });
         });
@@ -1187,6 +1214,28 @@ fn bind_cell(ui: &mut Ui, cx: &BuildCx, action: &str, slot: usize, binding: Opti
 pub struct Message {
     pub title: String,
     pub args: Vec<Arg>,
+}
+
+/// While shaders compile ahead (`Backend::precompile`) and a world waits for them: once, on a
+/// phone's first start, which it says so nobody takes it for every time.
+pub struct Compiling;
+
+impl Screen for Compiling {
+    fn name(&self) -> &str {
+        "core:compiling"
+    }
+
+    fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
+        ui.root_style(Style::default().stretch());
+        ui.panel("background", Style::default().grow().center().pad(12.0).gap(10.0), |ui| {
+            label(ui, cx, "world.compiling", &[], "title");
+            label(ui, cx, "world.compiling.once", &[], "label");
+        });
+    }
+
+    fn escape_closes(&self) -> bool {
+        false
+    }
 }
 
 impl Screen for Message {

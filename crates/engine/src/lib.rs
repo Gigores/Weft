@@ -17,6 +17,7 @@ pub mod content;
 pub mod dedicated;
 pub mod diag;
 pub mod entries;
+pub mod features;
 pub mod game_screens;
 pub mod hitbox;
 pub mod host;
@@ -26,6 +27,7 @@ pub mod input;
 pub mod log;
 pub mod loot;
 pub mod minecraft;
+pub mod mod_index;
 pub mod model;
 pub mod modloader;
 pub mod net;
@@ -44,12 +46,18 @@ pub mod shape;
 pub mod stack;
 pub mod steps;
 pub mod tag_bits;
+pub mod template;
+pub mod touch;
 pub mod ui;
 pub mod wire;
 pub mod world;
 
 pub use app::api::{exit_code, set_launch_options};
+#[cfg(target_os = "android")]
+pub use app::run_android;
 pub use app::{BackendFactory, Options, Renderers, run};
+#[cfg(target_os = "android")]
+pub use winit::platform::android::activity::AndroidApp;
 
 /// Background workers (generation, meshing, region ticks) leave two cores to the render and
 /// server threads: a full pool starved the render thread during loading and frames missed vsync.
