@@ -41,7 +41,8 @@ fn android_main(app: AndroidApp) {
         // A player's copy of a mod comes first, as on a computer.
         mod_dirs: vec![data.join("mods"), game.join("mods")],
         mods_off: Vec::new(),
-        gpu_debug: false,
+        // A debug package carries the validation layer (`build.py --validation`).
+        gpu_debug: weft_engine::paths::libraries().is_some_and(|d| d.join("libVkLayer_khronos_validation.so").is_file()),
         world: None,
         seed: None,
         screen: None,

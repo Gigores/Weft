@@ -1,6 +1,6 @@
 """Builds the game for 64-bit ARM Android phones into one APK.
 
-    python .github/android/build.py OUT.apk
+    python .github/android/build.py OUT.apk [--validation]
 
 Needs Rust's aarch64-linux-android target, ANDROID_HOME (an SDK with build-tools and a
 platform) and the NDK (ANDROID_NDK_LATEST_HOME or ANDROID_NDK_HOME, else the newest under the
@@ -8,7 +8,9 @@ SDK's ndk/), and a JDK for signing. Signs with WEFT_KEYSTORE (password WEFT_KEYS
 SDK's debug key, made if missing: an APK signed with another key can't update an installed one.
 
 The APK holds libmain.so (crates/android) and every mod's library, and assets/game.zip: the
-engine's assets and the mods' folders, unpacked by the game once per version.
+engine's assets and the mods' folders, unpacked by the game once per version. `--validation`
+adds Khronos' validation layer (downloaded once) and makes the APK debuggable, which Android
+wants for loading a layer from it; the game then validates, into its log, by itself.
 """
 
 import io
@@ -19,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -26,6 +29,9 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGET = "aarch64-linux-android"
 MIN_SDK = 26
 ABI = "arm64-v8a"
+LAYERS = "1.4.363.1"
+LAYERS_URL = f"https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases/download/vulkan-sdk-{LAYERS}/android-binaries-{LAYERS}.zip"
+LAYER = "libVkLayer_khronos_validation.so"
 
 
 def newest(dir: Path, pattern: str) -> Path:
@@ -40,10 +46,25 @@ def run(*cmd, **kw):
     subprocess.run([str(c) for c in cmd], check=True, **kw)
 
 
+def validation_layer(cache: Path) -> bytes:
+    archive = cache / f"validation-{LAYERS}.zip"
+    if not archive.is_file():
+        print(f"downloading {LAYERS_URL}", flush=True)
+        part = archive.with_suffix(".part")
+        with urllib.request.urlopen(LAYERS_URL) as r, open(part, "wb") as f:
+            shutil.copyfileobj(r, f)
+        part.replace(archive)
+    with zipfile.ZipFile(archive) as z:
+        name = next(n for n in z.namelist() if n.endswith(f"{ABI}/{LAYER}"))
+        return z.read(name)
+
+
 def main():
-    if len(sys.argv) != 2:
+    args = [a for a in sys.argv[1:] if a != "--validation"]
+    validation = len(args) < len(sys.argv) - 1
+    if len(args) != 1:
         sys.exit(__doc__)
-    out = Path(sys.argv[1]).resolve()
+    out = Path(args[0]).resolve()
     sdk = Path(os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or Path.home() / "AppData/Local/Android/Sdk")
     ndk_env = os.environ.get("ANDROID_NDK_LATEST_HOME") or os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT")
     ndk = Path(ndk_env) if ndk_env else newest(sdk / "ndk", "*")
@@ -106,10 +127,13 @@ def main():
         unsigned = tmp / "unsigned.apk"
         run(aapt2, "link", "-o", unsigned, "-I", android_jar, "--manifest", ROOT / ".github/android/AndroidManifest.xml",
             "--min-sdk-version", MIN_SDK, "--target-sdk-version", android_jar.parent.name.split("-")[1],
-            "--version-code", code, "--version-name", name, "-A", tmp / "assets", tmp / "res.zip")
+            "--version-code", code, "--version-name", name, "-A", tmp / "assets", tmp / "res.zip",
+            *(["--debug-mode"] if validation else []))
         with zipfile.ZipFile(unsigned, "a", zipfile.ZIP_DEFLATED) as z:
             for lib in ["main"] + [d.name for d in mods]:
                 z.write(built / f"lib{lib}.so", f"lib/{ABI}/lib{lib}.so")
+            if validation:
+                z.writestr(f"lib/{ABI}/{LAYER}", validation_layer(target_dir))
         aligned = tmp / "aligned.apk"
         run(tools / f"zipalign{exe}", "-f", "-P", "16", "4", unsigned, aligned)
 

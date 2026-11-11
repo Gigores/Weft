@@ -117,6 +117,9 @@ pub struct VulkanBackend {
     want_size: (u32, u32),
     vsync: bool,
     dirty_swapchain: bool,
+    /// Drawn upright on a turned phone: Android calls every frame suboptimal then, which is no
+    /// reason to make the swapchain again (resizes still come as out of date and `resize`).
+    turned: bool,
     buffers: Slab<Buffer>,
     textures: Slab<Texture>,
     pipelines: Slab<Pipeline>,
@@ -607,6 +610,7 @@ impl VulkanBackend {
                 want_size: (desc.width, desc.height),
                 vsync: desc.vsync,
                 dirty_swapchain: true,
+                turned: false,
                 buffers: Slab::default(),
                 textures: Slab::default(),
                 pipelines: Slab::default(),
@@ -716,6 +720,7 @@ impl VulkanBackend {
             if caps.max_image_count > 0 {
                 count = count.min(caps.max_image_count);
             }
+            self.turned = transform != caps.current_transform;
             let old = self.swapchain.take();
             let raw = self
                 .swapchain_fn
@@ -765,7 +770,15 @@ impl VulkanBackend {
                         .map_err(err("semaphore"))?,
                 );
             }
-            log::debug!("swapchain {}x{} {:?} {:?}", extent.width, extent.height, format.format, mode);
+            log::info!(
+                "swapchain {}x{} {:?} {:?}, {:?} on a {:?} screen",
+                extent.width,
+                extent.height,
+                format.format,
+                mode,
+                transform,
+                caps.current_transform
+            );
             self.swapchain = Some(Swapchain {
                 raw,
                 layouts: vec![vk::ImageLayout::UNDEFINED; images.len()],
@@ -1769,7 +1782,7 @@ impl Backend for VulkanBackend {
         };
         match result {
             Ok((index, suboptimal)) => {
-                if suboptimal {
+                if suboptimal && !self.turned {
                     self.dirty_swapchain = true;
                 }
                 self.image_index = Some(index);
@@ -2126,8 +2139,8 @@ impl Backend for VulkanBackend {
                 .swapchains(&swapchains)
                 .image_indices(&indices);
             match self.swapchain_fn.queue_present(self.queue, &present) {
-                Ok(false) => {}
-                Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => self.dirty_swapchain = true,
+                Ok(suboptimal) if !suboptimal || self.turned => {}
+                Ok(_) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => self.dirty_swapchain = true,
                 Err(e) => log::error!("vkQueuePresentKHR: {e:?}"),
             }
         }
