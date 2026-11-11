@@ -973,8 +973,11 @@ pub struct ModMeta {
     pub id: String,
     pub version: String,
     pub deps: Vec<String>,
-    /// Position when every mod comes after its dependencies (ties by id): the order in which
-    /// overrides apply and the later one wins.
+    /// Mods it loads after, or before, if they are there (`abi::ModDecl::after`, `before`).
+    pub after: Vec<String>,
+    pub before: Vec<String>,
+    /// Position when every mod comes after its dependencies and what it says it loads after
+    /// (ties by id): the order in which overrides apply and the later one wins.
     pub order: u32,
     /// Its `assets` folder (block and item model files are read at freeze).
     pub assets: std::path::PathBuf,
@@ -1266,6 +1269,14 @@ impl Content {
         self.ids
             .no_creative_break
             .is_some_and(|t| self.components.has(comps::ITEM, item, t))
+    }
+
+    /// `state` turned `toward` (`north`..) if its block has a `facing`: how a block item shows its
+    /// front, in a slot and in the hand.
+    pub fn facing_toward(&self, state: u32, toward: &str) -> u32 {
+        self.block_of(state)
+            .changed_text(state, &format!("facing={toward}"))
+            .unwrap_or(state)
     }
 
     pub fn block_of(&self, state: u32) -> &BlockDef {
@@ -1801,19 +1812,18 @@ fn debug_blocks(c: &Content, cube: glam::IVec3, blocks: &mut [u32]) {
     }
 }
 
-/// Every mod after the mods it depends on, ties by id.
+/// Every mod after the mods it depends on or says it loads after, and before those saying they
+/// load after it (`before` the same turned around), ties by id.
 pub fn load_order(mods: &[ModMeta]) -> Vec<u32> {
     let mut placed: Vec<Option<u32>> = vec![None; mods.len()];
     let mut next = 0;
+    let first = |i: usize, j: usize| {
+        let (a, b) = (&mods[i], &mods[j]);
+        b.deps.contains(&a.id) || b.after.contains(&a.id) || a.before.contains(&b.id)
+    };
     while next < mods.len() as u32 {
-        let ready = (0..mods.len()).find(|&i| {
-            placed[i].is_none()
-                && mods[i].deps.iter().all(|d| {
-                    mods.iter()
-                        .position(|m| &m.id == d)
-                        .is_none_or(|j| placed[j].is_some())
-                })
-        });
+        let ready =
+            (0..mods.len()).find(|&i| placed[i].is_none() && (0..mods.len()).all(|j| j == i || placed[j].is_some() || !first(j, i)));
         // A dependency cycle: place the rest by id rather than loop forever.
         let i = ready.unwrap_or_else(|| (0..mods.len()).find(|&i| placed[i].is_none()).unwrap());
         placed[i] = Some(next);
@@ -3849,6 +3859,8 @@ mod tests {
             id: id.into(),
             version: "1".into(),
             deps: deps.iter().map(|d| d.to_string()).collect(),
+            after: Vec::new(),
+            before: Vec::new(),
             order: 0,
             assets: Default::default(),
         }
@@ -3858,6 +3870,18 @@ mod tests {
     fn dependencies_load_first() {
         // Sorted by id, as the loader lists them: "aaa" depends on "zzz".
         let mods = [meta("aaa", &["zzz"]), meta("base", &[]), meta("zzz", &["base"])];
+        assert_eq!(load_order(&mods), vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn after_and_before_only_order() {
+        let with = |id: &str, after: &[&str], before: &[&str]| ModMeta {
+            after: after.iter().map(|d| d.to_string()).collect(),
+            before: before.iter().map(|d| d.to_string()).collect(),
+            ..meta(id, &[])
+        };
+        // "aaa" after "zzz", "mmm" before "aaa", "ghost" not there at all.
+        let mods = [with("aaa", &["zzz", "ghost"], &[]), with("mmm", &[], &["aaa"]), with("zzz", &[], &["ghost"])];
         assert_eq!(load_order(&mods), vec![2, 0, 1]);
     }
 }

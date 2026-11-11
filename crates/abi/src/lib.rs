@@ -291,6 +291,11 @@ pub struct ModDecl {
     /// Mod ids this one must load after. Registration itself is parallel, this orders what it
     /// registers (entries, edits, hooks) after theirs.
     pub deps: Slice<Str>,
+    /// Mod ids this one loads after if they are there, without needing them: its edits win over
+    /// theirs where both change one thing.
+    pub after: Slice<Str>,
+    /// Mod ids this one loads before if they are there: theirs win.
+    pub before: Slice<Str>,
     pub init: unsafe extern "C" fn(host: *const Host, me: ModId, reg: *mut Registrar) -> u32,
 }
 
@@ -954,7 +959,8 @@ pub mod comp {
     /// shapeless or processing one: item names or `#tags`, a liquid by its name) with `AMOUNTS`
     /// (`[u32]`, of each, millibuckets for liquids, 1), `OUTPUT` (`str`) and `COUNT` (`u32`, 1),
     /// `TIME` (`u32`, ticks, the kind says what they mean, 0), `OUTPUTS` (`[LootPool]`, more
-    /// results, rolled as loot is: a 5% one is a pool of it and nothing by weight), tag `HIDDEN` (works, the recipe viewer doesn't list it). Any other component is
+    /// results, rolled as loot is: a 5% one is a pool of it and nothing by weight), `USES`
+    /// (`[RecipeUse]`, what a run does to an ingredient other than using it up), tag `HIDDEN` (works, the recipe viewer doesn't list it). Any other component is
     /// data it carries for what makes it (energy per tick).
     pub mod recipe {
         pub const KIND: &str = "recipe.kind";
@@ -966,6 +972,7 @@ pub mod comp {
         pub const COUNT: &str = "recipe.count";
         pub const TIME: &str = "recipe.time";
         pub const OUTPUTS: &str = "recipe.outputs";
+        pub const USES: &str = "recipe.uses";
         pub const HIDDEN: &str = "recipe.hidden";
     }
 
@@ -1380,6 +1387,8 @@ pub mod comp {
         /// It flies as a projectile (`Projectile`): the engine moves it, and each tick a ray along
         /// its speed decides what it hits (`action::PROJECTILE_HIT`).
         pub const PROJECTILE: &str = "entity.projectile";
+        /// What hits land on, part by part (`Hitboxes`); without, its whole box.
+        pub const HITBOXES: &str = "entity.hitboxes";
     }
 
     /// A step's (`entry_kind::STEP`): `CHAIN` (`str`, the value it changes every time it is
@@ -2698,7 +2707,9 @@ pub mod ray {
 /// block of the cell it entered, the cell's main one or a part. `face` is the face it went in
 /// through, of the block's or the entity's box (-X, +X, -Y, +Y, -Z, +Z). `point` is where, in the
 /// caller's frame; `local` where on what it hit, from the block's or the box's low corner (a
-/// block's 0..1, times 16 its pixel).
+/// block's 0..1, times 16 its pixel). An entity's box turns with its body (`EntityState::body_yaw`):
+/// its face and `local` are in that turned box, -Z its front and +Z its back, `local.y` how high
+/// up from its feet.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RayHit {
@@ -2707,6 +2718,8 @@ pub struct RayHit {
     pub pos: BlockPos,
     pub state: u32,
     pub face: u32,
+    /// The part of the entity's hitbox it hit (`hitbox_part`): `face` and `local` are that part's.
+    pub part: u32,
     pub point: Vec3,
     pub local: Vec3,
     pub distance: f64,
@@ -2726,6 +2739,68 @@ crate::data! {
     }
 }
 
+crate::data! {
+    /// One part of an entity's hitbox: a box in model pixels of the kind (its feet at 0, -Z its
+    /// front) turning about `pivot` as `follows` says (`hitbox_follows`); a `STRIDE` part swings
+    /// `swing` radians at a full stride, `phase` (radians) after the stride's own beat.
+    pub struct HitboxPart {
+        pub name: crate::data::String,
+        pub min: [f32; 3],
+        pub max: [f32; 3],
+        pub pivot: [f32; 3],
+        pub follows: u32,
+        pub swing: f32,
+        pub phase: f32,
+    }
+}
+
+crate::data! {
+    /// What hits land on (`comp::entity::HITBOXES`), part by part, in pixels (1/16 block) at the
+    /// kind's own size: one made bigger or smaller (`set_size`) has them so too, a crouch squeezes
+    /// them down, a lying pose lays them down, and they turn with its body. Rays, arrows and blows
+    /// find the part they hit (`RayHit::part`, `Damage::part`).
+    pub struct Hitboxes {
+        pub parts: crate::data::Vec<HitboxPart>,
+    }
+}
+
+/// How a part of a hitbox moves (`HitboxPart::follows`).
+pub mod hitbox_follows {
+    /// With the body only.
+    pub const BODY: u32 = 0;
+    /// With the head: the look's yaw past the body's, and its pitch.
+    pub const LOOK: u32 = 1;
+    /// Swinging forward and back as it walks, a leg or an arm.
+    pub const STRIDE: u32 = 2;
+}
+
+/// A hitbox part's id from its name, as hits tell it (`RayHit::part`, `Damage::part`).
+pub const fn hitbox_part_id(name: &str) -> u32 {
+    let h = fnv(name.as_bytes());
+    (h ^ (h >> 32)) as u32 | 1
+}
+
+/// The parts the engine's shapes (the SDK's `Hitboxes::humanoid` ...) name.
+pub mod hitbox_part {
+    use super::hitbox_part_id as id;
+    pub const HEAD: u32 = id("head");
+    pub const BODY: u32 = id("body");
+    pub const RIGHT_ARM: u32 = id("right_arm");
+    pub const LEFT_ARM: u32 = id("left_arm");
+    pub const RIGHT_LEG: u32 = id("right_leg");
+    pub const LEFT_LEG: u32 = id("left_leg");
+    /// A four-legged one's: front right, front left, back right, back left.
+    pub const FRONT_RIGHT_LEG: u32 = id("front_right_leg");
+    pub const FRONT_LEFT_LEG: u32 = id("front_left_leg");
+    pub const BACK_RIGHT_LEG: u32 = id("back_right_leg");
+    pub const BACK_LEFT_LEG: u32 = id("back_left_leg");
+    /// A spider's legs, each side as one, and a bird's wings.
+    pub const RIGHT_LEGS: u32 = id("right_legs");
+    pub const LEFT_LEGS: u32 = id("left_legs");
+    pub const RIGHT_WING: u32 = id("right_wing");
+    pub const LEFT_WING: u32 = id("left_wing");
+}
+
 /// A projectile's hit (`action::PROJECTILE_HIT`): `target` 0 for a block at `pos`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2735,10 +2810,12 @@ pub struct ProjectileHit {
     pub owner: u64,
     pub pos: BlockPos,
     pub face: u32,
+    /// The part of `target`'s hitbox (`hitbox_part`).
+    pub part: u32,
     pub point: Vec3,
 }
 impl Schema for ProjectileHit {
-    const SCHEMA: &'static str = "{projectile:u64,target:u64,owner:u64,pos:[i32;3],face:u32,point:[f64;3]}";
+    const SCHEMA: &'static str = "{projectile:u64,target:u64,owner:u64,pos:[i32;3],face:u32,part:u32,point:[f64;3]}";
 }
 
 /// What `Host::entity_spawn` makes. What `set` leaves out takes the kind's defaults: a random
@@ -3059,6 +3136,9 @@ pub struct EntityState {
     pub moved: f32,
     /// Its box now (crouching and `set_size` included).
     pub size: EntitySize,
+    /// Where its body faces, radians like `yaw`: it lags behind the head, turning to where it
+    /// walks; what hits land on turns with it.
+    pub body_yaw: f32,
     /// The item it is using (eating, a bow drawn), 0 for none, and for how many ticks so far.
     pub using: u32,
     pub using_ticks: u32,
@@ -3100,6 +3180,7 @@ defaults!(EntityState {
     selected: 0,
     moved: 0.0,
     size: EntitySize { width: 0.0, height: 0.0, eye: 0.0 },
+    body_yaw: 0.0,
     using: 0,
     using_ticks: 0,
 });
@@ -3184,6 +3265,30 @@ crate::data! {
     pub struct RecipeKey { pub name: alloc::string::String, pub item: alloc::string::String }
 }
 
+crate::data! {
+    /// What a run of a recipe does to one of its ingredients (`comp::recipe::USES`), other than
+    /// using it up: `key` its pattern character, or for a recipe without a pattern its place among
+    /// the inputs (`"0"`); `how` a `recipe_use`, `amount` the wear a run gives, `item` what is
+    /// left in its place.
+    pub struct RecipeUse {
+        pub key: alloc::string::String,
+        pub how: u32,
+        pub amount: u32,
+        pub item: alloc::string::String,
+    }
+}
+
+/// `RecipeUse::how`. Without one an ingredient is used up, the last of a stack leaving its item's
+/// `comp::REMAINDER` (a lava bucket its bucket).
+pub mod recipe_use {
+    /// It stays as it is: a mold, a catalyst.
+    pub const KEEP: u32 = 1;
+    /// It stays and wears by `amount` a run, breaking when its durability is gone: a hammer.
+    pub const WEAR: u32 = 2;
+    /// Used up, `item` taking its place (any item, also one with no `remainder`).
+    pub const LEAVES: u32 = 3;
+}
+
 /// A recipe the viewer shows with a kind's own `display`.
 #[repr(C)]
 pub struct RecipeUiArgs {
@@ -3224,6 +3329,10 @@ pub mod slot_flags {
     /// takes its place, or the player leaves; never filled by a shift-click. `core:trash`
     /// (Delete) over a slot sends that stack there.
     pub const TRASH: u32 = 64;
+    /// A crafting grid of its menu's first recipe kind (`comp::menu::RECIPES`): the engine shows
+    /// what it makes in the menu's output group, and taking that uses the grid up as the recipe
+    /// says (`comp::recipe::USES`), with shift as many runs as fit in the player's inventory.
+    pub const GRID: u32 = 128;
 }
 
 /// The equipment slot of the second hand. Without it, players have one.
@@ -3288,6 +3397,9 @@ pub struct MenuArgs {
     /// player's own and menus of no one (a crafting table).
     pub owner: Holder,
     pub slot: u32,
+    /// `on_take` of a crafting grid's result: how many runs of the recipe it was (shift crafts
+    /// all that fit at once); 1 otherwise.
+    pub times: u32,
 }
 
 // ---------------------------------------------------------------- mod UI
@@ -4571,10 +4683,11 @@ pub struct Hurt {
     pub amount: f32,
     pub cause: u32,
     pub crit: u32,
-    pub pad: u32,
+    /// The part of its hitbox it landed on (`hitbox_part`), 0 for none in particular.
+    pub part: u32,
 }
 impl Schema for Hurt {
-    const SCHEMA: &'static str = "{entity:u64,source:u64,direct:u64,amount:f32,cause:u32,crit:u32,pad:u32}";
+    const SCHEMA: &'static str = "{entity:u64,source:u64,direct:u64,amount:f32,cause:u32,crit:u32,part:u32}";
 }
 
 #[repr(C)]
@@ -4742,6 +4855,8 @@ pub struct Query {
     /// A melee hit's: how charged its swing was (0..1) and whether it is a critical one.
     pub charge: f32,
     pub crit: u32,
+    /// The part of `entity`'s hitbox a hurt lands on (`hitbox_part`), 0 for none in particular.
+    pub part: u32,
     /// Valid for the call.
     pub text: Str,
 }
@@ -4757,13 +4872,14 @@ defaults!(Query {
     amount: 0.0,
     charge: 0.0,
     crit: 0,
+    part: 0,
     text: Str::EMPTY
 });
 
 /// A hurt described (`Host::entity_damage`): `amount` of `cause` from `source` (who; 0 for
 /// nothing), through `direct` (what hit: the arrow; 0 for `source` itself), with `item` (what
 /// `source` hit with), a critical one or not. `knock` the way it pushes (0: away from `direct`, else
-/// `source`).
+/// `source`). `part` the part of the hitbox it lands on (`hitbox_part`, 0 none in particular).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Damage {
@@ -4774,6 +4890,7 @@ pub struct Damage {
     pub item: ItemStack,
     pub knock: Vec3,
     pub crit: u32,
+    pub part: u32,
 }
 impl Damage {
     /// `amount` of `cause` from nobody.
@@ -4781,7 +4898,7 @@ impl Damage {
         Damage { amount, cause, ..Damage::DEFAULT }
     }
 }
-defaults!(Damage { amount: 0.0, cause: 0, source: 0, direct: 0, item: ItemStack::EMPTY, knock: Vec3::ZERO, crit: 0 });
+defaults!(Damage { amount: 0.0, cause: 0, source: 0, direct: 0, item: ItemStack::EMPTY, knock: Vec3::ZERO, crit: 0, part: 0 });
 
 /// The engine's phases, in the order they run; a mod's goes after one of them
 /// (`comp::phase::AFTER`). Numbers usually use `ADD`, `PERCENT`, `MULTIPLY` and `OVERRIDE`;

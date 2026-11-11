@@ -337,6 +337,7 @@ pub mod recipe {
     pub static COUNT: Component<u32, Recipe> = Component::named(r::COUNT);
     pub static TIME: Component<u32, Recipe> = Component::named(r::TIME);
     pub static OUTPUTS: Component<Vec<crate::abi::LootPool>, Recipe> = Component::named(r::OUTPUTS);
+    pub static USES: Component<Vec<crate::abi::RecipeUse>, Recipe> = Component::named(r::USES);
 }
 
 /// What a loot table is made of.
@@ -588,6 +589,7 @@ pub mod entity {
     pub static BLOCK: Component<Text, Entity> = Component::named(e::BLOCK);
     pub static SEATS: Component<Vec<abi::Seat>, Entity> = Component::named(e::SEATS);
     pub static PROJECTILE: Component<abi::Projectile, Entity> = Component::named(e::PROJECTILE);
+    pub static HITBOXES: Component<abi::Hitboxes, Entity> = Component::named(e::HITBOXES);
     pub static LIGHT_AT: Component<[f32; 3], Entity> = Component::named(e::LIGHT_AT);
     pub static SHOWN_SLOTS: Component<Vec<u32>, Entity> = Component::named(e::SHOWN_SLOTS);
     pub static ATTACH: Component<Vec<abi::Attach>, Entity> = Component::named(e::ATTACH);

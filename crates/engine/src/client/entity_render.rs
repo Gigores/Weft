@@ -730,6 +730,8 @@ impl EntityRenderer {
             }
             ItemDraw::Icon(t) => vec![(layers.map_or(t, |l| textures.layered(l)), white)],
             ItemDraw::Block(state) => {
+                // Its front toward whoever holds it.
+                let state = c.facing_toward(state, "west");
                 let s = &c.states[state as usize];
                 match looks.block_sprite(state, s) {
                     Some(t) => super::mesher::face_layers(c, s, t, 0)
@@ -1303,7 +1305,7 @@ impl EntityRenderer {
             let (clips, standing) = if lod == PoseLod::Kept {
                 (Clips::default(), 0)
             } else {
-                self.clips_of(id, e, kind, look, lying, in_view, hand.as_ref().filter(|_| in_view).map(|h| h.lowered), dt)
+                self.clips_of(id, e, kind, look, lying, in_view, hand.as_ref().filter(|_| in_view).map(|h| h.lowered))
             };
             if own_view {
                 // Its model goes where the camera is: the camera doesn't sit in the torso, whatever pose it's in.
@@ -1567,7 +1569,6 @@ impl EntityRenderer {
         lying: Option<f32>,
         in_view: bool,
         lowered: Option<f32>,
-        dt: f32,
     ) -> (Clips, usize) {
         let c = content();
         let pose = e.pose.def();
@@ -1661,7 +1662,7 @@ impl EntityRenderer {
         // Coming and going smoothly. Nearly all of a crowd has nothing here to look at.
         if clips.n > standing || (!self.fades.is_empty() && self.fades.contains_key(&(id, kind))) {
             let fades = self.fades.entry((id, kind)).or_default();
-            super::models::fade_clips(fades, m, &mut clips, standing, dt);
+            super::models::fade_clips(fades, m, &mut clips, standing, e.age);
             if fades.is_empty() {
                 self.fades.remove(&(id, kind));
             }

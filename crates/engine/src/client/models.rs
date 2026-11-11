@@ -238,21 +238,38 @@ pub struct PlayClip {
     pub by_progress: bool,
 }
 
-/// A clip coming in or going out on one entity.
+/// A clip coming in or going out on one entity: how far in it was when it last turned (`from`,
+/// 0..1, at its holder's clock `since`) and how fast it goes now, so it is a function of the
+/// holder's clock and every client has it alike.
 #[derive(Clone, Copy)]
 pub struct Fade {
     clip: PlayClip,
-    /// How far in it is, 0..1.
-    on: f32,
+    since: f32,
+    from: f32,
+    rate: f32,
+}
+
+impl Fade {
+    fn on(&self, now: f32) -> f32 {
+        (self.from + self.rate * (now - self.since).max(0.0)).clamp(0.0, 1.0)
+    }
+
+    /// From `now` on at `rate` a second, going on from where it is.
+    fn turn(&mut self, now: f32, rate: f32) {
+        if self.rate != rate {
+            (self.from, self.since, self.rate) = (self.on(now), now, rate);
+        }
+    }
 }
 
 /// Seconds a clip takes to come and go unless its file says. What goes by an action's progress
 /// starts at once: its first frames are the action's.
 const BLEND_SECS: f32 = 0.12;
 
-/// Eases what plays over the standing clips in and out: on `t` what is wanted comes in, what no
-/// longer is goes out where it stopped. What is below keeps its order: over it, later clips win.
-pub fn fade_clips(fades: &mut Vec<Fade>, m: &KindModel, clips: &mut Clips, standing: usize, dt: f32) {
+/// Eases what plays over the standing clips in and out by the holder's clock `now` (seconds):
+/// what is wanted comes in, what no longer is goes out where it stopped. What is below keeps its
+/// order: over it, later clips win.
+pub fn fade_clips(fades: &mut Vec<Fade>, m: &KindModel, clips: &mut Clips, standing: usize, now: f32) {
     let wanted = *clips;
     clips.n = standing;
     let anim = |c: &PlayClip| m.anims.get(c.anim as usize).map(|b| &b.anim);
@@ -266,11 +283,12 @@ pub fn fade_clips(fades: &mut Vec<Fade>, m: &KindModel, clips: &mut Clips, stand
         let secs = anim(&f.clip)
             .and_then(|a| a.blend_out)
             .unwrap_or(BLEND_SECS);
-        f.on -= dt / secs.max(1e-3);
-        if f.on <= 0.0 {
+        f.turn(now, -1.0 / secs.max(1e-3));
+        let on = f.on(now);
+        if on <= 0.0 {
             return false;
         }
-        clips.push(PlayClip { w: f.clip.w * smooth(f.on), ..f.clip });
+        clips.push(PlayClip { w: f.clip.w * smooth(on), ..f.clip });
         true
     });
     for c in &wanted.all()[standing..] {
@@ -280,14 +298,15 @@ pub fn fade_clips(fades: &mut Vec<Fade>, m: &KindModel, clips: &mut Clips, stand
         let found = fades
             .iter()
             .position(|f| (f.clip.anim, f.clip.mirror) == (c.anim, c.mirror));
+        // What has no time to come in is there at once.
         let i = found.unwrap_or_else(|| {
-            fades.push(Fade { clip: *c, on: 0.0 });
+            fades.push(Fade { clip: *c, since: now, from: if secs <= 0.0 { 1.0 } else { 0.0 }, rate: 0.0 });
             fades.len() - 1
         });
         let f = &mut fades[i];
-        f.on = (f.on + dt / secs.max(1e-3)).min(1.0);
+        f.turn(now, 1.0 / secs.max(1e-3));
         f.clip = *c;
-        clips.push(PlayClip { w: c.w * smooth(f.on), ..*c });
+        clips.push(PlayClip { w: c.w * smooth(f.on(now)), ..*c });
     }
 }
 
@@ -1278,6 +1297,62 @@ impl Models {
                 let p = at.transform_point3(Vec3::from_array(m.parts[i].pivot));
                 Some(self.located_from + p.as_dvec3())
             })
+    }
+
+    /// The first box of what `entity` showed last frame (its model, what it holds and has on) that
+    /// a ray from `from` along `dir` (the world, a unit vector) enters within `max`: that model,
+    /// the bone and how far along.
+    pub fn ray_bones(&self, entity: u64, from: glam::DVec3, dir: glam::DVec3, max: f64) -> Option<(u32, usize, f64)> {
+        let mut best: Option<(u32, usize, f64)> = None;
+        for &(_, kind, first) in self.located.iter().filter(|l| l.0 == entity) {
+            let Some(m) = self.kinds.get(kind as usize) else { continue };
+            for (i, p) in m.parts.iter().enumerate() {
+                // In the bone's pixels the ray goes by the same steps: its own length stays the world's.
+                let back = self.bone(first as usize + i).inverse();
+                let o = back
+                    .transform_point3((from - self.located_from).as_vec3())
+                    .as_dvec3();
+                let d = back.transform_vector3(dir.as_vec3()).as_dvec3();
+                for cu in &p.cuboids {
+                    let lo = Vec3::from_array(p.pivot) + Vec3::from_array(cu.origin);
+                    let b = crate::physics::Aabb { min: lo.as_dvec3(), max: (lo + Vec3::from_array(cu.size)).as_dvec3() };
+                    if let Some((t, _)) = crate::physics::ray_aabb(o, d, &b, max) {
+                        if best.is_none_or(|b| t < b.2) {
+                            best = Some((kind, i, t));
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// Whether `entity` was shown last frame: its bones are known.
+    pub fn posed(&self, entity: u64) -> bool {
+        self.located.iter().any(|l| l.0 == entity)
+    }
+
+    /// The bone the whole of `entity`'s own model goes with (its `body`, else its first), as last shown.
+    pub fn main_bone(&self, entity: u64) -> Option<(u32, usize)> {
+        let &(_, kind, _) = self.located.iter().find(|l| l.0 == entity)?;
+        let parts = &self.kinds.get(kind as usize)?.parts;
+        Some((kind, model::bone_named(parts, "body").unwrap_or(0)))
+    }
+
+    /// A point and a direction in the world as they were in bone `part` of `entity`'s model
+    /// `kind` last frame, in its pixels.
+    pub fn to_bone(&self, entity: u64, kind: u32, part: usize, p: glam::DVec3, d: glam::DVec3) -> Option<(Vec3, Vec3)> {
+        let &(.., first) = self.located.iter().find(|l| l.0 == entity && l.1 == kind)?;
+        let back = self.bone(first as usize + part).inverse();
+        Some((back.transform_point3((p - self.located_from).as_vec3()), back.transform_vector3(d.as_vec3())))
+    }
+
+    /// Where a point and a direction in a bone's pixels were in the world last frame (`to_bone`
+    /// the other way).
+    pub fn from_bone(&self, entity: u64, kind: u32, part: usize, p: Vec3, d: Vec3) -> Option<(glam::DVec3, glam::DVec3)> {
+        let &(.., first) = self.located.iter().find(|l| l.0 == entity && l.1 == kind)?;
+        let m = self.bone(first as usize + part);
+        Some((self.located_from + m.transform_point3(p).as_dvec3(), m.transform_vector3(d).as_dvec3().normalize_or_zero()))
     }
 
     pub fn destroy(&mut self, gpu: &mut dyn Backend) {

@@ -368,7 +368,15 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
             Ok(lib) => lib,
             // A mod that won't load is a good reason to have turned it off.
             Err(_) if wanted.contains(&name) => {
-                off.push(ModMeta { id: name.clone(), version: String::new(), deps: Vec::new(), order: 0, assets: dir.join("assets") });
+                off.push(ModMeta {
+                    id: name.clone(),
+                    version: String::new(),
+                    deps: Vec::new(),
+                    after: Vec::new(),
+                    before: Vec::new(),
+                    order: 0,
+                    assets: dir.join("assets"),
+                });
                 continue;
             }
             Err(e) => return Err(format!("loading mod {name} from {}: {e}", lib_path.display())),
@@ -425,6 +433,8 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
             id: m.id.clone(),
             version: unsafe { m.decl.version.as_str() }.to_string(),
             deps: deps_of(&m),
+            after: Vec::new(),
+            before: Vec::new(),
             order: 0,
             assets: m.assets.clone(),
         });
@@ -436,16 +446,18 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
     let metas: Vec<ModMeta> = mods
         .iter()
         .map(|m| unsafe {
+            let names = |list: &abi::Slice<abi::Str>| {
+                list.as_slice()
+                    .iter()
+                    .map(|d| d.as_str().to_string())
+                    .collect()
+            };
             ModMeta {
                 id: m.id.clone(),
                 version: m.decl.version.as_str().to_string(),
-                deps: m
-                    .decl
-                    .deps
-                    .as_slice()
-                    .iter()
-                    .map(|d| d.as_str().to_string())
-                    .collect(),
+                deps: names(&m.decl.deps),
+                after: names(&m.decl.after),
+                before: names(&m.decl.before),
                 order: 0,
                 assets: m.assets.clone(),
             }

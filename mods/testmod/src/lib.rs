@@ -245,7 +245,7 @@ fn init(r: &mut Registry) {
             Slots::single()
                 .accepts("#fuel")
                 .input()
-                .tooltip("testmod.fuel_slot")
+                .tooltip("block.testmod.fuel_slot")
                 .holder(),
         )
         .player_inventory()
@@ -317,6 +317,21 @@ fn init(r: &mut Registry) {
     r.shaped(&CRAFTING, "generator", 1, &["iii", "ifi", "iii"], &[('i', "#ingots/iron"), ('f', "#furnaces")]);
     r.shaped(&CRAFTING, "electric_furnace", 1, &["iii", "iFi", "ici"], &[('i', "#ingots/iron"), ('F', "#furnaces"), ('c', "#cables")]);
     r.shaped(&CRAFTING, "cable", 8, &["iii"], &[('i', "#ingots/iron")]);
+    // What a recipe does to its ingredients besides using them up: a hammer stays and wears a
+    // point a run (a shift-click crushes as much as it lasts for at once), the water bucket
+    // leaves its bucket in its slot (the lava one does by its own `remainder`).
+    static HAMMER: Item = Item::named("hammer");
+    r.item(&HAMMER)
+        .texture("base:iron_pickaxe")
+        .tint(0xC08060)
+        .durability(16)
+        .max_stack(1)
+        .handheld()
+        .tab(&BASE_TOOLS);
+    r.shapeless(&CRAFTING, "base:gravel", 1, &["hammer", "base:cobblestone"], 0)
+        .wear(0, 1);
+    r.shapeless(&CRAFTING, "base:obsidian", 1, &["base:lava_bucket", "base:water_bucket"], 0)
+        .leaves(1, "base:bucket");
 
     r.block(&REGOLITH)
         .hardness(0.5)
