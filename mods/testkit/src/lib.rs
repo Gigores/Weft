@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 
 use weft_sdk::*;
 
-declare_mod!(deps: [], init: init);
+declare_mod!(deps: ["testmod"], init: init);
 
 static PLAN: OnceLock<(Option<String>, Option<String>)> = OnceLock::new();
 

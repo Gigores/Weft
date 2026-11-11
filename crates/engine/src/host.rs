@@ -1698,6 +1698,7 @@ unsafe extern "C" fn find(kind: u32, name: Str, count: *mut u32) -> u32 {
         abi::entry_kind::KEY => at(c.game.keys.iter().map(|k| k.name.as_str()), name),
         abi::entry_kind::LIQUID => at(c.liquids.iter().map(|l| l.name.as_str()), name),
         abi::entry_kind::FEATURE => c.feature_names.get(name).copied(),
+        abi::entry_kind::RECORD => c.record_names.get(name).copied(),
         _ => None,
     };
     if !count.is_null() {
@@ -1727,6 +1728,7 @@ unsafe extern "C" fn name_of(kind: u32, id: u32) -> Str {
         abi::entry_kind::CONFIG => c.game.configs.get(id as usize).map(|d| d.name.as_str()),
         abi::entry_kind::SOUND => c.game.sounds.get(id as usize).map(|d| d.name.as_str()),
         abi::entry_kind::FEATURE => c.features.get(id as usize).map(|d| d.as_str()),
+        abi::entry_kind::RECORD => c.records.get(id as usize).map(|d| d.as_str()),
         _ => None,
     };
     name.map_or(Str::EMPTY, Str::new)

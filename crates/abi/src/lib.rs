@@ -438,11 +438,15 @@ pub mod entry_kind {
     pub const STEP: u32 = 42;
     /// A place in the order steps run in (`comp::phase`).
     pub const PHASE: u32 = 43;
+    /// A mod's own data, nothing the engine reads: its tags and components say what it is
+    /// (`structgen:structure`), other mods add, edit and remove records like anything else and
+    /// read them once the game is loaded (`Host::entries_with`).
+    pub const RECORD: u32 = 44;
     /// How many kinds there are; each has a component table (`ComponentTable`), empty for word
     /// sets and component declarations.
     pub const COUNT: usize = NAMES.len();
     /// Each kind's name for messages, by value.
-    pub const NAMES: [&str; 44] = [
+    pub const NAMES: [&str; 45] = [
         "block",
         "item",
         "entity",
@@ -487,6 +491,7 @@ pub mod entry_kind {
         "bone motion",
         "step",
         "phase",
+        "record",
     ];
 }
 

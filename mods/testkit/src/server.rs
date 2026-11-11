@@ -48,6 +48,9 @@ static EDITED: Item = Item::named("testmod:edited");
 static EDITED_BIOME: Biome = Biome::named("edited");
 static EDITED_LOOT: LootTable = LootTable::named("edited");
 static EDITED_KIND: EntityKind = EntityKind::named("edited");
+/// Testmod's records' tag and weight, by name: the vocabulary is shared.
+static STYLE: Tag = Tag::named("testmod:style");
+static STYLE_WEIGHT: Component<f32> = Component::named("testmod:weight");
 static WARMTH: Component<f32> = Component::named("testkit:warmth");
 static STORM: Weather = Weather::named("storm");
 static GRIT: Attribute = Attribute::named("grit");
@@ -171,6 +174,13 @@ pub fn register(r: &mut Registry) {
         .set(&WARMTH, 3.0)
         .attach(&MARK);
     r.edit(TIN_ORE.ore()).per_cube(7);
+    // Testmod's records: one of its changed, one more of the same kind.
+    static STONE_STYLE: Record = Record::named("testmod:stone_style");
+    static BRICK_STYLE: Record = Record::named("brick_style");
+    r.edit(&STONE_STYLE).set(&STYLE_WEIGHT, 5.0);
+    r.record(&BRICK_STYLE)
+        .tag(STYLE.name())
+        .set(&STYLE_WEIGHT, 1.0);
     r.block(&LAMP)
         .prop("lit", ["false", "true"])
         .states(|p, s| if p.is("lit", "true") { s.light(13) } else { s })
@@ -961,6 +971,15 @@ const OPS: &[(&str, &str, Run)] = &[
     ("look", "", |w, _, player, _| {
         Ok(w.looked_at(player, 5.0, Ray::blocks())
             .map_or("none".into(), |l| format!("{} {} {} {} {}", l.body, l.pos.x, l.pos.y, l.pos.z, block_name(l.state))))
+    }),
+    // Records with testmod's style tag: `name=weight` each, by name.
+    ("records", "", |_, _, _, _| {
+        let mut out: Vec<String> = entries_with(ek::RECORD, STYLE.name())
+            .into_iter()
+            .map(|id| format!("{}={}", name_of(ek::RECORD, id), STYLE_WEIGHT.on_record(id).unwrap_or(-1.0)))
+            .collect();
+        out.sort();
+        Ok(out.join(" "))
     }),
     // Features placed in generated cubes so far: `name x y z` each.
     ("placed", "", |_, _, _, _| {
