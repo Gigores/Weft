@@ -1099,20 +1099,21 @@ pub fn draw_custom(
         modui::TAG_ICON => stack_icon(ren, textures, r, ItemStack::new(data as u32, 1), scale, text_unit),
         modui::TAG_CREATIVE => {
             slot_background(ren, look, "slot", r, false, scale);
-            stack_icon(ren, textures, r, ItemStack::new(data as u32, 1), scale, text_unit);
             if hovered {
-                loaded(
-                    ren,
-                    look,
-                    "slot_highlight",
-                    Rect { x: r.x + scale, y: r.y + scale, w: r.w - 2.0 * scale, h: r.h - 2.0 * scale },
-                    scale,
-                );
+                slot_highlight(ren, look, r, scale);
             }
+            stack_icon(ren, textures, r, ItemStack::new(data as u32, 1), scale, text_unit);
         }
         TAG_SLOT => {
             let Some(client) = client else { return };
             slot_background(ren, look, "slot", r, false, scale);
+            let dragged = client
+                .drag
+                .as_ref()
+                .is_some_and(|d| d.1.contains(&(data as u32)));
+            if hovered || dragged {
+                slot_highlight(ren, look, r, scale);
+            }
             let stack = client
                 .menu
                 .as_ref()
@@ -1124,22 +1125,14 @@ pub fn draw_custom(
                 ren.image(Rect { x: r.x + (r.w - s) / 2.0, y: r.y + (r.h - s) / 2.0, w: s, h: s }, t, [0.0, 0.0, 1.0, 1.0], 0xFFFFFFFF);
             }
             stack_icon(ren, textures, r, stack, scale, text_unit);
-            let dragged = client
-                .drag
-                .as_ref()
-                .is_some_and(|d| d.1.contains(&(data as u32)));
-            if hovered || dragged {
-                loaded(
-                    ren,
-                    look,
-                    "slot_highlight",
-                    Rect { x: r.x + scale, y: r.y + scale, w: r.w - 2.0 * scale, h: r.h - 2.0 * scale },
-                    scale,
-                );
-            }
         }
         _ => {}
     }
+}
+
+/// A slot under the cursor or dragged over: lit inside its frame, behind what it holds.
+fn slot_highlight(ren: &mut UiRenderer, look: &Look, r: Rect, scale: f32) {
+    loaded(ren, look, "slot_highlight", Rect { x: r.x + scale, y: r.y + scale, w: r.w - 2.0 * scale, h: r.h - 2.0 * scale }, scale);
 }
 
 /// A stack in `r` (`UiRenderer::stack_icon`).

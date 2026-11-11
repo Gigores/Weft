@@ -1535,16 +1535,23 @@ impl Dim {
     }
 
     /// Falling bodies that came down: each block placed where it landed, on what it landed on,
-    /// else dropped as loot.
+    /// else dropped as loot. One resting on another that is still falling (layers of sand) rides
+    /// it down and lands once that one has; what it stood on being gone, it stands on the world.
     fn land_falling(&mut self, c: &'static Content) {
-        let bodies = &self.bodies;
+        let (bodies, entities) = (&self.bodies, &self.entities);
+        let falling = |id: u64| entities.get(id).is_some_and(|e| e.falls && !e.removed);
         let landed: Vec<(u64, DVec3, Vec<(IVec3, u32)>, bool, Option<u64>)> = self
             .entities
             .list
             .iter()
             .filter(|e| e.falls && !e.removed && e.motion != Motion::Parked)
-            .filter(|e| e.on_ground || e.age > 600 || bodies.get(&e.id).is_none_or(|s| s.all_blocks().is_empty()))
-            .map(|e| (e.id, e.pos, bodies.get(&e.id).map_or(Vec::new(), |s| s.all_blocks()), e.on_ground, e.frame))
+            .filter(|e| {
+                (e.on_ground && !e.frame.is_some_and(falling)) || e.age > 600 || bodies.get(&e.id).is_none_or(|s| s.all_blocks().is_empty())
+            })
+            .map(|e| {
+                let on = e.frame.filter(|f| bodies.contains_key(f));
+                (e.id, e.pos, bodies.get(&e.id).map_or(Vec::new(), |s| s.all_blocks()), e.on_ground, on)
+            })
             .collect();
         for (id, pos, blocks, ground, on) in landed {
             // One without its blocks (loaded from a save mid-fall) just goes.

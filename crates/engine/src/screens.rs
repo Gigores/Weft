@@ -127,6 +127,7 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         "core:debug_options" => Box::new(crate::hud_editor::DebugOptions),
         "core:tags" => Box::new(crate::game_screens::TagList::default()),
         "core:mods" => Box::new(ModList::default()),
+        "core:mod_catalog" => Box::new(crate::mod_index::Catalog::default()),
         "core:profile" => Box::new(Profile::default()),
         _ => return None,
     })
@@ -299,14 +300,17 @@ impl Screen for ModList {
                 if let Kind::Button { enabled, .. } = &mut ui.nodes[b].kind {
                     *enabled = has_settings;
                 }
+                button(ui, cx, "mods.catalog", &[], 120.0, |c| c.requests.push(Request::Screen("core:mod_catalog".into())));
                 let dir = cx.settings.run_dir.join("mods");
                 button(ui, cx, "mods.folder", &[], 120.0, move |_| crate::packs::open_folder(&dir));
                 button(ui, cx, "menu.done", &[], 120.0, |c| c.requests.push(Request::Close));
             });
-            if crate::modloader::restart_pending() {
+            if crate::modloader::restart_pending() || crate::mod_index::changed() {
                 ui.container(Style::row().gap(6.0).align(crate::ui::Align::Center), |ui| {
                     label(ui, cx, "mods.restart_note", &[], "dim");
-                    let b = button(ui, cx, "mods.restart", &[], 120.0, |c| c.requests.push(Request::Restart));
+                    // A phone's game can't start itself again: it closes, to be opened again.
+                    let key = if cfg!(target_os = "android") { "mods.close" } else { "mods.restart" };
+                    let b = button(ui, cx, key, &[], 120.0, |c| c.requests.push(Request::Restart));
                     ui.set_id(b, "mods_restart");
                 });
             }

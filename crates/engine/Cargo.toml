@@ -24,6 +24,10 @@ tokio.workspace = true
 zip.workspace = true
 kira.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+sha2.workspace = true
 mimalloc.workspace = true
 
 [dev-dependencies]

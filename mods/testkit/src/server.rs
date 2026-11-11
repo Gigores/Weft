@@ -557,6 +557,19 @@ const OPS: &[(&str, &str, Run)] = &[
         if missed > 0 { Err(format!("{missed} blocks not loaded")) } else { Ok(volume.to_string()) }
     }),
     ("get", "<pos:pos>", |w, cmd, _, _| Ok(block_name(w.block(pos(cmd, "pos")?)).to_string())),
+    ("count", "<from:pos> <to:pos> <block:block>", |w, cmd, _, _| {
+        // How many of a block lie in a box.
+        let (a, b, want) = (pos(cmd, "from")?, pos(cmd, "to")?, block_of(id(cmd, "block")?));
+        let mut n = 0;
+        for y in a[1].min(b[1])..=a[1].max(b[1]) {
+            for z in a[2].min(b[2])..=a[2].max(b[2]) {
+                for x in a[0].min(b[0])..=a[0].max(b[0]) {
+                    n += (block_of(w.block([x, y, z])) == want) as u32;
+                }
+            }
+        }
+        Ok(n.to_string())
+    }),
     ("prop", "<pos:pos> <name:word>", |w, cmd, _, _| {
         Ok(w.prop(pos(cmd, "pos")?, word(cmd, "name")?)
             .unwrap_or("none")

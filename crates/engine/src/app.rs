@@ -907,6 +907,8 @@ impl Running {
                 Request::Open(s) => self.open(s),
                 Request::Close => self.close_top(),
                 Request::Quit => self.quit = true,
+                // A phone's app can't start itself again: it closes, to be opened again.
+                Request::Restart if cfg!(target_os = "android") => self.quit = true,
                 Request::Restart => {
                     match crate::paths::own_program().and_then(|exe| {
                         std::process::Command::new(exe)
