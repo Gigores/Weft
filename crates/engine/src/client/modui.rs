@@ -619,6 +619,7 @@ pub unsafe extern "C" fn client_entity(c: *mut abi::ClientCtx, id: u64, out: *mu
                 health: cl.health(),
                 max_health: cl.max_health,
                 size: cl.player.dims().size(),
+                selected: cl.selected as u32,
                 ..Default::default()
             };
             *out = state;
