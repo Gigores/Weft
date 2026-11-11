@@ -49,6 +49,9 @@ pub fn register(r: &mut Registry) {
         r.shapeless(C, kind, 9, &["#ore_blocks/{m}"], 0);
         r.shapeless(S, kind, 1, &["#ores/{m}"], 200);
     }
+
+    r.shaped(C, "#hollow_log/{m}", 4, &[" # ", "# #", " # "], &[('#', "#hollow_log_of/{m}")]);
+
     r.shapeless(S, "#cooked_meat/{m}", 1, &["#raw_meat/{m}"], 200);
     r.shapeless(S, "#ingots/{m}", 1, &["#raw_ores/{m}"], 200);
 
