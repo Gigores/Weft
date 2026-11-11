@@ -156,7 +156,6 @@ entity.base.zombie = Зомби
 entity.base.spider = Паук
 entity.base.pig = Свинья
 entity.base.cow = Корова
-entity.base.creeper = Крипер
 entity.base.skeleton = Скелет
 entity.base.sheep = Овца
 entity.base.chicken = Курица

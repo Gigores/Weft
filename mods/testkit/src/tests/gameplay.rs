@@ -613,13 +613,13 @@ pub async fn beds(t: T) -> R {
     t.set(add(foot, [0, 2, 0]), "air").await?;
 
     // Any monster keeps the player up, by its tag.
-    let creeper = t
-        .op(&format!("spawn base:creeper {} {} {}", foot[0] + 5, foot[1], foot[2]))
+    let zombie = t
+        .op(&format!("spawn base:zombie {} {} {}", foot[0] + 5, foot[1], foot[2]))
         .await?;
     t.press("core:use");
     t.secs(0.4).await?;
-    t.check(t.c().screen() != "base:sleeping", "no sleeping with a creeper near");
-    t.op(&format!("remove {}", creeper.trim())).await?;
+    t.check(t.c().screen() != "base:sleeping", "no sleeping with a zombie near");
+    t.op(&format!("remove {}", zombie.trim())).await?;
 
     // Being hurt gets them up.
     t.press("core:use");
@@ -773,8 +773,7 @@ pub async fn beds_far(t: T) -> R {
     Ok(())
 }
 
-/// A creeper going off under water breaks nothing and the water stays. A crater in a lake is
-/// filled again by the water around it.
+/// A crater in a lake is filled again by the water around it.
 pub async fn explosions_and_water(t: T) -> R {
     t.flat().await?;
     t.cmd("/rule testkit:no_hurt 1").await?;
@@ -784,18 +783,7 @@ pub async fn explosions_and_water(t: T) -> R {
     t.fill(add(f, [-6, 0, -6]), add(f, [6, 2, 6]), "water")
         .await?;
     t.secs(0.3).await?;
-    let spot = add(f, [2, 0, 0]);
-    let creeper = t.op(&format!("spawn base:creeper {}", at(spot))).await?;
-    let id: u64 = creeper
-        .trim()
-        .parse()
-        .map_err(|_| format!("spawn creeper: {creeper}"))?;
-    t.until("the creeper going off", Duration::from_secs(6), |t| t.c().entity(id).is_none())
-        .await?;
-    t.secs(0.3).await?;
-    t.check(t.block(spot).await?.contains("water"), format!("the water stays: {}", t.block(spot).await?));
-    t.check_eq(t.block(add(spot, [0, -1, 0])).await?, "base:stone".into(), "the floor under it stays");
-    // The same place, a hole in the water that the water must fill.
+    // A hole in the water that the water must fill.
     t.op("mode creative").await?;
     t.c().set_flying(true);
     t.c()

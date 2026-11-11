@@ -30,6 +30,7 @@ pub mod minecraft;
 pub mod mod_index;
 pub mod model;
 pub mod modloader;
+pub mod mods_screen;
 pub mod net;
 pub mod packs;
 pub mod paths;

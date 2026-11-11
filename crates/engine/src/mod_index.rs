@@ -5,15 +5,9 @@
 //! verified had its source read by a maintainer; the others show only when asked for.
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
-
-use crate::app::{Ctx, Request};
-use crate::screens::{BuildCx, Screen, button, frame, label};
-use crate::ui::text::Arg;
-use crate::ui::{Align, Kind, Style, Ui};
 
 const INDEX_URL: &str = "https://raw.githubusercontent.com/Weft-Rust/Weft-Mods-Index/gh-pages/index.json";
 
@@ -24,6 +18,8 @@ pub struct IndexMod {
     pub summary: String,
     pub author: String,
     pub source: String,
+    /// Where its icon is, if the index says.
+    pub icon: String,
     /// Newest first.
     pub builds: Vec<Build>,
 }
@@ -58,6 +54,7 @@ fn parse(bytes: &[u8]) -> Option<Vec<IndexMod>> {
                 summary: text(m, "summary"),
                 author: text(m, "author"),
                 source: text(m, "source"),
+                icon: text(m, "icon"),
                 builds: m["builds"]
                     .as_array()
                     .map(|bs| {
@@ -172,6 +169,13 @@ pub fn refresh(cache: &Path) {
         return;
     }
     update(|s| s.status = Status::Loading);
+    if fake::on() {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            update(|s| (s.index, s.status) = (Some(fake::mods()), Status::Idle));
+        });
+        return;
+    }
     let file = cache.join("mod-index.json");
     std::thread::spawn(move || {
         let fetched = get(INDEX_URL).and_then(|b| parse(&b).map(|i| (i, b)).ok_or("not an index".into()));
@@ -179,6 +183,7 @@ pub fn refresh(cache: &Path) {
             Ok((index, bytes)) => {
                 let _ = file.parent().map(std::fs::create_dir_all);
                 let _ = std::fs::write(&file, bytes);
+                fetch_icons(&index, &file.with_file_name("mod-icons"));
                 update(|s| (s.index, s.status) = (Some(index), Status::Idle));
             }
             Err(e) => {
@@ -193,6 +198,43 @@ pub fn refresh(cache: &Path) {
     });
 }
 
+/// Where mod `id`'s icon from `url` is kept.
+fn icon_file(dir: &Path, id: &str, url: &str) -> PathBuf {
+    dir.join(format!("{id}-{:08x}.png", crate::registry::name_hash(url) as u32))
+}
+
+/// Mods' icons the index points at, those not here yet, one after another.
+fn fetch_icons(index: &[IndexMod], dir: &Path) {
+    let todo: Vec<(String, String)> = index
+        .iter()
+        .filter(|m| !m.icon.is_empty() && !icon_file(dir, &m.id, &m.icon).exists())
+        .map(|m| (m.id.clone(), m.icon.clone()))
+        .collect();
+    if todo.is_empty() {
+        return;
+    }
+    let dir = dir.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = std::fs::create_dir_all(&dir);
+        for (id, url) in todo {
+            // A picture, and a small one: what the index points at is the mod author's.
+            if let Some(bytes) = get(&url)
+                .ok()
+                .filter(|b| b.starts_with(b"\x89PNG") && b.len() < 1 << 18)
+            {
+                let _ = std::fs::write(icon_file(&dir, &id, &url), bytes);
+                update(|_| {});
+            }
+        }
+    });
+}
+
+/// Mod `id`'s icon as a GUI texture name, if it came.
+pub fn icon(cache: &Path, m: &IndexMod) -> Option<String> {
+    let path = icon_file(&cache.join("mod-icons"), &m.id, &m.icon);
+    (!m.icon.is_empty() && path.exists()).then(|| format!("{}{}", crate::ui::render::FILE, path.display()))
+}
+
 fn sha256_of(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -202,6 +244,10 @@ fn sha256_of(bytes: &[u8]) -> String {
 
 /// The mods in `dir` as zips, with each one's SHA-256.
 pub fn installed(dir: &Path) -> Vec<(String, String)> {
+    if fake::on() {
+        fake::seed();
+        return fake::INSTALLED.lock().clone();
+    }
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     entries
         .flatten()
@@ -219,6 +265,10 @@ pub fn installed(dir: &Path) -> Vec<(String, String)> {
 pub fn install(id: String, dir: PathBuf) {
     let Some(index) = index() else { return };
     update(|s| s.status = Status::Busy(id.clone()));
+    if fake::on() {
+        fake::install(id, index);
+        return;
+    }
     std::thread::spawn(move || {
         let have: Vec<String> = installed(&dir).into_iter().map(|m| m.0).collect();
         let mut todo = vec![id.clone()];
@@ -261,180 +311,220 @@ pub fn install(id: String, dir: PathBuf) {
 }
 
 pub fn remove(id: &str, dir: &Path) {
+    if fake::on() {
+        fake::INSTALLED.lock().retain(|m| m.0 != id);
+        CHANGED.store(true, std::sync::atomic::Ordering::Relaxed);
+        update(|_| {});
+        return;
+    }
     if valid_id(id) && std::fs::remove_file(dir.join(format!("{id}.zip"))).is_ok() {
         CHANGED.store(true, std::sync::atomic::Ordering::Relaxed);
         update(|_| {});
     }
 }
 
-/// The catalog: the index's mods, the one picked with what it is and what can be done with it.
-#[derive(Default)]
-pub struct Catalog {
-    selected: Rc<std::cell::Cell<usize>>,
-    unverified: Rc<std::cell::Cell<bool>>,
-    seen: u64,
-}
+/// `--fake-catalog`: made-up mods instead of the index, to look at the screen with a full list;
+/// installing and removing only pretend, nothing is downloaded or written.
+mod fake {
+    use super::{Build, CHANGED, IndexMod, Status, update};
 
-impl Screen for Catalog {
-    fn name(&self) -> &str {
-        "core:mod_catalog"
+    pub fn on() -> bool {
+        crate::app::api::launch_options().contains_key("fake-catalog")
     }
 
-    /// Built again when the background work moves on.
-    fn pointer(&mut self, _cursor: glam::Vec2, _ui: &mut Ui, ctx: &mut Ctx, _hud: &mut crate::hud::Hud) -> bool {
-        if generation() != self.seen {
-            ctx.requests.push(Request::Rebuild);
-        }
-        false
+    /// (id, the SHA-256 of what is "installed"): one up to date, one a version behind.
+    pub static INSTALLED: parking_lot::Mutex<Vec<(String, String)>> = parking_lot::Mutex::new(Vec::new());
+    static SEEDED: std::sync::Once = std::sync::Once::new();
+
+    fn sha(id: &str, version: &str) -> String {
+        format!("{:064x}", crate::registry::name_hash(&format!("{id}@{version}")) as u128)
     }
 
-    fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
-        self.seen = generation();
-        let dir = cx.settings.run_dir.join("mods");
-        if index().is_none() && matches!(status(), Status::Idle) {
-            refresh(&cx.settings.run_dir.join("cache"));
-        }
-        let have = installed(&dir);
-        let show_all = self.unverified.get();
-        let mods: Vec<IndexMod> = index()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|m| show_all || m.builds.iter().any(|b| b.verified))
-            .collect();
-        let sel = self.selected.get().min(mods.len().saturating_sub(1));
-        let tall = (cx.size.y - 120.0).clamp(80.0, 300.0);
-        let status = status();
-        frame(ui, cx, "catalog.title", |ui| {
-            ui.container(Style::row().gap(6.0), |ui| {
-                ui.panel(
-                    "well",
-                    Style::default()
-                        .pad(4.0)
-                        .gap(2.0)
-                        .w(184.0)
-                        .h(tall)
-                        .scroll()
-                        .stretch(),
-                    |ui| {
-                        if mods.is_empty() {
-                            let key = match &status {
-                                Status::Loading => "catalog.loading",
-                                Status::Failed(_) => "catalog.offline",
-                                _ => "catalog.empty",
-                            };
-                            label(ui, cx, key, &[], "dim");
-                        }
-                        for (i, m) in mods.iter().enumerate() {
-                            let s = self.selected.clone();
-                            let b = ui.button(
-                                "button",
-                                Style::row().min_h(22.0).pad_xy(4.0, 2.0).w(172.0),
-                                Rc::new(move |c: &mut Ctx| {
-                                    s.set(i);
-                                    c.requests.push(Request::Rebuild);
-                                }),
-                                |ui| {
-                                    ui.text(crate::ui::text::plain(&m.name), "button");
-                                },
-                            );
-                            if let Kind::Button { selected, .. } = &mut ui.nodes[b].kind {
-                                *selected = i == sel;
-                            }
-                        }
-                    },
+    pub fn mods() -> Vec<IndexMod> {
+        let abi = format!("{:016x}", crate::modloader::ABI_VERSION);
+        // id, name, author, summary, verified, deps, versions (newest first), fits this game.
+        let list: &[(&str, &str, &str, &str, bool, &[&str], &[&str], bool)] = &[
+            (
+                "cogwork",
+                "Cogwork",
+                "Zorro909",
+                "Gears, shafts and belts that carry power from a water wheel to whatever needs turning: mills, saws, presses.",
+                true,
+                &[],
+                &["0.4.1", "0.4.0", "0.3.2"],
+                true,
+            ),
+            (
+                "structgen",
+                "Structgen",
+                "Zorro909",
+                "Generates structures and hamlets across the overworld, and lets you save and load your own.",
+                true,
+                &[],
+                &["0.3.0"],
+                true,
+            ),
+            (
+                "showcase",
+                "Showcase",
+                "Zorro909",
+                "Films of the game: a camera that flies a path through a world as it generates.",
+                false,
+                &["structgen"],
+                &["0.2.0"],
+                true,
+            ),
+            ("lanterns", "Lanterns", "mira", "Twelve colored lanterns.", true, &[], &["1.0.0"], true),
+            (
+                "better_farming_and_rural_life_overhaul",
+                "Better Farming and Rural Life: a Complete Overhaul of Crops, Animals, Seasons and lots and lots of different other things",
+                "the_very_long_name_collective",
+                "Crops that grow by season and by how wet the ground is, animals that need feeding and shelter, a farmer's almanac that keeps track of it all, scarecrows, compost, greenhouses, irrigation channels that carry water from a river further than a bucket would, and a market in every village that buys what you grow at prices that change with the weather. Long descriptions wrap, and the panel scrolls when there is more of it than fits.",
+                true,
+                &["lanterns"],
+                &["2.3.0", "2.2.5"],
+                true,
+            ),
+            ("tiny", "T", "a", "", false, &[], &["0.0.1"], true),
+            (
+                "old_magic",
+                "Old Magic",
+                "wizard42",
+                "Wands, runes and a tower. Made for an older game: no build fits this one yet.",
+                true,
+                &[],
+                &["1.2.0"],
+                false,
+            ),
+            (
+                "cartography",
+                "Cartography",
+                "mira",
+                "Maps that fill in as you walk, markers, and a table to copy them on.",
+                true,
+                &["lanterns"],
+                &["0.9.0", "0.8.0"],
+                true,
+            ),
+            (
+                "redstone_plus",
+                "Redstone+",
+                "sparky",
+                "Gates, timers, displays and wireless pairs for bigger machines.",
+                false,
+                &[],
+                &["0.5.0"],
+                true,
+            ),
+            (
+                "biomes_galore",
+                "Biomes Galore",
+                "terra",
+                "Forty new biomes: salt flats, cherry hills, ash plains, mangroves.",
+                true,
+                &[],
+                &["3.1.0", "3.0.0"],
+                true,
+            ),
+            (
+                "deep_dark_caves",
+                "Deep Dark Caves",
+                "terra",
+                "Caves under the caves, with their own light and things living there.",
+                true,
+                &["biomes_galore"],
+                &["1.1.0"],
+                true,
+            ),
+            ("pipes", "Pipes", "flux", "Item and liquid pipes, pumps and filters.", true, &[], &["2.0.0"], true),
+            (
+                "quests",
+                "Quests",
+                "storyteller",
+                "A quest book: chapters, rewards and tasks a modpack writes in a text file.",
+                false,
+                &[],
+                &["0.3.0"],
+                true,
+            ),
+            ("hats", "Hats", "mira", "Hats. Worn on any model, players' own ones too.", true, &[], &["1.0.2"], true),
+            (
+                "weather_plus",
+                "Weather Plus",
+                "storm",
+                "Fog banks, hail, heat haze and storms that move across the map.",
+                true,
+                &[],
+                &["0.7.0"],
+                true,
+            ),
+            (
+                "tools_of_the_trade",
+                "Tools of the Trade",
+                "smith",
+                "Hammers that mine 3 x 3, axes that fell whole trees, sickles.",
+                false,
+                &["pipes"],
+                &["0.2.1"],
+                true,
+            ),
+        ];
+        list.iter()
+            .map(|&(id, name, author, summary, verified, deps, versions, fits)| IndexMod {
+                id: id.into(),
+                name: name.into(),
+                summary: summary.into(),
+                author: author.into(),
+                source: format!("https://github.com/{author}/{id}"),
+                icon: String::new(),
+                builds: versions
+                    .iter()
+                    .map(|v| Build {
+                        version: v.to_string(),
+                        abi: if fits { abi.clone() } else { "0000000000000000".into() },
+                        url: String::new(),
+                        sha256: sha(id, v),
+                        deps: deps.iter().map(|d| d.to_string()).collect(),
+                        verified,
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// What is "installed" at the start: the newest of one, an older one of another.
+    pub fn seed() {
+        SEEDED.call_once(|| {
+            *INSTALLED.lock() = vec![("lanterns".into(), sha("lanterns", "1.0.0")), ("cogwork".into(), sha("cogwork", "0.4.0"))];
+        });
+    }
+
+    /// Takes a moment, then `id` and what it needs are "installed".
+    pub fn install(id: String, index: Vec<IndexMod>) {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1200));
+            let mut todo = vec![id];
+            let mut have = INSTALLED.lock();
+            while let Some(want) = todo.pop() {
+                let Some(b) = index
+                    .iter()
+                    .find(|m| m.id == want)
+                    .and_then(|m| m.fitting())
+                else {
+                    continue;
+                };
+                have.retain(|m| m.0 != want);
+                have.push((want, b.sha256.clone()));
+                todo.extend(
+                    b.deps
+                        .iter()
+                        .filter(|d| !have.iter().any(|h| &h.0 == *d))
+                        .cloned(),
                 );
-                ui.panel(
-                    "panel",
-                    Style::default()
-                        .pad(8.0)
-                        .gap(4.0)
-                        .w(300.0)
-                        .h(tall)
-                        .scroll()
-                        .stretch(),
-                    |ui| {
-                        let Some(m) = mods.get(sel) else { return };
-                        ui.text(crate::ui::text::plain(&m.name), "default");
-                        label(ui, cx, "catalog.by", &[Arg::Text(m.author.clone())], "dim");
-                        let mine = have.iter().find(|h| h.0 == m.id);
-                        let fit = m.fitting();
-                        match (fit, mine) {
-                            (_, Some((_, sha))) => {
-                                let at = m.builds.iter().find(|b| &b.sha256 == sha);
-                                let version = at.map_or_else(|| "?".to_string(), |b| b.version.clone());
-                                label(ui, cx, "catalog.installed", &[Arg::Text(version)], "dim");
-                            }
-                            (Some(b), None) => {
-                                label(ui, cx, "catalog.version", &[Arg::Text(b.version.clone())], "dim");
-                            }
-                            (None, None) => {
-                                label(ui, cx, "catalog.no_build", &[], "dim");
-                            }
-                        }
-                        if !fit.is_some_and(|b| b.verified) {
-                            label(ui, cx, "catalog.unverified", &[], "dim");
-                        }
-                        if !m.source.is_empty() {
-                            ui.text(crate::ui::text::plain(&m.source), "dim");
-                        }
-                        ui.add(Kind::Container { class: None }, Style::default().h(4.0));
-                        ui.text(crate::ui::text::plain(&m.summary), "default");
-                    },
-                );
-            });
-            let picked = mods.get(sel).cloned();
-            ui.container(Style::row().gap(6.0), |ui| {
-                if let Some(m) = picked {
-                    let mine = have.iter().find(|h| h.0 == m.id).map(|h| h.1.clone());
-                    let newest = m.fitting().map(|b| b.sha256.clone());
-                    let busy = matches!(status, Status::Busy(_) | Status::Loading);
-                    let (key, offered) = match (&mine, &newest) {
-                        (None, Some(_)) => ("catalog.install", true),
-                        (Some(a), Some(b)) if a != b => ("catalog.update", true),
-                        _ => ("catalog.install", false),
-                    };
-                    let (id, to) = (m.id.clone(), dir.clone());
-                    let b = button(ui, cx, key, &[], 110.0, move |c| {
-                        install(id.clone(), to.clone());
-                        c.requests.push(Request::Rebuild);
-                    });
-                    if let Kind::Button { enabled, .. } = &mut ui.nodes[b].kind {
-                        *enabled = offered && !busy;
-                    }
-                    let (id, to) = (m.id.clone(), dir.clone());
-                    let b = button(ui, cx, "catalog.remove", &[], 110.0, move |c| {
-                        remove(&id, &to);
-                        c.requests.push(Request::Rebuild);
-                    });
-                    if let Kind::Button { enabled, .. } = &mut ui.nodes[b].kind {
-                        *enabled = mine.is_some() && !busy;
-                    }
-                }
-                let all = self.unverified.clone();
-                let key = if show_all { "catalog.unverified_shown" } else { "catalog.unverified_hidden" };
-                button(ui, cx, key, &[], 140.0, move |c| {
-                    all.set(!all.get());
-                    c.requests.push(Request::Rebuild);
-                });
-                let cache = cx.settings.run_dir.join("cache");
-                button(ui, cx, "catalog.refresh", &[], 90.0, move |c| {
-                    refresh(&cache);
-                    c.requests.push(Request::Rebuild);
-                });
-                button(ui, cx, "menu.done", &[], 90.0, |c| c.requests.push(Request::Close));
-            });
-            ui.container(Style::row().gap(6.0).align(Align::Center), |ui| match &status {
-                Status::Busy(id) => {
-                    label(ui, cx, "catalog.downloading", &[Arg::Text(id.clone())], "dim");
-                }
-                Status::Failed(e) => {
-                    label(ui, cx, "catalog.failed", &[Arg::Text(e.clone())], "dim");
-                }
-                _ if changed() => {
-                    label(ui, cx, "mods.restart_note", &[], "dim");
-                }
-                _ => {}
-            });
+            }
+            drop(have);
+            CHANGED.store(true, std::sync::atomic::Ordering::Relaxed);
+            update(|s| s.status = Status::Idle);
         });
     }
 }

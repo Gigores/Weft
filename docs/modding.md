@@ -149,7 +149,10 @@ Textures can also be [animated, glow and have overlays](textures.md), or [be con
 Format: `type.modname.name = value`, e.g. `item.examplemod.example_item = Example Item`\
 Any item can have a tooltip using `type.modname.name.tooltip = Some tooltip`, more in the [localization guide](localization.md).\
 If the player's language doesn't have a key (or a whole file), English is shown, so `en_us.lang` is the one you always need.\
-The Mods screen reads your mod's page from there too: `mod.mymod.name`, `mod.mymod.description` (as long as you like, with pictures), `mod.mymod.authors` and `mod.mymod.url`, and its icon is `assets/textures/gui/icon.png`.
+The Mods screen reads your mod's page from there too: `mod.mymod.name`, `mod.mymod.description` (as long as you like, with pictures), `mod.mymod.authors` and `mod.mymod.url`.
+
+### The mod's icon
+`assets/textures/gui/icon.png`, a square PNG (16x16 is enough, bigger is fine, under 256 KB). The Mods screen shows it on your mod's tile and page, and the catalog takes it from the same place at the commit you submitted, so players see it before they download. Without one your mod gets its first letter on a color.
 
 Text can carry colors and effects:
 - `{#ff8080}This text is red{/}`
