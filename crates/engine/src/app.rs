@@ -393,7 +393,6 @@ impl App {
         let off = modloader::off_file(&self.opts.run_dir, self.opts.automated);
         let mods = modloader::load(&self.opts.mod_dirs, &self.opts.cache_dir, &off, &self.opts.mods_off)?;
         crate::config::set_automated(self.opts.automated);
-        crate::settings::migrate(&self.opts.run_dir);
         crate::config::load(&self.opts.run_dir);
         if self.opts.no_vsync {
             crate::config::override_for_run("core:vsync", "false");

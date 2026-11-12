@@ -445,6 +445,11 @@ impl<T: Data, K> Component<T, K> {
     pub fn on_item(&self, item: u32) -> Option<T> {
         self.on(ek::ITEM, item)
     }
+    /// Its value on a record (`Registry::record`).
+    #[inline]
+    pub fn on_record(&self, record: u32) -> Option<T> {
+        self.on(ek::RECORD, record)
+    }
     #[inline]
     pub fn on_entity(&self, kind: u32) -> Option<T> {
         self.on(ek::ENTITY, kind)
@@ -587,6 +592,11 @@ impl<K> Tag<K> {
     #[inline]
     pub fn on_item(&self, item: u32) -> bool {
         self.on(ek::ITEM, item)
+    }
+    /// A record (`Registry::record`) has it.
+    #[inline]
+    pub fn on_record(&self, record: u32) -> bool {
+        self.on(ek::RECORD, record)
     }
     #[inline]
     pub fn on_entity(&self, kind: u32) -> bool {

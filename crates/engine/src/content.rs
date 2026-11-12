@@ -999,6 +999,9 @@ pub struct Content {
     /// Every feature's name by id (`FeatureDef::id`); each dimension has its own list of them.
     pub features: Vec<String>,
     pub feature_names: FxHashMap<String, u32>,
+    /// Mods' records by id (`entry_kind::RECORD`).
+    pub records: Vec<String>,
+    pub record_names: FxHashMap<String, u32>,
     /// Weighted lists of block states from `blocks` component values, by the index the value holds.
     pub ref_lists: Vec<Vec<[u32; 2]>>,
     pub components: Components,
@@ -2027,6 +2030,9 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
     let made = Made { templates: &templates, template_names: &template_names, palette_names: &palette_names };
     let (features, feature_names) =
         freeze_features(&mut games, &mut dim_defs, look, made, &mut matchers, &mut tables, &mod_name, &mut errors);
+    // Mods' own data: only its table, which mods read.
+    let rk = abi::entry_kind::RECORD;
+    let (records, record_names) = tables.bake(entries_of(&mut games, rk), rk, &mod_name, &mut errors, |e, _| e.name.clone());
     build_terrains(&mut games, &mut dim_defs, &biome_names, &biome_rules, look, &mut tables, &mod_name, &mut errors);
     let commands = freeze_commands(&mods, &mut games, &mut errors);
     let mut word_sets = collect_word_sets(&mut games, &mod_name, &mut errors);
@@ -2201,6 +2207,8 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
         palette_names,
         features,
         feature_names,
+        records,
+        record_names,
         ref_lists,
         word_sets,
         tint_kinds,

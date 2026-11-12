@@ -67,7 +67,8 @@ pub mod kind {
         Attribute = crate::abi::entry_kind::ATTRIBUTE,
         Key = crate::abi::entry_kind::KEY,
         Liquid = crate::abi::entry_kind::LIQUID,
-        Feature = crate::abi::entry_kind::FEATURE
+        Feature = crate::abi::entry_kind::FEATURE,
+        Record = crate::abi::entry_kind::RECORD
     );
     /// Kinds without ids: entries of their own number, or things known only by name.
     macro_rules! named_kinds {
@@ -357,6 +358,9 @@ pub type Feature = Handle<kind::Feature>;
 pub type Template = Handle<kind::Template>;
 /// Blocks for templates' slots (`Registry::palette`).
 pub type Palette = Handle<kind::Palette>;
+/// A mod's own data (`Registry::record`): what it is says its tags and components, the engine
+/// reads none of it.
+pub type Record = Handle<kind::Record>;
 /// A natural spawning rule (`Registry::natural_spawn`), named `<mod>:<entity>`, `/2`.. unless
 /// `named`.
 pub type SpawnRule = Handle<kind::SpawnRule>;
@@ -1208,6 +1212,22 @@ impl Registry {
     /// by itself; this adds to it.
     pub fn template(&mut self, template: &'static Template) -> TemplateBuilder<'_> {
         TemplateBuilder { reg: self, e: crate::entry::Entry::of(template), layers: Vec::new(), keys: Vec::new(), fills: Vec::new() }
+    }
+
+    /// A mod's own data, for itself or an API other mods use: tags and components say what it is,
+    /// and other mods `edit`, `replace` and `remove` it like anything registered. Read once the
+    /// game is loaded: `entries_with(entry_kind::RECORD, "structgen:structure")` lists them,
+    /// `CHANCE.on_record(id)` reads one.
+    ///
+    /// ```ignore
+    /// static HUT: Record = Record::named("hut");
+    /// r.record(&HUT).tag("structgen:structure").set(&CHANCE, 0.3).set(&SPACING, 256);
+    /// // Another mod's:
+    /// static THEIR_HUT: Record = Record::named("othermod:hut");
+    /// r.edit(&THEIR_HUT).set(&CHANCE, 0.05);
+    /// ```
+    pub fn record(&mut self, record: &'static Record) -> RecordBuilder<'_> {
+        RecordBuilder { reg: self, e: crate::entry::Entry::of(record) }
     }
 
     /// The blocks templates' slots take where a feature uses it (`FeatureBuilder::palette`):
@@ -3067,6 +3087,7 @@ pub struct TemplateBuilder<'a> {
 crate::entry::entry_builder!(
     Template => TemplateBuilder, template, finish;
     Palette => PaletteBuilder, palette;
+    Record => RecordBuilder, record;
     Liquid => LiquidBuilder, liquid_entry, finish;
     Reaction => ReactionBuilder, reaction_entry;
 );
@@ -3157,6 +3178,12 @@ pub(crate) fn qualify_block(ns: &str, block: &str) -> String {
     } else {
         qualify(ns, block)
     }
+}
+
+/// A record: nothing of its own, only the tags and components set on it.
+pub struct RecordBuilder<'a> {
+    reg: &'a mut Registry,
+    e: crate::entry::Entry,
 }
 
 /// Blocks for templates' slots.

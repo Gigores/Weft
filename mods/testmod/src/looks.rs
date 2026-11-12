@@ -347,6 +347,11 @@ fn wisps(t: &EntityTick) {
     }
 }
 
+/// What an outpost may be built of, as records other mods add to and change: a weight each.
+static STONE_STYLE: Record = Record::named("stone_style");
+static STYLE: Tag = Tag::named("testmod:style");
+static STYLE_WEIGHT: Component<f32> = Component::named("testmod:weight");
+
 pub static OUTPOST: Feature = Feature::named("outpost");
 pub static OUTPOST_HUB: Template = Template::named("outpost_hub");
 /// From `assets/structures/outpost_hall.json`.
@@ -356,6 +361,9 @@ static RED: Palette = Palette::named("red");
 static PIG: EntityKind = EntityKind::named("base:pig");
 
 fn outpost(r: &mut Registry) {
+    r.record(&STONE_STYLE)
+        .tag(STYLE.name())
+        .set(&STYLE_WEIGHT, 3.0);
     // 5 x 4 x 5, open at the middle of each side, where its joints are.
     r.template(&OUTPOST_HUB)
         .layer(&["wwwww", "wwwww", "wwwww", "wwwww", "wwwww"])

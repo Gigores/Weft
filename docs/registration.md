@@ -4,7 +4,7 @@ Everything a mod registers, kind by kind: what it is for, how to make one, what 
 The short version of the model is in the cheat sheet, [How registering works](modding.md#how-registering-works). This is the long one, for when you need the name of a component or want to know what an edit of some kind can reach.
 
 ## Quick links
-[the model](#the-model) | [blocks](#block) | [block states](#block-states) | [items](#item) | [entities](#entity) | [biomes](#biome) | [dimensions](#dimension) | [terrain](#terrain) | [menus and screens](#menu-and-screen) | [features](#feature) | [liquids](#liquid) | [reactions](#reaction) | [templates](#template) | [palettes](#palette) | [spawn rules](#spawn-rule) | [recipes](#recipe) | [recipe kinds](#recipe-kind) | [loot tables](#loot-table) | [particles](#particle) | [sky objects](#sky-object) | [sounds](#sound) | [music](#music) | [weather](#weather) | [precipitation](#precipitation) | [poses](#pose) | [game modes](#game-mode) | [damage causes](#damage-cause) | [entity effects](#entity-effect) | [text places](#text-place) | [conditions](#condition) | [cameras](#camera) | [keys](#key) | [settings](#config) | [attributes](#attribute) | [equipment slots](#equipment-slot) | [creative tabs](#creative-tab) | [categories](#sound-and-entity-category) | [tint kinds](#tint-kind) | [HUD elements](#hud-element) | [screen parts](#screen-part) | [word sets](#word-set) | [component declarations](#component-and-storage-declaration) | [bone motion](#bone-motion)
+[the model](#the-model) | [blocks](#block) | [block states](#block-states) | [items](#item) | [entities](#entity) | [biomes](#biome) | [dimensions](#dimension) | [terrain](#terrain) | [menus and screens](#menu-and-screen) | [features](#feature) | [liquids](#liquid) | [reactions](#reaction) | [templates](#template) | [palettes](#palette) | [spawn rules](#spawn-rule) | [recipes](#recipe) | [recipe kinds](#recipe-kind) | [loot tables](#loot-table) | [particles](#particle) | [sky objects](#sky-object) | [sounds](#sound) | [music](#music) | [weather](#weather) | [precipitation](#precipitation) | [poses](#pose) | [game modes](#game-mode) | [damage causes](#damage-cause) | [entity effects](#entity-effect) | [text places](#text-place) | [conditions](#condition) | [cameras](#camera) | [keys](#key) | [settings](#config) | [attributes](#attribute) | [equipment slots](#equipment-slot) | [creative tabs](#creative-tab) | [categories](#sound-and-entity-category) | [tint kinds](#tint-kind) | [HUD elements](#hud-element) | [screen parts](#screen-part) | [word sets](#word-set) | [component declarations](#component-and-storage-declaration) | [bone motion](#bone-motion) | [records](#record)
 
 ## The model
 Every registration is an entry: a kind, a name, and operations on its components. A builder method is a shortcut, `.per_cube(6)` on an ore is `.set(&comps::feature::COUNT, 6)` (and the spread it implies), so anything a shortcut doesn't cover is still reachable with the raw calls every builder has:
@@ -602,3 +602,19 @@ A bone of a model file moving by itself, named `<model>/<bone>`. `r.bone_motion(
 ```rust
 r.bone_motion("tailmod:tail", "tail2", BoneMotion::SPRINGY);
 ```
+
+## Record
+A mod's own data that other mods add to and change, the way they do the engine's: an API's structures, a machine's processing table, a quest. `r.record(&R)`, named like its handle; it has nothing of its own, only the tags and components set on it, and those say what it is. Another mod's `r.edit(&R)`, `r.replace` and `r.remove` work as on anything else, in load order, and an edit of a record nobody registered stops the load.
+
+They are read once the game is loaded, never in `init`, since only then are everyone's edits in: `entries_with(entry_kind::RECORD, "structgen:structure")` lists the records with that tag or component, `CHANCE.on_record(id)` and `STRUCTURE.on_record(id)` read one, `Record::lookup(name)` finds one by name.
+
+```rust
+pub static STRUCTURE: Tag = Tag::named("structgen:structure");
+pub static CHANCE: Component<f32> = Component::named("structgen:chance");
+static HUT: Record = Record::named("hut");
+r.record(&HUT).tag(STRUCTURE.name()).set(&CHANCE, 0.3);
+// Another mod:
+static THEIR_HUT: Record = Record::named("othermod:hut");
+r.edit(&THEIR_HUT).set(&CHANCE, 0.05);
+```
+An API crate wraps this in builders of its own (`structgen_api::place(r, ..)` making the record and `.chance(..)` one `.set`), the way the SDK's builders are shortcuts for components.
