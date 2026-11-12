@@ -1305,6 +1305,13 @@ impl Running {
             ui.pressed = hovered;
             ui.focused = hovered.filter(|&h| matches!(ui.nodes[h].kind, Kind::Input { .. } | Kind::Slider { .. }));
             ui.anchor = None;
+            if let Some(f) = ui.focused
+                && let Some(at) = self.ui.caret_at(ui, f, cursor)
+                && let Kind::Input { caret, .. } = &mut ui.nodes[f].kind
+            {
+                *caret = at;
+                self.quads_dirty = true;
+            }
             if let Some(h) = hovered {
                 if let Kind::Text(t) = &ui.nodes[h].kind {
                     let r = ui.nodes[h].rect;
@@ -1367,8 +1374,9 @@ impl Running {
             self.quads_dirty = true;
         }
         if let Some(f) = ui.focused {
-            if let Kind::Input { value, caret, max, on_change } = &mut ui.nodes[f].kind {
-                let outcome = crate::ui::edit::Field { value, caret, anchor: &mut ui.anchor, max: *max }.handle(&self.input);
+            if let Kind::Input { value, caret, max, on_change, area } = &mut ui.nodes[f].kind {
+                let lines = area.is_some();
+                let outcome = crate::ui::edit::Field { value, caret, anchor: &mut ui.anchor, max: *max, lines }.handle(&self.input);
                 let (changed, moved) = (outcome.changed, outcome.moved);
                 if moved {
                     self.quads_dirty = true;
