@@ -331,7 +331,7 @@ pub async fn fly_load(t: T) -> R {
     // The way with the most mountains: their slopes ask the most of what comes first.
     let mountains = |x: i32| {
         (0..24)
-            .filter(|i| name_of(ek::BIOME, OVERWORLD.column(5, x, -400 * i).biome) == "base:mountains")
+            .filter(|i| matches!(name_of(ek::BIOME, OVERWORLD.column(5, x, -400 * i).biome), "base:mountains" | "base:snowy_peaks"))
             .count()
     };
     let way = (-40..40)
