@@ -79,6 +79,30 @@ struct TreeSkeleton {
     top: (i32, i32, i32),
     branch_tips: Vec<(i32, i32, i32)>,
 }
+// TODO
+// struct TreeAge {
+//     trunk_height: &mut dyn FnMut(&mut Rng) -> u16,
+//     allow_branching: bool,
+//     thin_trunk: bool,
+// }
+// impl TreeAge {
+//     const YOUNG = Config {
+//         trunk_height: |rng| 4u16 + (rng.next() as u16) % 2u16,
+//         allow_branching: false,
+//         thin_trunk: true,
+//     };
+//     const MATURE = Config {
+//         trunk_height: |rng| 6u16 + (rng.next() as u16) % 3u16,
+//         allow_branching: false,
+//         thin_trunk: false,
+//     };
+//     const OLD = Config {
+//         trunk_height: |rng| 6u16 + (rng.next() as u16) % 3u16,
+//         allow_branching: true,
+//         thin_trunk: false,
+//     };
+//     const ALL = [&YOUNG, &MATURE, &OLD];
+// }
 
 fn place_trunk(
     pos: (i32, i32, i32),
@@ -276,7 +300,8 @@ pub fn register(r: &mut Registry) {
         .tag("forest")
         .tag("animals")
         .set(&TREES, 0.4)
-        .set(&GRASS_COVER, 0.12)
+        .set(&GRASS_COVER, 0.2)
+        .set(&RASPBERRY_COVER, 0.03)
         .set(&TREE_KINDS, TreeKinds::from([("base:oak", 4), ("base:birch", 1)]));
     r.biome(&BIRCH_FOREST)
         .temperature(..0.1)
