@@ -846,14 +846,20 @@ impl Lod {
         for &key in &self.wanted {
             if key.level > 0
                 && self.ready.contains(&key)
-                && key.children().iter().all(|child| self.ready.contains(child) && !wanted.contains(child))
+                && key
+                    .children()
+                    .iter()
+                    .all(|child| self.ready.contains(child) && !wanted.contains(child))
             {
                 candidates.insert(key, false);
             }
             if key.level < MAX_LEVEL {
                 let parent = key.parent();
                 if self.ready.contains(&parent)
-                    && parent.children().iter().all(|child| wanted.contains(child) && self.ready.contains(child))
+                    && parent
+                        .children()
+                        .iter()
+                        .all(|child| wanted.contains(child) && self.ready.contains(child))
                 {
                     candidates.insert(parent, true);
                 }
@@ -861,7 +867,9 @@ impl Lod {
         }
 
         self.transitions.retain(|key, (to_fine, _)| {
-            candidates.get(key).is_some_and(|candidate| *candidate == *to_fine)
+            candidates
+                .get(key)
+                .is_some_and(|candidate| *candidate == *to_fine)
         });
         let now = Instant::now();
         for (&key, &to_fine) in &candidates {
