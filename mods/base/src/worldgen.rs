@@ -233,7 +233,8 @@ pub fn register(r: &mut Registry) {
                 .and_then(|l| l.pick(s.random() >> 40))
                 .unwrap_or(OAK_LOG.id());
             let Some(t) = tree_at(log, x, y, z, s.random() >> 32) else { return };
-            tree_blocks(&t, |x, y, z, state, force| {
+            let mut rng = Rng(s.random());
+            tree_blocks(&t, &mut rng, |x, y, z, state, force| {
                 if force {
                     s.set([x, y, z], state);
                 } else {
@@ -387,12 +388,12 @@ struct TreeAt {
 fn tree_at(log: u32, x: i32, y: i32, z: i32, h: u64) -> Option<TreeAt> {
     let leaves = TREE_LEAVES.on_block(log)?.0;
     let cone = CONE_TREE.on_block(log);
-    let height = if cone { 6 + (h % 4) as i32 } else { 4 + (h % 3) as i32 };
+    let height = if cone { 6 + (h % 4) as i32 } else { 6 + (h % 3) as i32 };
     Some(TreeAt { x, y, z, log, leaves, cone, height })
 }
 
 /// Calls `put(x, y, z, state, force)` for every block of the tree.
-fn tree_blocks(t: &TreeAt, mut put: impl FnMut(i32, i32, i32, u32, bool)) {
+fn tree_blocks(t: &TreeAt, rng: &mut Rng, mut put: impl FnMut(i32, i32, i32, u32, bool)) {
     let (log, leaves) = (t.log, t.leaves);
     let top = t.y + t.height;
     match t.cone {
@@ -427,7 +428,29 @@ fn tree_blocks(t: &TreeAt, mut put: impl FnMut(i32, i32, i32, u32, bool)) {
     for y in t.y..top {
         put(t.x, y, t.z, log, true);
     }
-    put(t.x, t.y - 1, t.z, DIRT.id(), true);
+    let mut grow_root = |dx: i32, dz: i32, tall: bool| {
+        let x = t.x + dx;
+        let z = t.z + dz;
+        if tall {
+            put(x, t.y + 1, z, log, true);
+        }
+        put(x, t.y, z, log, true);
+        put(x, t.y - 1, z, log, true);
+    };
+    let root_positions = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let mut root_count = 0;
+    for dpos in root_positions {
+        if rng.float() < 0.666 {
+            grow_root(dpos.0, dpos.1, rng.float() < 0.5);
+            root_count += 1;
+        }
+    }
+    if root_count == 0 {
+        let root_pos = root_positions[rng.next() as usize % root_positions.len()];
+        grow_root(root_pos.0, root_pos.1, rng.float() < 0.5);
+    }
+    put(t.x, t.y - 1, t.z, log, true);
+    put(t.x, t.y - 2, t.z, DIRT.id(), true);
 }
 
 /// Places a tree into a live world (saplings). Checks for room first.
@@ -438,7 +461,8 @@ pub fn grow_tree(w: World, p: [i32; 3]) {
             return;
         }
     }
-    tree_blocks(&t, |x, y, z, s, overwrite| {
+    let mut rng = Rng((p[0] ^ p[1] ^ p[2]) as u64);
+    tree_blocks(&t, &mut rng, |x, y, z, s, overwrite| {
         let cur = w.block([x, y, z]);
         if overwrite || cur == 0 || TALL_GRASS.is(cur) || TALL_TALL_GRASS.is(cur) {
             w.set_block([x, y, z], s);
