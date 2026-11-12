@@ -63,6 +63,9 @@ pub static BUSH_STEM: Block = Block::named("bush_stem");
 pub static RASPBERRY_LEAVES: Block = Block::named("raspberry_leaves");
 pub static SNOWBERRY_LEAVES: Block = Block::named("snowberry_leaves");
 pub static MOSS: Block = Block::named("moss");
+pub static PORCINI_MUSHROOM: Block = Block::named("porcini");
+pub static CHANTERELLE_MUSHROOM: Block = Block::named("chanterelle");
+pub static TOADSTOOL_MUSHROOM: Block = Block::named("toadstool");
 
 static TILLABLE: Tag = Tag::named("tillable");
 
@@ -629,6 +632,30 @@ pub fn register(r: &mut Registry) {
         .shares_cell_with("#water")
         .hardness(0.1)
         .signal_blocker()
+        .tab(&crate::tabs::NATURAL);
+    r.block(&PORCINI_MUSHROOM)
+        .sound_group("grass")
+        .shares_cell_with("#water")
+        .hardness(0.1)
+        .needs_below("")
+        .plant()
+        .texture("porcini_mushroom")
+        .tab(&crate::tabs::NATURAL);
+    r.block(&CHANTERELLE_MUSHROOM)
+        .sound_group("grass")
+        .shares_cell_with("#water")
+        .hardness(0.1)
+        .needs_below("")
+        .plant()
+        .texture("chanterelle_mushroom")
+        .tab(&crate::tabs::NATURAL);
+    r.block(&TOADSTOOL_MUSHROOM)
+        .sound_group("grass")
+        .shares_cell_with("#water")
+        .hardness(0.1)
+        .needs_below("")
+        .plant()
+        .texture("toadstool_mushroom")
         .tab(&crate::tabs::NATURAL);
 
     r.shapes_of("hollow_log", "#logs", "_hollow")
