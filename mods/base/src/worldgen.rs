@@ -409,11 +409,7 @@ pub fn register(r: &mut Registry) {
                 .height(..=SEA + 1)
                 .continent(..0.1),
         )
-<<<<<<< HEAD
-        .rule(BiomeRule::new("beach").height(..=SEA + 1).continent(..0.3))
-        .rule(BiomeRule::new("mountains").field("base:mountains", 0.6..))
-=======
-        .rule(BiomeRule::new("beach").height(..=SEA + 1).continent(..0.1));
+        .rule(BiomeRule::new("beach").height(..=SEA + 1).continent(..0.3));
     let mut terrain = terrain;
     for (i, (cold, warm, line)) in snow_bands().into_iter().enumerate() {
         terrain = terrain.rule(
@@ -426,7 +422,6 @@ pub fn register(r: &mut Registry) {
     }
     terrain
         .rule(BiomeRule::new("mountains").field("base:mountains", 0.45..))
->>>>>>> deabf9205e001bbe1e3b5a45a5619946be958997
         .rule(BiomeRule::new("snowy_plains"))
         .rule(BiomeRule::new("taiga"))
         .rule(BiomeRule::new("desert"))
@@ -439,7 +434,7 @@ pub fn register(r: &mut Registry) {
     // Trees wherever a biome asks for them, in any dimension.
     r.scatter(&TREE_SITES)
         .spacing(5)
-        .reach(5)
+        .reach(7)
         .density(&TREES)
         .ground("#plant_soil")
         .plan(|s| {
