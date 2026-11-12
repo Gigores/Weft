@@ -1361,7 +1361,7 @@ fn debug_help(ui: &mut Ui, groups: u32, align: Align, mods: &[(&'static str, boo
                 t.wrap = false;
             }
         }
-        for key in ["hud.debug.options", "hud.debug.gamemode", "hud.debug.cubes", "hud.debug.hitboxes"] {
+        for key in ["hud.debug.options", "hud.debug.gamemode", "hud.debug.cubes", "hud.debug.hitboxes", "hud.debug.relight"] {
             let n = ui.text_bound("debug", Box::new(move |_: &Ctx| (key.into(), vec![])));
             if let Some(t) = ui.text_mut(n) {
                 t.wrap = false;

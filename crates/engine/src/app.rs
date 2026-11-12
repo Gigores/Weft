@@ -2101,6 +2101,9 @@ fn debug_keys(r: &mut Running) {
     if r.input.pressed("core:debug_options") && r.screens.is_empty() {
         r.open(screens::engine("core:debug_options"));
     }
+    if let Some(g) = r.game.as_mut().filter(|_| r.input.pressed("core:relight")) {
+        g.client.relight();
+    }
     for (key, group) in [("core:show_cubes", "cubes"), ("core:show_hitboxes", "hitboxes")] {
         if let Some(g) = r.game.as_mut().filter(|_| r.input.pressed(key)) {
             g.client.toggle_gizmo(group);

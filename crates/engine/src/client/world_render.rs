@@ -1070,12 +1070,17 @@ impl WorldRenderer {
                     DrawIndexedArgs { indices: len * 6, instances: 1, first_index: 0, vertex_offset: (s * 4) as i32, first_instance: 0 };
                 lod.push(((3, layer, a.page, args, origin, center), bounds));
             };
-            let groups = counts[ALWAYS]
-                .iter()
-                .zip(seen)
-                .chain(counts[BESIDE_CUBES].iter().zip(seen.map(|s| s && near_cubes)));
+            let groups = counts[ALWAYS].iter().zip(seen).chain(
+                counts[BESIDE_CUBES]
+                    .iter()
+                    .zip(seen.map(|s| s && near_cubes)),
+            );
             runs(a.offset, groups, |s, len| draw(0, s, len));
-            let surface_at = a.offset + counts[ALWAYS].iter().chain(&counts[BESIDE_CUBES]).sum::<u32>();
+            let surface_at = a.offset
+                + counts[ALWAYS]
+                    .iter()
+                    .chain(&counts[BESIDE_CUBES])
+                    .sum::<u32>();
             runs(surface_at, counts[SURFACE].iter().zip(seen), |s, len| draw(2, s, len));
         }
         // What is opaque first; see-through surfaces after all of it, in `draw_translucent`.

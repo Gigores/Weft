@@ -339,7 +339,11 @@ pub fn lod_record(dir: u32, pos: [i32; 3], size: [i32; 3], tex: u32, tint: u32, 
     let [r, g, b] = light.map(|c| c.min(15) as u32 / 2);
     let across = |v: i32| (v.max(1) as u32 - 1).min(wide);
     [
-        pos[0] as u32 | (pos[2] as u32) << l::Z_SHIFT | dir << l::DIR_SHIFT | tint << l::TINT_SHIFT | (sky.min(15) as u32 / 2) << l::SKY_SHIFT,
+        pos[0] as u32
+            | (pos[2] as u32) << l::Z_SHIFT
+            | dir << l::DIR_SHIFT
+            | tint << l::TINT_SHIFT
+            | (sky.min(15) as u32 / 2) << l::SKY_SHIFT,
         tex | biome << face::BIOME_SHIFT,
         (pos[1] as u32 & l::HALF_MASK) | (size[1].max(0) as u32).min(l::HEIGHT_MASK) << h | (r | g << 3) << l::LIGHT_RG_SHIFT,
         across(size[0]) | across(size[2]) << l::DEPTH_SHIFT | b << l::LIGHT_B_SHIFT,

@@ -206,7 +206,9 @@ pub fn mesh(c: &Content, key: TileKey, words: &[u32], columns: &Columns) -> (Vec
     };
     // Under a surface (a sea) the sky's light on the ground after `depth` blocks of it, as in the
     // cubes.
-    let sky_under = |surface: u32, depth: i32| (0..depth.min(16)).fold(15, |v, _| crate::world::light::step(v, c.tight[surface as usize].opacity, true));
+    let sky_under = |surface: u32, depth: i32| {
+        (0..depth.min(16)).fold(15, |v, _| crate::world::light::step(v, c.tight[surface as usize].opacity, true))
+    };
     let light_of = |i: i32, j: i32, y: i32, light: u32| match over(i, j) {
         (top_y, surface) if surface != 0 => light | ((15 - sky_under(surface, top_y - y)) as u32) << 24,
         _ => light,
@@ -218,7 +220,10 @@ pub fn mesh(c: &Content, key: TileKey, words: &[u32], columns: &Columns) -> (Vec
     for j in -1..=CELLS {
         for i in -1..=CELLS {
             let (top_y, surface) = over(i, j);
-            if let Some(dark) = (surface != 0).then(|| (1..=16).find(|&d| sky_under(surface, d) == 0)).flatten() {
+            if let Some(dark) = (surface != 0)
+                .then(|| (1..=16).find(|&d| sky_under(surface, d) == 0))
+                .flatten()
+            {
                 let y = &mut h[(i + 1) as usize][(j + 1) as usize];
                 *y = (*y).max(top_y - dark);
             }
