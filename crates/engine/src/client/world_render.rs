@@ -310,7 +310,7 @@ pub struct WorldRenderer {
     /// and the heights they span; the ones to draw this frame; and the columns whose cubes show
     /// their ground (`Lod::mask`, half its width), where their pixels are left to the cubes.
     lod: FxHashMap<super::lod::TileKey, (Alloc, super::lod::Counts, (i32, i32))>,
-    pub lod_draw: Vec<super::lod::TileKey>,
+    pub lod_draw: Vec<(super::lod::TileKey, f32)>,
     pub lod_half: u32,
     lod_mask: (BufferId, usize),
     faces: Pool,
@@ -1043,8 +1043,8 @@ impl WorldRenderer {
         let mut lod: Vec<(DrawRecord, [i32; 6])> = Vec::new();
         self.lod_drawn = 0;
         let masked = [-(self.lod_half as i32) * 16, (self.lod_half as i32 + 1) * 16];
-        for key in &self.lod_draw {
-            let Some(&(a, counts, (y0, y1))) = self.lod.get(key) else { continue };
+        for &(key, fade) in &self.lod_draw {
+            let Some(&(a, counts, (y0, y1))) = self.lod.get(&key) else { continue };
             let o = key.origin();
             let half = Vec3::new(key.size() as f32, (y1 - y0) as f32, key.size() as f32) / 2.0;
             let center = Vec3::new(o.x as f32, y0 as f32, o.y as f32) + half - (cam_cube * 16).as_vec3() - cam_frac;
@@ -1062,7 +1062,7 @@ impl WorldRenderer {
                 .all(|&k| bounds[k] < masked[1] && bounds[k + 3] > masked[0]);
             // A block of margin: the tiles are drawn a little lower than their records say.
             let seen = seen_sides(center - half - Vec3::ONE, center + half + Vec3::ONE);
-            let origin = [o.x / 16 - cam_cube.x, -cam_cube.y, o.y / 16 - cam_cube.z, 0];
+            let origin = [o.x / 16 - cam_cube.x, -cam_cube.y, o.y / 16 - cam_cube.z, fade.to_bits() as i32];
             use super::lod::{ALWAYS, BESIDE_CUBES, SURFACE};
             let mut draw = |layer: u8, s: u32, len: u32| {
                 self.lod_drawn += len as u64;

@@ -11,6 +11,7 @@
 //! cubes not made or meshed yet (flying fast), and nowhere stand through them.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use glam::{DVec3, IVec2};
@@ -45,6 +46,8 @@ const IN_FLIGHT: usize = 256;
 const MAX_QUADS: usize = 48_000;
 /// More model boxes than this become one box around all of them.
 const MAX_MODEL_BOXES: usize = 6;
+/// Time taken to dither between a parent tile and its four children.
+const LOD_FADE: Duration = Duration::from_millis(250);
 
 /// A tile: its level and place in the grid of its level's tiles.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -689,6 +692,8 @@ pub struct Lod {
     columns_dim: u32,
     /// Made tiles to make again for columns that changed, shown as they are till then.
     stale: FxHashSet<TileKey>,
+    /// Parent tile and transition start; true means parent -> children.
+    transitions: FxHashMap<TileKey, (bool, Instant)>,
 }
 
 /// Columns the mask reaches past the view radius (cubes are kept that far).
@@ -714,6 +719,7 @@ impl Lod {
             columns: Arc::default(),
             columns_dim: u32::MAX,
             stale: FxHashSet::default(),
+            transitions: FxHashMap::default(),
         }
     }
 
@@ -798,6 +804,7 @@ impl Lod {
             self.pending.clear();
             self.wanted.clear();
             self.wanted_at = None;
+            self.transitions.clear();
         }
         if (dim, seed) != (self.dim, self.seed) {
             (self.dim, self.seed) = (dim, seed);
@@ -833,26 +840,88 @@ impl Lod {
             self.wanted_at = Some((p, hide, reach));
             self.pick(p, hide as f64, reach as f64);
         }
-        // Shown: each wanted tile when made, else its children when all four are, else its
-        // nearest made ancestor.
-        let mut shown = FxHashSet::default();
-        let mut keep = FxHashSet::default();
+        // Find ready parent/children pairs.
+        let wanted: FxHashSet<TileKey> = self.wanted.iter().copied().collect();
+        let mut candidates = FxHashMap::default();
         for &key in &self.wanted {
-            keep.insert(key);
-            if self.ready.contains(&key) {
-                shown.insert(key);
+            if key.level > 0
+                && self.ready.contains(&key)
+                && key.children().iter().all(|child| self.ready.contains(child) && !wanted.contains(child))
+            {
+                candidates.insert(key, false);
+            }
+            if key.level < MAX_LEVEL {
+                let parent = key.parent();
+                if self.ready.contains(&parent)
+                    && parent.children().iter().all(|child| wanted.contains(child) && self.ready.contains(child))
+                {
+                    candidates.insert(parent, true);
+                }
+            }
+        }
+
+        self.transitions.retain(|key, (to_fine, _)| {
+            candidates.get(key).is_some_and(|candidate| *candidate == *to_fine)
+        });
+        let now = Instant::now();
+        for (&key, &to_fine) in &candidates {
+            self.transitions.entry(key).or_insert((to_fine, now));
+        }
+
+        let mut active = FxHashMap::default();
+        for (&key, &(to_fine, start)) in &self.transitions {
+            let t = (now - start).as_secs_f32() / LOD_FADE.as_secs_f32();
+            if t < 1.0 {
+                active.insert(key, (to_fine, t.clamp(0.0, 1.0)));
+            }
+        }
+
+        let mut shown = FxHashMap::default();
+        let mut keep = FxHashSet::default();
+        let mut transitioning = FxHashSet::default();
+        for (&parent, &(to_fine, t)) in &active {
+            let children = parent.children();
+            keep.insert(parent);
+            keep.extend(children);
+            transitioning.insert(parent);
+            transitioning.extend(children);
+            if to_fine {
+                shown.insert(parent, t - 1.0);
+                for child in children {
+                    shown.insert(child, t);
+                }
+            } else {
+                shown.insert(parent, t);
+                for child in children {
+                    shown.insert(child, t - 1.0);
+                }
+            }
+        }
+
+        for &key in &self.wanted {
+            if transitioning.contains(&key) {
+                keep.insert(key);
                 continue;
             }
-            if key.level > 1 && key.children().iter().all(|k| self.ready.contains(k)) {
-                shown.extend(key.children());
-                keep.extend(key.children());
+            keep.insert(key);
+            if self.ready.contains(&key) {
+                shown.insert(key, 2.0);
+                continue;
+            }
+            if key.level > 0 && key.children().iter().all(|k| self.ready.contains(k)) {
+                for child in key.children() {
+                    shown.insert(child, 2.0);
+                    keep.insert(child);
+                }
                 continue;
             }
             let mut a = key;
             while a.level < MAX_LEVEL {
                 a = a.parent();
                 if self.ready.contains(&a) {
-                    shown.insert(a);
+                    if !transitioning.contains(&a) {
+                        shown.insert(a, 2.0);
+                    }
                     keep.insert(a);
                     break;
                 }
