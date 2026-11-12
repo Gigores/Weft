@@ -6,6 +6,8 @@
   <metadata_license>FSFAP</metadata_license>
   <project_license>MPL-2.0</project_license>
   <url type="homepage">https://weft.download</url>
+  <url type="vcs-browser">https://github.com/Weft-Rust/Weft</url>
+  <url type="bug-tracker">https://github.com/Weft-Rust/Weft/issues</url>
   <supports>
     <control>pointing</control>
     <control>keyboard</control>
@@ -47,7 +49,7 @@
 
 
 <developer id="io.github.contributors">
-	<name>Github contributors</name>
+	<name>Weft Contributers</name>
 </developer>
 
   <content_rating type="oars-1.1">
