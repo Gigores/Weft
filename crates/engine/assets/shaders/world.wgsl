@@ -20,6 +20,7 @@ struct VOut {
     @location(10) @interpolate(flat) slot: u32,
     @location(11) pos: vec3<f32>,
     @location(12) @interpolate(flat) size: f32,
+    @location(13) @interpolate(flat) lod_fade: f32,
 }
 
 fn shader_of(tex: u32) -> u32 {
@@ -139,6 +140,7 @@ fn vs_face(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     let pos = finish(local, origins[ii]);
     var out: VOut;
     out.clip = scene.view_proj * pos;
+    out.lod_fade = 0.0;
     out.dist = length(pos.xyz);
     out.uv = UVS[(c + ((w0 >> FACE_TURN_SHIFT) & FACE_TURN_MASK)) % 4u];
     let tex_id = w1 & FACE_TEX_MASK;
@@ -184,6 +186,7 @@ fn vs_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     let pos = finish(local, origins[ii]);
     var out: VOut;
     out.clip = scene.view_proj * pos;
+    out.lod_fade = 0.0;
     out.dist = length(pos.xyz);
     out.uv = uvs[c];
     let tex_id = w4 & FACE_TEX_MASK;
@@ -329,9 +332,10 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
         c = (c + 1u) % 4u;
     }
     let local = lod_pos(w0, w2) + lod_corner(w0, w2, w3, CORNERS[dir * 4u + c]) - vec3(0.0, 0.125, 0.0);
-    let pos = finish(local, origins[ii]);
+    let pos = finish(local, vec4<i32>(origins[ii].xyz, 0));
     var out: VOut;
     out.clip = scene.view_proj * pos;
+    out.lod_fade = bitcast<f32>(origins[ii].w);
     out.dist = length(pos.xyz);
     let o = origins[ii] + g.cam_cube;
     let world = vec3<f32>(o.xyz * 16) + local + vec3(0.0, 0.125, 0.0);
@@ -372,10 +376,37 @@ fn shown_by_cubes(pos: vec3<f32>, part: u32) -> bool {
     return ((lod_mask[i / 32u] >> (i % 32u)) & 1u) != 0u;
 }
 
+fn lod_fade_visible(fade: f32, pixel: vec2<f32>) -> bool {
+    // Normal LOD tiles are always visible.
+    if fade > 1.0 {
+        return true;
+    }
+
+    let bayer = array<u32, 16>(
+         0u,  8u,  2u, 10u,
+        12u,  4u, 14u,  6u,
+         3u, 11u,  1u,  9u,
+        15u,  7u, 13u,  5u
+    );
+
+    let x = u32(pixel.x) & 3u;
+    let y = u32(pixel.y) & 3u;
+    let threshold = (f32(bayer[y * 4u + x]) + 0.5) / 16.0;
+
+    if fade < 0.0 {
+        return threshold >= fade + 1.0;
+    }
+
+    return threshold < fade;
+}
+
 @fragment
 fn fs_lod(in: VOut) -> @location(0) vec4<f32> {
     let du = dpdx(in.uv);
     let dv = dpdy(in.uv);
+    if !lod_fade_visible(in.lod_fade, in.clip.xy) {
+        discard;
+    }
     if shown_by_cubes(in.pos, 0u) {
         discard;
     }
@@ -394,6 +425,9 @@ fn fs_lod(in: VOut) -> @location(0) vec4<f32> {
 fn fs_lod_surface(in: VOut) -> @location(0) vec4<f32> {
     let du = dpdx(in.uv);
     let dv = dpdy(in.uv);
+    if !lod_fade_visible(in.lod_fade, in.clip.xy) {
+        discard;
+    }
     if shown_by_cubes(in.pos, 1u) {
         discard;
     }
