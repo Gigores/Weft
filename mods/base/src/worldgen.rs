@@ -53,7 +53,7 @@ struct TreeSkeleton {
     branch_tips: Vec<(i32, i32, i32)>,
 }
 
-fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, log_block: &Block, allow_branches: bool) -> TreeSkeleton {
+fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, log_block: &Block, wood_block: &Block, allow_branches: bool) -> TreeSkeleton {
     let (x, y, z) = pos;
     let top = y + height as i32;
     let log = log_block.id();
@@ -84,12 +84,19 @@ fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32
         }
     }
     let mut grow_root = |dx: i32, dz: i32, tall: bool| {
+        let wood = wood_block.with(&[("facing", match (dx, dz) {
+            (1, 0) => "east",
+            (-1, 0) => "west",
+            (0, 1) => "south",
+            (0, -1) => "north",
+            _ => return,
+        })]);
         let x = x + dx;
         let z = z + dz;
         if tall {
-            put(x, y + 1, z, log, true);
+            put(x, y + 1, z, wood, true);
         }
-        put(x, y, z, log, true);
+        put(x, y, z, wood, true);
         put(x, y - 1, z, log, true);
     };
     let root_positions = [(1, 0), (-1, 0), (0, 1), (0, -1)];
@@ -177,17 +184,17 @@ fn place_foliage(skeleton: TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32,
 }
 fn place_oak(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 3u16;
-    let skeleton = place_trunk(pos, rng, put, height, &OAK_LOG, true);
+    let skeleton = place_trunk(pos, rng, put, height, &OAK_LOG, &OAK_WOOD, true);
     place_foliage(skeleton, rng, put, height, OAK_LEAVES.id());
 }
 fn place_birch(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
-    let skeleton = place_trunk(pos, rng, put, height, &BIRCH_LOG, true);
+    let skeleton = place_trunk(pos, rng, put, height, &BIRCH_LOG, &BIRCH_WOOD, true);
     place_foliage(skeleton, rng, put, height, BIRCH_LEAVES.id());
 }
 fn place_spruce(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
-    place_trunk(pos, rng, put, height, &SPRUCE_LOG, false);
+    place_trunk(pos, rng, put, height, &SPRUCE_LOG, &SPRUCE_WOOD, false);
     place_cone_foliage(pos, put, height, SPRUCE_LEAVES.id());
 }
 

@@ -21,8 +21,11 @@ pub static IRON_ORE: Block = Block::named("iron_ore");
 pub static GOLD_ORE: Block = Block::named("gold_ore");
 pub static DIAMOND_ORE: Block = Block::named("diamond_ore");
 pub static OAK_LOG: Block = Block::named("oak_log");
+pub static OAK_WOOD: Block = Block::named("oak_wood");
 pub static BIRCH_LOG: Block = Block::named("birch_log");
+pub static BIRCH_WOOD: Block = Block::named("birch_wood");
 pub static SPRUCE_LOG: Block = Block::named("spruce_log");
+pub static SPRUCE_WOOD: Block = Block::named("spruce_wood");
 pub static OAK_PLANKS: Block = Block::named("oak_planks");
 pub static BIRCH_PLANKS: Block = Block::named("birch_planks");
 pub static SPRUCE_PLANKS: Block = Block::named("spruce_planks");
@@ -64,24 +67,28 @@ pub static MOSS: Block = Block::named("moss");
 static TILLABLE: Tag = Tag::named("tillable");
 
 /// A log that grows into a tree of `leaves` (a cone, like a spruce, when `cone`).
-fn log(r: &mut Registry, handle: &'static Block, wood: &str, leaves: &str, cone: bool) {
+fn log(r: &mut Registry, handle: &'static Block, wood: &str, wood_block: bool) {
     let side = format!("log_{wood}");
     let top = format!("log_{wood}_top");
-    let b = r
-        .block(handle)
-        .set_text(&crate::worldgen::TREE_LEAVES, leaves);
-    let b = if cone { b.tag("cone_tree") } else { b };
-    b.sound_group("wood")
+    let b = r.block(handle)
+        .sound_group("wood")
         .hardness(2.0)
         .mined_by("axe", tool_tier::HAND)
-        .tag("logs")
-        .tag(&format!("logs/{wood}"))
         .set(&FLAMMABLE, 5)
         .set(&FUEL, 300)
-        .axis()
-        .texture(&side)
-        .ends(&top)
         .tab(&crate::tabs::NATURAL);
+    if wood_block {
+        b.tag(&format!("wood/{wood}"))
+            .tag("wood")
+            .facing(Facings::HORIZONTAL, Toward::Player)
+            .texture(side.as_str());
+    } else {
+        b.tag(&format!("logs/{wood}"))
+            .tag("logs")
+            .axis()
+            .texture(&side)
+            .ends(&top);
+    }
 }
 
 /// Dyed blocks' colors: name, glass tint, wool tint, the light the glass takes away per channel.
@@ -344,9 +351,12 @@ pub fn register(r: &mut Registry) {
         .tag("ores/diamond")
         .tab(&crate::tabs::NATURAL);
 
-    log(r, &OAK_LOG, "oak", "oak_leaves", false);
-    log(r, &BIRCH_LOG, "birch", "birch_leaves", false);
-    log(r, &SPRUCE_LOG, "spruce", "spruce_leaves", true);
+    log(r, &OAK_LOG, "oak", false);
+    log(r, &BIRCH_LOG, "birch", false);
+    log(r, &SPRUCE_LOG, "spruce", false);
+    log(r, &OAK_WOOD, "oak", true);
+    log(r, &BIRCH_WOOD, "birch", true);
+    log(r, &SPRUCE_WOOD, "spruce", true);
     r.block(&BUSH_STEM)
         .sound_group("grass")
         .hardness(0.2)
