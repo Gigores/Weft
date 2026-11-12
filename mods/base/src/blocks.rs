@@ -70,7 +70,8 @@ static TILLABLE: Tag = Tag::named("tillable");
 fn log(r: &mut Registry, handle: &'static Block, wood: &str, wood_block: bool) {
     let side = format!("log_{wood}");
     let top = format!("log_{wood}_top");
-    let b = r.block(handle)
+    let b = r
+        .block(handle)
         .sound_group("wood")
         .hardness(2.0)
         .mined_by("axe", tool_tier::HAND)

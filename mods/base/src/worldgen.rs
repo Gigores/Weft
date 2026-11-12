@@ -53,14 +53,24 @@ struct TreeSkeleton {
     branch_tips: Vec<(i32, i32, i32)>,
 }
 
-fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, log_block: &Block, wood_block: &Block, allow_branches: bool) -> TreeSkeleton {
+fn place_trunk(
+    pos: (i32, i32, i32),
+    rng: &mut Rng,
+    put: &mut dyn FnMut(i32, i32, i32, u32, bool),
+    height: u16,
+    log_block: &Block,
+    wood_block: &Block,
+    allow_branches: bool,
+) -> TreeSkeleton {
     let (x, y, z) = pos;
     let top = y + height as i32;
     let log = log_block.id();
     let mut branch_tips: Vec<(i32, i32, i32)> = Vec::new();
     for y in y..top {
         put(x, y, z, log, true);
-        if !allow_branches { continue }
+        if !allow_branches {
+            continue;
+        }
         let left = top - y;
         if left < 5 && left > 1 && (rng.next() % (left as u64 + 8u64)) <= 2 {
             let roll = rng.float();
@@ -84,13 +94,16 @@ fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32
         }
     }
     let mut grow_root = |dx: i32, dz: i32, tall: bool| {
-        let wood = wood_block.with(&[("facing", match (dx, dz) {
-            (1, 0) => "east",
-            (-1, 0) => "west",
-            (0, 1) => "south",
-            (0, -1) => "north",
-            _ => return,
-        })]);
+        let wood = wood_block.with(&[(
+            "facing",
+            match (dx, dz) {
+                (1, 0) => "east",
+                (-1, 0) => "west",
+                (0, 1) => "south",
+                (0, -1) => "north",
+                _ => return,
+            },
+        )]);
         let x = x + dx;
         let z = z + dz;
         if tall {
@@ -114,11 +127,7 @@ fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32
     put(x, y - 1, z, log, true);
     put(x, y - 2, z, DIRT.id(), true);
 
-    TreeSkeleton {
-        height: top - y,
-        top: (x, top, z),
-        branch_tips
-    }
+    TreeSkeleton { height: top - y, top: (x, top, z), branch_tips }
 }
 fn place_cone_foliage(pos: (i32, i32, i32), put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, leaves: u32) {
     let (x, y, z) = pos;
@@ -135,24 +144,21 @@ fn place_cone_foliage(pos: (i32, i32, i32), put: &mut dyn FnMut(i32, i32, i32, u
     }
 }
 fn place_foliage(skeleton: TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, leaves: u32) {
-    fn leaf_kept( rx: f32, ry: f32, rz: f32, dx: i32, dy: i32, dz: i32, wx: i32, wy: i32, wz: i32, salt: u64) -> bool {
-        let q = (dx as f32 / rx).powi(2)
-            + (dy as f32 / ry).powi(2)
-            + (dz as f32 / rz).powi(2);
-        if q > 1.0 { return false }
+    fn leaf_kept(rx: f32, ry: f32, rz: f32, dx: i32, dy: i32, dz: i32, wx: i32, wy: i32, wz: i32, salt: u64) -> bool {
+        let q = (dx as f32 / rx).powi(2) + (dy as f32 / ry).powi(2) + (dz as f32 / rz).powi(2);
+        if q > 1.0 {
+            return false;
+        }
         let d = q.sqrt();
         let shell = 1.0 / rx.min(ry).min(rz).max(1.0);
         let core = (1.0 - shell).max(0.0);
-        if d <= core { return true }
+        if d <= core {
+            return true;
+        }
         let t = ((d - core) / (1.0 - core).max(0.001)).clamp(0.0, 1.0);
         let keep = 0.95 - 0.55 * t;
         let fine = unit(hash(salt, wx as i64, wy as i64, wz as i64)) as f32;
-        let coarse = unit(hash(
-            salt ^ 0xBEEF,
-            (wx / 2) as i64,
-            (wy / 2) as i64,
-            (wz / 2) as i64,
-        )) as f32;
+        let coarse = unit(hash(salt ^ 0xBEEF, (wx / 2) as i64, (wy / 2) as i64, (wz / 2) as i64)) as f32;
         fine < keep || coarse < 0.20
     }
     let (x, y, z) = skeleton.top;

@@ -40,11 +40,15 @@ impl TreeKinds {
     }
     pub fn pick(&self, mut roll: u64) -> Option<&str> {
         let total: u64 = self.entries.iter().map(|e| u64::from(e.weight)).sum();
-        if total == 0 { return None; }
+        if total == 0 {
+            return None;
+        }
         roll %= total;
         for entry in &self.entries {
             let weight = u64::from(entry.weight);
-            if roll < weight { return Some(&entry.name); }
+            if roll < weight {
+                return Some(&entry.name);
+            }
             roll -= weight;
         }
         None
