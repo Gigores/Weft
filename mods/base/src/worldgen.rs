@@ -206,9 +206,7 @@ pub fn register(r: &mut Registry) {
         // Slight jittering so snow doesn't fall on visible contours
         .field(
             "base:alpine",
-            Expr::temperature()
-                + Expr::noise(400.0) * Expr::value(0.2)
-                + Expr::noise(70.0) * Expr::value(0.1)
+            Expr::temperature() + Expr::noise(400.0) * Expr::value(0.2) + Expr::noise(70.0) * Expr::value(0.1)
                 - Expr::humidity() * Expr::value(0.1),
         )
         // Biomes bring their climate and surface; rules only add where else they must hold.
