@@ -47,10 +47,17 @@ pub static OCEAN: Biome = Biome::named("ocean");
 pub static BEACH: Biome = Biome::named("beach");
 pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
 
-fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, log_block: &Block, allow_branches: bool) {
+struct TreeSkeleton {
+    height: i32,
+    top: (i32, i32, i32),
+    branch_tips: Vec<(i32, i32, i32)>,
+}
+
+fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, log_block: &Block, allow_branches: bool) -> TreeSkeleton {
     let (x, y, z) = pos;
     let top = y + height as i32;
     let log = log_block.id();
+    let mut branch_tips: Vec<(i32, i32, i32)> = Vec::new();
     for y in y..top {
         put(x, y, z, log, true);
         if !allow_branches { continue }
@@ -59,12 +66,20 @@ fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32
             let roll = rng.float();
             if roll < 0.25 {
                 put(x + 1, y, z, log_block.with(&[("axis", "x")]), true);
+                put(x + 2, y, z, log_block.with(&[("axis", "x")]), true);
+                branch_tips.push((x + 2, y, z));
             } else if roll < 0.5 {
                 put(x - 1, y, z, log_block.with(&[("axis", "x")]), true);
+                put(x - 2, y, z, log_block.with(&[("axis", "x")]), true);
+                branch_tips.push((x - 2, y, z));
             } else if roll < 0.75 {
                 put(x, y, z + 1, log_block.with(&[("axis", "z")]), true);
+                put(x, y, z + 2, log_block.with(&[("axis", "z")]), true);
+                branch_tips.push((x, y, z + 2));
             } else {
                 put(x, y, z - 1, log_block.with(&[("axis", "z")]), true);
+                put(x, y, z - 2, log_block.with(&[("axis", "z")]), true);
+                branch_tips.push((x, y, z - 2));
             }
         }
     }
@@ -91,6 +106,12 @@ fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32
     }
     put(x, y - 1, z, log, true);
     put(x, y - 2, z, DIRT.id(), true);
+
+    TreeSkeleton {
+        height: top - y,
+        top: (x, top, z),
+        branch_tips
+    }
 }
 fn place_cone_foliage(pos: (i32, i32, i32), put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, leaves: u32) {
     let (x, y, z) = pos;
@@ -106,13 +127,63 @@ fn place_cone_foliage(pos: (i32, i32, i32), put: &mut dyn FnMut(i32, i32, i32, u
         }
     }
 }
+fn place_foliage(skeleton: TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, leaves: u32) {
+    fn leaf_kept( rx: f32, ry: f32, rz: f32, dx: i32, dy: i32, dz: i32, wx: i32, wy: i32, wz: i32, salt: u64) -> bool {
+        let q = (dx as f32 / rx).powi(2)
+            + (dy as f32 / ry).powi(2)
+            + (dz as f32 / rz).powi(2);
+        if q > 1.0 { return false }
+        let d = q.sqrt();
+        let shell = 1.0 / rx.min(ry).min(rz).max(1.0);
+        let core = (1.0 - shell).max(0.0);
+        if d <= core { return true }
+        let t = ((d - core) / (1.0 - core).max(0.001)).clamp(0.0, 1.0);
+        let keep = 0.95 - 0.55 * t;
+        let fine = unit(hash(salt, wx as i64, wy as i64, wz as i64)) as f32;
+        let coarse = unit(hash(
+            salt ^ 0xBEEF,
+            (wx / 2) as i64,
+            (wy / 2) as i64,
+            (wz / 2) as i64,
+        )) as f32;
+        fine < keep || coarse < 0.20
+    }
+    let (x, y, z) = skeleton.top;
+    let rx = skeleton.height as f32 * 0.66 + rng.float() - 0.5;
+    let ry = rx * 0.75;
+    let rz = rx;
+    let salt = hash(0x1EAF, x as i64, y as i64, z as i64);
+    for (dx, dy, dz) in sphere(rx) {
+        let bx = x + dx;
+        let by = y + dy;
+        let bz = z + dz;
+        if leaf_kept(rx, ry, rz, dx, dy, dz, bx, by, bz, salt) {
+            put(bx, by, bz, leaves, false);
+        }
+    }
+    for (x, y, z) in skeleton.branch_tips {
+        let rx = 2.0 + rng.float();
+        let ry = rx * 0.75;
+        let rz = rx;
+        for (dx, dy, dz) in sphere(rx) {
+            let bx = x + dx;
+            let by = y + dy;
+            let bz = z + dz;
+            if leaf_kept(rx, ry, rz, dx, dy, dz, bx, by, bz, salt) {
+                put(bx, by, bz, leaves, false);
+            }
+        }
+    }
+}
 fn place_oak(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
-    let height = 6u16 + (rng.next() as u16) % 6u16;
-    place_trunk(pos, rng, put, height, &OAK_LOG, true);
+    let height = 6u16 + (rng.next() as u16) % 3u16;
+    let skeleton = place_trunk(pos, rng, put, height, &OAK_LOG, true);
+    place_foliage(skeleton, rng, put, height, OAK_LEAVES.id());
 }
 fn place_birch(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
-    place_trunk(pos, rng, put, height, &BIRCH_LOG, true);
+    let skeleton = place_trunk(pos, rng, put, height, &BIRCH_LOG, true);
+    place_foliage(skeleton, rng, put, height, BIRCH_LEAVES.id());
 }
 fn place_spruce(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
@@ -297,7 +368,7 @@ pub fn register(r: &mut Registry) {
     // Trees wherever a biome asks for them, in any dimension.
     r.scatter(&TREE_SITES)
         .spacing(5)
-        .reach(3)
+        .reach(5)
         .density(&TREES)
         .ground("#plant_soil")
         .plan(|s| {
