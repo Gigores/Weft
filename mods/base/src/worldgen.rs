@@ -47,17 +47,24 @@ pub static OCEAN: Biome = Biome::named("ocean");
 pub static BEACH: Biome = Biome::named("beach");
 pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
 
-fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u32, log: u32) {
+fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, log_block: &Block, allow_branches: bool) {
     let (x, y, z) = pos;
     let top = y + height as i32;
+    let log = log_block.id();
     for y in y..top {
         put(x, y, z, log, true);
+        if !allow_branches { continue }
         let left = top - y;
-        if rng.next() % (left as u64) <= 2 {
-            if rng.float() < 0.5 {
-                put(x, y, z, log, true);
+        if left < 5 && left > 1 && (rng.next() % (left as u64 + 8u64)) <= 2 {
+            let roll = rng.float();
+            if roll < 0.25 {
+                put(x + 1, y, z, log_block.with(&[("axis", "x")]), true);
+            } else if roll < 0.5 {
+                put(x - 1, y, z, log_block.with(&[("axis", "x")]), true);
+            } else if roll < 0.75 {
+                put(x, y, z + 1, log_block.with(&[("axis", "z")]), true);
             } else {
-                put(x, y, z, log, true);
+                put(x, y, z - 1, log_block.with(&[("axis", "z")]), true);
             }
         }
     }
@@ -85,17 +92,32 @@ fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32
     put(x, y - 1, z, log, true);
     put(x, y - 2, z, DIRT.id(), true);
 }
+fn place_cone_foliage(pos: (i32, i32, i32), put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, leaves: u32) {
+    let (x, y, z) = pos;
+    for dy in 2..=(height as i32) + 1 {
+        let y = y + dy;
+        let r = if dy == (height as i32) + 1 { 0 } else { 1 + (((height as i32) + 1 - dy) % 3).min(2) };
+        for dz in -r..=r {
+            for dx in -r..=r {
+                if dx * dx + dz * dz <= r * r + 1 {
+                    put(x + dx, y, z + dz, leaves, false);
+                }
+            }
+        }
+    }
+}
 fn place_oak(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
-    let height = 6u32 + (rng.next() as u32) % 4u32;
-    place_trunk(pos, rng, put, height, OAK_LOG.id());
+    let height = 6u16 + (rng.next() as u16) % 6u16;
+    place_trunk(pos, rng, put, height, &OAK_LOG, true);
 }
 fn place_birch(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
-    let height = 6u32 + (rng.next() as u32) % 4u32;
-    place_trunk(pos, rng, put, height, BIRCH_LOG.id());
+    let height = 6u16 + (rng.next() as u16) % 4u16;
+    place_trunk(pos, rng, put, height, &BIRCH_LOG, true);
 }
 fn place_spruce(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
-    let height = 6u32 + (rng.next() as u32) % 4u32;
-    place_trunk(pos, rng, put, height, SPRUCE_LOG.id());
+    let height = 6u16 + (rng.next() as u16) % 4u16;
+    place_trunk(pos, rng, put, height, &SPRUCE_LOG, false);
+    place_cone_foliage(pos, put, height, SPRUCE_LEAVES.id());
 }
 
 /// Whether the ground within `r` blocks of a start is flat enough for it.
