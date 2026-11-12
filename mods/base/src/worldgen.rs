@@ -143,7 +143,7 @@ fn place_cone_foliage(pos: (i32, i32, i32), put: &mut dyn FnMut(i32, i32, i32, u
         }
     }
 }
-fn place_foliage(skeleton: TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, leaves: u32) {
+fn place_foliage(skeleton: TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), _height: u16, leaves: u32) {
     fn leaf_kept(rx: f32, ry: f32, rz: f32, dx: i32, dy: i32, dz: i32, wx: i32, wy: i32, wz: i32, salt: u64) -> bool {
         let q = (dx as f32 / rx).powi(2) + (dy as f32 / ry).powi(2) + (dz as f32 / rz).powi(2);
         if q > 1.0 {
