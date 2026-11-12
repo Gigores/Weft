@@ -14,6 +14,32 @@ use std::collections::BTreeSet;
 
 pub const SEA: i32 = 63;
 
+/// Snow line in a temperate climate (temp = 0)
+const SNOW_LINE: i32 = 190;
+/// Air cools with height, so the warmer the climate the higher the snow line for this many
+/// blocks for every step of temperature
+const LAPSE: f64 = 100.0;
+/// The lowest y the snow line can get in the coldest climates
+const SNOW_FLOOR: i32 = 165;
+/// Band size of snow line
+const BAND: f64 = 0.1;
+/// Afaik no mountain gets higher than this so a climate whose snow line is above it has none
+const SNOW_TOP: i32 = SEA + 190;
+
+fn snow_bands() -> Vec<(f64, f64, i32)> {
+    let coldest = f64::from(SNOW_FLOOR - SNOW_LINE) / LAPSE;
+    let edge = |i: usize| coldest + i as f64 * BAND;
+    let mut bands = vec![(f64::NEG_INFINITY, coldest, SNOW_FLOOR)];
+    for i in 0.. {
+        let line = SNOW_LINE + (LAPSE * (edge(i) + BAND / 2.0)).round() as i32;
+        if line > SNOW_TOP {
+            break;
+        }
+        bands.push((edge(i), edge(i + 1), line));
+    }
+    bands
+}
+
 static PLANT_SOIL: Tag = Tag::named("plant_soil");
 static CACTUS_SOIL: Tag = Tag::named("cactus_soil");
 static SUGAR_CANE_SOIL: Tag = Tag::named("sugar_cane_soil");
@@ -43,6 +69,7 @@ pub static TAIGA: Biome = Biome::named("taiga");
 pub static SNOWY: Biome = Biome::named("snowy_plains");
 pub static DESERT: Biome = Biome::named("desert");
 pub static MOUNTAINS: Biome = Biome::named("mountains");
+pub static SNOWY_PEAKS: Biome = Biome::named("snowy_peaks");
 pub static OCEAN: Biome = Biome::named("ocean");
 pub static BEACH: Biome = Biome::named("beach");
 pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
@@ -305,6 +332,14 @@ pub fn register(r: &mut Registry) {
         .set(&TREES, 0.06)
         .set(&GRASS_COVER, 0.05)
         .set(&TREE_KINDS, TreeKinds::from([("base:spruce", 1)]));
+    r.biome(&SNOWY_PEAKS)
+        .snows()
+        .surface("snow", "snow", 3)
+        .tint(grass, 0x80b497)
+        .tint(foliage, 0x60a17b)
+        .tint(water, 0x3938c9)
+        .tag("mountain")
+        .tag("cold");
     r.biome(&OCEAN)
         .surface("sand", "sand", 3)
         .deep_top("gravel", SEA - 8)
@@ -330,7 +365,8 @@ pub fn register(r: &mut Registry) {
     }
 
     // The overworld's shape. Other mods add to it by these names (`base:desert`, `base:mountains`).
-    r.terrain(&crate::OVERWORLD)
+    let terrain = r
+        .terrain(&crate::OVERWORLD)
         .stone("stone")
         .base_height(SEA as f64 - 8.0)
         .sea(SEA, "water")
@@ -359,6 +395,12 @@ pub fn register(r: &mut Registry) {
                 .mask(Expr::field("base:mountains"))
                 .named("mountains"),
         )
+        // Slight jittering so snow doesn't fall on visible contours
+        .field(
+            "base:alpine",
+            Expr::temperature() + Expr::noise(400.0) * Expr::value(0.2) + Expr::noise(70.0) * Expr::value(0.1)
+                - Expr::humidity() * Expr::value(0.1),
+        )
         // Biomes bring their climate and surface; rules only add where else they must hold.
         .rule(BiomeRule::new("ocean").height(..=SEA - 2))
         .rule(
@@ -367,8 +409,24 @@ pub fn register(r: &mut Registry) {
                 .height(..=SEA + 1)
                 .continent(..0.1),
         )
+<<<<<<< HEAD
         .rule(BiomeRule::new("beach").height(..=SEA + 1).continent(..0.3))
         .rule(BiomeRule::new("mountains").field("base:mountains", 0.6..))
+=======
+        .rule(BiomeRule::new("beach").height(..=SEA + 1).continent(..0.1));
+    let mut terrain = terrain;
+    for (i, (cold, warm, line)) in snow_bands().into_iter().enumerate() {
+        terrain = terrain.rule(
+            BiomeRule::new("snowy_peaks")
+                .named(&format!("snow_line_{i}"))
+                .field("base:mountains", 0.45..)
+                .field("base:alpine", cold..warm)
+                .height(line..),
+        );
+    }
+    terrain
+        .rule(BiomeRule::new("mountains").field("base:mountains", 0.45..))
+>>>>>>> deabf9205e001bbe1e3b5a45a5619946be958997
         .rule(BiomeRule::new("snowy_plains"))
         .rule(BiomeRule::new("taiga"))
         .rule(BiomeRule::new("desert"))
