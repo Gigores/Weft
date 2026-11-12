@@ -4,6 +4,7 @@
 use weft_sdk::*;
 
 use crate::blocks::*;
+use crate::tree_kinds::{TREE_KINDS, TreeKinds, register_tree, tree_place};
 
 use weft_sdk::noise::*;
 use weft_sdk::terrain::*;
@@ -25,9 +26,6 @@ pub static TALL_GRASS_COVER: Component<f32> = Component::named("tall_grass");
 pub static BOULDER_COVER: Component<f32> = Component::named("boulder");
 pub static RASPBERRY_COVER: Component<f32> = Component::named("raspberry");
 pub static SNOWBERRY_COVER: Component<f32> = Component::named("snowberry");
-/// The logs of the trees a biome grows, with weights: `"base:birch_log:1 base:oak_log:4"`
-/// (oaks where unset).
-pub static TREE_KINDS: Component<BlockList> = Component::named("tree_kinds");
 /// Flowers a biome grows, picked evenly (`"base:dandelion base:rose"` where unset).
 pub static FLOWERS: Component<BlockList> = Component::named("flowers");
 /// On a log, the tree it grows into: `round <leaves>` (like oaks, 4-6 high) or `cone <leaves>`
@@ -48,6 +46,57 @@ pub static MOUNTAINS: Biome = Biome::named("mountains");
 pub static OCEAN: Biome = Biome::named("ocean");
 pub static BEACH: Biome = Biome::named("beach");
 pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
+
+fn place_trunk(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u32, log: u32) {
+    let (x, y, z) = pos;
+    let top = y + height as i32;
+    for y in y..top {
+        put(x, y, z, log, true);
+        let left = top - y;
+        if rng.next() % (left as u64) <= 2 {
+            if rng.float() < 0.5 {
+                put(x, y, z, log, true);
+            } else {
+                put(x, y, z, log, true);
+            }
+        }
+    }
+    let mut grow_root = |dx: i32, dz: i32, tall: bool| {
+        let x = x + dx;
+        let z = z + dz;
+        if tall {
+            put(x, y + 1, z, log, true);
+        }
+        put(x, y, z, log, true);
+        put(x, y - 1, z, log, true);
+    };
+    let root_positions = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let mut root_count = 0;
+    for dpos in root_positions {
+        if rng.float() < 0.666 {
+            grow_root(dpos.0, dpos.1, rng.float() < 0.5);
+            root_count += 1;
+        }
+    }
+    if root_count == 0 {
+        let root_pos = root_positions[rng.next() as usize % root_positions.len()];
+        grow_root(root_pos.0, root_pos.1, rng.float() < 0.5);
+    }
+    put(x, y - 1, z, log, true);
+    put(x, y - 2, z, DIRT.id(), true);
+}
+fn place_oak(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
+    let height = 6u32 + (rng.next() as u32) % 4u32;
+    place_trunk(pos, rng, put, height, OAK_LOG.id());
+}
+fn place_birch(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
+    let height = 6u32 + (rng.next() as u32) % 4u32;
+    place_trunk(pos, rng, put, height, BIRCH_LOG.id());
+}
+fn place_spruce(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
+    let height = 6u32 + (rng.next() as u32) % 4u32;
+    place_trunk(pos, rng, put, height, SPRUCE_LOG.id());
+}
 
 /// Whether the ground within `r` blocks of a start is flat enough for it.
 fn gentle(p: &Plan, r: i32, max_range: i32) -> bool {
@@ -73,6 +122,9 @@ fn gentle(p: &Plan, r: i32, max_range: i32) -> bool {
 pub fn register(r: &mut Registry) {
     // Tags say what a biome is (spawning, decoration and mods ask these, not names).
     let (grass, foliage, water) = (&tints::GRASS, &tints::FOLIAGE, &tints::WATER);
+    register_tree("base:oak", place_oak);
+    register_tree("base:birch", place_birch);
+    register_tree("base:spruce", place_spruce);
     r.biome(&PLAINS)
         .surface("grass", "dirt", 3)
         .tag("animals")
@@ -92,7 +144,7 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .set(&TREES, 0.4)
         .set(&GRASS_COVER, 0.12)
-        .set_text(&TREE_KINDS, "base:birch_log:1 base:oak_log:4");
+        .set(&TREE_KINDS, TreeKinds::from([("base:oak", 4), ("base:birch", 1)]));
     r.biome(&BIRCH_FOREST)
         .temperature(..0.1)
         .humidity(0.05..)
@@ -103,7 +155,7 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .set(&TREES, 0.45)
         .set(&GRASS_COVER, 0.12)
-        .set_text(&TREE_KINDS, "base:birch_log");
+        .set(&TREE_KINDS, TreeKinds::from([("base:birch", 1)]));
     r.biome(&TAIGA)
         .temperature(..-0.15)
         .surface("grass", "dirt", 3)
@@ -115,7 +167,7 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .set(&TREES, 0.45)
         .set(&GRASS_COVER, 0.08)
-        .set_text(&TREE_KINDS, "base:spruce_log");
+        .set(&TREE_KINDS, TreeKinds::from([("base:spruce", 1)]));
     r.biome(&SNOWY)
         .snows()
         .temperature(..-0.25)
@@ -127,7 +179,7 @@ pub fn register(r: &mut Registry) {
         .tag("cold")
         .tag("animals")
         .set(&TREES, 0.03)
-        .set_text(&TREE_KINDS, "base:spruce_log");
+        .set(&TREE_KINDS, TreeKinds::from([("base:spruce", 1)]));
     r.biome(&DESERT)
         .temperature(0.25..)
         .humidity(..0.1)
@@ -146,7 +198,7 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .set(&TREES, 0.06)
         .set(&GRASS_COVER, 0.05)
-        .set_text(&TREE_KINDS, "base:spruce_log");
+        .set(&TREE_KINDS, TreeKinds::from([("base:spruce", 1)]));
     r.biome(&OCEAN)
         .surface("sand", "sand", 3)
         .deep_top("gravel", SEA - 8)
@@ -228,19 +280,25 @@ pub fn register(r: &mut Registry) {
         .ground("#plant_soil")
         .plan(|s| {
             let BlockPos { x, y, z } = s.pos();
-            let log = TREE_KINDS
-                .on_biome(s.biome())
-                .and_then(|l| l.pick(s.random() >> 40))
-                .unwrap_or(OAK_LOG.id());
-            let Some(t) = tree_at(log, x, y, z, s.random() >> 32) else { return };
+            let kinds = TREE_KINDS.on_biome(s.biome());
             let mut rng = Rng(s.random());
-            tree_blocks(&t, &mut rng, |x, y, z, state, force| {
+            // Biomes that ask for trees without naming kinds grow oaks, as they always did.
+            let name = match &kinds {
+                Some(kinds) => kinds.pick(rng.next()),
+                None => Some("base:oak"),
+            };
+            let Some(name) = name else { return };
+            let Some(place) = tree_place(name) else { return };
+
+            let mut put = |x: i32, y: i32, z: i32, state: u32, force: bool| {
                 if force {
                     s.set([x, y, z], state);
                 } else {
                     s.put([x, y, z], state);
                 }
-            });
+            };
+
+            place((x, y, z), &mut rng, &mut put);
         });
     r.scatter(&BOULDER_SITES)
         .spacing(5)
@@ -427,6 +485,14 @@ fn tree_blocks(t: &TreeAt, rng: &mut Rng, mut put: impl FnMut(i32, i32, i32, u32
     }
     for y in t.y..top {
         put(t.x, y, t.z, log, true);
+        let left = top - y;
+        if rng.next() % (left as u64) <= 2 {
+            if rng.float() < 0.5 {
+                put(t.x, y, t.z, log, true);
+            } else {
+                put(t.x, y, t.z, log, true);
+            }
+        }
     }
     let mut grow_root = |dx: i32, dz: i32, tall: bool| {
         let x = t.x + dx;
