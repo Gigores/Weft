@@ -2685,13 +2685,16 @@ fn report_frame(r: &mut Running, dt: f64) {
         if b.done() {
             let extra = match &r.game {
                 Some(g) => format!(
-                    "pos {:.1} {:.1} {:.1}, cubes {}, draws {}, faces {}k, entities {}, regions {}",
+                    "pos {:.1} {:.1} {:.1}, cubes {}, draws {}, faces {}k, lod {} tiles {}k quads {}k drawn, entities {}, regions {}",
                     g.client.player.pos.x,
                     g.client.player.pos.y,
                     g.client.player.pos.z,
                     g.client.world.len(),
                     g.client.render.drawn,
                     g.client.render.faces_drawn / 1000,
+                    g.client.lod_stats().0,
+                    g.client.lod_stats().2 / 1000,
+                    g.client.render.lod_drawn / 1000,
                     g.client.entities.len(),
                     g.server.as_ref().map_or(0, |s| s.regions())
                 ),

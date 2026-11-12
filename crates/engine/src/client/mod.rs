@@ -1648,7 +1648,7 @@ impl Client {
             && (-reach..=reach).all(|x| {
                 (-reach..=reach).all(|z| {
                     self.world
-                        .column_shown(glam::IVec2::new(at.x + x, at.z + z), self.seed)
+                        .column_shown(glam::IVec2::new(at.x + x, at.z + z), self.seed, false)
                 })
             })
     }
