@@ -642,6 +642,7 @@ pub fn register(r: &mut Registry) {
         .needs_below("")
         .plant()
         .texture("porcini_mushroom")
+        .drops("porcini", 1)
         .tab(&crate::tabs::NATURAL);
     r.block(&CHANTERELLE_MUSHROOM)
         .sound_group("grass")
@@ -650,6 +651,7 @@ pub fn register(r: &mut Registry) {
         .needs_below("")
         .plant()
         .texture("chanterelle_mushroom")
+        .drops("chanterelle", 1)
         .tab(&crate::tabs::NATURAL);
     r.block(&TOADSTOOL_MUSHROOM)
         .sound_group("grass")
@@ -658,6 +660,7 @@ pub fn register(r: &mut Registry) {
         .needs_below("")
         .plant()
         .texture("toadstool_mushroom")
+        .drops("toadstool", 1)
         .tab(&crate::tabs::NATURAL);
     let uv = [0.1, 0.1, 15.9, 7.9];
     let flipped_v = [uv[0], uv[3], uv[2], uv[1]];
@@ -692,6 +695,7 @@ pub fn register(r: &mut Registry) {
         .tilted([8.0, 7.0, 16.0], Dir::East, -24.0)
         .not_solid()
         .hitbox([0.0, 6.0, 8.0], [16.0, 13.0, 16.0])
+        .drops("dryads_saddle", 1)
         .tab(&crate::tabs::NATURAL);
 
     r.shapes_of("hollow_log", "#logs", "_hollow")

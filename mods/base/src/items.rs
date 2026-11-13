@@ -12,6 +12,8 @@ pub static FLINT: Item = Item::named("flint");
 pub static CLAY_BALL: Item = Item::named("clay_ball");
 pub static SNOWBERRY: Item = Item::named("snowberry");
 pub static RASPBERRY: Item = Item::named("raspberry");
+pub static DRYADS_SADDLE: Item = Item::named("dryads_saddle");
+pub static TOADSTOOL: Item = Item::named("toadstool");
 
 pub use base_api::{ARMOR, ARMOR_PIECE, ARMOR_TOUGHNESS, FLAMMABLE, FOOD, FUEL, Food};
 /// Tags of armor pieces, head to feet; `<tag>/<material>` picks the recipe (see recipes.rs).
@@ -90,11 +92,13 @@ pub fn register(r: &mut Registry) {
         ("mutton", 2, 1.2, "raw_meat/mutton"),
         ("cooked_mutton", 6, 9.6, "cooked_meat/mutton"),
         ("spider_eye", 2, 3.2, ""),
+        ("porcini", 1, 1.2, "mushrooms"),
+        ("chanterelle", 1, 1.2, "mushrooms"),
     ] {
         let i = r
             .item(Item::generated(name.into()))
             .set(&FOOD, Food { hunger, saturation })
-            .use_ticks(if tag == "berries" { 16 } else { 32 })
+            .use_ticks(if tag == "mushrooms" { 16 } else { 32 })
             .on_use(base_api::eat)
             .tab(&crate::tabs::FOOD);
         let i = if tag.starts_with("cooked_meat/") { i.tag("cooked_meat") } else { i };
@@ -102,6 +106,13 @@ pub fn register(r: &mut Registry) {
             i.tag(tag);
         }
     }
+    r.item(&TOADSTOOL)
+        .set(&FOOD, Food { hunger: 1, saturation: 1.2 })
+        .use_ticks(16)
+        .on_use(base_api::eat)
+        .gives_effect(&crate::effects::NAUSEA, 1, 10.0)
+        .gives_effect(&crate::effects::POISON, 1, 15.0)
+        .tab(&crate::tabs::FOOD);
     r.item(&SNOWBERRY)
         .set(&FOOD, Food { hunger: 1, saturation: 1.0 })
         .use_ticks(16)
@@ -114,6 +125,9 @@ pub fn register(r: &mut Registry) {
         .use_ticks(16)
         .on_use(base_api::eat)
         .tab(&crate::tabs::FOOD);
+    r.item(&DRYADS_SADDLE)
+        .tag("mushrooms")
+        .tab(&crate::tabs::INGREDIENTS);
     r.item(Item::generated("leather".into()))
         .tag("materials/leather")
         .tab(&crate::tabs::INGREDIENTS);

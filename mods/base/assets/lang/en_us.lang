@@ -383,3 +383,7 @@ block.base.porcini_mushroom = Porcini
 block.base.chanterelle_mushroom = Chanterelle
 block.base.toadstool_mushroom = Toadstool
 block.base.dryads_saddle_mushroom = Polypore
+item.base.porcini = Porcini
+item.base.chanterelle = Chanterelle
+item.base.toadstool = Toadstool
+item.base.dryads_saddle = Polypore
