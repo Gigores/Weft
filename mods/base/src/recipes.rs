@@ -42,6 +42,8 @@ pub fn register(r: &mut Registry) {
     r.shapeless(C, "#stained_glass/{m}", 1, &["#glass", "#dyes/{m}"], 0);
     r.shapeless(C, "#wool/{m}", 1, &["wool", "#dyes/{m}"], 0);
     r.shaped(C, "clay", 1, &["##", "##"], &[('#', "clay_ball")]);
+    r.shaped(C, "#logs/{m}", 4, &["##", "##"], &[('#', "#wood/{m}")]);
+    r.shaped(C, "#wood/{m}", 4, &["##", "##"], &[('#', "#logs/{m}")]);
 
     // Every mod's `ore_blocks/<m>` packs its `ingots/<m>` or `gems/<m>`, and its ores smelt into them.
     for kind in ["#ingots/{m}", "#gems/{m}"] {
