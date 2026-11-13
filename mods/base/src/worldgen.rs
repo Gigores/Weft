@@ -55,6 +55,7 @@ pub static SNOWBERRY_COVER: Component<f32> = Component::named("snowberry");
 pub static BUSH_COVER: Component<f32> = Component::named("bush");
 pub static FUNGI_COVER: Component<f32> = Component::named("fungi");
 pub static FLOWER_COVER: Component<f32> = Component::named("flower");
+pub static FERN_COVER: Component<f32> = Component::named("fern");
 /// Flowers a biome grows, picked evenly (`"base:dandelion base:rose"` where unset).
 pub static FLOWERS: Component<BlockList> = Component::named("flowers");
 /// On a log, the tree it grows into: `round <leaves>` (like oaks, 4-6 high) or `cone <leaves>`
@@ -342,12 +343,13 @@ pub fn register(r: &mut Registry) {
         .tag("forest")
         .tag("animals")
         .set(&TREES, 0.4)
+        .set(&FERN_COVER, 0.2)
         .set(&GRASS_COVER, 0.4)
         .set(&BUSH_COVER, 0.06)
         .set(&RASPBERRY_COVER, 0.002)
         .set(&FUNGI_COVER, 0.01)
-        .set_text(&FLOWERS, "base:rose base:dandelion base:fern base:fern")
-        .set(&FLOWER_COVER, 0.02)
+        // .set_text(&FLOWERS, "base:rose base:dandelion base:fern base:fern")
+        // .set(&FLOWER_COVER, 0.02)
         .set(&TREE_KINDS, TreeKinds::from([("base:oak", 4), ("base:birch", 1)]));
     r.biome(&BIRCH_FOREST)
         .temperature(..0.1)
@@ -358,12 +360,13 @@ pub fn register(r: &mut Registry) {
         .tag("forest")
         .tag("animals")
         .set(&TREES, 0.45)
+        .set(&FERN_COVER, 0.2)
         .set(&GRASS_COVER, 0.4)
         .set(&BUSH_COVER, 0.06)
         .set(&RASPBERRY_COVER, 0.002)
         .set(&FUNGI_COVER, 0.01)
-        .set_text(&FLOWERS, "base:rose base:dandelion base:fern base:fern")
-        .set(&FLOWER_COVER, 0.02)
+        // .set_text(&FLOWERS, "base:rose base:dandelion base:fern base:fern")
+        // .set(&FLOWER_COVER, 0.02)
         .set(&TREE_KINDS, TreeKinds::from([("base:birch", 1)]));
     r.biome(&TAIGA)
         .temperature(..-0.15)
@@ -841,13 +844,14 @@ fn decorate(g: &mut Gen) {
             let tall_grass_chance = TALL_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64;
             let grass_chance = GRASS_COVER.on_biome(b).unwrap_or(0.05) as f64;
             let flower_chance = FLOWER_COVER.on_biome(b).unwrap_or(0.012) as f64;
+            let fern_chance = FERN_COVER.on_biome(b).unwrap_or(0.0) as f64;
             // What is under the lowest layer takes a look at the terrain: only if anything would grow.
             if y == 0 && roll >= grass_chance.max(0.08) && roll >= tall_grass_chance.max(0.08) {
                 continue;
             }
             let below = if y == 0 { g.surface_block(wx, wz) } else { g.get(x, y - 1, z) };
             if PLANT_SOIL.on_block(below) {
-                // roll ∈ [0; 0.012)
+                // roll ∈ [0; grass_chance)
                 if roll < flower_chance {
                     let flower = FLOWERS
                         .on_biome(b)
@@ -855,7 +859,10 @@ fn decorate(g: &mut Gen) {
                     if flower != 0 {
                         g.set(x, y, z, flower);
                     }
-                // roll ∈ [0.012; tall_grass_chance)
+                // roll ∈ [grass_chance; fern_chance)
+                } else if roll < fern_chance {
+                    g.set(x, y, z, FERN.id());
+                // roll ∈ [fern_chance; tall_grass_chance)
                 } else if roll < tall_grass_chance {
                     let wave = fixed::fbm(fixed::seed32(seed, 0x7A11), wx * 16, wz * 16, 48 * 16, 3);
                     if wave > 0 {
