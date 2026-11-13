@@ -18,7 +18,7 @@ jobs:
 
       - name: Validate .desktop files
         run: |
-          desktop-file-utils metafiles/download.weft.weft.desktop
+          desktop-file-validate metafiles/download.weft.weft.desktop
 
       - name: Validate AppStream metainfo files
         run: |
