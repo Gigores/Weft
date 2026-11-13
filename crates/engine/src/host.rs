@@ -203,6 +203,7 @@ pub static HOST: Host = Host {
     place,
     unplace,
     plan_op,
+    generation_read,
     template_size,
     template_joints,
     world_seed,
@@ -221,8 +222,6 @@ pub static HOST: Host = Host {
     body_move_to,
     signal_read_changed,
     dim_column,
-    dim_surface_carved,
-    dim_surface_block,
     ease,
     force_load,
     asset_exists,
@@ -273,6 +272,26 @@ unsafe extern "C" fn place(w: *mut abi::WorldCtx, name: Str, pos: *const abi::Bl
 
 unsafe extern "C" fn unplace(w: *mut abi::WorldCtx, placing: u64) -> u32 {
     unsafe { dim(w).unplace(content(), placing) as u32 }
+}
+
+unsafe extern "C" fn generation_read(source: *const abi::GenSource, pos: abi::BlockPos) -> u32 {
+    let Some(source) = (unsafe { source.as_ref() }) else { return 0 };
+    let c = content();
+    if source.dim as usize >= c.dims.len() {
+        return 0;
+    }
+    let pos = crate::world::ivec(pos);
+    if source.ctx.is_null() {
+        if !crate::generation::can_read(source) {
+            misuse("generation_read", || {
+                "a generation callback cannot read its own or a later stage's output; use its borrowed view".into()
+            });
+            return 0;
+        }
+        crate::generation::Snapshot::new(c, source.dim, source.seed, source.before).read(pos)
+    } else {
+        unsafe { (&*source.ctx.cast::<crate::generation::ReadCtx>()).read(pos) }
+    }
 }
 
 unsafe extern "C" fn plan_op(ctx: *mut abi::PlanCtx, op: *const abi::PlanOp) -> u32 {
@@ -1876,20 +1895,6 @@ unsafe extern "C" fn dim_column(dim: u32, seed: u64, x: i32, z: i32, out: *mut a
     };
     unsafe { *out = col };
     1
-}
-
-unsafe extern "C" fn dim_surface_carved(dim: u32, seed: u64, x: i32, z: i32) -> u32 {
-    content()
-        .dims
-        .get(dim as usize)
-        .is_some_and(|d| d.carved(seed, x, z)) as u32
-}
-
-unsafe extern "C" fn dim_surface_block(dim: u32, seed: u64, x: i32, z: i32) -> u32 {
-    content()
-        .dims
-        .get(dim as usize)
-        .map_or(0, |d| d.surface_block(seed, x, z))
 }
 
 unsafe extern "C" fn reg_command(r: *mut abi::Registrar, name: Str, usage: Str, client: u32, cb: Callback) {

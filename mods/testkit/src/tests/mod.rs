@@ -53,6 +53,7 @@ pub fn all() -> Vec<TestDef> {
         world::edits,
         world::virtual_menus,
         world::worldgen,
+        world::generation_reads,
         world::plants_on_cube_tops,
         world::foreign_terrain,
         world::tick_control,

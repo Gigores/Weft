@@ -124,6 +124,7 @@ fn count(i: usize, n: usize) {
 }
 
 pub fn register(r: &mut Registry) {
+    crate::generation::register(r);
     // A random `.ctm` with tiles of two colors, on what isn't a cube.
     static VARIED_PLANT: Block = Block::named("varied_plant");
     static VARIED_BOX: Block = Block::named("varied_box");

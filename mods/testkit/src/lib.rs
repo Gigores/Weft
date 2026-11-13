@@ -8,6 +8,7 @@
 //! `--test-keep` keeps the test worlds. `weft --world w --script file.txt` runs a line script (see `script.rs`).
 //! Without those options the mod only registers its message channels.
 
+mod generation;
 mod runner;
 mod script;
 mod server;

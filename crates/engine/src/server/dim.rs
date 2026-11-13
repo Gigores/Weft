@@ -226,21 +226,8 @@ pub fn generate(c: &Content, dim: u32, seed: u64, pos: IVec3) -> Cube {
     if pos.y < def.min_cube_y || pos.y > def.max_cube_y {
         return Cube::uniform(AIR, 0);
     }
-    let mut blocks = vec![0u32; VOLUME];
-    let mut biomes = [0u16; 256];
-    let cols = match (def.builtin, &def.terrain, def.generator) {
-        (Some(f), _, _) => {
-            f(c, pos, &mut blocks);
-            return finish_generated(c, dim, seed, pos, blocks, biomes, None, true);
-        }
-        (None, None, None) => return Cube::uniform(AIR, 0),
-        (None, Some(t), _) => Some(Arc::new(
-            t.generate(seed, pos.to_array(), &mut blocks, &mut biomes)
-                .cols,
-        )),
-        (None, None, Some(_)) => def.columns(seed, pos.x, pos.z),
-    };
-    finish_generated(c, dim, seed, pos, blocks, biomes, cols, false)
+    let base = crate::generation::base(c, dim, seed, pos);
+    finish_generated(c, dim, seed, pos, base.blocks, base.biomes, base.columns, def.builtin.is_some())
 }
 
 /// Everything generation does after the terrain (which the GPU may have made): the
@@ -257,27 +244,14 @@ pub fn finish_generated(
     cols: Option<Arc<[abi::TerrainColumn; 256]>>,
     builtin: bool,
 ) -> Cube {
-    let def = &c.dims[dim as usize];
     let columns = cols.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
-    if !builtin && let Some((by, cb)) = def.generator {
-        let mut args =
-            abi::GenArgs { seed, cube: pos.to_array().into(), blocks: blocks.as_mut_ptr(), biomes: biomes.as_mut_ptr(), dim, columns };
-        host::invoke(by, cb, &mut args);
+    if !builtin {
+        crate::generation::run_generator(c, dim, seed, pos, &mut blocks, &mut biomes, cols.as_deref());
     }
-    let check = |blocks: &mut [u32], what: &'static str| {
-        let max = c.states.len() as u32;
-        let top = blocks.iter().copied().max().unwrap_or(0);
-        if top >= max {
-            for b in blocks.iter_mut().filter(|b| **b >= max) {
-                *b = AIR;
-            }
-            host::misuse(what, || format!("{} wrote state {top}, which does not exist (air instead)", def.name));
-        }
-    };
-    check(&mut blocks, "generator");
+    crate::generation::validate(c, dim, &mut blocks, "generator");
     let (changed, generated) = crate::features::place(c, dim, seed, pos, &mut blocks, &mut biomes, columns);
     if changed {
-        check(&mut blocks, "feature");
+        crate::generation::validate(c, dim, &mut blocks, "feature");
     }
     let mut cube = if blocks.iter().all(|&b| b == blocks[0]) {
         Cube::uniform(blocks[0], 0)

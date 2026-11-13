@@ -161,6 +161,17 @@ fn worldgen(_r: &mut Registry) {
     // static ACID_RAIN: Weather = Weather::named("acid_rain");
     // r.weather(&ACID_RAIN).darkness(0.5).duration(2400, 6000).weight(1);
     // r.edit(&OVERWORLD).push(&comps::dimension::WEATHERS, ACID_RAIN.name().to_string());
+    // Postprocessing can inspect the completed structures and vegetation.
+    // static MARKERS: Feature = Feature::named("markers");
+    // static MARKER: Block = Block::named("base:cobblestone");
+    // r.scatter(&MARKERS).dimension(&OVERWORLD).spacing(48).reach(2).stage(abi::stage::POST_PROCESS).plan(|p| {
+    //     let at = p.pos();
+    //     let surface = p.view().find([at.x, at.y + 8, at.z], Dir::Down, 24, |s| s != 0);
+    //     if let Some(ground) = surface {
+    //         let pos = [ground.x, ground.y + 1, ground.z];
+    //         if p.read(pos) == 0 { p.put(pos, MARKER.id()); }
+    //     }
+    // });
     // Base's iron, twice as common (an ore is named like its block):
     // static IRON_ORE: Block = Block::named("base:iron_ore");
     // r.edit(IRON_ORE.ore()).per_cube(12);

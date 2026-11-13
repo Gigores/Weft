@@ -272,6 +272,7 @@ The rest is split by what you are making. Each page starts with the common case 
 **The world from code**
 
 - [World API](world-api.md): positions, blocks, entities, raycasts, hitboxes, particles, sounds
+- [Reading generation](worldgen.md#reading-generation): `p.read(pos)`, spatial searches and postprocessing with `abi::stage::POST_PROCESS`
 
 **Client side**
 

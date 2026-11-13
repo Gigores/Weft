@@ -698,6 +698,7 @@ pub struct BiomeDef {
 }
 
 pub struct DimensionDef {
+    pub snapshots: crate::generation::Snapshots,
     pub name: String,
     pub owner: ModId,
     /// The callbacks and the mods they run as.
@@ -766,7 +767,7 @@ impl DimensionDef {
             std::array::from_fn(|i| {
                 let mut a =
                     abi::ColumnArgs { seed, x: cx * 16 + (i % 16) as i32, z: cz * 16 + (i / 16) as i32, height: i32::MIN, biome: 0 };
-                crate::host::invoke(by, cb, &mut a);
+                crate::generation::during_column(|| crate::host::invoke(by, cb, &mut a));
                 abi::TerrainColumn { height: a.height, biome: a.biome }
             })
         }))
@@ -1615,6 +1616,7 @@ fn bake_dimension(e: &Entry) -> DimensionDef {
         .collect();
     daylight.sort_by(|a, b| a[0].total_cmp(&b[0]));
     DimensionDef {
+        snapshots: Default::default(),
         raw_hazards: e.or(abi::comp::dimension::HAZARDS, Vec::new()),
         hazards: Vec::new(),
         name: e.name.clone(),
@@ -1654,6 +1656,7 @@ pub const VOID_DIM: &str = "core:void";
 
 fn void_dimension() -> DimensionDef {
     DimensionDef {
+        snapshots: Default::default(),
         raw_hazards: Vec::new(),
         hazards: Vec::new(),
         name: VOID_DIM.into(),
@@ -3058,10 +3061,15 @@ fn freeze_features(
                 Spread::EveryCube(..) => abi::stage::DECORATION,
             },
         );
+        if stage == u32::MAX {
+            errors.push(format!("{what}: stage u32::MAX is reserved for the completed generation view"));
+            return None;
+        }
         let mut def = FeatureDef {
             name: e.name.clone(),
             id,
             owner: e.owner,
+            stage,
             salt: crate::registry::name_hash(&e.name),
             biome: look.biomes(&what, e, errors).ok()?,
             y: heights(e),
@@ -3138,6 +3146,14 @@ fn feature_order(
                 let (a, b) = if after { (j, i) } else { (i, j) };
                 before[a].push(b);
                 needs[b] += 1;
+            }
+        }
+    }
+    for (i, a) in list.iter().enumerate() {
+        for (j, b) in list.iter().enumerate() {
+            if a.0 < b.0 && !before[i].contains(&j) {
+                before[i].push(j);
+                needs[j] += 1;
             }
         }
     }

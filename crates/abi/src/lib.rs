@@ -2177,8 +2177,26 @@ pub struct GateArgs {
     pub output: u32,
 }
 
+/// A generation snapshot, borrowed for the duration of a generation callback.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GenSource {
+    pub dim: u32,
+    pub seed: u64,
+    /// Completed stages strictly before this one.
+    pub before: u32,
+    /// Engine-local writes; null for a standalone snapshot.
+    pub ctx: *const core::ffi::c_void,
+}
+
 #[repr(C)]
 pub struct GenArgs {
+    pub source: GenSource,
+    /// Optional engine write-intent masks (64 words for blocks, 4 for biomes).
+    /// Writers set bits for explicit assignments, including assigning the input value.
+    /// Null when the entire buffer is the output, as in a dimension generator.
+    pub written: *mut u64,
+    pub biomes_written: *mut u64,
     pub seed: u64,
     pub cube: BlockPos,
     /// 4096 state ids, index = (y * 16 + z) * 16 + x. Pre-filled with 0 (air).
@@ -2201,6 +2219,7 @@ pub struct PlanCtx {
 /// A feature's plan (`comp::feature::PLAN`), once per start.
 #[repr(C)]
 pub struct PlanArgs {
+    pub source: GenSource,
     pub seed: u64,
     pub dim: u32,
     /// The start: the block above the ground for a feature on a grid.
@@ -2279,6 +2298,8 @@ pub mod stage {
     pub const VEGETATION: u32 = 2;
     /// Grass, flowers and the rest decided column by column.
     pub const DECORATION: u32 = 3;
+    /// Work on the completed terrain, structures and vegetation.
+    pub const POST_PROCESS: u32 = 4;
 }
 
 /// `comp::feature::SPREAD`.
@@ -4385,6 +4406,8 @@ pub struct Host {
     pub unplace: unsafe extern "C" fn(world: *mut WorldCtx, placing: u64) -> u32,
     /// A plan puts something (`PlanOp`); 0 where it goes past the feature's reach (left out).
     pub plan_op: unsafe extern "C" fn(ctx: *mut PlanCtx, op: *const PlanOp) -> u32,
+    /// A block in a generation snapshot, including this callback's earlier writes.
+    pub generation_read: unsafe extern "C" fn(source: *const GenSource, pos: BlockPos) -> u32,
     /// Template `name`'s size once transformed; 0 if there is no such template.
     pub template_size: unsafe extern "C" fn(name: Str, transform: u32, out: *mut BlockPos) -> u32,
     /// Template `name`'s joints once transformed, up to `cap` into `out`; how many it has.
@@ -4428,11 +4451,6 @@ pub struct Host {
     /// Column (`x`, `z`) of dimension `dim` for `seed` (its terrain's or `comp::dimension::COLUMN`),
     /// generated or not. Returns 0 if the dimension has neither.
     pub dim_column: unsafe extern "C" fn(dim: u32, seed: u64, x: i32, z: i32, out: *mut TerrainColumn) -> u32,
-    /// 1 if caves took the surface block of column (`x`, `z`), so nothing should stand there.
-    pub dim_surface_carved: unsafe extern "C" fn(dim: u32, seed: u64, x: i32, z: i32) -> u32,
-    /// The state the terrain leaves at the top of column (`x`, `z`): 0 where caves took it or the
-    /// dimension has no terrain.
-    pub dim_surface_block: unsafe extern "C" fn(dim: u32, seed: u64, x: i32, z: i32) -> u32,
 
     /// Puts `player` in camera mode `mode` (`u32::MAX`: back to its own choice); `locked`, it
     /// can't leave it until told. The change takes `transition` seconds eased by `easing`
