@@ -7,7 +7,7 @@
   <project_license>MPL-2.0</project_license>
   <url type="homepage">https://weft.download</url>
   <url type="vcs-browser">https://github.com/Weft-Rust/Weft</url>
-  <url type="bug-tracker">https://github.com/Weft-Rust/Weft/issues</url>
+  <url type="bugtracker">https://github.com/Weft-Rust/Weft/issues</url>
   <supports>
     <control>pointing</control>
     <control>keyboard</control>
