@@ -67,6 +67,7 @@ pub static PORCINI_MUSHROOM: Block = Block::named("porcini_mushroom");
 pub static CHANTERELLE_MUSHROOM: Block = Block::named("chanterelle_mushroom");
 pub static TOADSTOOL_MUSHROOM: Block = Block::named("toadstool_mushroom");
 pub static DRYADS_SADDLE_MUSHROOM: Block = Block::named("dryads_saddle_mushroom");
+pub static BUSH_LEAVES: Block = Block::named("bush_leaves");
 
 static TILLABLE: Tag = Tag::named("tillable");
 
@@ -100,18 +101,21 @@ fn log(r: &mut Registry, handle: &'static Block, wood: &str, wood_block: bool) {
 const COLORS: &[(&str, u32, u32, [u8; 3])] =
     &[("red", 0xED3737, 0xB02E26, [0, 12, 12]), ("green", 0x37C837, 0x5E7C16, [12, 0, 12]), ("blue", 0x375BFF, 0x3C44AA, [12, 12, 0])];
 
-fn leaves(r: &mut Registry, handle: &'static Block, tex: &str) {
-    r.block(handle)
+fn leaves(r: &mut Registry, handle: &'static Block, tex: &str, tint: bool) {
+    let mut b = r.block(handle)
         .sound_group("grass")
         .texture(tex)
         .hardness(0.2)
         .cutout()
         .light_opacity(1)
-        .tint_kind(&tints::FOLIAGE)
         .tag("leaves")
         .signal_blocker()
         .mined_by("shears", tool_tier::HAND)
         .tab(&crate::tabs::NATURAL);
+    if tint {
+        b = b.tint_kind(&tints::FOLIAGE);
+    }
+    std::mem::drop(b);
     // Vanilla: a sapling one time in 20, oak leaves an apple one time in 200.
     let mut table = r.loot(handle).pool(
         Pool::new()
@@ -384,9 +388,10 @@ pub fn register(r: &mut Registry) {
             .set(&FUEL, 300)
             .tab(&crate::tabs::BUILDING);
     }
-    leaves(r, &OAK_LEAVES, "leaves_oak");
-    leaves(r, &BIRCH_LEAVES, "leaves_birch");
-    leaves(r, &SPRUCE_LEAVES, "leaves_spruce");
+    leaves(r, &OAK_LEAVES, "leaves_oak", true);
+    leaves(r, &BIRCH_LEAVES, "leaves_birch", true);
+    leaves(r, &SPRUCE_LEAVES, "leaves_spruce", true);
+    leaves(r, &BUSH_LEAVES, "raspberry_leaves", false);
     berry_leaves(r, &RASPBERRY_LEAVES, "raspberry_leaves", "raspberry_leaves_berried", &crate::items::RASPBERRY);
     berry_leaves(r, &SNOWBERRY_LEAVES, "raspberry_leaves", "snowberry_leaves_berried", &crate::items::SNOWBERRY);
     // Vanilla numbers: water steps every 5 ticks and reaches 7 blocks, lava every 30 and 3.

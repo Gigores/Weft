@@ -52,6 +52,7 @@ pub static TALL_GRASS_COVER: Component<f32> = Component::named("tall_grass");
 pub static BOULDER_COVER: Component<f32> = Component::named("boulder");
 pub static RASPBERRY_COVER: Component<f32> = Component::named("raspberry");
 pub static SNOWBERRY_COVER: Component<f32> = Component::named("snowberry");
+pub static BUSH_COVER: Component<f32> = Component::named("bush");
 /// Flowers a biome grows, picked evenly (`"base:dandelion base:rose"` where unset).
 pub static FLOWERS: Component<BlockList> = Component::named("flowers");
 /// On a log, the tree it grows into: `round <leaves>` (like oaks, 4-6 high) or `cone <leaves>`
@@ -290,8 +291,9 @@ pub fn register(r: &mut Registry) {
         .set(&GRASS_COVER, 0.7)
         .set(&TALL_GRASS_COVER, 0.2)
         .set(&BOULDER_COVER, 0.03)
-        .set(&RASPBERRY_COVER, 0.02)
-        .set(&SNOWBERRY_COVER, 0.01);
+        .set(&BUSH_COVER, 0.03)
+        .set(&RASPBERRY_COVER, 0.005)
+        .set(&SNOWBERRY_COVER, 0.002);
     r.biome(&FOREST)
         .humidity(0.25..)
         .surface("grass", "dirt", 3)
@@ -301,7 +303,8 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .set(&TREES, 0.4)
         .set(&GRASS_COVER, 0.2)
-        .set(&RASPBERRY_COVER, 0.03)
+        .set(&BUSH_COVER, 0.06)
+        .set(&RASPBERRY_COVER, 0.002)
         .set(&TREE_KINDS, TreeKinds::from([("base:oak", 4), ("base:birch", 1)]));
     r.biome(&BIRCH_FOREST)
         .temperature(..0.1)
@@ -313,6 +316,8 @@ pub fn register(r: &mut Registry) {
         .tag("animals")
         .set(&TREES, 0.45)
         .set(&GRASS_COVER, 0.12)
+        .set(&BUSH_COVER, 0.06)
+        .set(&RASPBERRY_COVER, 0.002)
         .set(&TREE_KINDS, TreeKinds::from([("base:birch", 1)]));
     r.biome(&TAIGA)
         .temperature(..-0.15)
@@ -535,6 +540,17 @@ pub fn register(r: &mut Registry) {
                 }
             }
         });
+    r.scatter(&BUSH_SITES)
+        .spacing(5)
+        .reach(3)
+        .density(&BUSH_COVER)
+        .plan(|s| {
+            place_bush(
+                s,
+                |_r| BUSH_LEAVES.id(),
+                BUSH_STEM.id(),
+            )
+        });
     r.scatter(&RASPBERRY_SITES)
         .spacing(5)
         .reach(3)
@@ -559,6 +575,8 @@ pub fn register(r: &mut Registry) {
         });
     r.decoration(decorate);
 }
+
+static BUSH_SITES: Feature = Feature::named("bushes");
 
 fn place_boulder(s: &mut Plan, rng: &mut Rng, ox: i32, oy: i32, oz: i32, cells: &mut Vec<[i32; 3]>) {
     for (dx, dy, dz) in sphere(1.5) {
