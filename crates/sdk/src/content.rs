@@ -1674,7 +1674,11 @@ macro_rules! state_setters {
         pub fn hazard(self, h: crate::Hazard) -> Self {
             self.push(&bc::HAZARDS, h.0)
         }
-        /// A plant: tagged `plantable`, cross model, no collision. Placing a block into it is
+        /// Draw its item as the sprite of this block face instead of the model.
+        pub fn item_sprite(self, face: crate::Dir) -> Self {
+            self.set(&bc::ITEM_FACE, face.face() as u8)
+        }
+        /// A plant: tagged `plantable`, crossed flat boxes, no collision. Placing a block into it is
         /// refused, as for vanilla's flowers and sugar cane; grass that gives way is `.replaceable()`.
         pub fn plant(self) -> Self {
             self.not_solid()

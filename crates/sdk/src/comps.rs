@@ -566,6 +566,7 @@ pub mod block {
     pub static LIGHT_OPACITY: Component<u8, Block> = Component::named(b::LIGHT_OPACITY);
     pub static LAYER: Component<u32, Block> = Component::named(b::LAYER);
     pub static MODEL: Component<u32, Block> = Component::named(b::MODEL);
+    pub static ITEM_FACE: Component<u8, Block> = Component::named(b::ITEM_FACE);
     pub static TEXTURES: Component<[String; 6], Block> = Component::named(b::TEXTURES);
     pub static TURNS: Component<[u8; 6], Block> = Component::named(b::TURNS);
     pub static TURN: Component<u8, Block> = Component::named(b::TURN);

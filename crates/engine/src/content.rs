@@ -42,6 +42,23 @@ impl ModelBox {
         }
     }
 
+    /// The box that can use packed cube faces, if this geometry is a full, normally shaded cube.
+    pub fn full_cube(boxes: &[ModelBox]) -> Option<&ModelBox> {
+        match boxes {
+            [b] if b.min == [0.0; 3]
+                && b.max == [1.0; 3]
+                && b.tilt.degrees == 0.0
+                && !b.flat
+                && b.uv
+                    .iter()
+                    .all(|&uv| uv == weft_abi::UV_FROM_BOX || uv == [0.0, 0.0, 16.0, 16.0]) =>
+            {
+                Some(b)
+            }
+            _ => None,
+        }
+    }
+
     /// Turned with its block (`abi::Turn`), pictures and all: a face taking its picture from where
     /// the box is takes it from where it was written.
     pub fn turned(&self, t: weft_abi::Turn) -> ModelBox {
@@ -116,10 +133,9 @@ pub struct StateInfo {
     pub layer: RenderLayer,
     pub level: u8,
     pub model: BlockModel,
+    pub item_face: Option<u8>,
     /// Texture ids (`Content::textures`) per face.
     pub textures: [u32; 6],
-    /// Cube model: quarter turns of each face's picture.
-    pub turns: [u8; 6],
     pub boxes: Vec<ModelBox>,
     /// In block units.
     pub collision: Vec<[f32; 6]>,
@@ -263,13 +279,10 @@ impl StateInfo {
     /// The block texture an item of this block shows as a flat sprite (vanilla's generated item
     /// models): plants and liquids. Other shapes are drawn as their model.
     pub fn item_sprite(&self) -> Option<u32> {
-        if self.liquid.is_some() {
-            return Some(self.textures[3]);
-        }
-        match self.model {
-            BlockModel::Cross | BlockModel::None | BlockModel::Wire => Some(self.textures[0]),
-            _ => None,
-        }
+        self.item_face
+            .or_else(|| self.liquid.map(|_| 3))
+            .filter(|&f| f < 6)
+            .map(|f| self.textures[f as usize])
     }
 }
 
@@ -4014,6 +4027,27 @@ fn freeze_liquids(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_faces_require_full_cube_geometry() {
+        let cube = ModelBox::whole([7; 6]);
+        assert!(ModelBox::full_cube(std::slice::from_ref(&cube)).is_some());
+        for change in [0, 1, 2, 3, 4] {
+            let mut b = cube.clone();
+            match change {
+                0 => b.max[1] = 0.5,
+                1 => b.uv[0] = weft_abi::UV_NO_FACE,
+                2 => b.uv[1] = [0.0, 0.0, 8.0, 16.0],
+                3 => b.tilt.degrees = 45.0,
+                _ => b.flat = true,
+            }
+            assert!(ModelBox::full_cube(&[b]).is_none());
+        }
+        assert!(ModelBox::full_cube(&[cube.clone(), cube.clone()]).is_none());
+        for t in weft_abi::Turn::all() {
+            assert!(ModelBox::full_cube(&[cube.turned(t)]).is_some());
+        }
+    }
 
     fn meta(id: &str, deps: &[&str]) -> ModMeta {
         ModMeta {

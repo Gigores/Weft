@@ -1240,6 +1240,8 @@ pub mod comp {
         pub const LIGHT_OPACITY: &str = "block.light_opacity";
         pub const LAYER: &str = "block.layer";
         pub const MODEL: &str = "block.model";
+        /// Item sprite from this face (u8, FACE_DIRS); 255 draws the model.
+        pub const ITEM_FACE: &str = "block.item_face";
         pub const TEXTURES: &str = "block.textures";
         pub const TURNS: &str = "block.turns";
         pub const TURN: &str = "block.turn";
@@ -1672,8 +1674,9 @@ pub mod block_flags {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockModel {
     None = 0,
+    /// Preset: a single full box, expanded when content is frozen.
     Cube = 1,
-    /// Two diagonal quads (plants).
+    /// Preset: two flat, rotated boxes per cell, expanded when content is frozen.
     Cross = 2,
     /// `boxes` with their own textures.
     Boxes = 4,

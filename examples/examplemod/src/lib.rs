@@ -146,6 +146,9 @@ fn worldgen(_r: &mut Registry) {
     // static SHRINE: Template = Template::named("shrine");
     // r.template(&SHRINE).layer(&["ccc", "c c", "ccc"]).key('c', "base:cobblestone");
     // r.structure(&SHRINE).dimension(&OVERWORLD).spacing(256).chance(0.3);
+    // A block can use a flat face sprite as its item, independently of its world model:
+    // static STONE: Block = Block::named("base:stone");
+    // r.edit(&STONE).item_sprite(Dir::West);
     // A hut whose walls come from where it stands (`@wall`), in planks or bricks, turned and
     // mirrored any way, on the ground's own block, its chest filled from a loot table:
     // static HUT: Template = Template::named("hut");
