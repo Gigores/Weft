@@ -42,6 +42,23 @@ impl ModelBox {
         }
     }
 
+    /// The box that can use packed cube faces, if this geometry is a full, normally shaded cube.
+    pub fn full_cube(boxes: &[ModelBox]) -> Option<&ModelBox> {
+        match boxes {
+            [b] if b.min == [0.0; 3]
+                && b.max == [1.0; 3]
+                && b.tilt.degrees == 0.0
+                && !b.flat
+                && b.uv
+                    .iter()
+                    .all(|&uv| uv == weft_abi::UV_FROM_BOX || uv == [0.0, 0.0, 16.0, 16.0]) =>
+            {
+                Some(b)
+            }
+            _ => None,
+        }
+    }
+
     /// Turned with its block (`abi::Turn`), pictures and all: a face taking its picture from where
     /// the box is takes it from where it was written.
     pub fn turned(&self, t: weft_abi::Turn) -> ModelBox {
@@ -116,10 +133,9 @@ pub struct StateInfo {
     pub layer: RenderLayer,
     pub level: u8,
     pub model: BlockModel,
+    pub item_face: Option<u8>,
     /// Texture ids (`Content::textures`) per face.
     pub textures: [u32; 6],
-    /// Cube model: quarter turns of each face's picture.
-    pub turns: [u8; 6],
     pub boxes: Vec<ModelBox>,
     /// In block units.
     pub collision: Vec<[f32; 6]>,
@@ -263,13 +279,10 @@ impl StateInfo {
     /// The block texture an item of this block shows as a flat sprite (vanilla's generated item
     /// models): plants and liquids. Other shapes are drawn as their model.
     pub fn item_sprite(&self) -> Option<u32> {
-        if self.liquid.is_some() {
-            return Some(self.textures[3]);
-        }
-        match self.model {
-            BlockModel::Cross | BlockModel::None | BlockModel::Wire => Some(self.textures[0]),
-            _ => None,
-        }
+        self.item_face
+            .or_else(|| self.liquid.map(|_| 3))
+            .filter(|&f| f < 6)
+            .map(|f| self.textures[f as usize])
     }
 }
 
@@ -698,6 +711,7 @@ pub struct BiomeDef {
 }
 
 pub struct DimensionDef {
+    pub snapshots: crate::generation::Snapshots,
     pub name: String,
     pub owner: ModId,
     /// The callbacks and the mods they run as.
@@ -766,7 +780,7 @@ impl DimensionDef {
             std::array::from_fn(|i| {
                 let mut a =
                     abi::ColumnArgs { seed, x: cx * 16 + (i % 16) as i32, z: cz * 16 + (i / 16) as i32, height: i32::MIN, biome: 0 };
-                crate::host::invoke(by, cb, &mut a);
+                crate::generation::during_column(|| crate::host::invoke(by, cb, &mut a));
                 abi::TerrainColumn { height: a.height, biome: a.biome }
             })
         }))
@@ -864,6 +878,8 @@ pub struct ModMeta {
     pub order: u32,
     /// Its `assets` folder (block and item model files are read at freeze).
     pub assets: std::path::PathBuf,
+    /// The original folder or archive; an unpacked cache does not mean it is still installed.
+    pub source: std::path::PathBuf,
 }
 
 /// Ids of components the engine reads, resolved once.
@@ -1613,6 +1629,7 @@ fn bake_dimension(e: &Entry) -> DimensionDef {
         .collect();
     daylight.sort_by(|a, b| a[0].total_cmp(&b[0]));
     DimensionDef {
+        snapshots: Default::default(),
         raw_hazards: e.or(abi::comp::dimension::HAZARDS, Vec::new()),
         hazards: Vec::new(),
         name: e.name.clone(),
@@ -1652,6 +1669,7 @@ pub const VOID_DIM: &str = "core:void";
 
 fn void_dimension() -> DimensionDef {
     DimensionDef {
+        snapshots: Default::default(),
         raw_hazards: Vec::new(),
         hazards: Vec::new(),
         name: VOID_DIM.into(),
@@ -1733,17 +1751,20 @@ fn debug_blocks(c: &Content, cube: glam::IVec3, blocks: &mut [u32]) {
 /// Every mod after the mods it depends on or says it loads after, and before those saying they
 /// load after it (`before` the same turned around), ties by id.
 pub fn load_order(mods: &[ModMeta]) -> Vec<u32> {
-    let mut placed: Vec<Option<u32>> = vec![None; mods.len()];
-    let mut next = 0;
-    let first = |i: usize, j: usize| {
+    dependency_order(mods.len(), |i: usize, j: usize| {
         let (a, b) = (&mods[i], &mods[j]);
         b.deps.contains(&a.id) || b.after.contains(&a.id) || a.before.contains(&b.id)
-    };
-    while next < mods.len() as u32 {
-        let ready =
-            (0..mods.len()).find(|&i| placed[i].is_none() && (0..mods.len()).all(|j| j == i || placed[j].is_some() || !first(j, i)));
+    })
+}
+
+/// Inputs are sorted by id, also used to break a dependency cycle deterministically.
+pub(crate) fn dependency_order(count: usize, before: impl Fn(usize, usize) -> bool) -> Vec<u32> {
+    let mut placed: Vec<Option<u32>> = vec![None; count];
+    let mut next = 0;
+    while next < count as u32 {
+        let ready = (0..count).find(|&i| placed[i].is_none() && (0..count).all(|j| j == i || placed[j].is_some() || !before(j, i)));
         // A dependency cycle: place the rest by id rather than loop forever.
-        let i = ready.unwrap_or_else(|| (0..mods.len()).find(|&i| placed[i].is_none()).unwrap());
+        let i = ready.unwrap_or_else(|| (0..count).find(|&i| placed[i].is_none()).unwrap());
         placed[i] = Some(next);
         next += 1;
     }
@@ -3053,10 +3074,15 @@ fn freeze_features(
                 Spread::EveryCube(..) => abi::stage::DECORATION,
             },
         );
+        if stage == u32::MAX {
+            errors.push(format!("{what}: stage u32::MAX is reserved for the completed generation view"));
+            return None;
+        }
         let mut def = FeatureDef {
             name: e.name.clone(),
             id,
             owner: e.owner,
+            stage,
             salt: crate::registry::name_hash(&e.name),
             biome: look.biomes(&what, e, errors).ok()?,
             y: heights(e),
@@ -3133,6 +3159,14 @@ fn feature_order(
                 let (a, b) = if after { (j, i) } else { (i, j) };
                 before[a].push(b);
                 needs[b] += 1;
+            }
+        }
+    }
+    for (i, a) in list.iter().enumerate() {
+        for (j, b) in list.iter().enumerate() {
+            if a.0 < b.0 && !before[i].contains(&j) {
+                before[i].push(j);
+                needs[j] += 1;
             }
         }
     }
@@ -3994,6 +4028,27 @@ fn freeze_liquids(
 mod tests {
     use super::*;
 
+    #[test]
+    fn packed_faces_require_full_cube_geometry() {
+        let cube = ModelBox::whole([7; 6]);
+        assert!(ModelBox::full_cube(std::slice::from_ref(&cube)).is_some());
+        for change in [0, 1, 2, 3, 4] {
+            let mut b = cube.clone();
+            match change {
+                0 => b.max[1] = 0.5,
+                1 => b.uv[0] = weft_abi::UV_NO_FACE,
+                2 => b.uv[1] = [0.0, 0.0, 8.0, 16.0],
+                3 => b.tilt.degrees = 45.0,
+                _ => b.flat = true,
+            }
+            assert!(ModelBox::full_cube(&[b]).is_none());
+        }
+        assert!(ModelBox::full_cube(&[cube.clone(), cube.clone()]).is_none());
+        for t in weft_abi::Turn::all() {
+            assert!(ModelBox::full_cube(&[cube.turned(t)]).is_some());
+        }
+    }
+
     fn meta(id: &str, deps: &[&str]) -> ModMeta {
         ModMeta {
             id: id.into(),
@@ -4003,6 +4058,7 @@ mod tests {
             before: Vec::new(),
             order: 0,
             assets: Default::default(),
+            source: Default::default(),
         }
     }
 

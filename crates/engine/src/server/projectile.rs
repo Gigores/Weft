@@ -167,13 +167,25 @@ impl Dim {
                         part: h.part,
                         ..abi::Damage::DEFAULT
                     };
-                    if self.damage(c, h.entity, &d) {
+                    let embedded = point + v.normalize_or_zero() * 0.15;
+                    let yaw = self.entities.get(id).map_or(0.0, |e| e.yaw);
+                    // A lethal hit removes its target; keep the target's frame while it exists.
+                    let stuck = p
+                        .sticks
+                        .then(|| self.stuck_at(StuckIn::Entity(h.entity), embedded, yaw));
+                    let outcome = self.damage_outcome(c, h.entity, &d);
+                    if let super::guard::DamageOutcome::Blocked(slot) = outcome {
+                        if p.sticks {
+                            self.catch_projectile(c, h.entity, slot, id);
+                        }
+                        if let Some(e) = self.entities.get_mut(id) {
+                            e.gone(abi::removal::HIT);
+                        }
+                        after = None;
+                        to = point;
+                    } else if matches!(outcome, super::guard::DamageOutcome::Hurt) {
                         // In their box a little way, going about with them, as vanilla's arrows.
-                        to = point + v.normalize_or_zero() * 0.15;
-                        let yaw = self.entities.get(id).map_or(0.0, |e| e.yaw);
-                        let stuck = p
-                            .sticks
-                            .then(|| self.stuck_at(StuckIn::Entity(h.entity), to, yaw));
+                        to = embedded;
                         if let Some(e) = self.entities.get_mut(id) {
                             match stuck {
                                 Some(st) => e.stuck = Some(st),

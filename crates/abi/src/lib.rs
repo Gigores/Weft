@@ -585,6 +585,8 @@ pub mod comp {
     pub mod damage_cause {
         /// Armor doesn't soften it (mods read this in their `DAMAGE` modifiers).
         pub const BYPASSES_ARMOR: &str = "damage.bypasses_armor";
+        /// Held items cannot block it, independently of armor reduction.
+        pub const BYPASSES_BLOCKING: &str = "damage.bypasses_blocking";
         /// Hurts invulnerable entities and players outside survival too.
         pub const PIERCES_INVULNERABLE: &str = "damage.pierces_invulnerable";
         /// Lands in full while the entity is still recovering from the last hit.
@@ -737,6 +739,8 @@ pub mod comp {
         /// The player's effects move it: walking bob, the wider view sprinting and flying, the tilt
         /// when hurt, what is over the screen inside a block or a liquid.
         pub const EFFECTS: &str = "camera.effects";
+        /// Walking bob, hurt tilt and held-item recoil, without FOV changes or screen overlays.
+        pub const BOB: &str = "camera.bob";
         /// Pulled in towards `CameraArgs::anchor` where a block is in the way (third person).
         pub const CLIP: &str = "camera.clip";
         /// A small box that bumps into blocks, moved from where it was to where `call` says, and
@@ -918,6 +922,7 @@ pub mod comp {
         pub const ANCHOR: &str = "hud_element.anchor";
         pub const ORDER: &str = "hud_element.order";
         pub const CALL: &str = "hud_element.call";
+        pub const REBUILD: &str = "hud_element.rebuild";
     }
 
     /// A screen part's, what a mod adds to place `AREA` (`str`) of screen `SCREEN` (`str`):
@@ -1235,6 +1240,8 @@ pub mod comp {
         pub const LIGHT_OPACITY: &str = "block.light_opacity";
         pub const LAYER: &str = "block.layer";
         pub const MODEL: &str = "block.model";
+        /// Item sprite from this face (u8, FACE_DIRS); 255 draws the model.
+        pub const ITEM_FACE: &str = "block.item_face";
         pub const TEXTURES: &str = "block.textures";
         pub const TURNS: &str = "block.turns";
         pub const TURN: &str = "block.turn";
@@ -1481,6 +1488,13 @@ pub mod comp {
     /// Item: ticks of holding the use button before it takes effect (food 32); slows while held.
     /// `USE_HOLD`: it never does by itself, only its `ON_RELEASE` when let go (a bow).
     pub const USE_TICKS: &str = "use_ticks";
+    /// Item: `Blocking`, attacks stopped while using it. Weapon: `DISABLE_BLOCKING` seconds.
+    pub const BLOCKS_ATTACKS: &str = "blocks_attacks";
+    pub const DISABLE_BLOCKING: &str = "disable_blocking";
+    /// Item: `ProjectileCatch`, blocked sticking projectiles are kept in its stack data.
+    pub const CATCH_PROJECTILES: &str = "catch_projectiles";
+    /// Stack: `[EmbeddedProjectile]`, retained when moved, saved and shared with clients.
+    pub const EMBEDDED_PROJECTILES: &str = "embedded_projectiles";
     /// Item: `[EffectGift]` its user gets when it is used (after `USE_TICKS`), the item turning
     /// into its `REMAINDER` (a potion's bottle) or one fewer; nothing else needed for a potion.
     pub const GIVES_EFFECTS: &str = "gives_effects";
@@ -1660,8 +1674,9 @@ pub mod block_flags {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockModel {
     None = 0,
+    /// Preset: a single full box, expanded when content is frozen.
     Cube = 1,
-    /// Two diagonal quads (plants).
+    /// Preset: two flat, rotated boxes per cell, expanded when content is frozen.
     Cross = 2,
     /// `boxes` with their own textures.
     Boxes = 4,
@@ -1708,6 +1723,16 @@ impl Default for BoxTilt {
 
 impl Schema for BoxTilt {
     const SCHEMA: &'static str = "{origin:[f32;3],axis:[f32;3],degrees:f32}";
+}
+
+crate::data! {
+    /// Where blocked projectiles enter an item's model, in the named bone's pixels.
+    pub struct ProjectileCatch {
+        pub bone: crate::data::String,
+        pub min: [f32; 3],
+        pub max: [f32; 3],
+        pub direction: [f32; 3],
+    }
 }
 
 crate::data! {
@@ -2155,8 +2180,26 @@ pub struct GateArgs {
     pub output: u32,
 }
 
+/// A generation snapshot, borrowed for the duration of a generation callback.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GenSource {
+    pub dim: u32,
+    pub seed: u64,
+    /// Completed stages strictly before this one.
+    pub before: u32,
+    /// Engine-local writes; null for a standalone snapshot.
+    pub ctx: *const core::ffi::c_void,
+}
+
 #[repr(C)]
 pub struct GenArgs {
+    pub source: GenSource,
+    /// Optional engine write-intent masks (64 words for blocks, 4 for biomes).
+    /// Writers set bits for explicit assignments, including assigning the input value.
+    /// Null when the entire buffer is the output, as in a dimension generator.
+    pub written: *mut u64,
+    pub biomes_written: *mut u64,
     pub seed: u64,
     pub cube: BlockPos,
     /// 4096 state ids, index = (y * 16 + z) * 16 + x. Pre-filled with 0 (air).
@@ -2179,6 +2222,7 @@ pub struct PlanCtx {
 /// A feature's plan (`comp::feature::PLAN`), once per start.
 #[repr(C)]
 pub struct PlanArgs {
+    pub source: GenSource,
     pub seed: u64,
     pub dim: u32,
     /// The start: the block above the ground for a feature on a grid.
@@ -2257,6 +2301,8 @@ pub mod stage {
     pub const VEGETATION: u32 = 2;
     /// Grass, flowers and the rest decided column by column.
     pub const DECORATION: u32 = 3;
+    /// Work on the completed terrain, structures and vegetation.
+    pub const POST_PROCESS: u32 = 4;
 }
 
 /// `comp::feature::SPREAD`.
@@ -2890,6 +2936,39 @@ pub struct RayHit {
     pub distance: f64,
 }
 
+/// What the client aims at: `entity` is nonzero for a mob, `state` for a block. Block positions
+/// are in `body`'s frame (0 for the world), so moving platforms keep their own coordinates.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Target {
+    pub entity: u64,
+    pub body: u64,
+    pub pos: BlockPos,
+    pub state: u32,
+}
+
+crate::data! {
+    /// Directional protection while using an item. Arc is degrees; wear applies only above
+    /// the threshold, as base + floor(damage * factor).
+    pub struct Blocking {
+        pub delay_ticks: u32,
+        pub arc: f32,
+        pub wear_threshold: f32,
+        pub wear_base: u32,
+        pub wear_factor: f32,
+    }
+}
+
+crate::data! {
+    /// A projectile model retained in an item. Position and direction are in model pixels.
+    pub struct EmbeddedProjectile {
+        pub kind: crate::data::String,
+        pub bone: crate::data::String,
+        pub position: [f32; 3],
+        pub direction: [f32; 3],
+    }
+}
+
 crate::data! {
     /// How a projectile flies and what it does where it hits: `damage` per block a tick of its
     /// speed (rounded up, vanilla's arrow 2), the share of its speed kept each tick in the air and
@@ -3128,6 +3207,7 @@ pub mod spawn_set {
     pub const VELOCITY: u32 = 1;
     pub const YAW: u32 = 2;
     pub const PICKUP_DELAY: u32 = 4;
+    pub const INHERIT_VELOCITY: u32 = 8;
 }
 
 /// An effect on an entity (`Host::entity_effects`).
@@ -3785,6 +3865,12 @@ pub struct UiBindArgs {
     pub text: *mut UiCtx,
 }
 
+#[repr(C)]
+pub struct UiRevisionArgs {
+    pub client: *mut ClientCtx,
+    pub revision: u64,
+}
+
 /// A player changed an INPUT (`text`) or SLIDER (`value`, 0..1).
 #[repr(C)]
 pub struct UiChangeArgs {
@@ -4046,6 +4132,7 @@ pub struct Host {
     /// Synced component of an entity the client knows (own player always), null if unknown.
     pub client_component: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, comp: u32) -> *const u8,
     pub client_entity: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, out: *mut EntityState) -> u32,
+    pub client_target: unsafe extern "C" fn(client: *mut ClientCtx, out: *mut Target) -> u32,
 
     /// Energy contract (`energy` component, on an entity or a stack): moves `amount` in (positive)
     /// or out (negative), respecting capacity and rate limits. Returns what moved (or would, when
@@ -4322,6 +4409,8 @@ pub struct Host {
     pub unplace: unsafe extern "C" fn(world: *mut WorldCtx, placing: u64) -> u32,
     /// A plan puts something (`PlanOp`); 0 where it goes past the feature's reach (left out).
     pub plan_op: unsafe extern "C" fn(ctx: *mut PlanCtx, op: *const PlanOp) -> u32,
+    /// A block in a generation snapshot, including this callback's earlier writes.
+    pub generation_read: unsafe extern "C" fn(source: *const GenSource, pos: BlockPos) -> u32,
     /// Template `name`'s size once transformed; 0 if there is no such template.
     pub template_size: unsafe extern "C" fn(name: Str, transform: u32, out: *mut BlockPos) -> u32,
     /// Template `name`'s joints once transformed, up to `cap` into `out`; how many it has.
@@ -4365,11 +4454,6 @@ pub struct Host {
     /// Column (`x`, `z`) of dimension `dim` for `seed` (its terrain's or `comp::dimension::COLUMN`),
     /// generated or not. Returns 0 if the dimension has neither.
     pub dim_column: unsafe extern "C" fn(dim: u32, seed: u64, x: i32, z: i32, out: *mut TerrainColumn) -> u32,
-    /// 1 if caves took the surface block of column (`x`, `z`), so nothing should stand there.
-    pub dim_surface_carved: unsafe extern "C" fn(dim: u32, seed: u64, x: i32, z: i32) -> u32,
-    /// The state the terrain leaves at the top of column (`x`, `z`): 0 where caves took it or the
-    /// dimension has no terrain.
-    pub dim_surface_block: unsafe extern "C" fn(dim: u32, seed: u64, x: i32, z: i32) -> u32,
 
     /// Puts `player` in camera mode `mode` (`u32::MAX`: back to its own choice); `locked`, it
     /// can't leave it until told. The change takes `transition` seconds eased by `easing`
@@ -5897,6 +5981,7 @@ pub struct CommandArgs {
 /// Places for HUD elements. `HOTBAR_LEFT`/`HOTBAR_RIGHT` stack upwards above the hotbar's halves.
 pub mod hud_anchor {
     pub const TOP_LEFT: &str = "top_left";
+    pub const TOP_CENTER: &str = "top_center";
     pub const TOP_RIGHT: &str = "top_right";
     pub const BOTTOM_LEFT: &str = "bottom_left";
     pub const BOTTOM_RIGHT: &str = "bottom_right";

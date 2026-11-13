@@ -365,6 +365,7 @@ struct Applied {
     view: i32,
     language: String,
     gui_scale: u32,
+    advanced_tooltips: bool,
     /// Resource and shader packs: put into effect once their screens are closed, however.
     packs: (Vec<String>, Option<String>),
 }
@@ -584,6 +585,8 @@ impl App {
                     Some(s) => r.open(s),
                     None => log::warn!("--screen: no screen {name}"),
                 }
+            } else if !crate::modloader::newly_disabled().is_empty() {
+                r.open(screens::engine("core:disabled_mods"));
             }
         }
         Ok(r)
@@ -1326,6 +1329,17 @@ impl Running {
                     match target.as_deref().map(|t| t.strip_prefix("open:").ok_or(t)) {
                         // A file or folder, opened with what the system opens it with.
                         Some(Ok(path)) => crate::packs::open_path(std::path::Path::new(path)),
+                        Some(Err(t)) if t.starts_with("suggest:") => {
+                            if let Some(n) = ui.find("chat") {
+                                if let Kind::Input { value, caret, max, on_change, .. } = &mut ui.nodes[n].kind {
+                                    *value = t["suggest:".len()..].chars().take(*max as usize).collect();
+                                    *caret = value.chars().count();
+                                    text_changed = on_change.as_ref().map(|cb| (cb.clone(), value.clone()));
+                                    ui.focused = Some(n);
+                                    ui.dirty = true;
+                                }
+                            }
+                        }
                         Some(Err(t)) => {
                             if let Some(n) = ui.find(t) {
                                 ui.focused = Some(n);
@@ -1409,12 +1423,13 @@ impl Running {
 
     /// Recipes of (or uses for) the item under the cursor, in any screen.
     fn recipe_keys(&mut self, requests: &mut Vec<Request>) {
-        let Some((_, ui)) = self.screens.last_mut() else { return };
+        let Some((screen, ui)) = self.screens.last_mut() else { return };
         let typing = ui
             .focused
             .is_some_and(|f| matches!(ui.nodes[f].kind, Kind::Input { .. }));
         for (action, uses) in [("core:recipes", false), ("core:uses", true)] {
-            if !typing && self.input.pressed(action) {
+            let right_click = uses && matches!(screen.name(), "core:recipes" | "core:tag") && self.input.pressed_button(1);
+            if !typing && (self.input.pressed(action) || right_click) {
                 if let Some(item) = crate::game_screens::hovered_item(ui, self.game.as_ref().map(|g| &g.client)) {
                     requests.push(Request::Open(Box::new(crate::game_screens::RecipeView::item(item, uses))));
                 }
@@ -1505,6 +1520,7 @@ impl Running {
             view: s::view_distance(),
             language: s::language(),
             gui_scale: s::gui_scale(),
+            advanced_tooltips: s::advanced_tooltips(),
             packs: (s::resource_packs(), s::shader_pack()),
         };
         if now.vsync != self.applied.vsync {
@@ -1521,7 +1537,7 @@ impl Running {
             self.look = Look::new(&self.assets, &mod_ids(), &self.lang);
         }
         s::apply_binds(&mut self.input);
-        if relang || now.gui_scale != self.applied.gui_scale {
+        if relang || now.gui_scale != self.applied.gui_scale || now.advanced_tooltips != self.applied.advanced_tooltips {
             self.rebuild_all();
         }
         // Not while choosing: every click would reload everything.
@@ -2085,6 +2101,9 @@ fn escape(r: &mut Running, requests: &mut Vec<Request>) {
 
 /// The debug overlay and what goes with it (F3 and F3 plus a key by default).
 fn debug_keys(r: &mut Running) {
+    if r.input.pressed("core:advanced_tooltips") {
+        crate::settings::set("advanced_tooltips", (!crate::settings::advanced_tooltips()) as u8 as f64);
+    }
     if r.input.pressed("core:debug") {
         r.debug = !r.debug;
         r.hud.invalidate();
@@ -2441,15 +2460,17 @@ fn build_ui_quads(r: &mut Running, scale: f32) {
     if with_hud {
         layers.push(&r.hud.ui);
     }
-    // Only the top screen shows, like vanilla: the ones under it are not drawn through its
-    // see-through overlay.
-    layers.extend(r.screens.last().map(|(_, u)| u));
+    let first = r
+        .screens
+        .iter()
+        .rposition(|(s, _)| !s.overlays())
+        .unwrap_or(0);
+    layers.extend(r.screens[first..].iter().map(|(_, ui)| ui));
     for ui in layers {
         let look = &r.look;
         let textures = &r.textures;
-        let unit = ui.text_unit;
         let mut custom = |ren: &mut UiRenderer, tag: u32, data: u64, rect: crate::ui::Rect, hovered: bool, icon: Option<u32>| {
-            crate::hud::draw_custom(ren, look, textures, client, tag, data, rect, hovered, icon, scale, unit);
+            crate::hud::draw_custom(ren, look, textures, client, tag, data, rect, hovered, icon, scale);
             if tag == crate::client::modui::TAG_ENTITY {
                 let inner = crate::ui::Rect { x: rect.x + scale, y: rect.y + scale, w: rect.w - 2.0 * scale, h: rect.h - 2.0 * scale };
                 previews.push([inner.x, inner.y, inner.w, inner.h]);

@@ -32,6 +32,11 @@ static INGREDIENTS: CreativeTab = CreativeTab::named("base:ingredients");
 /// Called once at startup, in parallel with the other mods: register everything here.
 /// Nothing exists in the world yet, you only describe what your mod adds.
 fn init(r: &mut Registry) {
+    // An item may protect its user in either hand while it is being used:
+    // r.item(Item::generated("guard".into())).max_stack(1).durability(200)
+    //     .use_until_released()
+    //     .set(&comps::BLOCKS_ATTACKS, Blocking { delay_ticks: 0, arc: 180.0,
+    //         wear_threshold: 3.0, wear_base: 1, wear_factor: 1.0 });
     config(r);
     blocks(r);
     items(r);
@@ -141,6 +146,9 @@ fn worldgen(_r: &mut Registry) {
     // static SHRINE: Template = Template::named("shrine");
     // r.template(&SHRINE).layer(&["ccc", "c c", "ccc"]).key('c', "base:cobblestone");
     // r.structure(&SHRINE).dimension(&OVERWORLD).spacing(256).chance(0.3);
+    // A block can use a flat face sprite as its item, independently of its world model:
+    // static STONE: Block = Block::named("base:stone");
+    // r.edit(&STONE).item_sprite(Dir::West);
     // A hut whose walls come from where it stands (`@wall`), in planks or bricks, turned and
     // mirrored any way, on the ground's own block, its chest filled from a loot table:
     // static HUT: Template = Template::named("hut");
@@ -156,6 +164,17 @@ fn worldgen(_r: &mut Registry) {
     // static ACID_RAIN: Weather = Weather::named("acid_rain");
     // r.weather(&ACID_RAIN).darkness(0.5).duration(2400, 6000).weight(1);
     // r.edit(&OVERWORLD).push(&comps::dimension::WEATHERS, ACID_RAIN.name().to_string());
+    // Postprocessing can inspect the completed structures and vegetation.
+    // static MARKERS: Feature = Feature::named("markers");
+    // static MARKER: Block = Block::named("base:cobblestone");
+    // r.scatter(&MARKERS).dimension(&OVERWORLD).spacing(48).reach(2).stage(abi::stage::POST_PROCESS).plan(|p| {
+    //     let at = p.pos();
+    //     let surface = p.view().find([at.x, at.y + 8, at.z], Dir::Down, 24, |s| s != 0);
+    //     if let Some(ground) = surface {
+    //         let pos = [ground.x, ground.y + 1, ground.z];
+    //         if p.read(pos) == 0 { p.put(pos, MARKER.id()); }
+    //     }
+    // });
     // Base's iron, twice as common (an ore is named like its block):
     // static IRON_ORE: Block = Block::named("base:iron_ore");
     // r.edit(IRON_ORE.ore()).per_cube(12);
@@ -219,6 +238,14 @@ fn client(_r: &mut Registry) {
     // r.key(&DASH, "R").on_server(|w, player| { info!("{player} dashes"); w.game_time(); });
     // r.menu(&ABOUT).screen(|ui| ui.panel("background", S::column().pad(8.0), |ui| ui.text("examplemod.about")));
     // r.hud_element(&MANA, hud_anchor::HOTBAR_RIGHT, 2, |ui| ui.text_bind(|c, out| { /* ... */ }));
+    // static TARGET_INFO: HudElement = HudElement::named("base:target_info");
+    // r.screen_part(&TARGET_INFO, "details", 0, |ui| {
+    //     ui.text_bind(|c, out| {
+    //         if let Some(target) = c.target() {
+    //             out.set("examplemod.target_state", &[Arg::Int(target.state as i64)]);
+    //         }
+    //     });
+    // });
     //
     // In the hands: both or none, one with its own action, first on a right click. An item's clips
     // go in `animations/<item>.animation.json`, `models/player_template.geo.json` is the skeleton

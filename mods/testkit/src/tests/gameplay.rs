@@ -1966,9 +1966,20 @@ pub async fn projectiles(t: T) -> R {
     t.secs(0.3).await?;
     let before = num(&t.op(&format!("entity {pig}")).await?, 4);
     let (x, y, z) = (f[0] as f64 + 0.5, f[1] as f64 + 0.45, f[2] as f64 - 1.5);
-    t.op(&format!("shoot base:arrow {x} {y} {z} 0 0 -300"))
-        .await?;
-    t.secs(0.5).await?;
+    let fatal: u64 = t
+        .op(&format!("shoot base:arrow {x} {y} {z} 0 0 -300"))
+        .await?
+        .parse()
+        .map_err(|_| "bad arrow id")?;
+    t.secs(0.1).await?;
+    if let (Some(arrow), Some(pig)) = (t.c().entity(fatal), t.c().entity(pig.parse().map_err(|_| "bad pig id")?)) {
+        let off = (arrow.pos.x - pig.pos.x).hypot(arrow.pos.z - pig.pos.z);
+        t.check(off < 2.0, format!("a fatal hit stays at the displayed body: {off:.2} blocks off"));
+    } else {
+        t.fail("fatal hit and dying body must remain visible for the death animation");
+    }
+    t.shot("fatal_hit").await?;
+    t.secs(0.4).await?;
     // That fast it kills: gone is hit too.
     let after = t
         .op(&format!("entity {pig}"))
@@ -2060,6 +2071,42 @@ pub async fn bow_and_keys(t: T) -> R {
     t.check_eq(t.op("key core:use").await?, "0 0".into(), "and let go");
     t.check_eq(t.c().inventory_slot(1).count, 4, "one arrow shot");
     t.check_eq(t.c().inventory_slot(0).wear(), 1, "the bow wore by one");
+    let f = t.feet();
+    let at = super::add(f, [0, 0, -2]);
+    let cow: u64 = t
+        .op(&format!("spawn base:cow {} {} {}", at[0], at[1], at[2]))
+        .await?
+        .parse()
+        .map_err(|_| "bad cow id")?;
+    t.look_at(at);
+    t.until("aimed at the cow", Duration::from_secs(5), |t| t.c().target().is_some_and(|target| target.entity == cow))
+        .await?;
+    t.hold("core:use", 1.2);
+    t.secs(1.6).await?;
+    t.check_eq(t.c().inventory_slot(1).count, 3, "an unhandled entity interaction still draws and fires the bow");
+    t.c()
+        .teleport([f[0] as f64 + 20.5, f[1] as f64, f[2] as f64 + 0.5]);
+    t.c().set_look(0.0, 0.0);
+    t.secs(0.2).await?;
+    let seen = t.c().entities();
+    let arrow = EntityKind::lookup("base:arrow").ok_or("no arrow kind")?;
+    t.hold("core:right", 2.0);
+    t.hold("core:use", 1.2);
+    t.secs(1.0).await?;
+    let launch_x = t.state().pos.x;
+    let shot = |t: &T| {
+        t.c()
+            .entities()
+            .into_iter()
+            .find(|id| !seen.contains(id) && t.c().entity(*id).is_some_and(|e| e.kind == arrow))
+    };
+    t.until("moving shot appeared", Duration::from_secs(3), |t| shot(t).is_some())
+        .await?;
+    let shot = shot(&t).ok_or("no moving shot")?;
+    t.c().input_release_all();
+    t.secs(0.3).await?;
+    let x = t.c().entity(shot).ok_or("moving shot disappeared")?.pos.x;
+    t.check(x > launch_x + 0.1, format!("the arrow keeps the shooter's sideways motion: {launch_x:.3} -> {x:.3}"));
     Ok(())
 }
 

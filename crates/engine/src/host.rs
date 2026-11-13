@@ -104,6 +104,7 @@ pub static HOST: Host = Host {
     client_weather: crate::client::modui::client_weather,
     client_component: crate::client::modui::client_component,
     client_entity: crate::client::modui::client_entity,
+    client_target: crate::client::modui::client_target,
     energy_move,
     component_get,
     component_set,
@@ -202,6 +203,7 @@ pub static HOST: Host = Host {
     place,
     unplace,
     plan_op,
+    generation_read,
     template_size,
     template_joints,
     world_seed,
@@ -220,8 +222,6 @@ pub static HOST: Host = Host {
     body_move_to,
     signal_read_changed,
     dim_column,
-    dim_surface_carved,
-    dim_surface_block,
     ease,
     force_load,
     asset_exists,
@@ -272,6 +272,26 @@ unsafe extern "C" fn place(w: *mut abi::WorldCtx, name: Str, pos: *const abi::Bl
 
 unsafe extern "C" fn unplace(w: *mut abi::WorldCtx, placing: u64) -> u32 {
     unsafe { dim(w).unplace(content(), placing) as u32 }
+}
+
+unsafe extern "C" fn generation_read(source: *const abi::GenSource, pos: abi::BlockPos) -> u32 {
+    let Some(source) = (unsafe { source.as_ref() }) else { return 0 };
+    let c = content();
+    if source.dim as usize >= c.dims.len() {
+        return 0;
+    }
+    let pos = crate::world::ivec(pos);
+    if source.ctx.is_null() {
+        if !crate::generation::can_read(source) {
+            misuse("generation_read", || {
+                "a generation callback cannot read its own or a later stage's output; use its borrowed view".into()
+            });
+            return 0;
+        }
+        crate::generation::Snapshot::new(c, source.dim, source.seed, source.before).read(pos)
+    } else {
+        unsafe { (&*source.ctx.cast::<crate::generation::ReadCtx>()).read(pos) }
+    }
 }
 
 unsafe extern "C" fn plan_op(ctx: *mut abi::PlanCtx, op: *const abi::PlanOp) -> u32 {
@@ -660,6 +680,7 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
     }
     let dim = unsafe { dim(w) };
     let pos = crate::world::dvec(d.pos);
+    let inherited = if d.set & abi::spawn_set::INHERIT_VELOCITY != 0 { dim.world_velocity(d.owner) } else { DVec3::ZERO };
     // Items are their stack: nothing to spawn for an empty one.
     // How it starts, set before anyone is asked about it.
     let init = |e: &mut crate::server::entity::Entity| {
@@ -667,6 +688,7 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
         if d.set & s::VELOCITY != 0 && crate::world::dvec(d.velocity).is_finite() {
             e.vel = crate::world::dvec(d.velocity);
         }
+        e.vel += inherited;
         if d.set & s::YAW != 0 && d.yaw.is_finite() {
             e.yaw = d.yaw;
         }
@@ -1875,20 +1897,6 @@ unsafe extern "C" fn dim_column(dim: u32, seed: u64, x: i32, z: i32, out: *mut a
     1
 }
 
-unsafe extern "C" fn dim_surface_carved(dim: u32, seed: u64, x: i32, z: i32) -> u32 {
-    content()
-        .dims
-        .get(dim as usize)
-        .is_some_and(|d| d.carved(seed, x, z)) as u32
-}
-
-unsafe extern "C" fn dim_surface_block(dim: u32, seed: u64, x: i32, z: i32) -> u32 {
-    content()
-        .dims
-        .get(dim as usize)
-        .map_or(0, |d| d.surface_block(seed, x, z))
-}
-
 unsafe extern "C" fn reg_command(r: *mut abi::Registrar, name: Str, usage: Str, client: u32, cb: Callback) {
     unsafe {
         let r = reg(r);
@@ -1981,7 +1989,7 @@ unsafe extern "C" fn find_event(name: Str, schema: Str) -> u32 {
         log::error!("event {name} is '{}' but a mod emits '{schema}'", def.schema);
         return u32::MAX;
     }
-    if def.handlers.is_empty() { u32::MAX } else { id }
+    id
 }
 
 unsafe extern "C" fn emit(w: *mut abi::WorldCtx, event: u32, value: abi::Slice<u8>) {

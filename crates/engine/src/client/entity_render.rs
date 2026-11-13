@@ -79,9 +79,19 @@ const ICON_CELLS: u32 = 16;
 #[derive(Clone, Copy)]
 enum Carrying {
     /// In a hand: a model, or a sprite or block when it is none.
-    Held { stack: ItemStack, model: Option<u32>, off: bool },
+    Held {
+        stack: ItemStack,
+        model: Option<u32>,
+        off: bool,
+    },
     /// A model on one of its bones.
-    On { model: u32, bone: usize },
+    On {
+        model: u32,
+        bone: usize,
+    },
+    Embedded {
+        stack: ItemStack,
+    },
 }
 
 /// Something on an entity this frame: its place in `posed`, what, its light, its age and who.
@@ -566,6 +576,11 @@ impl EntityRenderer {
         for s in held {
             self.load_sprite(assets, &s);
             self.models.model_for(assets, s);
+            for embedded in crate::stack::embedded(&s) {
+                if let Some(&k) = c.game.entity_names.get(&embedded.kind) {
+                    self.load(gpu, assets, &c.game.entities[k as usize].texture);
+                }
+            }
         }
         self.own_stacks = held;
         let wanted = std::mem::take(&mut super::models::ICONS.lock().unwrap().wanted);
@@ -601,6 +616,11 @@ impl EntityRenderer {
             }
             if !e.item.is_empty() {
                 self.load_sprite(assets, &e.item);
+                for embedded in crate::stack::embedded(&e.item) {
+                    if let Some(&k) = c.game.entity_names.get(&embedded.kind) {
+                        self.load(gpu, assets, &c.game.entities[k as usize].texture);
+                    }
+                }
             }
             if !e.item.is_empty() && !c.game.item_model_for_stack.is_empty() {
                 self.models.model_for(assets, e.item);
@@ -613,10 +633,16 @@ impl EntityRenderer {
                     self.load(gpu, assets, t);
                 }
             }
-            for i in [e.held, e.off_held] {
-                if i != 0 && seen_items.get(i as usize).is_some_and(|s| !s) {
-                    seen_items[i as usize] = true;
-                    self.load_sprite(assets, &ItemStack { item: i, count: 1, data: 0 });
+            for stack in e.held_stacks {
+                let i = stack.item;
+                if i != 0 {
+                    self.load_sprite(assets, &stack);
+                    self.models.model_for(assets, stack);
+                }
+                for embedded in crate::stack::embedded(&stack) {
+                    if let Some(&k) = c.game.entity_names.get(&embedded.kind) {
+                        self.load(gpu, assets, &c.game.entities[k as usize].texture);
+                    }
                 }
             }
         }
@@ -1182,6 +1208,16 @@ impl EntityRenderer {
         // The first person: its place in `posed`, its layers before the arms were left out of
         // them and which arms the clips bring up.
         let mut own_hand: Option<(usize, [Instance; super::models::MAX_LAYERS], usize, u32)> = None;
+        let hidden = |e: &ClientEntity| {
+            e.effects.iter().any(|f| {
+                f.until > now
+                    && c.game
+                        .entity_effects
+                        .get(f.id as usize)
+                        .is_some_and(|d| d.hides)
+            })
+        };
+        let own_body = me.filter(|_| hand.as_ref().is_none_or(|h| h.body));
         for (id, e) in entities
             .iter()
             .map(|(i, e)| (*i, e))
@@ -1193,14 +1229,13 @@ impl EntityRenderer {
                 continue;
             }
             // Invisible to everyone else.
-            let hidden = e.effects.iter().any(|f| {
-                f.until > now
-                    && c.game
-                        .entity_effects
-                        .get(f.id as usize)
-                        .is_some_and(|d| d.hides)
-            });
-            if hidden && id != self.local {
+            if hidden(e) && id != self.local {
+                continue;
+            }
+            if e.stuck.is_some_and(|s| {
+                let host = if s.host == self.local { own_body } else { entities.get(&s.host).filter(|h| !hidden(h)) };
+                host.is_none()
+            }) {
                 continue;
             }
             // Out of the view it has nothing to show. What it may have on goes by its model's reach.
@@ -1229,7 +1264,11 @@ impl EntityRenderer {
                 None => (0, 0.0),
             };
             if !e.item.is_empty() {
+                let holder = posed.len();
                 self.pose_ground_item(id, e, base, lit, here, effect, hurt, textures, &mut posed, &mut instances);
+                if posed.len() > holder && e.item.data != 0 {
+                    carried.push(Carry { holder, what: Carrying::Embedded { stack: e.item }, lit, biome: here, age: e.age, id });
+                }
                 continue;
             }
             let look = e.look();
@@ -1347,8 +1386,7 @@ impl EntityRenderer {
             if !sleeping {
                 for (item, off) in [(e.held, false), (e.off_held, true)] {
                     if item != 0 {
-                        // Its stack is known of the local player only.
-                        let shown = if id == self.local { self.own_stacks[off as usize] } else { ItemStack { item, count: 1, data: 0 } };
+                        let shown = if id == self.local { self.own_stacks[off as usize] } else { e.held_stacks[off as usize] };
                         let model = self.models.model_seen(shown);
                         carried.push(carry(Carrying::Held { stack: shown, model, off }));
                     }
@@ -1812,6 +1850,12 @@ impl EntityRenderer {
                 .unwrap_or_default();
             let own = own_holder == Some(holder);
             let (model, root, off, slot) = match what {
+                Carrying::Embedded { stack } => {
+                    for (model, first, layer) in self.embedded_models(stack, posed[holder].kind, at, lit) {
+                        self.models.queue(model, first, [layer]);
+                    }
+                    continue;
+                }
                 Carrying::On { model, bone } => (Some(model), self.models.bone(at + bone), false, model + 2),
                 Carrying::Held { stack, model, off } => {
                     let item = stack.item;
@@ -1862,9 +1906,42 @@ impl EntityRenderer {
                     self.models.queue(kind, bones, [l]);
                 }
             }
+            if let Carrying::Held { stack, .. } = what {
+                for (model, first, layer) in self.embedded_models(stack, kind, bones as usize, lit) {
+                    if own {
+                        own_items.push((model, first, layer));
+                    } else {
+                        self.models.queue(model, first, [layer]);
+                    }
+                }
+            }
         }
         (hand_items, own_items)
     }
+
+    fn embedded_models(&mut self, stack: ItemStack, kind: u32, bones: usize, lit: u32) -> Vec<(u32, u32, Instance)> {
+        let mut out = Vec::new();
+        for projectile in crate::stack::embedded(&stack) {
+            let Some(&model) = content().game.entity_names.get(&projectile.kind) else { continue };
+            let bone = self.models.kinds[kind as usize]
+                .parts
+                .iter()
+                .position(|p| p.name == projectile.bone)
+                .unwrap_or(0);
+            let Some(root) = embedded_root(&projectile, self.models.bone(bones + bone)) else { continue };
+            let first = self.models.pose_clips(model, root, &[]);
+            let (layers, count) = self.layers(model, 0, &[], lit, (0, 0.0));
+            if count > 0 {
+                out.push((model, first, layers[0]));
+            }
+        }
+        out
+    }
+}
+
+fn embedded_root(projectile: &weft_abi::EmbeddedProjectile, attached: Mat4) -> Option<Mat4> {
+    let direction = Vec3::from_array(projectile.direction).try_normalize()?;
+    Some(attached * Mat4::from_rotation_translation(Quat::from_rotation_arc(-Vec3::Z, direction), Vec3::from_array(projectile.position)))
 }
 
 /// The selection outline at `o`: twelve thin dark boxes along the edges of each selection box.

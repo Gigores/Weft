@@ -126,6 +126,9 @@ pub fn brightness() -> f32 {
 pub fn debug_groups() -> u32 {
     number("core:debug_groups") as u32
 }
+pub fn advanced_tooltips() -> bool {
+    number("core:advanced_tooltips") != 0.0
+}
 /// Mouse up looks down instead.
 pub fn invert_y() -> bool {
     number("core:invert_y") != 0.0

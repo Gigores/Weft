@@ -91,6 +91,14 @@ pub async fn tooltips(t: T) -> R {
             t.probe("diamond block icon in the tooltip", block, block > 0.0008);
         }
     }
+    settings::ADVANCED_TOOLTIPS.set(true);
+    t.frames(4).await?;
+    if let Some(Rect { x, y, w, h }) = t.c().ui_rect("slot:36") {
+        t.c().input_cursor(x + w / 2.0, y + h / 2.0);
+        t.frames(4).await?;
+        t.shot("advanced").await?;
+    }
+    settings::ADVANCED_TOOLTIPS.set(false);
     t.c().menu_close();
     t.no_screen().await
 }
@@ -122,6 +130,13 @@ pub async fn night_light(t: T) -> R {
     t.probe("floor by the glowstone is lit", crate::runner::lum(by_glow), crate::runner::lum(by_glow) > 50.0);
     let red = by_lamp[0] - by_lamp[1];
     t.probe("floor by the red lamp is reddish (red minus green)", red, red > 15.0);
+    t.set(glow, "air").await?;
+    t.set(lamp, "lava").await?;
+    t.secs(0.5).await?;
+    let lava = t.shot("lava").await?;
+    let warm = avg_around(&t, &lava, floor(add(lamp, [1, 0, 1])), 0.02);
+    t.note(format!("floor by lava: {warm:?}"));
+    t.check(warm[0] > warm[1] + 15.0 && warm[1] > warm[2] + 5.0, "lava lights the floor orange");
     Ok(())
 }
 

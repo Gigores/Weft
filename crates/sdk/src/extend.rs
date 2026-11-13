@@ -255,7 +255,7 @@ impl<T: Value> Event<T> {
     pub fn name(&self) -> &str {
         self.full.get_or_init(|| crate::full_name(self.name))
     }
-    /// `u32::MAX` when nobody listens.
+    /// `u32::MAX` if the event is unknown or registries are not ready yet.
     pub fn id(&self) -> u32 {
         let id = self.id.load(Ordering::Relaxed);
         if id != UNRESOLVED {
@@ -1090,7 +1090,11 @@ impl Registry {
 
     /// Declares a component stacks carry a value of (`stack.with(&COMP, v)`), with its flags
     /// (`abi::stack_flags`: kept on the server, not saved), 0 for neither.
-    pub fn stack_component<T: Value>(&mut self, c: &crate::Component<T>, flags: u32) -> crate::game::DeclarationBuilder<'_> {
+    pub fn stack_component<T: crate::component::Data>(
+        &mut self,
+        c: &crate::Component<T>,
+        flags: u32,
+    ) -> crate::game::DeclarationBuilder<'_> {
         self.declare::<T>(c.name()).stack(flags)
     }
 }

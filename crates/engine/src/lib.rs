@@ -20,6 +20,7 @@ pub mod editor;
 pub mod entries;
 pub mod features;
 pub mod game_screens;
+mod generation;
 pub mod hitbox;
 pub mod host;
 pub mod hud;
@@ -94,11 +95,15 @@ pub fn init_workers() {
     set_priority(PRIORITY_ABOVE_NORMAL);
 }
 
+/// Cached worker count, since asking the system may take too much time on a hot path
 fn workers() -> usize {
-    std::thread::available_parallelism()
-        .map_or(4, |n| n.get())
-        .saturating_sub(2)
-        .max(1)
+    static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *WORKERS.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map_or(4, |n| n.get())
+            .saturating_sub(2)
+            .max(1)
+    })
 }
 
 /// The pool for bulk work queued by the thousand (generating and saving cubes). Work that

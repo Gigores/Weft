@@ -226,21 +226,8 @@ pub fn generate(c: &Content, dim: u32, seed: u64, pos: IVec3) -> Cube {
     if pos.y < def.min_cube_y || pos.y > def.max_cube_y {
         return Cube::uniform(AIR, 0);
     }
-    let mut blocks = vec![0u32; VOLUME];
-    let mut biomes = [0u16; 256];
-    let cols = match (def.builtin, &def.terrain, def.generator) {
-        (Some(f), _, _) => {
-            f(c, pos, &mut blocks);
-            return finish_generated(c, dim, seed, pos, blocks, biomes, None, true);
-        }
-        (None, None, None) => return Cube::uniform(AIR, 0),
-        (None, Some(t), _) => Some(Arc::new(
-            t.generate(seed, pos.to_array(), &mut blocks, &mut biomes)
-                .cols,
-        )),
-        (None, None, Some(_)) => def.columns(seed, pos.x, pos.z),
-    };
-    finish_generated(c, dim, seed, pos, blocks, biomes, cols, false)
+    let base = crate::generation::base(c, dim, seed, pos);
+    finish_generated(c, dim, seed, pos, base.blocks, base.biomes, base.columns, def.builtin.is_some())
 }
 
 /// Everything generation does after the terrain (which the GPU may have made): the
@@ -257,27 +244,14 @@ pub fn finish_generated(
     cols: Option<Arc<[abi::TerrainColumn; 256]>>,
     builtin: bool,
 ) -> Cube {
-    let def = &c.dims[dim as usize];
     let columns = cols.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
-    if !builtin && let Some((by, cb)) = def.generator {
-        let mut args =
-            abi::GenArgs { seed, cube: pos.to_array().into(), blocks: blocks.as_mut_ptr(), biomes: biomes.as_mut_ptr(), dim, columns };
-        host::invoke(by, cb, &mut args);
+    if !builtin {
+        crate::generation::run_generator(c, dim, seed, pos, &mut blocks, &mut biomes, cols.as_deref());
     }
-    let check = |blocks: &mut [u32], what: &'static str| {
-        let max = c.states.len() as u32;
-        let top = blocks.iter().copied().max().unwrap_or(0);
-        if top >= max {
-            for b in blocks.iter_mut().filter(|b| **b >= max) {
-                *b = AIR;
-            }
-            host::misuse(what, || format!("{} wrote state {top}, which does not exist (air instead)", def.name));
-        }
-    };
-    check(&mut blocks, "generator");
+    crate::generation::validate(c, dim, &mut blocks, "generator");
     let (changed, generated) = crate::features::place(c, dim, seed, pos, &mut blocks, &mut biomes, columns);
     if changed {
-        check(&mut blocks, "feature");
+        crate::generation::validate(c, dim, &mut blocks, "feature");
     }
     let mut cube = if blocks.iter().all(|&b| b == blocks[0]) {
         Cube::uniform(blocks[0], 0)
@@ -419,7 +393,12 @@ impl Dim {
             .entities
             .list
             .iter()
-            .filter(|e| e.player || (e.is_body() && e.anchor.is_none() && (now + e.id) % 10 == 0))
+            .filter(|e| {
+                e.player
+                    || (e.is_body()
+                        && e.anchor.is_none()
+                        && ((now + e.id) % 10 == 0 || !self.entities.comps.contains_key(&(e.id, attributes))))
+            })
             .map(|e| e.id)
             .collect::<Vec<_>>()
             .into_iter()
@@ -516,10 +495,15 @@ impl Dim {
                 put(comps, attributes, &bytes);
             }
             if let Some(inv) = inventories.get(&e.id) {
+                use crate::net::codec::Wire;
                 let item = crate::content::in_main_hand(c, e.kind, inv, e.selected);
-                put(comps, held, &(if item.is_empty() { 0 } else { item.item }).to_le_bytes());
+                let mut bytes = crate::net::codec::W::default();
+                crate::stack::for_client(item).put(&mut bytes);
+                put(comps, held, &bytes.0);
                 let off = crate::content::in_off_hand(c, e.kind, inv);
-                put(comps, off_held, &(if off.is_empty() { 0 } else { off.item }).to_le_bytes());
+                let mut bytes = crate::net::codec::W::default();
+                crate::stack::for_client(off).put(&mut bytes);
+                put(comps, off_held, &bytes.0);
             }
             let use_value = e.using.0 | (e.using.1 as u32) << 31;
             put(comps, using, &use_value.to_le_bytes());
@@ -1258,6 +1242,16 @@ impl Dim {
         self.attribute(c, player, crate::registry::attr::BLOCK_REACH, false) + super::BLOCK_SLACK
     }
 
+    /// Velocity in the world, including the body carrying it. Seated riders already have their
+    /// mount's velocity in `vel`; its frame is only the platform underneath that mount.
+    pub fn world_velocity(&self, id: u64) -> DVec3 {
+        let Some(e) = self.entities.get(id) else { return DVec3::ZERO };
+        e.vel
+            + e.frame
+                .and_then(|f| self.entities.get(f))
+                .map_or(DVec3::ZERO, |b| b.vel)
+    }
+
     /// `stack` thrown by `player`: from just below its eyes where it looks, not to be picked up
     /// for two seconds.
     pub fn throw(&mut self, c: &'static Content, player: u64, stack: ItemStack) -> u64 {
@@ -1603,18 +1597,26 @@ impl Dim {
     /// it is still recovering (`question::RECOVERING`), the `DAMAGE` chain, knockback
     /// (`chain::KNOCKBACK`), then the `HURT` event.
     pub fn damage(&mut self, c: &'static Content, id: u64, d: &abi::Damage) -> bool {
+        matches!(self.damage_outcome(c, id, d), super::guard::DamageOutcome::Hurt)
+    }
+
+    pub(super) fn damage_outcome(&mut self, c: &'static Content, id: u64, d: &abi::Damage) -> super::guard::DamageOutcome {
         let (amount, source, cause) = (d.amount, d.source, d.cause);
-        let Some(e) = self.entities.get(id) else { return false };
+        let Some(e) = self.entities.get(id) else { return super::guard::DamageOutcome::Missed };
         let k = &c.game.entities[e.kind as usize];
         if !e.alive() || amount.is_nan() {
-            return false;
+            return super::guard::DamageOutcome::Missed;
         }
         if amount < 0.0 {
-            return self.heal(c, id, -amount, source, cause);
+            return if self.heal(c, id, -amount, source, cause) {
+                super::guard::DamageOutcome::Hurt
+            } else {
+                super::guard::DamageOutcome::Missed
+            };
         }
         let Some(def) = c.game.damage_causes.get(cause as usize) else {
             crate::host::misuse("damage", || format!("no damage cause {cause}"));
-            return false;
+            return super::guard::DamageOutcome::Missed;
         };
         let q = abi::Query {
             entity: id,
@@ -1628,7 +1630,10 @@ impl Dim {
             ..abi::Query::DEFAULT
         };
         if !self.ask(c, abi::action::HURT, &q) {
-            return false;
+            return super::guard::DamageOutcome::Missed;
+        }
+        if let Some(slot) = self.block_damage(c, id, d) {
+            return super::guard::DamageOutcome::Blocked(slot);
         }
         let recovering = self.ask_or(c, abi::question::RECOVERING, &q, false);
         let explain = crate::log::on(crate::log::Channel::Modifiers, log::Level::Debug);
@@ -1640,7 +1645,7 @@ impl Dim {
         let last = self.entities.get(id).map_or(0.0, |e| e.last_hurt);
         let landing = if recovering { amount - last } else { amount };
         if landing <= 0.0 {
-            return false;
+            return super::guard::DamageOutcome::Missed;
         }
         let amount = landing;
         let direct = if d.direct != 0 { d.direct } else { source };
@@ -1682,7 +1687,7 @@ impl Dim {
             let strength = self.compute(c, abi::chain::KNOCKBACK, 0.4, &q, false);
             self.knock(c, id, way * strength);
         }
-        let Some(e) = self.entities.get_mut(id) else { return false };
+        let Some(e) = self.entities.get_mut(id) else { return super::guard::DamageOutcome::Missed };
         e.health = if spared { 1.0 } else { (e.health - amount).max(0.0) };
         e.last_hurt = if recovering { last + amount } else { amount };
         if !recovering {
@@ -1728,7 +1733,7 @@ impl Dim {
                 self.entities.remove(id, abi::removal::DIED);
             }
         }
-        true
+        super::guard::DamageOutcome::Hurt
     }
 
     /// `amount` more health up to the most it has, through the `HEAL` chain; the dead stay dead.
@@ -1998,22 +2003,15 @@ impl Dim {
             .par_iter()
             .map(|&i| {
                 let (e, nav) = (&list[i], list[i].nav.as_ref().unwrap());
-                let height = e.height(c).ceil() as i32;
+                let dims = e.dims(c);
                 // It goes down no further than it falls without harm.
                 let drop = (e.safe_fall.floor() as i32).max(1);
                 match on_body(e) {
                     Some((f, place)) => {
                         let deck = &bodies[&f];
-                        super::path::find(
-                            c,
-                            &super::space::DeckCells(deck),
-                            place.to_local(e.pos).floor().as_ivec3(),
-                            nav.target.floor().as_ivec3(),
-                            height,
-                            drop,
-                        )
+                        super::path::find(c, &super::space::DeckCells(deck), place.to_local(e.pos), nav.target, dims, drop)
                     }
-                    None => super::path::find(c, &block, e.pos.floor().as_ivec3(), nav.target.floor().as_ivec3(), height, drop),
+                    None => super::path::find(c, &block, e.pos, nav.target, dims, drop),
                 }
             })
             .collect();
@@ -2032,10 +2030,11 @@ impl Dim {
                 continue;
             }
             let pos = place.map_or(e.pos, |t| t.to_local(e.pos));
+            let dims = e.dims(c);
             let nav = e.nav.as_mut().unwrap();
             nav.stuck = if e.moved < 0.02 { nav.stuck + 1 } else { 0 };
             let close = (nav.target - pos).with_y(0.0).length() < 1.0 && (nav.target.y - pos.y).abs() < 1.5;
-            match super::path::steer(nav, pos, e.blocked) {
+            match super::path::steer(nav, pos, dims, e.blocked) {
                 _ if close || nav.stuck > 40 => e.nav = None,
                 Some((dir, jump)) => {
                     e.yaw = (-dir[0]).atan2(-dir[1]);

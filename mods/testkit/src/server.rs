@@ -124,6 +124,7 @@ fn count(i: usize, n: usize) {
 }
 
 pub fn register(r: &mut Registry) {
+    crate::generation::register(r);
     // A random `.ctm` with tiles of two colors, on what isn't a cube.
     static VARIED_PLANT: Block = Block::named("varied_plant");
     static VARIED_BOX: Block = Block::named("varied_box");
@@ -742,8 +743,13 @@ const OPS: &[(&str, &str, Run)] = &[
         let e = w.entity(owner(w, cmd)?).ok_or("no such entity")?;
         Ok(format!("{} {:.2} {:.2} {:.2} {}", name_of(ek::ENTITY, e.kind), e.pos.x, e.pos.y, e.pos.z, e.health))
     }),
-    ("size", "@entity", |w, cmd, _, _| {
-        let s = w.entity(owner(w, cmd)?).ok_or("no such entity")?.size;
+    ("size", "@entity [width:float] [height:float]", |w, cmd, _, _| {
+        let id = owner(w, cmd)?;
+        let s = w.entity(id).ok_or("no such entity")?.size;
+        if let (Some(width), Some(height)) = (cmd.float("width"), cmd.float("height")) {
+            w.set_size(id, Some(abi::EntitySize { width: width as f32, height: height as f32, eye: s.eye * height as f32 / s.height }));
+        }
+        let s = w.entity(id).ok_or("no such entity")?.size;
         Ok(format!("{:.3} {:.3} {:.3}", s.width, s.height, s.eye))
     }),
     ("near", "<pos:pos> <r:float>", |w, cmd, player, _| {
@@ -1274,6 +1280,21 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok((w.damage(int(cmd, "id")?, Damage::new(amount, abi::damage_cause::ATTACK).by(player)) as u32).to_string())
     }),
     ("pose", "", |w, _, player, _| Ok(w.entity(player).map_or(0, |e| e.pose).to_string())),
+    ("hit_from", "<source:int> <amount:float> <weapon:item> [cause:int] [hand:word(main,off)] [knock:pos]", |w, cmd, player, _| {
+        let amount = cmd.float("amount").ok_or("missing amount")? as f32;
+        let cause = int(cmd, "cause").unwrap_or(abi::damage_cause::ATTACK);
+        let weapon = ItemStack::new(id(cmd, "weapon")?, 1);
+        if let Some(hand) = cmd.text("hand") {
+            w.use_item(player, hand == "off");
+        }
+        let mut damage = Damage::new(amount, cause)
+            .by(int(cmd, "source")?)
+            .with(weapon);
+        if let Some(knock) = cmd.pos("knock") {
+            damage = damage.knock(knock);
+        }
+        Ok((w.damage(player, damage) as u32).to_string())
+    }),
     ("hurt_me", "<amount:float>", |w, cmd, player, _| {
         let amount = cmd.float("amount").ok_or("missing amount")? as f32;
         Ok((w.damage(player, Damage::new(amount, abi::damage_cause::ATTACK)) as u32).to_string())

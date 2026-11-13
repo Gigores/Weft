@@ -30,43 +30,43 @@ An attribute being registered (`Registry::attribute`).
 
 ## BlockEvent
 
-- <a id="BlockEvent-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3458)
-- <a id="BlockEvent-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3461)
-- <a id="BlockEvent-state"></a>`.state() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3464)
-- <a id="BlockEvent-neighbor"></a>`.neighbor() -> BlockPos`: The neighbor that changed, for `on_neighbor`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3468)
-- <a id="BlockEvent-body_pos"></a>`.body_pos() -> BlockPos`: Where the block is on the body, for `on_carried`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3472)
-- <a id="BlockEvent-entity"></a>`.entity() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3475)
+- <a id="BlockEvent-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3462)
+- <a id="BlockEvent-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3465)
+- <a id="BlockEvent-state"></a>`.state() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3468)
+- <a id="BlockEvent-neighbor"></a>`.neighbor() -> BlockPos`: The neighbor that changed, for `on_neighbor`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3472)
+- <a id="BlockEvent-body_pos"></a>`.body_pos() -> BlockPos`: Where the block is on the body, for `on_carried`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3476)
+- <a id="BlockEvent-entity"></a>`.entity() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3479)
 
 ## Damage
 
 A hurt described (`World::damage`): `Damage::new(4.0, &damage_causes::ATTACK).by(shooter) .through(arrow)`. Steps see all of it (`Query::other`, `direct`, `item`, `crit`).
 
-- <a id="Damage-new"></a>`.new(amount: f32, cause: impl Into<Id<crate::DamageCause>>) -> Damage` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L87)
-- <a id="Damage-by"></a>`.by(source: u64)`: Who did it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L91)
-- <a id="Damage-through"></a>`.through(direct: u64)`: What hit, when not `by` itself (the arrow): knockback goes away from it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L96)
-- <a id="Damage-with"></a>`.with(item: ItemStack)`: What it was done with. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L101)
-- <a id="Damage-knock"></a>`.knock(way: impl Into<Vec3>)`: The way it pushes, instead of away from what hit. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L106)
-- <a id="Damage-crit"></a>`.crit(mut self)` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L110)
-- <a id="Damage-part"></a>`.part(part: u32)`: The part of the hitbox it lands on (`hitbox_part::HEAD`, `hitbox_part_id("tail")`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L115)
+- <a id="Damage-new"></a>`.new(amount: f32, cause: impl Into<Id<crate::DamageCause>>) -> Damage` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L93)
+- <a id="Damage-by"></a>`.by(source: u64)`: Who did it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L97)
+- <a id="Damage-through"></a>`.through(direct: u64)`: What hit, when not `by` itself (the arrow): knockback goes away from it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L102)
+- <a id="Damage-with"></a>`.with(item: ItemStack)`: What it was done with. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L107)
+- <a id="Damage-knock"></a>`.knock(way: impl Into<Vec3>)`: The way it pushes, instead of away from what hit. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L112)
+- <a id="Damage-crit"></a>`.crit(mut self)` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L116)
+- <a id="Damage-part"></a>`.part(part: u32)`: The part of the hitbox it lands on (`hitbox_part::HEAD`, `hitbox_part_id("tail")`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L121)
 
 ## EffectTick
 
 An effect's tick (`EntityEffectBuilder::on_tick`): every entity that has it, with its level.
 
-- <a id="EffectTick-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L767)
-- <a id="EffectTick-effect"></a>`.effect() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L770)
-- <a id="EffectTick-iter"></a>`.iter() -> impl Iterator<Item = (u64, u32)> + '_`: (entity, level). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L774)
+- <a id="EffectTick-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L773)
+- <a id="EffectTick-effect"></a>`.effect() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L776)
+- <a id="EffectTick-iter"></a>`.iter() -> impl Iterator<Item = (u64, u32)> + '_`: (entity, level). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L780)
 
 ## EntityEvent
 
-- <a id="EntityEvent-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L750)
-- <a id="EntityEvent-entity"></a>`.entity() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L753)
-- <a id="EntityEvent-other"></a>`.other() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L756)
+- <a id="EntityEvent-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L756)
+- <a id="EntityEvent-entity"></a>`.entity() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L759)
+- <a id="EntityEvent-other"></a>`.other() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L762)
 
 ## EntityTick
 
-- <a id="EntityTick-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L737)
-- <a id="EntityTick-ids"></a>`.ids() -> &[u64]` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L740)
+- <a id="EntityTick-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L743)
+- <a id="EntityTick-ids"></a>`.ids() -> &[u64]` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L746)
 
 ## Event
 
@@ -74,7 +74,7 @@ A typed event, named like any other thing a mod owns: `Event::named("eaten")` is
 
 - <a id="Event-named"></a>`.named(name: &'static str)` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L252)
 - <a id="Event-name"></a>`.name() -> &str` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L255)
-- <a id="Event-id"></a>`.id() -> u32`: `u32::MAX` when nobody listens. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L259)
+- <a id="Event-id"></a>`.id() -> u32`: `u32::MAX` if the event is unknown or registries are not ready yet. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L259)
 
 ## EventBatch
 
@@ -89,30 +89,30 @@ Every value of one event queued during a tick, in the order they happened.
 
 Which faces of a `BlockBuilder::signal_gate` read power and give it (strongly, into the block there and on), and its delay.
 
-- <a id="Gate-new"></a>`.new() -> Gate`: Reads behind it and both sides, gives out of the front, one redstone tick late. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3398)
-- <a id="Gate-inputs"></a>`.inputs(sides: &[Side]) -> Gate`: The faces it reads; an output is never an input. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3402)
-- <a id="Gate-outputs"></a>`.outputs(sides: &[Side]) -> Gate`: The faces it gives at. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3407)
-- <a id="Gate-delay"></a>`.delay(ticks: u32) -> Gate`: In redstone ticks, two game ticks each. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3413)
+- <a id="Gate-new"></a>`.new() -> Gate`: Reads behind it and both sides, gives out of the front, one redstone tick late. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3402)
+- <a id="Gate-inputs"></a>`.inputs(sides: &[Side]) -> Gate`: The faces it reads; an output is never an input. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3406)
+- <a id="Gate-outputs"></a>`.outputs(sides: &[Side]) -> Gate`: The faces it gives at. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3411)
+- <a id="Gate-delay"></a>`.delay(ticks: u32) -> Gate`: In redstone ticks, two game ticks each. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3417)
 
 ## GateInputs
 
 What comes in at a `BlockBuilder::signal_gate`'s faces.
 
-- <a id="GateInputs-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3434)
-- <a id="GateInputs-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3437)
-- <a id="GateInputs-side"></a>`.side(side: Side) -> u8`: Power coming in at `side`, 0 for a face it doesn't read. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3441)
-- <a id="GateInputs-output"></a>`.output() -> u8`: What it gives now. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3445)
+- <a id="GateInputs-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3438)
+- <a id="GateInputs-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3441)
+- <a id="GateInputs-side"></a>`.side(side: Side) -> u8`: Power coming in at `side`, 0 for a face it doesn't read. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3445)
+- <a id="GateInputs-output"></a>`.output() -> u8`: What it gives now. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3449)
 
 ## ItemUse
 
-- <a id="ItemUse-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3552)
-- <a id="ItemUse-entity"></a>`.entity() -> u64`: Who uses it: a player, or a mob (`World::use_item`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3556)
-- <a id="ItemUse-target_block"></a>`.target_block() -> Option<(BlockPos, u32)>` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3559)
-- <a id="ItemUse-held_ticks"></a>`.held_ticks() -> u32`: Ticks the use button was held, for `on_release` (a bow's draw); 0 for a use at once. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3563)
-- <a id="ItemUse-stack"></a>`.stack() -> crate::ItemStack` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3566)
-- <a id="ItemUse-slot"></a>`.slot() -> u32`: The slot of its inventory the stack is in. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3570)
-- <a id="ItemUse-holder"></a>`.holder() -> crate::Holder`: The used stack as a holder: what a backpack opens its menu on. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3574)
-- <a id="ItemUse-set_stack"></a>`.set_stack(s: crate::ItemStack)`: Replaces the held stack (use count 0 to consume it entirely). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3578)
+- <a id="ItemUse-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3556)
+- <a id="ItemUse-entity"></a>`.entity() -> u64`: Who uses it: a player, or a mob (`World::use_item`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3560)
+- <a id="ItemUse-target_block"></a>`.target_block() -> Option<(BlockPos, u32)>` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3563)
+- <a id="ItemUse-held_ticks"></a>`.held_ticks() -> u32`: Ticks the use button was held, for `on_release` (a bow's draw); 0 for a use at once. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3567)
+- <a id="ItemUse-stack"></a>`.stack() -> crate::ItemStack` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3570)
+- <a id="ItemUse-slot"></a>`.slot() -> u32`: The slot of its inventory the stack is in. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3574)
+- <a id="ItemUse-holder"></a>`.holder() -> crate::Holder`: The used stack as a holder: what a backpack opens its menu on. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3578)
+- <a id="ItemUse-set_stack"></a>`.set_stack(s: crate::ItemStack)`: Replaces the held stack (use count 0 to consume it entirely). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3582)
 
 ## Modifier
 
@@ -139,9 +139,9 @@ One step's run (`Registry::modify`, `Registry::step`): read the context, change 
 
 The blocks around one (`BlockBuilder::derived`).
 
-- <a id="Neighbors-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L1912)
-- <a id="Neighbors-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L1915)
-- <a id="Neighbors-at"></a>`.at(side: crate::Dir) -> u32`: The block on that side, air where nothing is loaded. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L1919)
+- <a id="Neighbors-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L1916)
+- <a id="Neighbors-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L1919)
+- <a id="Neighbors-at"></a>`.at(side: crate::Dir) -> u32`: The block on that side, air where nothing is loaded. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L1923)
 
 ## PhaseBuilder
 
@@ -151,22 +151,22 @@ A phase being registered (`Registry::phase`).
 
 ## Place
 
-- <a id="Place-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3519)
-- <a id="Place-face"></a>`.face() -> crate::Dir`: Face of the block that was clicked. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3523)
-- <a id="Place-look_dir"></a>`.look_dir() -> crate::Vec3` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3526)
-- <a id="Place-hit"></a>`.hit() -> crate::Vec3`: Just outside where it was clicked, 0..1 from this cell's corner: for a slab, `hit().y > 0.5` is the upper half, on a floor, under a ceiling, against a wall or on another slab alike. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3531)
-- <a id="Place-placed"></a>`.placed(prop: &str) -> Option<&'static str>`: In `merge`: a property of how its item would go. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3535)
+- <a id="Place-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3523)
+- <a id="Place-face"></a>`.face() -> crate::Dir`: Face of the block that was clicked. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3527)
+- <a id="Place-look_dir"></a>`.look_dir() -> crate::Vec3` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3530)
+- <a id="Place-hit"></a>`.hit() -> crate::Vec3`: Just outside where it was clicked, 0..1 from this cell's corner: for a slab, `hit().y > 0.5` is the upper half, on a floor, under a ceiling, against a wall or on another slab alike. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3535)
+- <a id="Place-placed"></a>`.placed(prop: &str) -> Option<&'static str>`: In `merge`: a property of how its item would go. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3539)
 
 ## SignalEvent
 
 What `BlockBuilder::on_signal` is told.
 
-- <a id="SignalEvent-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3342)
-- <a id="SignalEvent-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3345)
-- <a id="SignalEvent-state"></a>`.state() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3348)
-- <a id="SignalEvent-level"></a>`.level() -> u8`: Power around it now, 0..15. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3352)
-- <a id="SignalEvent-level_before"></a>`.level_before() -> u8`: What it was. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3356)
-- <a id="SignalEvent-rising"></a>`.rising() -> bool`: It just got power. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3360)
+- <a id="SignalEvent-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3346)
+- <a id="SignalEvent-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3349)
+- <a id="SignalEvent-state"></a>`.state() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3352)
+- <a id="SignalEvent-level"></a>`.level() -> u8`: Power around it now, 0..15. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3356)
+- <a id="SignalEvent-level_before"></a>`.level_before() -> u8`: What it was. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3360)
+- <a id="SignalEvent-rising"></a>`.rising() -> bool`: It just got power. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3364)
 
 ## StepBuilder
 
@@ -191,9 +191,9 @@ Every entity of a region that has a component, with the values side by side, and
 
 ## Use
 
-- <a id="Use-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3488)
-- <a id="Use-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3491)
-- <a id="Use-state"></a>`.state() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3494)
-- <a id="Use-face"></a>`.face() -> crate::Dir`: Face of the block that was clicked. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3498)
-- <a id="Use-player"></a>`.player() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3501)
-- <a id="Use-sneaking"></a>`.sneaking() -> bool`: The player sneaks: only with `.sneak_use(..)` saying so, or with empty hands. Returning false passes the click on to what it holds. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3506)
+- <a id="Use-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3492)
+- <a id="Use-pos"></a>`.pos() -> BlockPos` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3495)
+- <a id="Use-state"></a>`.state() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3498)
+- <a id="Use-face"></a>`.face() -> crate::Dir`: Face of the block that was clicked. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3502)
+- <a id="Use-player"></a>`.player() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3505)
+- <a id="Use-sneaking"></a>`.sneaking() -> bool`: The player sneaks: only with `.sneak_use(..)` saying so, or with empty hands. Returning false passes the click on to what it holds. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L3510)

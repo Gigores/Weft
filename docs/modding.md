@@ -247,6 +247,13 @@ The mod itself uses the same crate, so there's one declaration of everything, an
 
 ## Where to go next
 
+Directional shields use `comps::BLOCKS_ATTACKS` and can keep projectiles in their
+stack data; see [entities](entities.md#coming-going-and-getting-hurt).
+
+For HUD information about the crosshair's target, see `ClientView::target` and the target panel
+extension in the [UI guide](ui.md#hud). A projectile's relative launch speed uses
+`Spawn::inherit_velocity`, described in the [entities guide](entities.md#projectiles).
+
 The rest is split by what you are making. Each page starts with the common case and goes on to the rare ones; the [reference](reference/index.md) lists every method of every builder with a link to its source.
 
 **Content you register**
@@ -265,6 +272,7 @@ The rest is split by what you are making. Each page starts with the common case 
 **The world from code**
 
 - [World API](world-api.md): positions, blocks, entities, raycasts, hitboxes, particles, sounds
+- [Reading generation](worldgen.md#reading-generation): `p.read(pos)`, spatial searches and postprocessing with `abi::stage::POST_PROCESS`
 
 **Client side**
 

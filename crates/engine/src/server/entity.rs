@@ -50,6 +50,7 @@ pub struct Entity {
     pub using: (u32, bool),
     /// The item it is using, the ticks left until it takes effect, and the slot it is in.
     pub use_done: Option<(u32, u32, u32)>,
+    pub blocking_disabled_until: u64,
     /// The block it is breaking.
     pub mining: Option<Mining>,
     pub anchor: Option<IVec3>,
@@ -206,6 +207,7 @@ impl Entity {
             health,
             age: 0,
             hurt_cooldown: 0,
+            blocking_disabled_until: 0,
             walk: None,
             jump_mul: 1.0,
             moves: physics::Moves::default(),

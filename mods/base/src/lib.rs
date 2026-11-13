@@ -16,6 +16,7 @@ mod redstone;
 mod sounds;
 mod storage;
 mod tree_kinds;
+mod target_info;
 mod woodcutter;
 mod worldgen;
 
@@ -56,6 +57,7 @@ fn init(r: &mut Registry) {
     redstone::register(r);
     woodcutter::register(r);
     storage::register(r);
+    target_info::register(r);
     // Its terrain is described in `worldgen`.
     r.dimension(&OVERWORLD)
         .player_spawn()

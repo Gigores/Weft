@@ -812,6 +812,10 @@ impl DamageCauseBuilder<'_> {
     pub fn bypasses_armor(self) -> Self {
         self.tag(abi::comp::damage_cause::BYPASSES_ARMOR)
     }
+    /// Held items cannot block it.
+    pub fn bypasses_blocking(self) -> Self {
+        self.tag(abi::comp::damage_cause::BYPASSES_BLOCKING)
+    }
     /// Hurts invulnerable entities and players outside survival too.
     pub fn pierces_invulnerable(self) -> Self {
         self.tag(abi::comp::damage_cause::PIERCES_INVULNERABLE)
@@ -1670,7 +1674,11 @@ macro_rules! state_setters {
         pub fn hazard(self, h: crate::Hazard) -> Self {
             self.push(&bc::HAZARDS, h.0)
         }
-        /// A plant: tagged `plantable`, cross model, no collision. Placing a block into it is
+        /// Draw its item as the sprite of this block face instead of the model.
+        pub fn item_sprite(self, face: crate::Dir) -> Self {
+            self.set(&bc::ITEM_FACE, face.face() as u8)
+        }
+        /// A plant: tagged `plantable`, crossed flat boxes, no collision. Placing a block into it is
         /// refused, as for vanilla's flowers and sugar cane; grass that gives way is `.replaceable()`.
         pub fn plant(self) -> Self {
             self.not_solid()
@@ -3209,6 +3217,13 @@ impl Gen {
     pub(crate) fn wrap(a: &mut abi::GenArgs) -> &mut Gen {
         unsafe { &mut *(a as *mut abi::GenArgs as *mut Gen) }
     }
+    pub fn view(&self) -> crate::Generation<'_> {
+        crate::Generation::new(self.args.source)
+    }
+    /// Read a block in world coordinates, including outside this cube and earlier local writes.
+    pub fn read(&self, pos: impl Into<BlockPos>) -> u32 {
+        self.view().read(pos)
+    }
     pub fn seed(&self) -> u64 {
         self.args.seed
     }
@@ -3221,18 +3236,32 @@ impl Gen {
         [c.x * 16, c.y * 16, c.z * 16].into()
     }
     pub fn blocks(&mut self) -> &mut [u32; 4096] {
+        if !self.args.written.is_null() {
+            unsafe { std::slice::from_raw_parts_mut(self.args.written, 64).fill(u64::MAX) };
+        }
         unsafe { &mut *(self.args.blocks as *mut [u32; 4096]) }
     }
     pub fn biomes(&mut self) -> &mut [u16; 256] {
+        if !self.args.biomes_written.is_null() {
+            unsafe { std::slice::from_raw_parts_mut(self.args.biomes_written, 4).fill(u64::MAX) };
+        }
         unsafe { &mut *(self.args.biomes as *mut [u16; 256]) }
     }
     #[inline]
     pub fn set(&mut self, x: usize, y: usize, z: usize, state: u32) {
-        self.blocks()[(y * 16 + z) * 16 + x] = state;
+        let i = (y * 16 + z) * 16 + x;
+        assert!(i < 4096 && x < 16 && y < 16 && z < 16);
+        unsafe {
+            *self.args.blocks.add(i) = state;
+            if !self.args.written.is_null() {
+                *self.args.written.add(i / 64) |= 1 << (i % 64);
+            }
+        }
     }
     #[inline]
     pub fn get(&mut self, x: usize, y: usize, z: usize) -> u32 {
-        self.blocks()[(y * 16 + z) * 16 + x]
+        let o = self.origin();
+        self.read([o.x + x as i32, o.y + y as i32, o.z + z as i32])
     }
 }
 
