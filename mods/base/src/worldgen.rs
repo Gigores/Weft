@@ -126,6 +126,7 @@ fn place_trunk(
     log_block: &Block,
     wood_block: &Block,
     allow_branches: bool,
+    allow_roots: bool,
 ) -> TreeSkeleton {
     let (x, y, z) = pos;
     let top = y + height as i32;
@@ -158,39 +159,41 @@ fn place_trunk(
             }
         }
     }
-    let mut grow_root = |dx: i32, dz: i32, tall: bool| {
-        let wood = wood_block.with(&[(
-            "facing",
-            match (dx, dz) {
-                (1, 0) => "east",
-                (-1, 0) => "west",
-                (0, 1) => "south",
-                (0, -1) => "north",
-                _ => return,
-            },
-        )]);
-        let x = x + dx;
-        let z = z + dz;
-        if tall {
-            put(x, y + 1, z, wood, true);
+    if allow_roots {
+        let mut grow_root = |dx: i32, dz: i32, tall: bool| {
+            let wood = wood_block.with(&[(
+                "facing",
+                match (dx, dz) {
+                    (1, 0) => "east",
+                    (-1, 0) => "west",
+                    (0, 1) => "south",
+                    (0, -1) => "north",
+                    _ => return,
+                },
+            )]);
+            let x = x + dx;
+            let z = z + dz;
+            if tall {
+                put(x, y + 1, z, wood, true);
+            }
+            put(x, y, z, wood, true);
+            put(x, y - 1, z, log, true);
+        };
+        let root_positions = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+        let mut root_count = 0;
+        for dpos in root_positions {
+            if rng.float() < 0.666 {
+                grow_root(dpos.0, dpos.1, rng.float() < 0.5);
+                root_count += 1;
+            }
         }
-        put(x, y, z, wood, true);
+        if root_count == 0 {
+            let root_pos = root_positions[rng.next() as usize % root_positions.len()];
+            grow_root(root_pos.0, root_pos.1, rng.float() < 0.5);
+        }
         put(x, y - 1, z, log, true);
-    };
-    let root_positions = [(1, 0), (-1, 0), (0, 1), (0, -1)];
-    let mut root_count = 0;
-    for dpos in root_positions {
-        if rng.float() < 0.666 {
-            grow_root(dpos.0, dpos.1, rng.float() < 0.5);
-            root_count += 1;
-        }
+        put(x, y - 2, z, DIRT.id(), true);
     }
-    if root_count == 0 {
-        let root_pos = root_positions[rng.next() as usize % root_positions.len()];
-        grow_root(root_pos.0, root_pos.1, rng.float() < 0.5);
-    }
-    put(x, y - 1, z, log, true);
-    put(x, y - 2, z, DIRT.id(), true);
 
     TreeSkeleton { height: top - y, top: (x, top, z), bottom: (x, y, z), branch_tips }
 }
@@ -282,18 +285,18 @@ fn decorate_trunk(skeleton: &TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i3
 }
 fn place_oak(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 3u16;
-    let skeleton = place_trunk(pos, rng, put, height, &OAK_LOG, &OAK_WOOD, true);
+    let skeleton = place_trunk(pos, rng, put, height, &OAK_LOG, &OAK_WOOD, true, true);
     place_foliage(&skeleton, rng, put, height, OAK_LEAVES.id());
     decorate_trunk(&skeleton, rng, put);
 }
 fn place_birch(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
-    let skeleton = place_trunk(pos, rng, put, height, &BIRCH_LOG, &BIRCH_WOOD, true);
+    let skeleton = place_trunk(pos, rng, put, height, &BIRCH_LOG, &BIRCH_WOOD, true, false);
     place_foliage(&skeleton, rng, put, height, BIRCH_LEAVES.id());
 }
 fn place_spruce(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
-    place_trunk(pos, rng, put, height, &SPRUCE_LOG, &SPRUCE_WOOD, false);
+    place_trunk(pos, rng, put, height, &SPRUCE_LOG, &SPRUCE_WOOD, false, false);
     place_cone_foliage(pos, put, height, SPRUCE_LEAVES.id());
 }
 
