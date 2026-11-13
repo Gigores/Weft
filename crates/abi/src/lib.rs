@@ -918,6 +918,7 @@ pub mod comp {
         pub const ANCHOR: &str = "hud_element.anchor";
         pub const ORDER: &str = "hud_element.order";
         pub const CALL: &str = "hud_element.call";
+        pub const REBUILD: &str = "hud_element.rebuild";
     }
 
     /// A screen part's, what a mod adds to place `AREA` (`str`) of screen `SCREEN` (`str`):
@@ -2890,6 +2891,17 @@ pub struct RayHit {
     pub distance: f64,
 }
 
+/// What the client aims at: `entity` is nonzero for a mob, `state` for a block. Block positions
+/// are in `body`'s frame (0 for the world), so moving platforms keep their own coordinates.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Target {
+    pub entity: u64,
+    pub body: u64,
+    pub pos: BlockPos,
+    pub state: u32,
+}
+
 crate::data! {
     /// How a projectile flies and what it does where it hits: `damage` per block a tick of its
     /// speed (rounded up, vanilla's arrow 2), the share of its speed kept each tick in the air and
@@ -3128,6 +3140,7 @@ pub mod spawn_set {
     pub const VELOCITY: u32 = 1;
     pub const YAW: u32 = 2;
     pub const PICKUP_DELAY: u32 = 4;
+    pub const INHERIT_VELOCITY: u32 = 8;
 }
 
 /// An effect on an entity (`Host::entity_effects`).
@@ -3785,6 +3798,12 @@ pub struct UiBindArgs {
     pub text: *mut UiCtx,
 }
 
+#[repr(C)]
+pub struct UiRevisionArgs {
+    pub client: *mut ClientCtx,
+    pub revision: u64,
+}
+
 /// A player changed an INPUT (`text`) or SLIDER (`value`, 0..1).
 #[repr(C)]
 pub struct UiChangeArgs {
@@ -4046,6 +4065,7 @@ pub struct Host {
     /// Synced component of an entity the client knows (own player always), null if unknown.
     pub client_component: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, comp: u32) -> *const u8,
     pub client_entity: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, out: *mut EntityState) -> u32,
+    pub client_target: unsafe extern "C" fn(client: *mut ClientCtx, out: *mut Target) -> u32,
 
     /// Energy contract (`energy` component, on an entity or a stack): moves `amount` in (positive)
     /// or out (negative), respecting capacity and rate limits. Returns what moved (or would, when
@@ -5897,6 +5917,7 @@ pub struct CommandArgs {
 /// Places for HUD elements. `HOTBAR_LEFT`/`HOTBAR_RIGHT` stack upwards above the hotbar's halves.
 pub mod hud_anchor {
     pub const TOP_LEFT: &str = "top_left";
+    pub const TOP_CENTER: &str = "top_center";
     pub const TOP_RIGHT: &str = "top_right";
     pub const BOTTOM_LEFT: &str = "bottom_left";
     pub const BOTTOM_RIGHT: &str = "bottom_right";

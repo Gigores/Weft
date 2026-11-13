@@ -1,4 +1,14 @@
 language.name = Русский
+hud.element.base.target_info = Информация о цели
+hud.base.target.name = {0}
+hud.base.target.tool = Инструмент: {0} (уровень {1})
+hud.base.target.health = Здоровье: {0} / {1}
+tool.pickaxe = Кирка
+tool.axe = Топор
+tool.shovel = Лопата
+tool.hoe = Мотыга
+tool.sword = Меч
+tool.shears = Ножницы
 menu.base.inventory = Создание
 menu.base.chest = Сундук
 menu.base.furnace = Печь

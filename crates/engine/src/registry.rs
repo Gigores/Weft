@@ -22,6 +22,7 @@ pub struct HudElement {
     pub order: i32,
     pub owner: ModId,
     pub cb: Callback,
+    pub rebuild: Option<(ModId, Callback)>,
 }
 pub const ITEM: &str = "core:item";
 /// A block falling as an entity (`Host::fall_block`), placed again where it lands.
@@ -2044,7 +2045,15 @@ pub fn freeze(
         use abi::comp::hud_element as h;
         let (owner, cb) = e.callback(h::CALL).unwrap_or((e.owner, Callback::NONE));
         let anchor = e.text(h::ANCHOR).unwrap_or_default().to_string();
-        HudElement { name: e.name.clone(), title: crate::ui::text::dotted(&e.name), anchor, order: e.or(h::ORDER, 0), owner, cb }
+        HudElement {
+            name: e.name.clone(),
+            title: crate::ui::text::dotted(&e.name),
+            anchor,
+            order: e.or(h::ORDER, 0),
+            owner,
+            cb,
+            rebuild: e.callback(h::REBUILD),
+        }
     });
     (g.bone_motions, _) = tables.bake(kind(ek::BONE_MOTION), ek::BONE_MOTION, mod_name, errors, |e, _| {
         use abi::comp::bone_motion as b;
@@ -2821,7 +2830,7 @@ impl Game {
                     for y in 0..bh {
                         for x in 0..bw {
                             let cx = if mirror { bw - 1 - x } else { x };
-                            cells[((y0 + y) * w + x0 + x) as usize] = Some((y * rw + cx) as usize);
+                            cells[((y0 + y) * w + x0 + x) as usize] = (at(x, y) != 0).then_some((y * rw + cx) as usize);
                         }
                     }
                 }
@@ -3174,6 +3183,61 @@ mod box_unwrap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shaped_slots_follow_ingredients() {
+        let mut tags = crate::components::Builder::default();
+        tags.start(&[]);
+        let tags = tags.finish();
+        for mask in 1u32..512 {
+            let filled: Vec<_> = (0..9).filter(|i| mask & (1 << i) != 0).collect();
+            let x0 = filled.iter().map(|i| i % 3).min().unwrap();
+            let y0 = filled.iter().map(|i| i / 3).min().unwrap();
+            let w = filled.iter().map(|i| i % 3).max().unwrap() + 1 - x0;
+            let h = filled.iter().map(|i| i / 3).max().unwrap() + 1 - y0;
+            let pattern: Vec<_> = (0..h)
+                .flat_map(|y| (0..w).map(move |x| (y + y0) * 3 + x + x0))
+                .map(|i| if mask & (1 << i) == 0 { Ingredient::Empty } else { Ingredient::Item(i + 1) })
+                .collect();
+            let mut game = Game::default();
+            game.recipes.insert(
+                "crafting".into(),
+                vec![Recipe {
+                    shaped: Some((w, h, pattern.clone())),
+                    inputs: Vec::new(),
+                    uses: vec![Use::Consume; pattern.len()],
+                    input_counts: Vec::new(),
+                    outputs: Vec::new(),
+                    extras: Default::default(),
+                    time: 0,
+                    entry: 0,
+                }],
+            );
+            for mirror in [false, true] {
+                for top in 0..=3 - h {
+                    for left in 0..=3 - w {
+                        let mut grid = [0; 9];
+                        let mut expected = vec![None; 9];
+                        for y in 0..h {
+                            for x in 0..w {
+                                let k = (y * w + if mirror { w - 1 - x } else { x }) as usize;
+                                if let Ingredient::Item(item) = pattern[k] {
+                                    let slot = ((top + y) * 3 + left + x) as usize;
+                                    grid[slot] = item;
+                                    expected[slot] = Some(k);
+                                }
+                            }
+                        }
+                        let (_, cells) = game.match_cells("crafting", &grid, 3, 3, &tags).unwrap();
+                        assert_eq!(cells, expected, "mask {mask}, mirror {mirror}, at {left},{top}");
+                        let slot = grid.iter().position(|&item| item != 0).unwrap();
+                        grid[slot] = 100;
+                        assert!(game.match_cells("crafting", &grid, 3, 3, &tags).is_none(), "wrong ingredient in slot {slot}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn variable_recipes_expand_per_material() {

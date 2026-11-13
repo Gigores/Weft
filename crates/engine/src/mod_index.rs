@@ -260,26 +260,83 @@ pub fn installed(dir: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Downloads the build of `id` that fits this game, and what it needs that isn't there (what
-/// comes with the game isn't in the index), into `dir`.
-pub fn install(id: String, dir: PathBuf) {
-    let Some(index) = index() else { return };
+/// Resolves the complete download list before anything is written or downloaded.
+pub fn install_plan(id: &str, dir: &Path) -> Result<Vec<IndexMod>, String> {
+    let index = index().ok_or("the catalog is not loaded")?;
+    let metas = crate::content::try_content()
+        .into_iter()
+        .flat_map(|c| &c.mods)
+        .chain(crate::modloader::turned_off());
+    let mut have: rustc_hash::FxHashMap<String, Vec<String>> = metas
+        .filter(|m| m.source.exists() && crate::modloader::load_error(&m.id).is_none())
+        .map(|m| (m.id.clone(), m.deps.clone()))
+        .collect();
+    let abi = format!("{:016x}", crate::modloader::ABI_VERSION);
+    for (id, sha) in installed(dir) {
+        let build = index.iter().find(|m| m.id == id).and_then(|m| {
+            m.builds
+                .iter()
+                .find(|b| b.sha256.eq_ignore_ascii_case(&sha))
+        });
+        match build {
+            Some(b) if b.abi == abi => {
+                have.insert(id, b.deps.clone());
+            }
+            Some(_) => {
+                have.remove(&id);
+            }
+            None if crate::modloader::load_error(&id).is_some() => {
+                have.remove(&id);
+            }
+            None => {}
+        }
+    }
+    plan(id, &index, &have)
+}
+
+fn plan(id: &str, index: &[IndexMod], have: &rustc_hash::FxHashMap<String, Vec<String>>) -> Result<Vec<IndexMod>, String> {
+    let mut todo = vec![id.to_string()];
+    let mut planned: Vec<IndexMod> = Vec::new();
+    let mut needed = rustc_hash::FxHashMap::<String, Vec<String>>::default();
+    while let Some(want) = todo.pop() {
+        if needed.contains_key(&want) {
+            continue;
+        }
+        let deps = if let Some(deps) = have.get(&want).filter(|_| want != id) {
+            deps.clone()
+        } else {
+            let m = index
+                .iter()
+                .find(|m| m.id == want)
+                .ok_or_else(|| format!("missing dependency {want}"))?;
+            let b = m
+                .fitting()
+                .ok_or_else(|| format!("{} has no build for this game", m.name))?;
+            planned.push(m.clone());
+            b.deps.clone()
+        };
+        todo.extend(deps.iter().cloned());
+        needed.insert(want, deps);
+    }
+    let mut names: Vec<_> = needed.keys().collect();
+    names.sort();
+    let order = crate::content::dependency_order(names.len(), |i, j| needed[names[j]].contains(names[i]));
+    planned.sort_by_key(|m| order[names.binary_search(&&m.id).unwrap()]);
+    Ok(planned)
+}
+
+/// Downloads exactly the builds the player reviewed, with their SHA-256 checked.
+pub fn install(plan: Vec<IndexMod>, dir: PathBuf) {
+    let Some(id) = plan.last().map(|m| m.id.clone()) else { return };
     update(|s| s.status = Status::Busy(id.clone()));
     if fake::on() {
-        fake::install(id, index);
+        fake::install(plan);
         return;
     }
     std::thread::spawn(move || {
-        let have: Vec<String> = installed(&dir).into_iter().map(|m| m.0).collect();
-        let mut todo = vec![id.clone()];
-        let mut done: Vec<String> = Vec::new();
+        let mut changed = false;
         let result = (|| {
-            while let Some(want) = todo.pop() {
-                // The one asked for is installed again (an update), what it needs only if missing.
-                if done.contains(&want) || (want != id && have.contains(&want)) {
-                    continue;
-                }
-                let Some(m) = index.iter().find(|m| m.id == want) else { continue };
+            for m in plan {
                 let b = m
                     .fitting()
                     .ok_or(format!("{} has no build for this game", m.name))?;
@@ -293,12 +350,11 @@ pub fn install(id: String, dir: PathBuf) {
                 std::fs::write(&part, &bytes)
                     .and_then(|_| std::fs::rename(&part, &to))
                     .map_err(|e| e.to_string())?;
-                todo.extend(b.deps.iter().cloned());
-                done.push(want);
+                changed = true;
             }
             Ok::<_, String>(())
         })();
-        if !done.is_empty() {
+        if changed {
             CHANGED.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         update(|s| {
@@ -325,6 +381,64 @@ pub fn remove(id: &str, dir: &Path) {
 
 /// `--fake-catalog`: made-up mods instead of the index, to look at the screen with a full list;
 /// installing and removing only pretend, nothing is downloaded or written.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn download_plan_resolves_graph_before_installing() {
+        let entry = |id: &str, deps: &[&str]| IndexMod {
+            id: id.into(),
+            name: id.into(),
+            summary: String::new(),
+            author: String::new(),
+            source: String::new(),
+            icon: String::new(),
+            builds: vec![Build {
+                version: "1".into(),
+                abi: format!("{:016x}", crate::modloader::ABI_VERSION),
+                url: String::new(),
+                sha256: String::new(),
+                deps: deps.iter().map(|s| s.to_string()).collect(),
+                verified: true,
+            }],
+        };
+        let mut index = vec![
+            entry("top", &["left", "right", "shipped"]),
+            entry("left", &["shared"]),
+            entry("right", &["shared"]),
+            entry("shared", &[]),
+        ];
+        let have = [("shipped".into(), Vec::new())]
+            .into_iter()
+            .collect::<rustc_hash::FxHashMap<_, _>>();
+        let ids = |p: Vec<IndexMod>| {
+            let mut ids: Vec<_> = p.into_iter().map(|m| m.id).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(plan("top", &index, &have).unwrap()), ["left", "right", "shared", "top"]);
+        let mut installed = have.clone();
+        for id in ["left", "right"] {
+            installed.insert(id.into(), vec!["shared".into()]);
+        }
+        assert_eq!(
+            ids(plan("top", &index, &installed).unwrap()),
+            ["shared", "top"],
+            "installed mods still need their dependencies resolved"
+        );
+        assert!(plan("top", &index, &Default::default()).is_err(), "a missing dependency rejects the whole plan");
+        index[3].builds[0].abi = "another".into();
+        assert!(plan("top", &index, &have).is_err(), "a transitive ABI mismatch rejects the whole plan");
+        index[3] = entry("shared", &["top"]);
+        assert_eq!(
+            ids(plan("top", &index, &have).unwrap()),
+            ["left", "right", "shared", "top"],
+            "cycles follow the loader's deterministic order"
+        );
+    }
+}
+
 mod fake {
     use super::{Build, CHANGED, IndexMod, Status, update};
 
@@ -500,27 +614,14 @@ mod fake {
     }
 
     /// Takes a moment, then `id` and what it needs are "installed".
-    pub fn install(id: String, index: Vec<IndexMod>) {
+    pub fn install(plan: Vec<IndexMod>) {
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(1200));
-            let mut todo = vec![id];
             let mut have = INSTALLED.lock();
-            while let Some(want) = todo.pop() {
-                let Some(b) = index
-                    .iter()
-                    .find(|m| m.id == want)
-                    .and_then(|m| m.fitting())
-                else {
-                    continue;
-                };
-                have.retain(|m| m.0 != want);
-                have.push((want, b.sha256.clone()));
-                todo.extend(
-                    b.deps
-                        .iter()
-                        .filter(|d| !have.iter().any(|h| &h.0 == *d))
-                        .cloned(),
-                );
+            for m in plan {
+                let b = m.fitting().unwrap();
+                have.retain(|h| h.0 != m.id);
+                have.push((m.id.clone(), b.sha256.clone()));
             }
             drop(have);
             CHANGED.store(true, std::sync::atomic::Ordering::Relaxed);

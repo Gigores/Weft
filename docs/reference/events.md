@@ -41,32 +41,32 @@ An attribute being registered (`Registry::attribute`).
 
 A hurt described (`World::damage`): `Damage::new(4.0, &damage_causes::ATTACK).by(shooter) .through(arrow)`. Steps see all of it (`Query::other`, `direct`, `item`, `crit`).
 
-- <a id="Damage-new"></a>`.new(amount: f32, cause: impl Into<Id<crate::DamageCause>>) -> Damage` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L87)
-- <a id="Damage-by"></a>`.by(source: u64)`: Who did it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L91)
-- <a id="Damage-through"></a>`.through(direct: u64)`: What hit, when not `by` itself (the arrow): knockback goes away from it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L96)
-- <a id="Damage-with"></a>`.with(item: ItemStack)`: What it was done with. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L101)
-- <a id="Damage-knock"></a>`.knock(way: impl Into<Vec3>)`: The way it pushes, instead of away from what hit. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L106)
-- <a id="Damage-crit"></a>`.crit(mut self)` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L110)
-- <a id="Damage-part"></a>`.part(part: u32)`: The part of the hitbox it lands on (`hitbox_part::HEAD`, `hitbox_part_id("tail")`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L115)
+- <a id="Damage-new"></a>`.new(amount: f32, cause: impl Into<Id<crate::DamageCause>>) -> Damage` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L93)
+- <a id="Damage-by"></a>`.by(source: u64)`: Who did it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L97)
+- <a id="Damage-through"></a>`.through(direct: u64)`: What hit, when not `by` itself (the arrow): knockback goes away from it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L102)
+- <a id="Damage-with"></a>`.with(item: ItemStack)`: What it was done with. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L107)
+- <a id="Damage-knock"></a>`.knock(way: impl Into<Vec3>)`: The way it pushes, instead of away from what hit. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L112)
+- <a id="Damage-crit"></a>`.crit(mut self)` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L116)
+- <a id="Damage-part"></a>`.part(part: u32)`: The part of the hitbox it lands on (`hitbox_part::HEAD`, `hitbox_part_id("tail")`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L121)
 
 ## EffectTick
 
 An effect's tick (`EntityEffectBuilder::on_tick`): every entity that has it, with its level.
 
-- <a id="EffectTick-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L767)
-- <a id="EffectTick-effect"></a>`.effect() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L770)
-- <a id="EffectTick-iter"></a>`.iter() -> impl Iterator<Item = (u64, u32)> + '_`: (entity, level). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L774)
+- <a id="EffectTick-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L773)
+- <a id="EffectTick-effect"></a>`.effect() -> u32` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L776)
+- <a id="EffectTick-iter"></a>`.iter() -> impl Iterator<Item = (u64, u32)> + '_`: (entity, level). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L780)
 
 ## EntityEvent
 
-- <a id="EntityEvent-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L750)
-- <a id="EntityEvent-entity"></a>`.entity() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L753)
-- <a id="EntityEvent-other"></a>`.other() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L756)
+- <a id="EntityEvent-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L756)
+- <a id="EntityEvent-entity"></a>`.entity() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L759)
+- <a id="EntityEvent-other"></a>`.other() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L762)
 
 ## EntityTick
 
-- <a id="EntityTick-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L737)
-- <a id="EntityTick-ids"></a>`.ids() -> &[u64]` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L740)
+- <a id="EntityTick-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L743)
+- <a id="EntityTick-ids"></a>`.ids() -> &[u64]` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L746)
 
 ## Event
 

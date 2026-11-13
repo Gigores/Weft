@@ -64,6 +64,12 @@ impl Spawn {
         self.desc.set |= abi::spawn_set::VELOCITY;
         self
     }
+    /// Adds its owner's current velocity once at spawn, including a mount or moving platform.
+    /// Combine with `owner(id)` and `velocity(v)` to launch relative to the shooter.
+    pub fn inherit_velocity(mut self) -> Self {
+        self.desc.set |= abi::spawn_set::INHERIT_VELOCITY;
+        self
+    }
     /// Radians, like `EntityState::yaw`.
     pub fn yaw(mut self, radians: f32) -> Self {
         self.desc.yaw = radians;
@@ -1766,15 +1772,15 @@ impl Registry {
         unsafe { (host().reg_command_branch)(self.raw, Str::new(command), Str::new(usage), 1, cb) }
     }
 
-    /// Adds to place `area` of `screen` without replacing the screen: a button in the main menu is
+    /// Adds to place `area` of a screen or HUD element without replacing it: a main menu button is
     /// `r.screen_part(&screens::TITLE, "buttons", 0, |ui| ..)`. Lower `order` comes first. The
     /// engine's places: `TITLE` `buttons` and `side`, `PAUSE` `buttons`, `SETTINGS` `buttons`, and
     /// beside menus: any menu's own `side` (`r.screen_part(&base::CHEST, "side", ..)`, another
     /// mod's menu too) and `MENUS` `side` beside every one (a sort button). Named
     /// `<mod>:<screen>/<area>` (`base:pause/buttons`, the next `/2`..), other mods edit it by that.
-    pub fn screen_part(
+    pub fn screen_part<K: crate::kind::Kind>(
         &mut self,
-        screen: &Menu,
+        screen: &crate::Handle<K>,
         area: &str,
         order: i32,
         f: impl Fn(&mut Ui) + Send + Sync + 'static,
@@ -2032,6 +2038,16 @@ pub struct HudElementBuilder<'a> {
 }
 
 impl HudElementBuilder<'_> {
+    /// Rebuilds the layout when this revision changes. Keep changing text and numbers in
+    /// bindings; use this for a different set of widgets, such as a new inspected block.
+    pub fn rebuild_when(self, f: impl Fn(&crate::ClientView) -> u64 + Send + Sync + 'static) -> Self {
+        self.set(
+            &comps::hud_element::REBUILD,
+            callback(move |a: &mut abi::UiRevisionArgs| {
+                a.revision = f(&crate::ClientView::from_raw(a.client));
+            }),
+        )
+    }
     /// Where it sits (`hud_anchor::*`).
     pub fn anchor(self, anchor: &str) -> Self {
         self.set_text(&comps::hud_element::ANCHOR, anchor)

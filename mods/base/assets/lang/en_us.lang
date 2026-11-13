@@ -1,4 +1,14 @@
 language.name = English
+hud.element.base.target_info = Target information
+hud.base.target.name = {0}
+hud.base.target.tool = Tool: {0} (level {1})
+hud.base.target.health = Health: {0} / {1}
+tool.pickaxe = Pickaxe
+tool.axe = Axe
+tool.shovel = Shovel
+tool.hoe = Hoe
+tool.sword = Sword
+tool.shears = Shears
 # The base game's look of the engine's classes (see the engine's color.* keys).
 color.default = {#fefefe}
 color.default_shadow = {#1f1f1f}

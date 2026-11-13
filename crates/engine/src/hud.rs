@@ -257,6 +257,7 @@ struct Placed {
 #[derive(Default)]
 pub struct Hud {
     pub ui: Ui,
+    revisions: Vec<u64>,
     key: Option<(bool, usize, [u32; 3], bool, bool, u32, u8, (i32, i32), (u32, u32, u8), u64, (bool, [i32; 2], u64))>,
     /// Player overrides from `config/hud.txt` by element name.
     layout: rustc_hash::FxHashMap<String, Placement>,
@@ -362,6 +363,19 @@ impl Hud {
     /// `chat_open`: the chat screen shows the messages itself.
     /// `groups`: bit per `DEBUG_GROUPS` entry shown with the debug overlay.
     pub fn update(&mut self, client: &Client, debug: bool, groups: u32, chat_open: bool, lang: &Lang, input: &crate::input::Input) -> bool {
+        let huds = &content().game.huds;
+        self.revisions.resize(huds.len(), 0);
+        let mut view = modui::ClientView::new(Some(client));
+        for (h, previous) in huds.iter().zip(&mut self.revisions) {
+            if let Some((owner, cb)) = h.rebuild {
+                let mut args = weft_abi::UiRevisionArgs { client: view.raw(), revision: 0 };
+                crate::host::invoke(owner, cb, &mut args);
+                if *previous != args.revision {
+                    *previous = args.revision;
+                    self.key = None;
+                }
+            }
+        }
         let now = std::time::Instant::now();
         let chat_visible = if chat_open {
             0
@@ -687,6 +701,7 @@ impl Hud {
             stack(ui, &[a::DEBUG_LEFT, a::TOP_LEFT], false, Style::default().w(0.0).grow(), Align::Start);
             stack(ui, &[a::DEBUG_RIGHT, a::TOP_RIGHT], false, Style::default().w(0.0).grow(), Align::End);
         });
+        stack(ui, &[a::TOP_CENTER], false, Style::default().at(window.x / 2.0, 4.0, [0.5, 0.0]), Align::Center);
         for e in at(CENTER, false) {
             emit(ui, e, Style::default().self_align(Align::Center), Align::Start);
         }
@@ -1059,7 +1074,6 @@ pub fn draw_custom(
     hovered: bool,
     icon: Option<u32>,
     scale: f32,
-    text_unit: f32,
 ) {
     match tag {
         TAG_CROSSHAIR => loaded(ren, look, "crosshair", r, scale),
@@ -1090,7 +1104,7 @@ pub fn draw_custom(
                 .get(data as usize)
                 .copied()
                 .unwrap_or_default();
-            stack_icon(ren, textures, r, stack, scale, text_unit);
+            ren.defer_stack(r, stack);
         }
         TAG_ENTITY => {
             // Inset frame; the model itself is drawn in a later pass.
@@ -1102,13 +1116,13 @@ pub fn draw_custom(
             }
         }
         crate::editor::TAG_PICTURE => ren.picture_icon(textures, r, data as u32),
-        modui::TAG_ICON => stack_icon(ren, textures, r, ItemStack::new(data as u32, 1), scale, text_unit),
+        modui::TAG_ICON => ren.defer_stack(r, ItemStack::new(data as u32, 1)),
         modui::TAG_CREATIVE => {
             slot_background(ren, look, "slot", r, false, scale);
             if hovered {
                 slot_highlight(ren, look, r, scale);
             }
-            stack_icon(ren, textures, r, ItemStack::new(data as u32, 1), scale, text_unit);
+            ren.defer_stack(r, ItemStack::new(data as u32, 1));
         }
         TAG_SLOT => {
             let Some(client) = client else { return };
@@ -1130,7 +1144,7 @@ pub fn draw_custom(
                 let s = 16.0 * scale;
                 ren.image(Rect { x: r.x + (r.w - s) / 2.0, y: r.y + (r.h - s) / 2.0, w: s, h: s }, t, [0.0, 0.0, 1.0, 1.0], 0xFFFFFFFF);
             }
-            stack_icon(ren, textures, r, stack, scale, text_unit);
+            ren.defer_stack(r, stack);
         }
         _ => {}
     }
@@ -1151,7 +1165,9 @@ pub fn stack_icon(ren: &mut UiRenderer, textures: &GameTextures, r: Rect, stack:
 pub fn slot_background(ren: &mut UiRenderer, look: &Look, class: &str, r: Rect, selected: bool, scale: f32) {
     loaded(ren, look, class, r, scale);
     if selected {
-        loaded(ren, look, "hotbar_selected", Rect { x: r.x - scale, y: r.y - scale, w: r.w + 2.0 * scale, h: r.h + 2.0 * scale }, scale);
+        ren.defer_overlay(|ren| {
+            loaded(ren, look, "hotbar_selected", Rect { x: r.x - scale, y: r.y - scale, w: r.w + 2.0 * scale, h: r.h + 2.0 * scale }, scale)
+        });
     }
 }
 
@@ -1267,6 +1283,13 @@ pub fn item_tooltip(lang: &Lang, input: &crate::input::Input, stack: weft_abi::I
     if max > 0 {
         let damage = crate::stack::damage(&stack);
         line(lang.get("tooltip.durability"), &[text::Arg::Int((max - damage.min(max)) as i64), text::Arg::Int(max as i64)], None, &mut out);
+    }
+    if crate::settings::advanced_tooltips() {
+        let id = &c.items[stack.item as usize].name;
+        line("{0}", &[text::Arg::Text(id.clone())], None, &mut out);
+        if let Some((ns, _)) = id.split_once(':') {
+            line("{0}", &[text::Arg::Name(text::Name::Mod(ns.to_string()))], None, &mut out);
+        }
     }
     out
 }

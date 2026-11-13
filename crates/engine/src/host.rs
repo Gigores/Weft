@@ -104,6 +104,7 @@ pub static HOST: Host = Host {
     client_weather: crate::client::modui::client_weather,
     client_component: crate::client::modui::client_component,
     client_entity: crate::client::modui::client_entity,
+    client_target: crate::client::modui::client_target,
     energy_move,
     component_get,
     component_set,
@@ -660,6 +661,7 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
     }
     let dim = unsafe { dim(w) };
     let pos = crate::world::dvec(d.pos);
+    let inherited = if d.set & abi::spawn_set::INHERIT_VELOCITY != 0 { dim.world_velocity(d.owner) } else { DVec3::ZERO };
     // Items are their stack: nothing to spawn for an empty one.
     // How it starts, set before anyone is asked about it.
     let init = |e: &mut crate::server::entity::Entity| {
@@ -667,6 +669,7 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
         if d.set & s::VELOCITY != 0 && crate::world::dvec(d.velocity).is_finite() {
             e.vel = crate::world::dvec(d.velocity);
         }
+        e.vel += inherited;
         if d.set & s::YAW != 0 && d.yaw.is_finite() {
             e.yaw = d.yaw;
         }

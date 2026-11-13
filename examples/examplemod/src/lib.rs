@@ -219,6 +219,14 @@ fn client(_r: &mut Registry) {
     // r.key(&DASH, "R").on_server(|w, player| { info!("{player} dashes"); w.game_time(); });
     // r.menu(&ABOUT).screen(|ui| ui.panel("background", S::column().pad(8.0), |ui| ui.text("examplemod.about")));
     // r.hud_element(&MANA, hud_anchor::HOTBAR_RIGHT, 2, |ui| ui.text_bind(|c, out| { /* ... */ }));
+    // static TARGET_INFO: HudElement = HudElement::named("base:target_info");
+    // r.screen_part(&TARGET_INFO, "details", 0, |ui| {
+    //     ui.text_bind(|c, out| {
+    //         if let Some(target) = c.target() {
+    //             out.set("examplemod.target_state", &[Arg::Int(target.state as i64)]);
+    //         }
+    //     });
+    // });
     //
     // In the hands: both or none, one with its own action, first on a right click. An item's clips
     // go in `animations/<item>.animation.json`, `models/player_template.geo.json` is the skeleton

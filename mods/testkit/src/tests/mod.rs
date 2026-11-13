@@ -34,6 +34,7 @@ pub fn all() -> Vec<TestDef> {
         ui::hud_editor,
         ui::debug_lines,
         ui::inventory_crafting,
+        ui::target_info,
         ui::creative_inventory,
         ui::chat_overflow,
         ui::text_on_screen,
