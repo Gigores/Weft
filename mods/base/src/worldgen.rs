@@ -53,6 +53,7 @@ pub static BOULDER_COVER: Component<f32> = Component::named("boulder");
 pub static RASPBERRY_COVER: Component<f32> = Component::named("raspberry");
 pub static SNOWBERRY_COVER: Component<f32> = Component::named("snowberry");
 pub static BUSH_COVER: Component<f32> = Component::named("bush");
+pub static FUNGI_COVER: Component<f32> = Component::named("fungi");
 /// Flowers a biome grows, picked evenly (`"base:dandelion base:rose"` where unset).
 pub static FLOWERS: Component<BlockList> = Component::named("flowers");
 /// On a log, the tree it grows into: `round <leaves>` (like oaks, 4-6 high) or `cone <leaves>`
@@ -343,6 +344,7 @@ pub fn register(r: &mut Registry) {
         .set(&GRASS_COVER, 0.2)
         .set(&BUSH_COVER, 0.06)
         .set(&RASPBERRY_COVER, 0.002)
+        .set(&FUNGI_COVER, 0.01)
         .set(&TREE_KINDS, TreeKinds::from([("base:oak", 4), ("base:birch", 1)]));
     r.biome(&BIRCH_FOREST)
         .temperature(..0.1)
@@ -356,6 +358,7 @@ pub fn register(r: &mut Registry) {
         .set(&GRASS_COVER, 0.12)
         .set(&BUSH_COVER, 0.06)
         .set(&RASPBERRY_COVER, 0.002)
+        .set(&FUNGI_COVER, 0.01)
         .set(&TREE_KINDS, TreeKinds::from([("base:birch", 1)]));
     r.biome(&TAIGA)
         .temperature(..-0.15)
@@ -611,8 +614,19 @@ pub fn register(r: &mut Registry) {
                 BUSH_STEM.id(),
             )
         });
+    r.scatter(&FUNGI_SITES)
+        .spacing(3)
+        .reach(1)
+        .density(&FUNGI_COVER)
+        .plan(|s| {
+            let FUNGI = [&PORCINI_MUSHROOM, &CHANTERELLE_MUSHROOM, &TOADSTOOL_MUSHROOM];
+            let mut rng = Rng(s.random());
+            s.put(s.pos(), FUNGI[rng.next() as usize % FUNGI.len()].id());
+        });
     r.decoration(decorate);
 }
+
+static FUNGI_SITES: Feature = Feature::named("fungis");
 
 static BUSH_SITES: Feature = Feature::named("bushes");
 
