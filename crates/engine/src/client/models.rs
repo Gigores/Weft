@@ -1588,7 +1588,7 @@ impl Models {
     pub fn clips_along(&self, to: u32, holder: u32, clips: &[PlayClip], clock: f32, off: bool) -> Clips {
         let mut out = Clips::default();
         let (Some(m), Some(h)) = (self.kinds.get(to as usize), self.kinds.get(holder as usize)) else { return out };
-        m.play(&mut out, m.act(Act::Idle), &Play { clock, looping: true, ..Play::default() });
+        m.play(&mut out, m.act(Act::Idle), &Play { clock, looping: true, mirror: off, ..Play::default() });
         for c in clips.iter().filter(|c| !c.hand || c.mirror == off) {
             let Some(b) = h.anims.get(c.anim as usize) else { continue };
             let name = b
@@ -1600,7 +1600,7 @@ impl Models {
             let own = if name == "idle" { &[][..] } else { m.action(0, name) };
             for &i in own {
                 let Some(own) = m.anims.get(i as usize) else { continue };
-                out.push(PlayClip { anim: i, t: c.t / b.anim.length * own.anim.length, w: c.w, ..PlayClip::default() });
+                out.push(PlayClip { anim: i, t: c.t / b.anim.length * own.anim.length, w: c.w, mirror: off, ..PlayClip::default() });
             }
             // A holder's own clip, not whoever else's of that name, on this one's bones.
             for &i in &m.brought {
@@ -1608,7 +1608,7 @@ impl Models {
                     .get(i as usize)
                     .is_some_and(|own| Arc::ptr_eq(&own.anim, &b.anim))
                 {
-                    out.push(PlayClip { anim: i, t: c.t, w: c.w, ..PlayClip::default() });
+                    out.push(PlayClip { anim: i, t: c.t, w: c.w, mirror: off, ..PlayClip::default() });
                 }
             }
         }

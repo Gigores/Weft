@@ -585,12 +585,8 @@ impl App {
                     Some(s) => r.open(s),
                     None => log::warn!("--screen: no screen {name}"),
                 }
-            } else if !r.settings.read_only
-                && crate::modloader::turned_off()
-                    .iter()
-                    .any(|m| crate::modloader::load_error(&m.id).is_some())
-            {
-                r.open(screens::engine("core:mods"));
+            } else if !crate::modloader::newly_disabled().is_empty() {
+                r.open(screens::engine("core:disabled_mods"));
             }
         }
         Ok(r)
@@ -2464,9 +2460,12 @@ fn build_ui_quads(r: &mut Running, scale: f32) {
     if with_hud {
         layers.push(&r.hud.ui);
     }
-    // Only the top screen shows, like vanilla: the ones under it are not drawn through its
-    // see-through overlay.
-    layers.extend(r.screens.last().map(|(_, u)| u));
+    let first = r
+        .screens
+        .iter()
+        .rposition(|(s, _)| !s.overlays())
+        .unwrap_or(0);
+    layers.extend(r.screens[first..].iter().map(|(_, ui)| ui));
     for ui in layers {
         let look = &r.look;
         let textures = &r.textures;

@@ -585,6 +585,8 @@ pub mod comp {
     pub mod damage_cause {
         /// Armor doesn't soften it (mods read this in their `DAMAGE` modifiers).
         pub const BYPASSES_ARMOR: &str = "damage.bypasses_armor";
+        /// Held items cannot block it, independently of armor reduction.
+        pub const BYPASSES_BLOCKING: &str = "damage.bypasses_blocking";
         /// Hurts invulnerable entities and players outside survival too.
         pub const PIERCES_INVULNERABLE: &str = "damage.pierces_invulnerable";
         /// Lands in full while the entity is still recovering from the last hit.
@@ -1482,6 +1484,13 @@ pub mod comp {
     /// Item: ticks of holding the use button before it takes effect (food 32); slows while held.
     /// `USE_HOLD`: it never does by itself, only its `ON_RELEASE` when let go (a bow).
     pub const USE_TICKS: &str = "use_ticks";
+    /// Item: `Blocking`, attacks stopped while using it. Weapon: `DISABLE_BLOCKING` seconds.
+    pub const BLOCKS_ATTACKS: &str = "blocks_attacks";
+    pub const DISABLE_BLOCKING: &str = "disable_blocking";
+    /// Item: `ProjectileCatch`, blocked sticking projectiles are kept in its stack data.
+    pub const CATCH_PROJECTILES: &str = "catch_projectiles";
+    /// Stack: `[EmbeddedProjectile]`, retained when moved, saved and shared with clients.
+    pub const EMBEDDED_PROJECTILES: &str = "embedded_projectiles";
     /// Item: `[EffectGift]` its user gets when it is used (after `USE_TICKS`), the item turning
     /// into its `REMAINDER` (a potion's bottle) or one fewer; nothing else needed for a potion.
     pub const GIVES_EFFECTS: &str = "gives_effects";
@@ -1709,6 +1718,16 @@ impl Default for BoxTilt {
 
 impl Schema for BoxTilt {
     const SCHEMA: &'static str = "{origin:[f32;3],axis:[f32;3],degrees:f32}";
+}
+
+crate::data! {
+    /// Where blocked projectiles enter an item's model, in the named bone's pixels.
+    pub struct ProjectileCatch {
+        pub bone: crate::data::String,
+        pub min: [f32; 3],
+        pub max: [f32; 3],
+        pub direction: [f32; 3],
+    }
 }
 
 crate::data! {
@@ -2900,6 +2919,28 @@ pub struct Target {
     pub body: u64,
     pub pos: BlockPos,
     pub state: u32,
+}
+
+crate::data! {
+    /// Directional protection while using an item. Arc is degrees; wear applies only above
+    /// the threshold, as base + floor(damage * factor).
+    pub struct Blocking {
+        pub delay_ticks: u32,
+        pub arc: f32,
+        pub wear_threshold: f32,
+        pub wear_base: u32,
+        pub wear_factor: f32,
+    }
+}
+
+crate::data! {
+    /// A projectile model retained in an item. Position and direction are in model pixels.
+    pub struct EmbeddedProjectile {
+        pub kind: crate::data::String,
+        pub bone: crate::data::String,
+        pub position: [f32; 3],
+        pub direction: [f32; 3],
+    }
 }
 
 crate::data! {

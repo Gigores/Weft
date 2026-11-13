@@ -2,6 +2,12 @@
 //! is a weather's. The builders' methods set them; `r.edit(&X).set(&comps::..)` changes one of
 //! another mod's, and the engine reads them when the game loads (absent: its default).
 
+pub static BLOCKS_ATTACKS: crate::Component<crate::Blocking> = crate::Component::named(crate::abi::comp::BLOCKS_ATTACKS);
+pub static DISABLE_BLOCKING: crate::Component<f32> = crate::Component::named(crate::abi::comp::DISABLE_BLOCKING);
+pub static CATCH_PROJECTILES: crate::Component<crate::ProjectileCatch> = crate::Component::named(crate::abi::comp::CATCH_PROJECTILES);
+pub static EMBEDDED_PROJECTILES: crate::Component<Vec<crate::EmbeddedProjectile>> =
+    crate::Component::named(crate::abi::comp::EMBEDDED_PROJECTILES);
+
 /// What a weather is made of: rain's look and flags where nothing is set.
 pub mod weather {
     use crate::abi::comp::weather as w;
@@ -74,6 +80,7 @@ pub mod damage_cause {
     use crate::kind::DamageCause;
     use crate::{Component, Tag, Text};
     pub static BYPASSES_ARMOR: Tag<DamageCause> = Tag::named(d::BYPASSES_ARMOR);
+    pub static BYPASSES_BLOCKING: Tag<DamageCause> = Tag::named(d::BYPASSES_BLOCKING);
     pub static PIERCES_INVULNERABLE: Tag<DamageCause> = Tag::named(d::PIERCES_INVULNERABLE);
     pub static IGNORES_COOLDOWN: Tag<DamageCause> = Tag::named(d::IGNORES_COOLDOWN);
     pub static BURNING: Tag<DamageCause> = Tag::named(d::BURNING);

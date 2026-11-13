@@ -370,3 +370,4 @@ storage.base.sort = Sort
 storage.base.deposit = Put away nearby
 storage.base.trash = Trash
     Hotkey: {key:core:trash}
+item.base.shield = Shield

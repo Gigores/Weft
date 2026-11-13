@@ -32,6 +32,11 @@ static INGREDIENTS: CreativeTab = CreativeTab::named("base:ingredients");
 /// Called once at startup, in parallel with the other mods: register everything here.
 /// Nothing exists in the world yet, you only describe what your mod adds.
 fn init(r: &mut Registry) {
+    // An item may protect its user in either hand while it is being used:
+    // r.item(Item::generated("guard".into())).max_stack(1).durability(200)
+    //     .use_until_released()
+    //     .set(&comps::BLOCKS_ATTACKS, Blocking { delay_ticks: 0, arc: 180.0,
+    //         wear_threshold: 3.0, wear_base: 1, wear_factor: 1.0 });
     config(r);
     blocks(r);
     items(r);

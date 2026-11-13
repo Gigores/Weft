@@ -521,10 +521,15 @@ impl Dim {
                 put(comps, attributes, &bytes);
             }
             if let Some(inv) = inventories.get(&e.id) {
+                use crate::net::codec::Wire;
                 let item = crate::content::in_main_hand(c, e.kind, inv, e.selected);
-                put(comps, held, &(if item.is_empty() { 0 } else { item.item }).to_le_bytes());
+                let mut bytes = crate::net::codec::W::default();
+                crate::stack::for_client(item).put(&mut bytes);
+                put(comps, held, &bytes.0);
                 let off = crate::content::in_off_hand(c, e.kind, inv);
-                put(comps, off_held, &(if off.is_empty() { 0 } else { off.item }).to_le_bytes());
+                let mut bytes = crate::net::codec::W::default();
+                crate::stack::for_client(off).put(&mut bytes);
+                put(comps, off_held, &bytes.0);
             }
             let use_value = e.using.0 | (e.using.1 as u32) << 31;
             put(comps, using, &use_value.to_le_bytes());
@@ -1618,18 +1623,26 @@ impl Dim {
     /// it is still recovering (`question::RECOVERING`), the `DAMAGE` chain, knockback
     /// (`chain::KNOCKBACK`), then the `HURT` event.
     pub fn damage(&mut self, c: &'static Content, id: u64, d: &abi::Damage) -> bool {
+        matches!(self.damage_outcome(c, id, d), super::guard::DamageOutcome::Hurt)
+    }
+
+    pub(super) fn damage_outcome(&mut self, c: &'static Content, id: u64, d: &abi::Damage) -> super::guard::DamageOutcome {
         let (amount, source, cause) = (d.amount, d.source, d.cause);
-        let Some(e) = self.entities.get(id) else { return false };
+        let Some(e) = self.entities.get(id) else { return super::guard::DamageOutcome::Missed };
         let k = &c.game.entities[e.kind as usize];
         if !e.alive() || amount.is_nan() {
-            return false;
+            return super::guard::DamageOutcome::Missed;
         }
         if amount < 0.0 {
-            return self.heal(c, id, -amount, source, cause);
+            return if self.heal(c, id, -amount, source, cause) {
+                super::guard::DamageOutcome::Hurt
+            } else {
+                super::guard::DamageOutcome::Missed
+            };
         }
         let Some(def) = c.game.damage_causes.get(cause as usize) else {
             crate::host::misuse("damage", || format!("no damage cause {cause}"));
-            return false;
+            return super::guard::DamageOutcome::Missed;
         };
         let q = abi::Query {
             entity: id,
@@ -1643,7 +1656,10 @@ impl Dim {
             ..abi::Query::DEFAULT
         };
         if !self.ask(c, abi::action::HURT, &q) {
-            return false;
+            return super::guard::DamageOutcome::Missed;
+        }
+        if let Some(slot) = self.block_damage(c, id, d) {
+            return super::guard::DamageOutcome::Blocked(slot);
         }
         let recovering = self.ask_or(c, abi::question::RECOVERING, &q, false);
         let explain = crate::log::on(crate::log::Channel::Modifiers, log::Level::Debug);
@@ -1655,7 +1671,7 @@ impl Dim {
         let last = self.entities.get(id).map_or(0.0, |e| e.last_hurt);
         let landing = if recovering { amount - last } else { amount };
         if landing <= 0.0 {
-            return false;
+            return super::guard::DamageOutcome::Missed;
         }
         let amount = landing;
         let direct = if d.direct != 0 { d.direct } else { source };
@@ -1697,7 +1713,7 @@ impl Dim {
             let strength = self.compute(c, abi::chain::KNOCKBACK, 0.4, &q, false);
             self.knock(c, id, way * strength);
         }
-        let Some(e) = self.entities.get_mut(id) else { return false };
+        let Some(e) = self.entities.get_mut(id) else { return super::guard::DamageOutcome::Missed };
         e.health = if spared { 1.0 } else { (e.health - amount).max(0.0) };
         e.last_hurt = if recovering { last + amount } else { amount };
         if !recovering {
@@ -1743,7 +1759,7 @@ impl Dim {
                 self.entities.remove(id, abi::removal::DIED);
             }
         }
-        true
+        super::guard::DamageOutcome::Hurt
     }
 
     /// `amount` more health up to the most it has, through the `HEAL` chain; the dead stay dead.

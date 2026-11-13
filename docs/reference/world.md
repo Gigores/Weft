@@ -91,12 +91,12 @@ How a block's model is turned (`State::orientation`, one of `abi::Turn`'s 24). A
 
 What a ray looks for (`World::raycast`): blocks unless said otherwise.
 
-- <a id="Ray-blocks"></a>`.blocks() -> Ray` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2408)
-- <a id="Ray-entities_only"></a>`.entities_only() -> Ray`: Only what can be hit: bodies, not dropped stacks, the dead or spectators. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2412)
-- <a id="Ray-liquids"></a>`.liquids(mut self) -> Ray`: Liquids stop it too. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2416)
-- <a id="Ray-entities"></a>`.entities(mut self) -> Ray` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2420)
-- <a id="Ray-solid"></a>`.solid(mut self) -> Ray`: Blocks by what stops a body, not what is aimed at: through grass, as an arrow flies. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2425)
-- <a id="Ray-skip"></a>`.skip(id: u64) -> Ray`: It goes through `id` (the one looking, the shooter). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2430)
+- <a id="Ray-blocks"></a>`.blocks() -> Ray` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2411)
+- <a id="Ray-entities_only"></a>`.entities_only() -> Ray`: Only what can be hit: bodies, not dropped stacks, the dead or spectators. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2415)
+- <a id="Ray-liquids"></a>`.liquids(mut self) -> Ray`: Liquids stop it too. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2419)
+- <a id="Ray-entities"></a>`.entities(mut self) -> Ray` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2423)
+- <a id="Ray-solid"></a>`.solid(mut self) -> Ray`: Blocks by what stops a body, not what is aimed at: through grass, as an arrow flies. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2428)
+- <a id="Ray-skip"></a>`.skip(id: u64) -> Ray`: It goes through `id` (the one looking, the shooter). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2433)
 
 ## Shape
 

@@ -280,13 +280,38 @@ struct Switches {
     run_only: Vec<String>,
 }
 
+impl Switches {
+    fn save(&self) {
+        let saved: Vec<&str> = self
+            .wanted
+            .iter()
+            .filter(|w| !self.run_only.contains(w))
+            .map(String::as_str)
+            .collect();
+        let result = self
+            .file
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&self.file, saved.join("\n")));
+        if let Err(e) = result {
+            log::error!("{}: {e}", self.file.display());
+        }
+    }
+}
+
 static OFF: OnceLock<Vec<ModMeta>> = OnceLock::new();
+static NEWLY_DISABLED: OnceLock<Vec<String>> = OnceLock::new();
 static LOAD_ERRORS: OnceLock<rustc_hash::FxHashMap<String, String>> = OnceLock::new();
 static SWITCHES: parking_lot::Mutex<Option<Switches>> = parking_lot::Mutex::new(None);
 
 /// Mods found but not running, for the mods screen: turned off, or needing one that is.
 pub fn turned_off() -> &'static [ModMeta] {
     OFF.get().map_or(&[], |v| v.as_slice())
+}
+
+/// Mods automatically disabled on this start, excluding ones already disabled through dependencies.
+pub fn newly_disabled() -> &'static [String] {
+    NEWLY_DISABLED.get().map_or(&[], |v| v.as_slice())
 }
 
 pub fn load_error(id: &str) -> Option<&'static str> {
@@ -360,18 +385,22 @@ pub fn toggle(id: &str) {
         enable(id, &mut s.wanted, &dependencies);
     }
     s.wanted.sort();
-    if let Some(d) = s.file.parent() {
-        let _ = std::fs::create_dir_all(d);
-    }
-    let saved: Vec<&str> = s
-        .wanted
-        .iter()
-        .filter(|w| !s.run_only.contains(w))
-        .map(String::as_str)
-        .collect();
-    if let Err(e) = std::fs::write(&s.file, saved.join("\n")) {
-        log::error!("{}: {e}", s.file.display());
-    }
+    s.save();
+}
+
+fn automatically_disabled(off: &[ModMeta], wanted: &[String]) -> Vec<String> {
+    // Missing dependencies cause automatic disabling; only explicit switches suppress the notice.
+    let deps = |id: &str| {
+        Some(
+            off.iter()
+                .find(|m| m.id == id)
+                .map_or(Vec::new(), |m| m.deps.clone()),
+        )
+    };
+    off.iter()
+        .filter(|m| runs(&m.id, wanted, &deps))
+        .map(|m| m.id.clone())
+        .collect()
 }
 
 /// Something was switched that a restart would bring in.
@@ -394,11 +423,14 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect();
+    let run_only = also_off
+        .iter()
+        .filter(|id| !wanted.contains(id))
+        .cloned()
+        .collect();
     wanted.extend(also_off.iter().cloned());
     wanted.sort();
     wanted.dedup();
-    *SWITCHES.lock() =
-        Some(Switches { file: off_file.to_path_buf(), at_start: wanted.clone(), wanted: wanted.clone(), run_only: also_off.to_vec() });
     let mut off: Vec<ModMeta> = Vec::new();
     let mut errors = rustc_hash::FxHashMap::default();
     let shadow = cache.join("mods");
@@ -505,6 +537,17 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
         });
     }
     off.sort_by(|a, b| a.id.cmp(&b.id));
+    let newly_disabled = automatically_disabled(&off, &wanted);
+    wanted.extend(newly_disabled.iter().cloned());
+    wanted.sort();
+    wanted.dedup();
+    let switches = Switches { file: off_file.to_path_buf(), at_start: wanted.clone(), wanted, run_only };
+    if !newly_disabled.is_empty() {
+        log::info!("automatically disabled mods: {}", newly_disabled.join(", "));
+        switches.save();
+    }
+    *SWITCHES.lock() = Some(switches);
+    let _ = NEWLY_DISABLED.set(newly_disabled);
     let _ = OFF.set(off);
     let _ = LOAD_ERRORS.set(errors);
     let _ = NAMES.set(mods.iter().map(|m| m.id.clone()).collect());
@@ -603,6 +646,37 @@ mod tests {
         enable("top", &mut disabled, &deps);
         assert_eq!(disabled, off(&["unrelated"]));
         assert!(runs("top", &disabled, &deps));
+
+        let off_mods: Vec<ModMeta> = [
+            ("base", vec![]),
+            ("middle", vec!["base"]),
+            ("top", vec!["middle", "base"]),
+            ("broken", vec![]),
+            ("addon", vec!["broken"]),
+            ("absent_dep", vec!["absent"]),
+            ("cycle", vec!["cycle"]),
+        ]
+        .into_iter()
+        .map(|(id, deps)| ModMeta {
+            id: id.to_string(),
+            version: String::new(),
+            deps: off(&deps),
+            after: Vec::new(),
+            before: Vec::new(),
+            order: 0,
+            assets: PathBuf::new(),
+            source: PathBuf::new(),
+        })
+        .collect();
+        let wanted = off(&["base", "cycle"]);
+        let automatic = automatically_disabled(&off_mods, &wanted);
+        assert_eq!(automatic, off(&["broken", "addon", "absent_dep"]));
+        let mut saved = wanted.clone();
+        saved.extend(automatic);
+        assert!(automatically_disabled(&off_mods, &saved).is_empty());
+        enable("top", &mut saved, &deps);
+        assert!(runs("top", &saved, &deps));
+        assert_eq!(saved, off(&["cycle", "broken", "addon", "absent_dep"]));
     }
 
     /// A player's copy of a mod that also came with the game: theirs is the one, still unpacked.

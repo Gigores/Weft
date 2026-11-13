@@ -6,6 +6,7 @@ use crate::runner::{R, T};
 
 /// Screens open by name and lay out inside the window: the engine's menus and a mod's own.
 pub async fn screens(t: T) -> R {
+    t.c().menu_open(&screens::TITLE);
     t.screen("core:title").await?;
     t.shot("title").await?;
     t.laid_out(&[

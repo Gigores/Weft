@@ -8,6 +8,7 @@ mod looks;
 mod probe;
 pub mod redstone;
 mod scene;
+mod shields;
 mod sync;
 mod ui;
 mod visual;
@@ -75,6 +76,7 @@ pub fn all() -> Vec<TestDef> {
         gameplay::projectiles,
         extend::steps_in_phases,
         gameplay::bow_and_keys,
+        shields::shields,
         gameplay::permissions,
         gameplay::armor,
         gameplay::slot_accepts,

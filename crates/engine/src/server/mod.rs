@@ -9,6 +9,7 @@ pub mod energy;
 pub mod entity;
 pub(crate) mod extend;
 pub mod forced;
+mod guard;
 pub mod holder;
 mod liquid;
 mod load;
