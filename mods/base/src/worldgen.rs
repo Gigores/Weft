@@ -293,6 +293,7 @@ fn place_birch(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32
     let height = 6u16 + (rng.next() as u16) % 4u16;
     let skeleton = place_trunk(pos, rng, put, height, &BIRCH_LOG, &BIRCH_WOOD, true, false);
     place_foliage(&skeleton, rng, put, height, BIRCH_LEAVES.id());
+    decorate_trunk(&skeleton, rng, put);
 }
 fn place_spruce(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
