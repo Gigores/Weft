@@ -63,9 +63,10 @@ pub static BUSH_STEM: Block = Block::named("bush_stem");
 pub static RASPBERRY_LEAVES: Block = Block::named("raspberry_leaves");
 pub static SNOWBERRY_LEAVES: Block = Block::named("snowberry_leaves");
 pub static MOSS: Block = Block::named("moss");
-pub static PORCINI_MUSHROOM: Block = Block::named("porcini");
-pub static CHANTERELLE_MUSHROOM: Block = Block::named("chanterelle");
-pub static TOADSTOOL_MUSHROOM: Block = Block::named("toadstool");
+pub static PORCINI_MUSHROOM: Block = Block::named("porcini_mushroom");
+pub static CHANTERELLE_MUSHROOM: Block = Block::named("chanterelle_mushroom");
+pub static TOADSTOOL_MUSHROOM: Block = Block::named("toadstool_mushroom");
+pub static DRYADS_SADDLE_MUSHROOM: Block = Block::named("dryads_saddle_mushroom");
 
 static TILLABLE: Tag = Tag::named("tillable");
 
@@ -183,6 +184,7 @@ fn pick_berries(u: &mut Use, berry: &'static Item) -> bool {
     w.spawn_item(block_center(p), berry.stack(1));
     true
 }
+
 
 /// Sand and gravel: with nothing under them they fall as an entity and land as a block.
 pub fn register(r: &mut Registry) {
@@ -656,6 +658,40 @@ pub fn register(r: &mut Registry) {
         .needs_below("")
         .plant()
         .texture("toadstool_mushroom")
+        .tab(&crate::tabs::NATURAL);
+    let uv = [0.1, 0.1, 15.9, 7.9];
+    let flipped_v = [uv[0], uv[3], uv[2], uv[1]];
+    let top_uv = [0.1, 0.1, 15.9, 7.9];
+    let bottom_uv = [0.1, 8.1, 15.9, 15.9];
+    fn flip_v(uv: [f32; 4]) -> [f32; 4] {
+        [uv[0], uv[3], uv[2], uv[1]]
+    }
+    fn shelf_faces(top: [f32; 4], bottom: [f32; 4]) -> [(&'static str, [f32; 4]); 6] {
+        let tex = "dryads_saddle_mushroom";
+        let none = (tex, UV_NO_FACE);
+        [none, none, (tex, bottom), (tex, top), none, none]
+    }
+    r.block(&DRYADS_SADDLE_MUSHROOM)
+        .sound_group("grass")
+        .shares_cell_with("#water")
+        .hardness(0.1)
+        .texture("dryads_saddle_mushroom")
+        .facing(Facings::HORIZONTAL, Toward::Face)
+        .states(|_p, s| s.needs(Dir::South, ""))
+        .model_box_faces(
+            [0.0, 12.0, 8.0],
+            [16.0, 12.2, 16.0],
+            shelf_faces(top_uv, flip_v(top_uv)), // upper: top half both sides
+        )
+        .tilted([8.0, 12.0, 16.0], Dir::East, -18.0)
+        .model_box_faces(
+            [0.0, 7.0, 8.0],
+            [16.0, 7.2, 16.0],
+            shelf_faces(bottom_uv, flip_v(bottom_uv)), // lower: bottom half both sides
+        )
+        .tilted([8.0, 7.0, 16.0], Dir::East, -24.0)
+        .not_solid()
+        .hitbox([0.0, 6.0, 8.0], [16.0, 13.0, 16.0])
         .tab(&crate::tabs::NATURAL);
 
     r.shapes_of("hollow_log", "#logs", "_hollow")
