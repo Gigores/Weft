@@ -46,6 +46,10 @@ impl BuildCx<'_> {
 pub trait Screen: std::any::Any {
     fn name(&self) -> &str;
     fn build(&mut self, ui: &mut Ui, cx: &BuildCx);
+    /// Draw the screen below this one too; input still goes only to the top screen.
+    fn overlays(&self) -> bool {
+        false
+    }
     /// Single player stops the server tick while this is open.
     fn pauses(&self) -> bool {
         false
@@ -127,6 +131,7 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         "core:debug_options" => Box::new(crate::hud_editor::DebugOptions),
         "core:tags" => Box::new(crate::game_screens::TagList::default()),
         "core:mods" => Box::new(crate::mods_screen::ModsScreen::default()),
+        "core:disabled_mods" => Box::new(crate::mods_screen::DisabledMods),
         "core:editor" => Box::new(crate::editor::Editor::default()),
         "core:profile" => Box::new(Profile::default()),
         _ => return None,

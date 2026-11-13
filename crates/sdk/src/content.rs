@@ -812,6 +812,10 @@ impl DamageCauseBuilder<'_> {
     pub fn bypasses_armor(self) -> Self {
         self.tag(abi::comp::damage_cause::BYPASSES_ARMOR)
     }
+    /// Held items cannot block it.
+    pub fn bypasses_blocking(self) -> Self {
+        self.tag(abi::comp::damage_cause::BYPASSES_BLOCKING)
+    }
     /// Hurts invulnerable entities and players outside survival too.
     pub fn pierces_invulnerable(self) -> Self {
         self.tag(abi::comp::damage_cause::PIERCES_INVULNERABLE)

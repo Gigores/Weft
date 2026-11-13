@@ -1286,9 +1286,9 @@ pub fn item_tooltip(lang: &Lang, input: &crate::input::Input, stack: weft_abi::I
     }
     if crate::settings::advanced_tooltips() {
         let id = &c.items[stack.item as usize].name;
-        line("{0}", &[text::Arg::Text(id.clone())], None, &mut out);
+        line("{color:tooltip_dim}{0}{/}", &[text::Arg::Text(id.clone())], None, &mut out);
         if let Some((ns, _)) = id.split_once(':') {
-            line("{0}", &[text::Arg::Name(text::Name::Mod(ns.to_string()))], None, &mut out);
+            line("{#5555ff}{0}{/}", &[text::Arg::Name(text::Name::Mod(ns.to_string()))], None, &mut out);
         }
     }
     out

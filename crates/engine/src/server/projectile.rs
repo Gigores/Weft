@@ -173,7 +173,17 @@ impl Dim {
                     let stuck = p
                         .sticks
                         .then(|| self.stuck_at(StuckIn::Entity(h.entity), embedded, yaw));
-                    if self.damage(c, h.entity, &d) {
+                    let outcome = self.damage_outcome(c, h.entity, &d);
+                    if let super::guard::DamageOutcome::Blocked(slot) = outcome {
+                        if p.sticks {
+                            self.catch_projectile(c, h.entity, slot, id);
+                        }
+                        if let Some(e) = self.entities.get_mut(id) {
+                            e.gone(abi::removal::HIT);
+                        }
+                        after = None;
+                        to = point;
+                    } else if matches!(outcome, super::guard::DamageOutcome::Hurt) {
                         // In their box a little way, going about with them, as vanilla's arrows.
                         to = embedded;
                         if let Some(e) = self.entities.get_mut(id) {

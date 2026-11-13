@@ -111,6 +111,7 @@ pub struct ClientEntity {
     pub held: u32,
     /// And in the other hand.
     pub off_held: u32,
+    pub held_stacks: [ItemStack; 2],
     /// Into using what it holds, 0..1 (seconds for what is used until let go, `endless_use`),
     /// and whether with the other hand.
     pub using: Option<(f32, bool)>,
@@ -365,6 +366,7 @@ impl ClientEntity {
             worn: Vec::new(),
             held: 0,
             off_held: 0,
+            held_stacks: [ItemStack::EMPTY; 2],
             using: None,
             use_ticks: 0.0,
             stuck: None,
@@ -2546,7 +2548,10 @@ impl Client {
         } else if comp == shown {
             e.shown = words(bytes).map(u32::from_le_bytes).collect();
         } else if comp == held {
-            e.held = words(bytes).next().map_or(0, u32::from_le_bytes);
+            use crate::net::codec::Wire;
+            let stack = ItemStack::get(&mut crate::net::codec::R(bytes)).unwrap_or_default();
+            e.held = stack.item;
+            e.held_stacks[0] = stack;
         } else if comp == swaps {
             e.swaps = parse_swaps(bytes);
         } else if comp == looping {
@@ -2556,7 +2561,10 @@ impl Client {
                 e.action = Some((name.into_owned(), ((arriving - e.born).max(0.0) / crate::world::TPS as f64) as f32, true));
             }
         } else if comp == off_held {
-            e.off_held = words(bytes).next().map_or(0, u32::from_le_bytes);
+            use crate::net::codec::Wire;
+            let stack = ItemStack::get(&mut crate::net::codec::R(bytes)).unwrap_or_default();
+            e.off_held = stack.item;
+            e.held_stacks[1] = stack;
         } else if comp == using {
             let v = words(bytes).next().map_or(0, u32::from_le_bytes);
             let ticks = (v & !(1 << 31)) as f32;

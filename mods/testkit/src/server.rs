@@ -1274,6 +1274,21 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok((w.damage(int(cmd, "id")?, Damage::new(amount, abi::damage_cause::ATTACK).by(player)) as u32).to_string())
     }),
     ("pose", "", |w, _, player, _| Ok(w.entity(player).map_or(0, |e| e.pose).to_string())),
+    ("hit_from", "<source:int> <amount:float> <weapon:item> [cause:int] [hand:word(main,off)] [knock:pos]", |w, cmd, player, _| {
+        let amount = cmd.float("amount").ok_or("missing amount")? as f32;
+        let cause = int(cmd, "cause").unwrap_or(abi::damage_cause::ATTACK);
+        let weapon = ItemStack::new(id(cmd, "weapon")?, 1);
+        if let Some(hand) = cmd.text("hand") {
+            w.use_item(player, hand == "off");
+        }
+        let mut damage = Damage::new(amount, cause)
+            .by(int(cmd, "source")?)
+            .with(weapon);
+        if let Some(knock) = cmd.pos("knock") {
+            damage = damage.knock(knock);
+        }
+        Ok((w.damage(player, damage) as u32).to_string())
+    }),
     ("hurt_me", "<amount:float>", |w, cmd, player, _| {
         let amount = cmd.float("amount").ok_or("missing amount")? as f32;
         Ok((w.damage(player, Damage::new(amount, abi::damage_cause::ATTACK)) as u32).to_string())

@@ -29,8 +29,8 @@ mod view;
 mod world;
 
 pub use abi::{
-    BlockPos, EntitySize, Holder, ItemStack, OpenMenu, Rect, UV_FROM_BOX, UV_NO_FACE, Vec3, Who, hitbox_part, hitbox_part_id, hud_anchor,
-    tool_tier,
+    BlockPos, Blocking, EmbeddedProjectile, EntitySize, Holder, ItemStack, OpenMenu, ProjectileCatch, Rect, UV_FROM_BOX, UV_NO_FACE, Vec3,
+    Who, hitbox_part, hitbox_part_id, hud_anchor, tool_tier,
 };
 pub use camera::{Shot, cameras, easing, shot};
 pub use client::{Channel, Client, Hand, Packet, Payload, keys, launch_option, screens};

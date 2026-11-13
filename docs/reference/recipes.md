@@ -47,8 +47,8 @@ A recipe kind being registered; sent when dropped.
 
 One recipe of a kind, found by `recipe_find` (or shown by a kind's `layout`).
 
-- <a id="RecipeView-time"></a>`.time() -> u32`: Its time in ticks. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2139)
-- <a id="RecipeView-outputs"></a>`.outputs() -> Vec<(ItemStack, f32)>`: Its results with their chances; a liquid's is its item by the millibucket. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2143)
-- <a id="RecipeView-roll"></a>`.roll(w: &crate::World) -> Vec<ItemStack>`: What else one run of it gives this time, its pools rolled. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2153)
-- <a id="RecipeView-value"></a>`.value<T: Value, K>(comp: &Component<T, K>) -> Option<T>`: A value the recipe carries (`r.shaped(..).set(&COMP, v)`): its entry's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2160)
-- <a id="RecipeView-consume"></a>`.consume(stacks: &mut [ItemStack]) -> bool`: Takes its inputs out of `stacks` (the ones `recipe_find` was given); false, and nothing taken, if they are not all there. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2165)
+- <a id="RecipeView-time"></a>`.time() -> u32`: Its time in ticks. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2142)
+- <a id="RecipeView-outputs"></a>`.outputs() -> Vec<(ItemStack, f32)>`: Its results with their chances; a liquid's is its item by the millibucket. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2146)
+- <a id="RecipeView-roll"></a>`.roll(w: &crate::World) -> Vec<ItemStack>`: What else one run of it gives this time, its pools rolled. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2156)
+- <a id="RecipeView-value"></a>`.value<T: Value, K>(comp: &Component<T, K>) -> Option<T>`: A value the recipe carries (`r.shaped(..).set(&COMP, v)`): its entry's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2163)
+- <a id="RecipeView-consume"></a>`.consume(stacks: &mut [ItemStack]) -> bool`: Takes its inputs out of `stacks` (the ones `recipe_find` was given); false, and nothing taken, if they are not all there. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2168)

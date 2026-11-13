@@ -36,6 +36,21 @@ including its mount or moving platform; `velocity` alone remains an absolute spe
 
 ## Coming, going and getting hurt
 
+An item with `comps::BLOCKS_ATTACKS` protects its user while held in use. Pair
+`.use_until_released()` with a `Blocking` value: `delay_ticks`, the frontal `arc` in
+degrees, and `wear_threshold`, `wear_base` and `wear_factor` for durability loss.
+Blocked attacks cause no health loss or knockback. The
+`damage.bypasses_blocking` tag on a damage cause skips this protection independently
+of armor; `DamageCauseBuilder::bypasses_blocking()` sets it. A weapon's
+`comps::DISABLE_BLOCKING` value disables blocking for that many seconds. The base
+shield activates immediately, has a 180-degree arc, and axes disable it for five seconds.
+
+`comps::CATCH_PROJECTILES` takes a `ProjectileCatch`: a model bone, bounds in its
+pixels and an incoming direction. Sticking projectiles blocked by that item become
+`comps::EMBEDDED_PROJECTILES` stack data. They stay with the item through hand changes,
+drops and saves, and follow its model's bone. Other clients receive held stack data
+through the normal entity fields. Up to 32 projectile models are retained per stack.
+
 - comings and goings: `actions::SPAWN` asks before anyone sees a new one (`cause`: `spawn_cause::NATURAL`, `EGG`, `COMMAND`, `MOD`, set with `Spawn::new().cause(..)`, and `DROP` for a dropped stack) and tells after: a zombie in random armor is that event. `ENTITY_REMOVED` tells when one leaves the world and why (`removal::DIED`, `DESPAWNED`, `UNLOADED`, `PICKED_UP`, `HIT` ...): a boss bar gone with its boss. Moving blocks and block entities are blocks, so their comings and goings are the blocks' events, not these. What despawns far from players is its category's; `w.entity_modify(id).persistent(true)` keeps one, and so does naming it or it picking something up, as vanilla's
 - `on_hurt(|w, hurt| ..)`, `on_died(|w, death| ..)`: `actions::HURT` and `actions::DIE` for this kind. The damage itself is the `chain::DAMAGE` chain and `actions::HURT` can stop it, for any kind, yours or not. Every hit has a cause (`damage_causes::FALL`, `LAVA`, `PROJECTILE` ...); your own is `r.damage_cause(&RADIATION).bypasses_armor().death_message("death.mymod.radiation")`, and a kind tagged `immune/fall` or `immune/mymod:radiation` takes none of it. From code a hurt is described: `w.damage(id, Damage::new(4.0, &RADIATION).by(who).through(arrow).knock(dir))`, every step seeing who, through what (`direct`), with what and whether it crits. Healing is the same call with a negative amount (`w.heal` is that), going through `chain::HEAL` and the `ENTITY_HEALED` event instead
 

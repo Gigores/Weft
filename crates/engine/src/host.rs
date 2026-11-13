@@ -1984,7 +1984,7 @@ unsafe extern "C" fn find_event(name: Str, schema: Str) -> u32 {
         log::error!("event {name} is '{}' but a mod emits '{schema}'", def.schema);
         return u32::MAX;
     }
-    if def.handlers.is_empty() { u32::MAX } else { id }
+    id
 }
 
 unsafe extern "C" fn emit(w: *mut abi::WorldCtx, event: u32, value: abi::Slice<u8>) {

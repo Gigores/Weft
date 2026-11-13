@@ -654,8 +654,8 @@ static LAYERS: Tag = Tag::named(abi::comp::LAYERS);
 
 pub trait StackData: Sized {
     /// This stack with its own value of `c` set.
-    fn with<T: Value>(self, c: &Component<T>, v: T) -> Self;
-    fn without<T: Value>(self, c: &Component<T>) -> Self;
+    fn with<T: Data>(self, c: &Component<T>, v: T) -> Self;
+    fn without<T: Data>(self, c: &Component<T>) -> Self;
     /// `count` less, empty when nothing is left.
     fn shrink(self, n: u32) -> Self;
     fn grow(self, n: u32) -> Self;
@@ -736,11 +736,11 @@ impl Layers {
 const STACK_BYTES: usize = 12;
 
 impl StackData for ItemStack {
-    fn with<T: Value>(self, c: &Component<T>, v: T) -> Self {
-        let b = value_bytes(&v);
+    fn with<T: Data>(self, c: &Component<T>, v: T) -> Self {
+        let b = abi::data::bytes_of(&v);
         ItemStack { data: unsafe { (host().stack_with)(self.data, c.id(), abi::Slice::new(&b), 0) }, ..self }
     }
-    fn without<T: Value>(self, c: &Component<T>) -> Self {
+    fn without<T: Data>(self, c: &Component<T>) -> Self {
         ItemStack { data: unsafe { (host().stack_with)(self.data, c.id(), abi::Slice::EMPTY, 1) }, ..self }
     }
     fn shrink(self, n: u32) -> Self {

@@ -270,6 +270,53 @@ fn request_install(c: &mut Ctx, id: &str, dir: &std::path::Path) {
         .push(Request::Open(Box::new(InstallMods { plan, dir: dir.to_path_buf() })));
 }
 
+pub struct DisabledMods;
+
+impl Screen for DisabledMods {
+    fn name(&self) -> &str {
+        "core:disabled_mods"
+    }
+
+    fn draws_close(&self) -> bool {
+        true
+    }
+
+    fn overlays(&self) -> bool {
+        true
+    }
+
+    fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
+        ui.root_style(Style::default().stretch());
+        ui.panel("overlay", Style::default().grow().center().pad(12.0), |ui| {
+            ui.panel(
+                "panel",
+                Style::default()
+                    .w(320.0)
+                    .pad(12.0)
+                    .gap(10.0)
+                    .align(Align::Center),
+                |ui| {
+                    crate::screens::title(ui, cx, "mods.disabled_title");
+                    label(ui, cx, "mods.disabled_hint", &[], "default");
+                    let style = Style { max_h: (cx.size.y - 160.0).max(40.0), ..Style::default().w(296.0).pad(6.0).gap(4.0).scroll() };
+                    ui.panel("well", style, |ui| {
+                        for id in crate::modloader::newly_disabled() {
+                            ui.text(mod_name(cx.lang, id), "default");
+                        }
+                    });
+                    ui.container(Style::row().gap(8.0), |ui| {
+                        crate::screens::button(ui, cx, "mods.title", &[], 120.0, |c| {
+                            c.requests.push(Request::Close);
+                            c.requests.push(Request::Screen("core:mods".into()));
+                        });
+                        crate::screens::button(ui, cx, "menu.done", &[], 120.0, |c| c.requests.push(Request::Close));
+                    });
+                },
+            );
+        });
+    }
+}
+
 struct InstallMods {
     plan: Result<Vec<IndexMod>, String>,
     dir: PathBuf,
@@ -480,10 +527,6 @@ impl Screen for ModsScreen {
                                 *selected = !self.unverified.get();
                             }
                             ui.set_id(filter, "mods_verified_filter");
-                            if !self.unverified.get() && hidden > 0 {
-                                let n = ui.text(text::plain(&format!("+{hidden}")), "count");
-                                ui.nodes[n].tooltip = Some(cx.t("mods.showing_verified", &[Arg::Int(hidden as i64)]));
-                            }
                             let to = cache.clone();
                             let b = icon_button(ui, cx, "button", "icon_refresh", "mods.refresh", &[], move |c| {
                                 mod_index::refresh(&to);

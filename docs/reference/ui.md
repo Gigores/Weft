@@ -32,9 +32,9 @@ Read-only client state for bindings.
 A HUD element being registered (`Registry::hud_element`).
 
 - <a id="HudElementBuilder-rebuild_when"></a>`.rebuild_when(f: impl Fn(&crate::ClientView) -> u64 + Send + Sync + 'static)`: Rebuilds the layout when this revision changes. Keep changing text and numbers in bindings; use this for a different set of widgets, such as a new inspected block. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2043)
-- <a id="HudElementBuilder-anchor"></a>`.anchor(anchor: &str)`: Where it sits (`hud_anchor::*`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2049)
-- <a id="HudElementBuilder-order"></a>`.order(order: i32)`: 0 sits nearest the anchor's edge. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2053)
-- <a id="HudElementBuilder-ui"></a>`.ui(f: impl Fn(&mut Ui) + Send + Sync + 'static)`: What it shows. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2057)
+- <a id="HudElementBuilder-anchor"></a>`.anchor(anchor: &str)`: Where it sits (`hud_anchor::*`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2052)
+- <a id="HudElementBuilder-order"></a>`.order(order: i32)`: 0 sits nearest the anchor's edge. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2056)
+- <a id="HudElementBuilder-ui"></a>`.ui(f: impl Fn(&mut Ui) + Send + Sync + 'static)`: What it shows. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2060)
 
 ## Icons
 
@@ -141,5 +141,5 @@ How a part is laid out and shown: the same properties the engine's own screens u
 
 A word set being registered or added to (`Registry::word_set`).
 
-- <a id="WordSetBuilder-words"></a>`.words(words: &[&str])` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2075)
-- <a id="WordSetBuilder-remove_word"></a>`.remove_word(word: &str)`: Takes a word out (another mod's, in an edit). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2081)
+- <a id="WordSetBuilder-words"></a>`.words(words: &[&str])` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2078)
+- <a id="WordSetBuilder-remove_word"></a>`.remove_word(word: &str)`: Takes a word out (another mod's, in an edit). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2084)

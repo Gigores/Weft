@@ -247,6 +247,9 @@ The mod itself uses the same crate, so there's one declaration of everything, an
 
 ## Where to go next
 
+Directional shields use `comps::BLOCKS_ATTACKS` and can keep projectiles in their
+stack data; see [entities](entities.md#coming-going-and-getting-hurt).
+
 For HUD information about the crosshair's target, see `ClientView::target` and the target panel
 extension in the [UI guide](ui.md#hud). A projectile's relative launch speed uses
 `Spawn::inherit_velocity`, described in the [entities guide](entities.md#projectiles).
