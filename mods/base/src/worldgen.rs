@@ -78,6 +78,7 @@ pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
 struct TreeSkeleton {
     height: i32,
     top: (i32, i32, i32),
+    bottom: (i32, i32, i32),
     branch_tips: Vec<(i32, i32, i32)>,
 }
 // TODO
@@ -105,6 +106,15 @@ struct TreeSkeleton {
 //     const ALL = [&YOUNG, &MATURE, &OLD];
 // }
 
+const DIRECTIONS: [(i32, i32, &str); 4] = [
+    (1, 0, "east"),
+    (-1, 0, "west"),
+    (0, 1, "south"),
+    (0, -1, "north"),
+];
+fn random_direction(rng: &mut Rng) -> (i32, i32, &str) {
+    DIRECTIONS[rng.next() as usize % 4usize]
+}
 fn place_trunk(
     pos: (i32, i32, i32),
     rng: &mut Rng,
@@ -179,7 +189,7 @@ fn place_trunk(
     put(x, y - 1, z, log, true);
     put(x, y - 2, z, DIRT.id(), true);
 
-    TreeSkeleton { height: top - y, top: (x, top, z), branch_tips }
+    TreeSkeleton { height: top - y, top: (x, top, z), bottom: (x, y, z), branch_tips }
 }
 fn place_cone_foliage(pos: (i32, i32, i32), put: &mut dyn FnMut(i32, i32, i32, u32, bool), height: u16, leaves: u32) {
     let (x, y, z) = pos;
@@ -195,7 +205,7 @@ fn place_cone_foliage(pos: (i32, i32, i32), put: &mut dyn FnMut(i32, i32, i32, u
         }
     }
 }
-fn place_foliage(skeleton: TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), _height: u16, leaves: u32) {
+fn place_foliage(skeleton: &TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool), _height: u16, leaves: u32) {
     fn leaf_kept(rx: f32, ry: f32, rz: f32, dx: i32, dy: i32, dz: i32, wx: i32, wy: i32, wz: i32, salt: u64) -> bool {
         let q = (dx as f32 / rx).powi(2) + (dy as f32 / ry).powi(2) + (dz as f32 / rz).powi(2);
         if q > 1.0 {
@@ -226,7 +236,7 @@ fn place_foliage(skeleton: TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32,
             put(bx, by, bz, leaves, false);
         }
     }
-    for (x, y, z) in skeleton.branch_tips {
+    for (x, y, z) in &skeleton.branch_tips {
         let rx = 2.0 + rng.float();
         let ry = rx * 0.75;
         let rz = rx;
@@ -240,15 +250,43 @@ fn place_foliage(skeleton: TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32,
         }
     }
 }
+fn moss_on_side(side: Dir) -> u32 {
+    let props: Vec<(&str, &str)> = Dir::ALL
+        .iter()
+        .map(|&d| (d.name(), if d == side { "true" } else { "false" }))
+        .collect();
+    MOSS.with(&props)
+}
+fn decorate_trunk(skeleton: &TreeSkeleton, rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
+    let mossy = rng.float() < 0.25;
+    for y in skeleton.bottom.1..skeleton.top.1 {
+        if rng.float() >= 0.5 { continue }
+        if mossy {
+            let bz = skeleton.bottom.2 - 1;
+            let state = moss_on_side(Dir::South);
+            if state != u32::MAX {
+                put(skeleton.bottom.0, y, bz, state, false);
+            }
+            continue;
+        }
+        if rng.float() >= 0.25 { continue }
+        let (dx, dz, facing) = random_direction(rng);
+        let bx = skeleton.bottom.0 + dx;
+        let bz = skeleton.bottom.2 + dz;
+        let state = DRYADS_SADDLE_MUSHROOM.with(&[("facing", facing)]);
+        put(bx, y, bz, state, false);
+    }
+}
 fn place_oak(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 3u16;
     let skeleton = place_trunk(pos, rng, put, height, &OAK_LOG, &OAK_WOOD, true);
-    place_foliage(skeleton, rng, put, height, OAK_LEAVES.id());
+    place_foliage(&skeleton, rng, put, height, OAK_LEAVES.id());
+    decorate_trunk(&skeleton, rng, put);
 }
 fn place_birch(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
     let skeleton = place_trunk(pos, rng, put, height, &BIRCH_LOG, &BIRCH_WOOD, true);
-    place_foliage(skeleton, rng, put, height, BIRCH_LEAVES.id());
+    place_foliage(&skeleton, rng, put, height, BIRCH_LEAVES.id());
 }
 fn place_spruce(pos: (i32, i32, i32), rng: &mut Rng, put: &mut dyn FnMut(i32, i32, i32, u32, bool)) {
     let height = 6u16 + (rng.next() as u16) % 4u16;
