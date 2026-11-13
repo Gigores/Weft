@@ -6,6 +6,6 @@ Name=Weft
 Comment=a voxel sandbox engine written in Rust
 Categories=Game;Simulation;
 
-Icon=download.weft.weft.png
+Icon=download.weft.weft
 Exec=weft
 Terminal=false
