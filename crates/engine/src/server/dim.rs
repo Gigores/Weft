@@ -2035,14 +2035,7 @@ impl Dim {
                 match on_body(e) {
                     Some((f, place)) => {
                         let deck = &bodies[&f];
-                        super::path::find(
-                            c,
-                            &super::space::DeckCells(deck),
-                            place.to_local(e.pos),
-                            nav.target,
-                            dims,
-                            drop,
-                        )
+                        super::path::find(c, &super::space::DeckCells(deck), place.to_local(e.pos), nav.target, dims, drop)
                     }
                     None => super::path::find(c, &block, e.pos, nav.target, dims, drop),
                 }

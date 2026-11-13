@@ -299,9 +299,11 @@ async fn energy_grid(t: T, g: [i32; 3]) -> R {
 /// Bodies of different sizes choose openings they fit through.
 async fn pathfinding(t: T, o: [i32; 3]) -> R {
     for (width, height) in [(0.6_f64, 1.1_f64), (1.4, 0.9), (2.4, 2.4)] {
-        t.fill(add(o, [3, 0, -7]), add(o, [3, 3, 7]), "cobblestone").await?;
+        t.fill(add(o, [3, 0, -7]), add(o, [3, 3, 7]), "cobblestone")
+            .await?;
         t.fill(add(o, [3, 0, 0]), add(o, [3, 1, 0]), "air").await?;
-        t.fill(add(o, [3, 0, 4]), add(o, [3, height.ceil() as i32 - 1, 4 + width.ceil() as i32 - 1]), "air").await?;
+        t.fill(add(o, [3, 0, 4]), add(o, [3, height.ceil() as i32 - 1, 4 + width.ceil() as i32 - 1]), "air")
+            .await?;
         let id = spawn(&t, "testmod:idol", o).await?;
         t.op(&format!("size {id} {width} {height}")).await?;
         let goal = add(o, [7, 0, 0]);

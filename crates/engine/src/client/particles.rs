@@ -342,7 +342,10 @@ impl Particles {
         }
         // Dust uses the side's base layer, with that layer's own tint.
         let looks = super::looks::current();
-        let dust = c.states.get(b.block as usize).filter(|_| k.frames.is_empty());
+        let dust = c
+            .states
+            .get(b.block as usize)
+            .filter(|_| k.frames.is_empty());
         let (layer, dust_tint) = dust.map_or((0, 0xFF_FFFF), |s| {
             let d = looks.drawn(b.block, s);
             let (tex, dir) = match d.boxes.first() {
@@ -352,7 +355,9 @@ impl Particles {
             };
             let layer = super::mesher::face_layers(c, s, tex & crate::gpu_layout::face::TEX_MASK, dir)[0];
             let p = pos.floor().as_ivec3();
-            let biome = world.cube(p >> 4i32).map(|cube| cube.biome((p.x & 15) as usize, (p.z & 15) as usize));
+            let biome = world
+                .cube(p >> 4i32)
+                .map(|cube| cube.biome((p.x & 15) as usize, (p.z & 15) as usize));
             // Wire's gray picture takes the color of wire at middling power.
             let tint = if d.model == weft_abi::BlockModel::Wire { 0xC8_1414 } else { c.kind_color(layer.tint, biome) };
             (layer.tex, tint)
