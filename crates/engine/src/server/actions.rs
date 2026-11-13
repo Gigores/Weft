@@ -418,6 +418,12 @@ impl Server {
                     self.players[pi]
                         .conn
                         .send(ToClient::Swing { used_item: false, off_hand: false });
+                } else {
+                    for slot in self.hands(c, pi) {
+                        if self.use_in_hand(c, pi, slot, None) {
+                            break;
+                        }
+                    }
                 }
             }
             ToServer::OpenInventory => {

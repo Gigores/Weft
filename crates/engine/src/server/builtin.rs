@@ -169,7 +169,10 @@ fn structure(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let radius = a.int("radius").unwrap_or(4096).clamp(1, 1 << 16) as i32;
     let seed = s.dims[dim as usize].seed();
     match crate::features::nearest(c, dim, seed, name, x.here.floor().as_ivec3(), radius) {
-        Some(p) => say("structure.found", vec![text(name), int(p.x), int(p.y), int(p.z)]),
+        Some(p) => {
+            let coords = Msg::template(&format!("{{link:suggest:/tp {} {} {}}}[{}, {}, {}]{{/link}}", p.x, p.y, p.z, p.x, p.y, p.z));
+            say("structure.found", vec![text(name), Arg::Msg(coords)])
+        }
         None => say("structure.none", vec![text(name), int(radius)]),
     }
 }

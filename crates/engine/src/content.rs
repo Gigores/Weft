@@ -864,6 +864,8 @@ pub struct ModMeta {
     pub order: u32,
     /// Its `assets` folder (block and item model files are read at freeze).
     pub assets: std::path::PathBuf,
+    /// The original folder or archive; an unpacked cache does not mean it is still installed.
+    pub source: std::path::PathBuf,
 }
 
 /// Ids of components the engine reads, resolved once.
@@ -1733,17 +1735,20 @@ fn debug_blocks(c: &Content, cube: glam::IVec3, blocks: &mut [u32]) {
 /// Every mod after the mods it depends on or says it loads after, and before those saying they
 /// load after it (`before` the same turned around), ties by id.
 pub fn load_order(mods: &[ModMeta]) -> Vec<u32> {
-    let mut placed: Vec<Option<u32>> = vec![None; mods.len()];
-    let mut next = 0;
-    let first = |i: usize, j: usize| {
+    dependency_order(mods.len(), |i: usize, j: usize| {
         let (a, b) = (&mods[i], &mods[j]);
         b.deps.contains(&a.id) || b.after.contains(&a.id) || a.before.contains(&b.id)
-    };
-    while next < mods.len() as u32 {
-        let ready =
-            (0..mods.len()).find(|&i| placed[i].is_none() && (0..mods.len()).all(|j| j == i || placed[j].is_some() || !first(j, i)));
+    })
+}
+
+/// Inputs are sorted by id, also used to break a dependency cycle deterministically.
+pub(crate) fn dependency_order(count: usize, before: impl Fn(usize, usize) -> bool) -> Vec<u32> {
+    let mut placed: Vec<Option<u32>> = vec![None; count];
+    let mut next = 0;
+    while next < count as u32 {
+        let ready = (0..count).find(|&i| placed[i].is_none() && (0..count).all(|j| j == i || placed[j].is_some() || !before(j, i)));
         // A dependency cycle: place the rest by id rather than loop forever.
-        let i = ready.unwrap_or_else(|| (0..mods.len()).find(|&i| placed[i].is_none()).unwrap());
+        let i = ready.unwrap_or_else(|| (0..count).find(|&i| placed[i].is_none()).unwrap());
         placed[i] = Some(next);
         next += 1;
     }
@@ -4003,6 +4008,7 @@ mod tests {
             before: Vec::new(),
             order: 0,
             assets: Default::default(),
+            source: Default::default(),
         }
     }
 

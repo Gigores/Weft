@@ -167,13 +167,15 @@ impl Dim {
                         part: h.part,
                         ..abi::Damage::DEFAULT
                     };
+                    let embedded = point + v.normalize_or_zero() * 0.15;
+                    let yaw = self.entities.get(id).map_or(0.0, |e| e.yaw);
+                    // A lethal hit removes its target; keep the target's frame while it exists.
+                    let stuck = p
+                        .sticks
+                        .then(|| self.stuck_at(StuckIn::Entity(h.entity), embedded, yaw));
                     if self.damage(c, h.entity, &d) {
                         // In their box a little way, going about with them, as vanilla's arrows.
-                        to = point + v.normalize_or_zero() * 0.15;
-                        let yaw = self.entities.get(id).map_or(0.0, |e| e.yaw);
-                        let stuck = p
-                            .sticks
-                            .then(|| self.stuck_at(StuckIn::Entity(h.entity), to, yaw));
+                        to = embedded;
                         if let Some(e) = self.entities.get_mut(id) {
                             match stuck {
                                 Some(st) => e.stuck = Some(st),

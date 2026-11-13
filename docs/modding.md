@@ -247,6 +247,10 @@ The mod itself uses the same crate, so there's one declaration of everything, an
 
 ## Where to go next
 
+For HUD information about the crosshair's target, see `ClientView::target` and the target panel
+extension in the [UI guide](ui.md#hud). A projectile's relative launch speed uses
+`Spawn::inherit_velocity`, described in the [entities guide](entities.md#projectiles).
+
 The rest is split by what you are making. Each page starts with the common case and goes on to the rare ones; the [reference](reference/index.md) lists every method of every builder with a link to its source.
 
 **Content you register**

@@ -292,6 +292,7 @@ pub mod hud_element {
     pub static ANCHOR: Component<Text, HudElement> = Component::named(h::ANCHOR);
     pub static ORDER: Component<i32, HudElement> = Component::named(h::ORDER);
     pub static CALL: Component<crate::abi::Callback, HudElement> = Component::named(h::CALL);
+    pub static REBUILD: Component<crate::abi::Callback, HudElement> = Component::named(h::REBUILD);
 }
 
 /// What a screen part is made of.

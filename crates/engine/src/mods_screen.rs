@@ -241,16 +241,14 @@ fn actions(ui: &mut Ui, cx: &BuildCx, r: &Row, dir: &PathBuf, busy: bool) {
         State::Get { .. } => {
             let (id, to) = (r.id.clone(), dir.clone());
             let b = icon_button(ui, cx, "button_install", "icon_download", "mods.install", &[], move |c| {
-                mod_index::install(id.clone(), to.clone());
-                c.requests.push(Request::Rebuild);
+                request_install(c, &id, &to);
             });
             set_enabled(ui, b, !busy);
         }
         State::Installed { newer: Some(v), .. } => {
             let (id, to) = (r.id.clone(), dir.clone());
             let b = icon_button(ui, cx, "button_update", "icon_update", "mods.update_to", &[Arg::Text(v.clone())], move |c| {
-                mod_index::install(id.clone(), to.clone());
-                c.requests.push(Request::Rebuild);
+                request_install(c, &id, &to);
             });
             set_enabled(ui, b, !busy);
         }
@@ -266,8 +264,68 @@ fn actions(ui: &mut Ui, cx: &BuildCx, r: &Row, dir: &PathBuf, busy: bool) {
     }
 }
 
+fn request_install(c: &mut Ctx, id: &str, dir: &std::path::Path) {
+    let plan = mod_index::install_plan(id, dir);
+    c.requests
+        .push(Request::Open(Box::new(InstallMods { plan, dir: dir.to_path_buf() })));
+}
+
+struct InstallMods {
+    plan: Result<Vec<IndexMod>, String>,
+    dir: PathBuf,
+}
+
+impl Screen for InstallMods {
+    fn name(&self) -> &str {
+        "core:install_mods"
+    }
+
+    fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
+        crate::screens::frame(ui, cx, "mods.install_confirm", |ui| {
+            match &self.plan {
+                Ok(plan) => {
+                    label(ui, cx, "mods.install_count", &[Arg::Int(plan.len() as i64)], "default");
+                    let style = Style { max_h: (cx.size.y - 150.0).max(60.0), ..Style::default().w(300.0).pad(6.0).gap(4.0).scroll() };
+                    ui.panel("well", style, |ui| {
+                        for m in plan {
+                            ui.container(Style::row().gap(4.0).align(Align::Center), |ui| {
+                                ui.text(text::plain(&m.name), "default");
+                                let b = m.fitting().unwrap();
+                                ui.text(text::plain(&b.version), "dim");
+                                badge(
+                                    ui,
+                                    cx,
+                                    if b.verified { "badge_verified" } else { "badge_unverified" },
+                                    if b.verified { "mods.verified" } else { "mods.unverified" },
+                                    &[],
+                                    None,
+                                );
+                            });
+                        }
+                    });
+                    let (plan, dir) = (plan.clone(), self.dir.clone());
+                    let b = crate::screens::button(ui, cx, "mods.install", &[], 120.0, move |c| {
+                        mod_index::install(plan.clone(), dir.clone());
+                        c.requests.push(Request::Close);
+                        c.requests.push(Request::Rebuild);
+                    });
+                    ui.set_id(b, "mods_install_confirm");
+                }
+                Err(e) => {
+                    label(ui, cx, "mods.failed", &[Arg::Text(e.clone())], "warning");
+                }
+            }
+            crate::screens::button(ui, cx, "menu.cancel", &[], 120.0, |c| c.requests.push(Request::Close));
+        });
+    }
+}
+
 /// The badges that say where a mod stands.
 fn badges(ui: &mut Ui, cx: &BuildCx, r: &Row) {
+    if crate::modloader::load_error(&r.id).is_some() {
+        badge(ui, cx, "badge_incompatible", "mods.incompatible", &[], None);
+        return;
+    }
     match r.verified {
         Some(true) => {
             badge(ui, cx, "badge_verified", "mods.verified", &[], Some("mods.safe"));
@@ -333,7 +391,14 @@ impl Screen for ModsScreen {
         let browse_count = if tab == Tab::Browse { rows.len() } else { self.rows(cx, Tab::Browse, &dir, &cache).len() };
         let slot = tab as usize;
         let picked_id = self.picked.borrow()[slot].clone();
-        let sel = rows.iter().position(|r| r.id == picked_id).unwrap_or(0);
+        let sel = rows
+            .iter()
+            .position(|r| r.id == picked_id)
+            .or_else(|| {
+                rows.iter()
+                    .position(|r| crate::modloader::load_error(&r.id).is_some())
+            })
+            .unwrap_or(0);
         let tall = (cx.size.y - 110.0).clamp(120.0, 330.0);
         let wide = (cx.size.x - 40.0).clamp(480.0, 680.0);
         let bg = if cx.in_game { "overlay" } else { "background" };
@@ -402,10 +467,23 @@ impl Screen for ModsScreen {
                             } else {
                                 ("button_install", "mods.showing_verified")
                             };
-                            icon_button(ui, cx, class, "icon_verified", tip, &[], move |c| {
+                            let hidden = mod_index::index()
+                                .unwrap_or_default()
+                                .iter()
+                                .filter(|m| !m.builds.iter().any(|b| b.verified))
+                                .count();
+                            let filter = icon_button(ui, cx, class, "icon_verified", tip, &[Arg::Int(hidden as i64)], move |c| {
                                 all.set(!all.get());
                                 c.requests.push(Request::Rebuild);
                             });
+                            if let Kind::Button { selected, .. } = &mut ui.nodes[filter].kind {
+                                *selected = !self.unverified.get();
+                            }
+                            ui.set_id(filter, "mods_verified_filter");
+                            if !self.unverified.get() && hidden > 0 {
+                                let n = ui.text(text::plain(&format!("+{hidden}")), "count");
+                                ui.nodes[n].tooltip = Some(cx.t("mods.showing_verified", &[Arg::Int(hidden as i64)]));
+                            }
                             let to = cache.clone();
                             let b = icon_button(ui, cx, "button", "icon_refresh", "mods.refresh", &[], move |c| {
                                 mod_index::refresh(&to);
@@ -495,6 +573,7 @@ impl Screen for ModsScreen {
                                                 },
                                             );
                                             ui.nodes[led].tooltip = Some(cx.t(if on { "mods.turn_off" } else { "mods.turn_on" }, &[]));
+                                            set_enabled(ui, led, crate::modloader::load_error(&r.id).is_none());
                                             ui.set_id(led, &format!("mod_led:{}", r.id));
                                         }
                                     },
@@ -601,7 +680,14 @@ fn detail(ui: &mut Ui, cx: &BuildCx, r: &Row, dir: &PathBuf, busy: bool, width: 
             v(ui);
         });
     };
-    let loaded = crate::content::content().mods.iter().find(|m| m.id == r.id);
+    let loaded = crate::content::content()
+        .mods
+        .iter()
+        .chain(crate::modloader::turned_off())
+        .find(|m| m.id == r.id);
+    if let Some(reason) = crate::modloader::load_error(&r.id) {
+        label(ui, cx, "mods.failed", &[Arg::Text(reason.to_string())], "warning");
+    }
     match &r.state {
         State::Local => {
             let v = loaded.map(|m| m.version.clone()).unwrap_or_default();
@@ -678,8 +764,7 @@ fn detail(ui: &mut Ui, cx: &BuildCx, r: &Row, dir: &PathBuf, busy: bool, width: 
                     .min_h(17.0)
                     .align(Align::Center),
                 Rc::new(move |c: &mut Ctx| {
-                    mod_index::install(id.clone(), to.clone());
-                    c.requests.push(Request::Rebuild);
+                    request_install(c, &id, &to);
                 }),
                 |ui| {
                     ui.add(Kind::Image { texture: format!("core:gui/{icon}"), color: 0xFFFFFFFF }, Style::default().size(9.0, 9.0));

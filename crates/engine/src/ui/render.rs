@@ -174,6 +174,7 @@ pub struct UiRenderer {
     /// Stack counts drawn over queued item icons: (icon number, count, text pixel size).
     /// Item nodes of the tree being built: where, what, and their clip.
     stacks: Vec<(Rect, weft_abi::ItemStack, [f32; 4])>,
+    overlays: Vec<Quad>,
     /// Text effects and GUI fills the shader has, and the effect slot by `text::fx_id`.
     fx: Slots,
     gui: Slots,
@@ -234,6 +235,7 @@ impl UiRenderer {
             quads: Vec::new(),
             icon_clips: Vec::new(),
             stacks: Vec::new(),
+            overlays: Vec::new(),
             fx,
             gui,
             fx_slots: Vec::new(),
@@ -918,8 +920,10 @@ impl UiRenderer {
     ) {
         self.icon_clips.clear();
         self.stacks.clear();
+        self.overlays.clear();
         let mut icons = Vec::new();
         self.node(gpu, assets, ui, look, 0, scale, &mut icons, custom, None);
+        self.quads.append(&mut self.overlays);
         if let Some((c, t)) = game {
             let clips = std::mem::take(&mut self.icon_clips);
             for (i, (x, y, s, item)) in icons.into_iter().enumerate() {
@@ -938,6 +942,18 @@ impl UiRenderer {
                 }
             }
         }
+    }
+
+    /// A node's stack, drawn after the screen's backgrounds and with that node's clip.
+    pub fn defer_stack(&mut self, r: Rect, stack: weft_abi::ItemStack) {
+        self.stacks.push((r, stack, [0.0; 4]));
+    }
+
+    /// Draw above node backgrounds, before item icons.
+    pub fn defer_overlay(&mut self, draw: impl FnOnce(&mut Self)) {
+        let start = self.quads.len();
+        draw(self);
+        self.overlays.extend(self.quads.drain(start..));
     }
 
     /// A stack the one way slots, the hotbar, item nodes and the held cursor stack show it: the
@@ -1055,6 +1071,8 @@ impl UiRenderer {
         let n = &ui.nodes[id];
         let r = Rect { x: n.rect.x * scale, y: n.rect.y * scale, w: n.rect.w * scale, h: n.rect.h * scale };
         let (quad_start, icon_start) = (self.quads.len(), icons.len());
+        let stack_start = self.stacks.len();
+        let overlay_start = self.overlays.len();
         let hovered = ui.hovered == Some(id);
         if let Some(color) = n.style.fill {
             self.rect(r, color);
@@ -1361,6 +1379,12 @@ impl UiRenderer {
         let clip = n
             .clip
             .map_or([0.0; 4], |c| [c.x * scale, c.y * scale, (c.x + c.w) * scale, (c.y + c.h) * scale]);
+        for (_, _, stack_clip) in &mut self.stacks[stack_start..] {
+            *stack_clip = clip;
+        }
+        for q in &mut self.overlays[overlay_start..] {
+            q.clip = clip;
+        }
         if n.clip.is_some() {
             for q in &mut self.quads[quad_start..] {
                 // Quads may carry their own clip (text fields): keep the overlap of both.

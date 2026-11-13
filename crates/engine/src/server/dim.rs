@@ -419,7 +419,12 @@ impl Dim {
             .entities
             .list
             .iter()
-            .filter(|e| e.player || (e.is_body() && e.anchor.is_none() && (now + e.id) % 10 == 0))
+            .filter(|e| {
+                e.player
+                    || (e.is_body()
+                        && e.anchor.is_none()
+                        && ((now + e.id) % 10 == 0 || !self.entities.comps.contains_key(&(e.id, attributes))))
+            })
             .map(|e| e.id)
             .collect::<Vec<_>>()
             .into_iter()
@@ -1256,6 +1261,16 @@ impl Dim {
     /// How far a player's actions on blocks reach, with room for what the client saw last.
     pub fn block_reach(&mut self, c: &'static Content, player: u64) -> f64 {
         self.attribute(c, player, crate::registry::attr::BLOCK_REACH, false) + super::BLOCK_SLACK
+    }
+
+    /// Velocity in the world, including the body carrying it. Seated riders already have their
+    /// mount's velocity in `vel`; its frame is only the platform underneath that mount.
+    pub fn world_velocity(&self, id: u64) -> DVec3 {
+        let Some(e) = self.entities.get(id) else { return DVec3::ZERO };
+        e.vel
+            + e.frame
+                .and_then(|f| self.entities.get(f))
+                .map_or(DVec3::ZERO, |b| b.vel)
     }
 
     /// `stack` thrown by `player`: from just below its eyes where it looks, not to be picked up

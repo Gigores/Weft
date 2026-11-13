@@ -73,6 +73,16 @@ pub fn register(r: &mut Registry) {
         .burns_in_sun()
         .attach(&FUSE)
         .goals(skeleton());
+    r.on_event(&actions::SPAWN, |batch| {
+        for spawned in batch.iter() {
+            if spawned.kind == SKELETON.id() {
+                batch
+                    .world()
+                    .inventory(spawned.entity)
+                    .set(0, ItemStack::new(BOW.id(), 1));
+            }
+        }
+    });
     // Drawn as long as the use button is held, shot when it is let go.
     r.item(&BOW)
         .durability(384)
@@ -254,7 +264,15 @@ fn shoot_bow(u: &mut ItemUse) -> bool {
     let Some(s) = w.entity(id) else { return false };
     // Three blocks a tick at full draw.
     let v = look_dir(s.yaw, s.pitch) * (power * 3.0 * 20.0);
-    w.spawn_with(&ARROW, s.eye(), &Spawn::new().owner(id).velocity(v).yaw(s.yaw));
+    w.spawn_with(
+        &ARROW,
+        s.eye(),
+        &Spawn::new()
+            .owner(id)
+            .velocity(v)
+            .inherit_velocity()
+            .yaw(s.yaw),
+    );
     if !creative {
         if let Some(slot) = arrow {
             inv.set(slot, consume_one(inv.get(slot)));
@@ -278,6 +296,7 @@ fn shoot(w: &World, id: u64, from: &EntityState, at: &EntityState) {
         &Spawn::new()
             .owner(id)
             .velocity(v)
+            .inherit_velocity()
             .yaw(yaw_toward([0.0; 3], d)),
     );
 }

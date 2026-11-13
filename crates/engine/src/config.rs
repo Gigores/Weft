@@ -407,6 +407,7 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:sensitivity", ck::FLOAT, 1.0, 0.01, 3.0, 0.01),
         number("core:brightness", ck::FLOAT, 0.5, 0.0, 1.0, 0.0),
         number("core:debug_groups", ck::INT, u32::MAX as f64, 0.0, u32::MAX as f64, 1.0),
+        number("core:advanced_tooltips", ck::BOOL, 0.0, 0.0, 1.0, 0.0),
         number("core:invert_y", ck::BOOL, 0.0, 0.0, 1.0, 0.0),
         // Buttons and steering for fingers (`touch`), on where the screen is the only input.
         number("core:touch_controls", ck::BOOL, cfg!(target_os = "android") as u8 as f64, 0.0, 1.0, 0.0),

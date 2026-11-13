@@ -600,6 +600,19 @@ pub unsafe extern "C" fn client_menu_owner(c: *mut abi::ClientCtx) -> u64 {
     }
 }
 
+pub unsafe extern "C" fn client_target(c: *mut abi::ClientCtx, out: *mut abi::Target) -> u32 {
+    let Some(cl) = (unsafe { view(c) }) else { return 0 };
+    let target = if let Some(entity) = cl.target_entity {
+        abi::Target { entity, ..Default::default() }
+    } else if let Some(h) = cl.target {
+        abi::Target { pos: h.block.to_array().into(), state: h.state, body: h.frame, ..Default::default() }
+    } else {
+        return 0;
+    };
+    unsafe { *out = target };
+    1
+}
+
 pub unsafe extern "C" fn client_entity(c: *mut abi::ClientCtx, id: u64, out: *mut abi::EntityState) -> u32 {
     unsafe {
         let Some(cl) = view(c) else { return 0 };
@@ -634,16 +647,21 @@ pub unsafe extern "C" fn client_entity(c: *mut abi::ClientCtx, id: u64, out: *mu
                     pitch: e.pitch,
                     moved: e.swing,
                     health: e.health,
-                    // The kind's own value: clients do not see attribute modifiers of others.
                     max_health: {
-                        let attr = &content.game.attributes[crate::registry::attr::MAX_HEALTH as usize];
-                        attr.comp
-                            .and_then(|id| {
-                                content
-                                    .components
-                                    .get::<f64>(crate::components::ENTITY, e.kind, id)
+                        cl.entity_components
+                            .get(&(id, content.game.fields.health))
+                            .and_then(|b| b.get(4..8))
+                            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                            .unwrap_or_else(|| {
+                                let attr = &content.game.attributes[crate::registry::attr::MAX_HEALTH as usize];
+                                attr.comp
+                                    .and_then(|id| {
+                                        content
+                                            .components
+                                            .get::<f64>(crate::components::ENTITY, e.kind, id)
+                                    })
+                                    .unwrap_or(attr.default) as f32
                             })
-                            .unwrap_or(attr.default) as f32
                     },
                     size: e.dims().size(),
                     ..Default::default()
