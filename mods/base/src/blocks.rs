@@ -68,6 +68,7 @@ pub static CHANTERELLE_MUSHROOM: Block = Block::named("chanterelle_mushroom");
 pub static TOADSTOOL_MUSHROOM: Block = Block::named("toadstool_mushroom");
 pub static DRYADS_SADDLE_MUSHROOM: Block = Block::named("dryads_saddle_mushroom");
 pub static BUSH_LEAVES: Block = Block::named("bush_leaves");
+pub static FERN: Block = Block::named("fern");
 
 static TILLABLE: Tag = Tag::named("tillable");
 
@@ -668,7 +669,6 @@ pub fn register(r: &mut Registry) {
         .drops("toadstool", 1)
         .tab(&crate::tabs::NATURAL);
     let uv = [0.1, 0.1, 15.9, 7.9];
-    let flipped_v = [uv[0], uv[3], uv[2], uv[1]];
     let top_uv = [0.1, 0.1, 15.9, 7.9];
     let bottom_uv = [0.1, 8.1, 15.9, 15.9];
     fn flip_v(uv: [f32; 4]) -> [f32; 4] {
@@ -702,7 +702,15 @@ pub fn register(r: &mut Registry) {
         .hitbox([0.0, 6.0, 8.0], [16.0, 13.0, 16.0])
         .drops("dryads_saddle", 1)
         .tab(&crate::tabs::NATURAL);
-
+    r.block(&FERN)
+        .sound_group("grass")
+        .shares_cell_with("#water")
+        .hardness(0.1)
+        .needs_below("#plant_soil")
+        .tint_kind(&tints::GRASS)
+        .tab(&crate::tabs::NATURAL)
+        .not_solid()
+        .hitbox([2.0, 0.0, 2.0], [14.0, 16.0, 14.0]);
     r.shapes_of("hollow_log", "#logs", "_hollow")
         .sound_group("wood")
         .model_file("hollow_log")
@@ -715,6 +723,11 @@ pub fn register(r: &mut Registry) {
         .outline([2.0, 0.0, 2.0], [14.0, 16.0, 14.0])
         .tag("hollow_log")
         .tab(&crate::tabs::NATURAL);
+    r.loot(&FERN).pool(
+        Pool::new()
+            .when(Cond::tool("#tools/shears"))
+            .item(FERN.name())
+    );
 
     // What may grow or stand where, from the common `dirt` and `sand` tags like modern vanilla:
     // a mod's sand tagged `sand` gets cactus and sugar cane, in the world and from players.

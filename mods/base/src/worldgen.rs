@@ -619,9 +619,9 @@ pub fn register(r: &mut Registry) {
         .reach(1)
         .density(&FUNGI_COVER)
         .plan(|s| {
-            let FUNGI = [&PORCINI_MUSHROOM, &CHANTERELLE_MUSHROOM, &TOADSTOOL_MUSHROOM];
+            let fungi = [&PORCINI_MUSHROOM, &CHANTERELLE_MUSHROOM, &TOADSTOOL_MUSHROOM];
             let mut rng = Rng(s.random());
-            s.put(s.pos(), FUNGI[rng.next() as usize % FUNGI.len()].id());
+            s.put(s.pos(), fungi[rng.next() as usize % fungi.len()].id());
         });
     r.decoration(decorate);
 }
