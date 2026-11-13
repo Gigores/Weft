@@ -94,6 +94,7 @@ pub fn register(r: &mut Registry) {
         ("spider_eye", 2, 3.2, ""),
         ("porcini", 1, 1.2, "mushrooms"),
         ("chanterelle", 1, 1.2, "mushrooms"),
+        ("cooked_dryads_saddle", 4, 2.4, "mushrooms"),
     ] {
         let i = r
             .item(Item::generated(name.into()))

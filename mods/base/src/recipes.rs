@@ -56,6 +56,7 @@ pub fn register(r: &mut Registry) {
 
     r.shapeless(S, "#cooked_meat/{m}", 1, &["#raw_meat/{m}"], 200);
     r.shapeless(S, "#ingots/{m}", 1, &["#raw_ores/{m}"], 200);
+    r.shapeless(S, "cooked_dryads_saddle", 1, &["dryads_saddle"], 200);
 
     // A `pickaxes/<m>` or `armor_chest/<m>` item is made from `materials/<m>`.
     for (tool, pattern) in [
