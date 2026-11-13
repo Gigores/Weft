@@ -3325,8 +3325,8 @@ fn engine_cameras() -> Vec<RawEntry> {
     };
     vec![
         mode("core:first_person", cf::HAND | cf::HUD | cf::EFFECTS | cf::CYCLE),
-        mode("core:behind", cf::BODY | cf::HUD | cf::CLIP | cf::CYCLE),
-        mode("core:front", cf::BODY | cf::HUD | cf::CLIP | cf::CYCLE),
+        mode("core:behind", cf::BODY | cf::HUD | cf::BOB | cf::CLIP | cf::CYCLE),
+        mode("core:front", cf::BODY | cf::HUD | cf::BOB | cf::CLIP | cf::CYCLE),
         mode("core:free", cf::BODY | cf::SOLID | cf::DETACHED | cf::NO_INTERACT)
             .set(abi::comp::camera::WHEN, vec!["attribute(core:can_fly, 1..)".to_string()])
             .set(abi::comp::camera::KEY, "core:freecam".to_string()),

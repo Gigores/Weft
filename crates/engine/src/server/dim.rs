@@ -2029,7 +2029,7 @@ impl Dim {
             .par_iter()
             .map(|&i| {
                 let (e, nav) = (&list[i], list[i].nav.as_ref().unwrap());
-                let height = e.height(c).ceil() as i32;
+                let dims = e.dims(c);
                 // It goes down no further than it falls without harm.
                 let drop = (e.safe_fall.floor() as i32).max(1);
                 match on_body(e) {
@@ -2038,13 +2038,13 @@ impl Dim {
                         super::path::find(
                             c,
                             &super::space::DeckCells(deck),
-                            place.to_local(e.pos).floor().as_ivec3(),
-                            nav.target.floor().as_ivec3(),
-                            height,
+                            place.to_local(e.pos),
+                            nav.target,
+                            dims,
                             drop,
                         )
                     }
-                    None => super::path::find(c, &block, e.pos.floor().as_ivec3(), nav.target.floor().as_ivec3(), height, drop),
+                    None => super::path::find(c, &block, e.pos, nav.target, dims, drop),
                 }
             })
             .collect();
@@ -2063,10 +2063,11 @@ impl Dim {
                 continue;
             }
             let pos = place.map_or(e.pos, |t| t.to_local(e.pos));
+            let dims = e.dims(c);
             let nav = e.nav.as_mut().unwrap();
             nav.stuck = if e.moved < 0.02 { nav.stuck + 1 } else { 0 };
             let close = (nav.target - pos).with_y(0.0).length() < 1.0 && (nav.target.y - pos.y).abs() < 1.5;
-            match super::path::steer(nav, pos, e.blocked) {
+            match super::path::steer(nav, pos, dims, e.blocked) {
                 _ if close || nav.stuck > 40 => e.nav = None,
                 Some((dir, jump)) => {
                     e.yaw = (-dir[0]).atan2(-dir[1]);

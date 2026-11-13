@@ -739,6 +739,8 @@ pub mod comp {
         /// The player's effects move it: walking bob, the wider view sprinting and flying, the tilt
         /// when hurt, what is over the screen inside a block or a liquid.
         pub const EFFECTS: &str = "camera.effects";
+        /// Walking bob, hurt tilt and held-item recoil, without FOV changes or screen overlays.
+        pub const BOB: &str = "camera.bob";
         /// Pulled in towards `CameraArgs::anchor` where a block is in the way (third person).
         pub const CLIP: &str = "camera.clip";
         /// A small box that bumps into blocks, moved from where it was to where `call` says, and

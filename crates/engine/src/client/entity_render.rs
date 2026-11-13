@@ -1208,6 +1208,16 @@ impl EntityRenderer {
         // The first person: its place in `posed`, its layers before the arms were left out of
         // them and which arms the clips bring up.
         let mut own_hand: Option<(usize, [Instance; super::models::MAX_LAYERS], usize, u32)> = None;
+        let hidden = |e: &ClientEntity| {
+            e.effects.iter().any(|f| {
+                f.until > now
+                    && c.game
+                        .entity_effects
+                        .get(f.id as usize)
+                        .is_some_and(|d| d.hides)
+            })
+        };
+        let own_body = me.filter(|_| hand.as_ref().is_none_or(|h| h.body));
         for (id, e) in entities
             .iter()
             .map(|(i, e)| (*i, e))
@@ -1219,14 +1229,13 @@ impl EntityRenderer {
                 continue;
             }
             // Invisible to everyone else.
-            let hidden = e.effects.iter().any(|f| {
-                f.until > now
-                    && c.game
-                        .entity_effects
-                        .get(f.id as usize)
-                        .is_some_and(|d| d.hides)
-            });
-            if hidden && id != self.local {
+            if hidden(e) && id != self.local {
+                continue;
+            }
+            if e.stuck.is_some_and(|s| {
+                let host = if s.host == self.local { own_body } else { entities.get(&s.host).filter(|h| !hidden(h)) };
+                host.is_none()
+            }) {
                 continue;
             }
             // Out of the view it has nothing to show. What it may have on goes by its model's reach.

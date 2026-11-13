@@ -742,8 +742,13 @@ const OPS: &[(&str, &str, Run)] = &[
         let e = w.entity(owner(w, cmd)?).ok_or("no such entity")?;
         Ok(format!("{} {:.2} {:.2} {:.2} {}", name_of(ek::ENTITY, e.kind), e.pos.x, e.pos.y, e.pos.z, e.health))
     }),
-    ("size", "@entity", |w, cmd, _, _| {
-        let s = w.entity(owner(w, cmd)?).ok_or("no such entity")?.size;
+    ("size", "@entity [width:float] [height:float]", |w, cmd, _, _| {
+        let id = owner(w, cmd)?;
+        let s = w.entity(id).ok_or("no such entity")?.size;
+        if let (Some(width), Some(height)) = (cmd.float("width"), cmd.float("height")) {
+            w.set_size(id, Some(abi::EntitySize { width: width as f32, height: height as f32, eye: s.eye * height as f32 / s.height }));
+        }
+        let s = w.entity(id).ok_or("no such entity")?.size;
         Ok(format!("{:.3} {:.3} {:.3}", s.width, s.height, s.eye))
     }),
     ("near", "<pos:pos> <r:float>", |w, cmd, player, _| {
