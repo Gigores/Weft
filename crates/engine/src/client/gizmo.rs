@@ -99,7 +99,7 @@ impl Gizmos {
                 .values()
                 .filter(|e| (e.pos - me).length_squared() < 64.0 * 64.0)
                 .map(|e| (e, e.dims()));
-            let mut parts = Vec::new();
+            let mut parts = crate::hitbox::Scratch::default();
             for (e, dims) in near.chain(own) {
                 let crate::physics::Dims { half_width: hw, height: h, eye } = dims;
                 cuboid(&mut lines, e.pos - DVec3::new(hw, 0.0, hw), e.pos + DVec3::new(hw, h, hw), 0xFFFFFFFF);
@@ -109,7 +109,7 @@ impl Gizmos {
                     .filter(|_| e.is_body())
                 {
                     crate::hitbox::place(hb, &e.hit_body(), &mut parts);
-                    for p in &parts {
+                    for p in &parts.parts {
                         placed_cuboid(&mut lines, p, 0xFF60D0FF);
                     }
                 }

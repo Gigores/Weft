@@ -1,9 +1,18 @@
 //! What the server said and what the terrain thread finished, taken once a frame.
 
 use super::*;
+use crate::net::codec::Wire;
 
 fn entity_rotation(rotation: Option<[f32; 4]>) -> glam::DQuat {
     rotation.map_or(glam::DQuat::IDENTITY, |q| glam::Quat::from_array(q).as_dquat().normalize())
+}
+
+pub(super) struct Landing {
+    destination: u64,
+    cubes: Vec<IVec3>,
+    ready: bool,
+    despawned: bool,
+    started: Instant,
 }
 
 impl Client {
@@ -27,6 +36,24 @@ impl Client {
 
     fn receive_message(&mut self, msg: ToClient, fwd: &mut Vec<terrain::In>) {
         match msg {
+            ToClient::BodyGrab(body) => {
+                self.grabbed_body = body;
+                self.grab_turn = glam::Vec2::ZERO;
+            }
+            ToClient::ControllerEdit { controller, face, data } => {
+                if let Some(settings) = crate::controller::Settings::from_bytes(&data) {
+                    self.controller_edit = Some((controller, face, settings));
+                    self.events.push(ClientEvent::ControllerEdit);
+                }
+            }
+            ToClient::HelmProfile { mount, controller, data } => {
+                self.helm_pilot = match crate::controller::Settings::from_bytes(&data) {
+                    Some(crate::controller::Settings::Helm(profile)) => {
+                        Some(crate::controller::Pilot { mount, controller, profile, held: u64::MAX, pulses: 0 })
+                    }
+                    _ => None,
+                };
+            }
             ToClient::Welcome { player, dim, pos, seed, look, selected, flying } => {
                 self.player.flying = flying;
                 self.player_id = player;
@@ -38,36 +65,32 @@ impl Client {
                 self.seed = seed;
                 self.reset_terrain(dim, fwd);
             }
-            ToClient::Cube { dim, frame: 0, pos, cube, edit } if dim == self.world.dim => fwd.push(terrain::In::Cube { pos, cube, edit }),
-            ToClient::Cube { dim, frame, pos, cube, .. } if dim == self.world.dim => {
-                if let Some(e) = self.entities.get_mut(&frame) {
-                    if e.structure.is_none() {
-                        e.structure = Some(Box::new(ClientWorld::structure(dim)));
-                        self.render.remove_frame(frame);
-                    }
-                    let s = e.structure.as_mut().unwrap();
-                    s.insert(pos, cube, Default::default());
-                    s.scan_bounds();
+            ToClient::Cube { dim, frame, pos, cube, edit } if dim == self.world.dim => {
+                if frame == 0 {
+                    fwd.push(terrain::In::Cube { pos, cube, edit });
+                } else if let Some(space) = self.space_mut(frame) {
+                    space.apply_update(terrain::Out::Cube { pos, cube, around: Default::default() });
                 }
             }
             ToClient::Unload { dim, pos } if dim == self.world.dim => {
                 self.wires.cube_gone(0, pos);
                 fwd.push(terrain::In::Unload(pos));
             }
-            ToClient::Blocks { dim, frame: 0, changes, extras } if dim == self.world.dim => fwd.push(terrain::In::Blocks(changes, extras)),
             ToClient::Blocks { dim, frame, changes, extras } if dim == self.world.dim => {
-                if let Some(s) = self
-                    .entities
-                    .get_mut(&frame)
-                    .and_then(|e| e.structure.as_mut())
-                {
-                    for (p, state) in changes {
-                        s.set_block(p, state);
+                if frame == 0 {
+                    fwd.push(terrain::In::Blocks(changes, extras));
+                } else if let Some(space) = self.space_mut(frame) {
+                    space.apply_update(terrain::Out::Blocks(changes, extras));
+                }
+            }
+            ToClient::SpaceLanded { dim, frame, destination, cubes } if dim == self.world.dim => {
+                if self.space(frame).is_some() && !self.landings.contains_key(&frame) {
+                    let ready = destination != 0 || cubes.is_empty();
+                    self.landings
+                        .insert(frame, Landing { destination, cubes, ready, despawned: false, started: Instant::now() });
+                    if !ready {
+                        fwd.push(terrain::In::SpaceLanded(frame));
                     }
-                    for (p, parts) in extras {
-                        s.set_extras(p, parts);
-                    }
-                    s.scan_bounds();
                 }
             }
             ToClient::Saved { dim, cubes } if dim == self.world.dim => fwd.push(terrain::In::Saved(cubes)),
@@ -111,6 +134,13 @@ impl Client {
                 }
             }
             ToClient::Despawn(ids) => {
+                if self
+                    .grabbed_body
+                    .is_some_and(|body| ids.iter().any(|(id, _)| *id == body))
+                {
+                    self.grabbed_body = None;
+                    self.grab_turn = glam::Vec2::ZERO;
+                }
                 let arriving = self.arriving_tick();
                 self.entity_components
                     .retain(|(e, _), _| !ids.iter().any(|g| g.0 == *e));
@@ -118,6 +148,10 @@ impl Client {
                     self.environment.remote.remove(&id);
                     self.environment.static_entities.remove(&id);
                     self.showing_blocks.remove(&id);
+                    if let Some(landing) = self.landings.get_mut(&id) {
+                        landing.despawned = true;
+                        continue;
+                    }
                     // What is stuck in one that died goes down with it.
                     let host = self.entities.get(&id).and_then(|e| e.stuck).map(|s| s.host);
                     let host_dies = host.is_some_and(|h| {
@@ -158,6 +192,7 @@ impl Client {
                 }
             }
             ToClient::OpenMenu { kind, window, slots, owner, block, name } => {
+                self.drag = None;
                 self.menu = Some(ClientMenu {
                     kind,
                     window,
@@ -166,6 +201,7 @@ impl Client {
                     name,
                     slots: vec![ItemStack::EMPTY; slots as usize],
                     cursor: ItemStack::EMPTY,
+                    drag_targets: Vec::new(),
                 });
                 self.events.push(ClientEvent::OpenMenu);
             }
@@ -178,9 +214,10 @@ impl Client {
                     }
                 }
             }
-            ToClient::Cursor(s) => {
+            ToClient::Cursor { stack, targets } => {
                 if let Some(m) = &mut self.menu {
-                    m.cursor = s;
+                    m.cursor = stack;
+                    m.drag_targets = targets;
                 }
             }
             ToClient::CloseMenu => {
@@ -294,6 +331,7 @@ impl Client {
             self.entities.clear();
             self.showing_blocks.clear();
             self.particles.clear();
+            self.wake_render.clear();
             self.entity_components.clear();
         }
         let at = self.body_tick(self.body_clock);
@@ -309,6 +347,7 @@ impl Client {
         self.player.pos = pos;
         self.player.prev = pos;
         self.player.vel = DVec3::ZERO;
+        self.me.surface_pos = pos;
     }
 
     fn spawn_entities(&mut self, list: Vec<crate::net::EntityView>) {
@@ -328,6 +367,11 @@ impl Client {
             let to = if content().game.is_block_entity(e.kind) { &mut self.showing_blocks } else { &mut self.entities };
             self.entity_render.changed_items.insert(e.id);
             let mut shown = ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch);
+            if e.has_space {
+                self.landings.remove(&e.id);
+                self.render.remove_frame(e.id);
+                shown.structure = Some(Box::new(ClientWorld::structure(self.world.dim)));
+            }
             shown.target_rotation = entity_rotation(e.rotation);
             (shown.born, shown.body_yaw, shown.body_target) = (e.born as f64, e.body_yaw, e.body_yaw);
             (shown.walk, shown.walk_target, shown.swing, shown.swing_target) = (e.strode, e.strode, e.stride, e.stride);
@@ -354,36 +398,16 @@ impl Client {
                 .steers
                 .then_some(id)
         });
-        // Bodies turn by the tick from these moves (`physics::turn_body`), as the server turned
-        // them, by how they moved on what they stand on.
-        let deltas: rustc_hash::FxHashMap<u64, DVec3> = list
-            .iter()
-            .filter_map(|m| self.entities.get(&m.id).map(|e| (m.id, m.pos - e.target)))
-            .collect();
-        // Limbs swing and crouching turns by the tick too, the clips' clock.
-        for &crate::net::Move { id, yaw, pose, frame, .. } in &list {
-            let Some(&d) = deltas.get(&id) else { continue };
-            let carried = deltas
-                .get(&frame)
-                .filter(|_| frame != 0)
-                .copied()
-                .unwrap_or_default();
+        for crate::net::Move { id, pos, yaw, pitch, body_yaw, strode, stride, pose, sprinting, frame, rotation } in list.iter().copied() {
             if let Some(e) = self.entities.get_mut(&id) {
-                let walked = d - carried;
-                e.body_target = crate::physics::turn_body(e.body_target, yaw, walked);
-                let speed = (walked.with_y(0.0).length() * crate::world::TPS as f64) as f32;
-                crate::model::walk_limbs(&mut e.walk_target, &mut e.swing_target, speed, crate::world::TICK as f32);
+                (e.body_target, e.walk_target, e.swing_target) = (body_yaw, strode, stride);
                 let crouching = pose == Pose::CROUCH;
                 if crouching != e.crouch_at.2 {
                     e.crouch_at = (tick as f64, e.crouched, crouching);
                 }
-            }
-        }
-        for &crate::net::Move { id, pos, yaw, pitch, pose, sprinting, frame, rotation } in &list {
-            if Some(id) == driving {
-                continue;
-            }
-            if let Some(e) = self.entities.get_mut(&id) {
+                if Some(id) == driving {
+                    continue;
+                }
                 (e.pose, e.sprinting) = (pose, sprinting);
                 let was = e.target;
                 let rot = entity_rotation(rotation);
@@ -453,31 +477,53 @@ impl Client {
                 continue;
             }
             let (resets, whole) = (batch.resets, batch.whole);
+            let mut landings = batch.landings;
             self.world.begin_batch(whole);
             let mut items = batch.out.into_iter();
             while let Some(o) = items.next() {
-                match o {
-                    terrain::Out::Cube { pos, cube, around } => self.world.insert(pos, cube, around),
-                    terrain::Out::Blocks(changes, extras) => {
-                        for (p, s) in changes {
-                            self.world.set_block(p, s);
-                        }
-                        for (p, parts) in extras {
-                            self.world.set_extras(p, parts);
-                        }
-                    }
-                    terrain::Out::Unload(pos) => self.world.remove(pos),
-                    terrain::Out::Range { lo, hi } => self.world.set_range(lo, hi),
-                }
+                self.world.apply_update(o);
                 if !whole && start.elapsed() >= self.budget {
                     let out: Vec<terrain::Out> = items.collect();
                     if !out.is_empty() {
-                        self.terrain_left = Some(terrain::Batch { resets, whole, out });
+                        self.terrain_left = Some(terrain::Batch { resets, whole, out, landings: std::mem::take(&mut landings) });
                     }
                     break;
                 }
             }
             self.world.end_batch();
+            for frame in landings {
+                if let Some(landing) = self.landings.get_mut(&frame) {
+                    landing.ready = true;
+                }
+            }
+        }
+    }
+
+    pub(super) fn finish_landings(&mut self) {
+        let shown: Vec<_> = self
+            .landings
+            .iter()
+            .filter_map(|(&frame, landing)| {
+                let waiting = !landing.ready
+                    || landing.cubes.iter().any(|&pos| {
+                        self.space(landing.destination)
+                            .is_some_and(|space| space.mesh_pending(pos))
+                            || landing.destination == 0
+                                && self
+                                    .meshes
+                                    .iter()
+                                    .any(|mesh| mesh.pos == pos && self.world.current(mesh))
+                    });
+                (!waiting || landing.started.elapsed() >= world::HOLD_MAX).then_some(frame)
+            })
+            .collect();
+        for frame in shown {
+            let landing = self.landings.remove(&frame).unwrap();
+            if landing.despawned {
+                self.entities.remove(&frame);
+            } else if let Some(entity) = self.entities.get_mut(&frame) {
+                entity.structure = None;
+            }
         }
     }
 }

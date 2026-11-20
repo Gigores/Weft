@@ -323,17 +323,19 @@ impl Server {
                     .map(|x| r.around(x.0, |p| removed.iter().find(|o| o.0 == p).map(|o| o.1.clone())))
                     .collect();
                 for ((pos, cube, inside), around) in removed.into_iter().zip(around) {
+                    let inside = r.entities.structure_tree(&inside);
                     if let Some(s) = &storage {
                         // Written in the background; loads queue behind it there.
-                        let (s, mut bytes, dim) = (s.clone(), serialize(c, r, &inside), r.id);
+                        let (s, mut bytes, dim) = (s.clone(), super::serialize_tree(c, r, &inside), r.id);
                         persist::append_timers(&mut bytes, c, &r.take_timers(pos));
                         crate::background().spawn(move || s.lock().save(c, dim, pos, &cube, &around, &bytes));
                     }
                     for id in inside {
                         r.entities.remove(id, weft_abi::removal::UNLOADED);
+                        r.bodies.remove(&id);
                     }
                 }
-                r.compact(c);
+                r.compact(0, c);
             }
             d.dirty |= d.regions.iter().map(|r| r.space.cubes.len()).sum::<usize>() != before;
         }
@@ -463,9 +465,7 @@ pub(super) fn send_far(
                 Arc::new(cube)
             }
         };
-        p.conn
-            .send(ToClient::Cube { dim: p.dim, frame: 0, pos, cube, edit: false });
-        p.send_levels(dim, pos);
+        p.send_terrain_cube(dim, pos, cube);
         p.sent.insert(pos);
     }
 }

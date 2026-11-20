@@ -7,9 +7,39 @@ use super::statics::*;
 use super::util::sphere;
 
 static COVERED: Block = Block::named("core:covered");
+pub(super) fn plant_at(seed: u64, surface: BlockPos, biome: u32, ground: u32) -> u32 {
+    if surface.y < SEA || FROZEN.on_biome(biome) || !PLANT_SOIL.on_block(ground) {
+        return 0;
+    }
+    let h = hash(seed ^ 0xF10, surface.x as i64, 0, surface.z as i64);
+    soil_plant(seed, surface.x, surface.z, biome, h, unit(h))
+}
+
+fn soil_plant(seed: u64, x: i32, z: i32, b: u32, h: u64, roll: f64) -> u32 {
+    if roll < FLOWER_COVER.on_biome(b).unwrap_or(0.012) as f64 {
+        FLOWERS
+            .on_biome(b)
+            .map_or_else(|| [DANDELION.id(), ROSE.id()][(h >> 32) as usize % 2], |l| l.pick(h >> 32).unwrap_or(0))
+    } else if roll < FERN_COVER.on_biome(b).unwrap_or(0.0) as f64 {
+        FERN.id()
+    } else if roll < CLOVER_COVER.on_biome(b).unwrap_or(0.0) as f64 {
+        CLOVER.id()
+    } else if roll < BLUEGRASS_COVER.on_biome(b).unwrap_or(0.0) as f64 {
+        let wave = fixed::fbm(fixed::seed32(seed, 0x7A11) + 1, x * 16, z * 16, 48 * 16, 3);
+        if wave < 0 { BLUEGRASS.id() } else { 0 }
+    } else if roll < SHORT_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64 {
+        SHORT_GRASS.id()
+    } else if roll < TALL_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64 {
+        TALL_TALL_GRASS.id()
+    } else if roll < GRASS_COVER.on_biome(b).unwrap_or(0.05) as f64 {
+        TALL_GRASS.id()
+    } else {
+        0
+    }
+}
+
 /// Plants and Clay after the terrain and trees filled the cube.
 pub fn decorate(g: &mut Gen) {
-    let place_grass = |g: &mut Gen, x, y, z| g.set(x, y, z, TALL_GRASS.id());
     let place_tall_grass = |g: &mut Gen, x, y, z| {
         let upper = COVERED.with(&[("to", "down")]);
         if y + 1 < 16 && g.get(x, y + 1, z) == 0 && upper != u32::MAX {
@@ -49,15 +79,11 @@ pub fn decorate(g: &mut Gen) {
             if FROZEN.on_biome(b) {
                 continue;
             }
-            let tall_grass_chance = TALL_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64;
-            let grass_chance = GRASS_COVER.on_biome(b).unwrap_or(0.05) as f64;
-            let flower_chance = FLOWER_COVER.on_biome(b).unwrap_or(0.012) as f64;
-            let fern_chance = FERN_COVER.on_biome(b).unwrap_or(0.0) as f64;
-            let bluegrass_chance = BLUEGRASS_COVER.on_biome(b).unwrap_or(0.0) as f64;
-            let short_grass_chance = SHORT_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64;
-            let clover_chance = CLOVER_COVER.on_biome(b).unwrap_or(0.0) as f64;
             // What is under the lowest layer takes a look at the terrain: only if anything would grow.
-            if y == 0 && roll >= grass_chance.max(0.08) && roll >= tall_grass_chance.max(0.08) {
+            if y == 0
+                && roll >= GRASS_COVER.on_biome(b).unwrap_or(0.05).max(0.08) as f64
+                && roll >= TALL_GRASS_COVER.on_biome(b).unwrap_or(0.0).max(0.08) as f64
+            {
                 continue;
             }
             let below = g.read([wx, oy + y as i32 - 1, wz]);
@@ -70,35 +96,11 @@ pub fn decorate(g: &mut Gen) {
                 }
             }
             if PLANT_SOIL.on_block(below) {
-                // roll ∈ [0; flower_chance)
-                if roll < flower_chance {
-                    let flower = FLOWERS
-                        .on_biome(b)
-                        .map_or_else(|| [DANDELION.id(), ROSE.id()][(h >> 32) as usize % 2], |l| l.pick(h >> 32).unwrap_or(0));
-                    if flower != 0 {
-                        g.set(x, y, z, flower);
-                    }
-                // roll ∈ [flower_chance; clover_chance)
-                } else if roll < fern_chance {
-                    g.set(x, y, z, FERN.id());
-                // roll ∈ [clover_chance; fern_chance)
-                } else if roll < clover_chance {
-                    g.set(x, y, z, CLOVER.id());
-                // roll ∈ [fern_chance; bluegrass_chance)
-                } else if roll < bluegrass_chance {
-                    let wave = fixed::fbm(fixed::seed32(seed, 0x7A11) + 1, wx * 16, wz * 16, 48 * 16, 3);
-                    if wave < 0 {
-                        g.set(x, y, z, BLUEGRASS.id());
-                    }
-                // roll ∈ [bluegrass_chance; short_grass_chance)
-                } else if roll < short_grass_chance {
-                    g.set(x, y, z, SHORT_GRASS.id());
-                // roll ∈ [bluegrass_chance; tall_grass_chance)
-                } else if roll < tall_grass_chance {
+                let plant = soil_plant(seed, wx, wz, b, h, roll);
+                if TALL_TALL_GRASS.is(plant) {
                     place_tall_grass(g, x, y, z);
-                // roll ∈ [tall_grass_chance; grass_chance)
-                } else if roll < grass_chance {
-                    place_grass(g, x, y, z);
+                } else if plant != 0 {
+                    g.set(x, y, z, plant);
                 }
             } else if CACTUS_SOIL.on_block(below) && DRY.on_biome(b) && roll < 0.006 && y + 2 < 16 {
                 let n = 1 + (h >> 40) % 3;

@@ -541,7 +541,7 @@ r.phase(&CRITS, &phase::MULTIPLY);
 ```
 
 ## Equipment slot
-A slot things are worn in. `r.equipment_slot(&S, covers, background)`. `comps::equipment_slot`: `COVERS` (`[str]` bones), `BACKGROUND` (`str`).
+A slot things are worn in. `r.equipment_slot(&S, covers, background)` registers it. Its components are `COVERS` (`[str]` bones), `BACKGROUND` (`str`) and `PRIORITIES` (`[SlotPriority]` for quick transfers).
 
 ```rust
 r.edit(&base_api::CHEST).push(&comps::equipment_slot::COVERS, "leftWing".to_string());
@@ -599,10 +599,10 @@ r.edit(base_api::HUNGER.declaration()).untag("component.keep_on_respawn");
 ```
 
 ## Bone motion
-A bone of a model file moving by itself, named `<model>/<bone>`. `r.bone_motion(model, bone, BoneMotion::..)`. `comps::bone_motion`: `GRAVITY`, `SPRING`, `DRAG` (`f32`, 0). There is no builder, so one bone takes one registration; `r.remove(Handle::<kind::BoneMotion>::generated(..))` takes another mod's away.
+A bone of a model file moving by itself, named `<model>/<bone>`. `r.bone_motion(model, bone, BoneMotion::..)` uses the preset's default angle. The components in `comps::bone_motion` are `GRAVITY`, `SPRING`, `DRAG` and `MAX_ANGLE` (degrees). One bone takes one registration. `r.remove(Handle::<kind::BoneMotion>::generated(..))` takes another mod's away.
 
 ```rust
-r.bone_motion("tailmod:tail", "tail2", BoneMotion::SPRINGY);
+r.bone_motion_with_limit("tailmod:tail", "tail2", BoneMotion::SPRINGY, 45.0);
 ```
 
 ## Record

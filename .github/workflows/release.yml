@@ -11,8 +11,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to release, e.g. v0.1.0
+        description: Release tag, e.g. v0.1.0
         required: true
+      draft:
+        description: Build the selected commit and attach files to its existing draft
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -42,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.draft && github.sha || inputs.tag || github.ref }}
 
       - name: Tag matches the version
         shell: bash
@@ -143,7 +147,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.draft && github.sha || inputs.tag || github.ref }}
 
       - name: Tag matches the version
         run: |
@@ -193,7 +197,14 @@ jobs:
           path: archives
           merge-multiple: true
 
+      - name: Attach files to draft
+        if: inputs.draft
+        run: |
+          test "$(gh release view "$TAG" --json isDraft,targetCommitish --jq 'select(.isDraft) | .targetCommitish')" = "$GITHUB_SHA"
+          gh release upload "$TAG" archives/* --clobber
+
       - name: Publish
+        if: ${{ !inputs.draft }}
         run: |
           gh release create "$TAG" archives/* \
             --verify-tag --title "Weft ${TAG#v}" \

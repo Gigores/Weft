@@ -139,6 +139,7 @@ pub struct StateInfo {
     pub boxes: Vec<ModelBox>,
     /// In block units.
     pub collision: Vec<[f32; 6]>,
+    pub cylinder: Option<crate::physics::Cylinder>,
     /// `abi::comp::block::LIQUID_WALLS`; `Content::liquid_walls` has them worked out.
     pub liquid_walls: u8,
     /// What rays pick and the room it takes in its cell, in block units: its hitbox, else its
@@ -166,10 +167,8 @@ pub struct StateInfo {
     pub signal: Signal,
     /// What a hit breaks off alone (`abi::comp::block::PIECES`), turned like the boxes.
     pub pieces: Vec<Piece>,
-    /// The other cells a big block takes (`abi::comp::block::CELLS`), turned, each with the
-    /// direction (`DIRS`) of its neighbor one step nearer the block's own cell: `core:covered`
-    /// in that cell points there.
-    pub cells: Vec<(IVec3, u8)>,
+    /// Cells reached by the shape at a grid-aligned origin, excluding the origin.
+    pub cells: Vec<IVec3>,
 }
 
 /// An attribute modifier something gives (`abi::Modifier`) resolved: the step and the phase it
@@ -594,6 +593,12 @@ pub fn swings_per_second(c: &Content, kind: u32, held: &weft_abi::ItemStack) -> 
         .unwrap_or(1.0)
 }
 
+/// Mining can start again after the swing with the weapon that struck the target.
+pub fn melee_recovery(c: &Content, kind: u32, held: &weft_abi::ItemStack, speed: f32) -> u32 {
+    let rate = swings_per_second(c, kind, held) * speed;
+    if rate > 0.0 { (crate::world::TPS as f32 / rate).ceil().max(1.0) as u32 } else { 1 }
+}
+
 /// How charged a swing is after that many ticks, 0..1. Client and server have to agree, with
 /// `speed` the `core:attack_speed` attribute.
 pub fn swing_charge(c: &Content, kind: u32, held: &weft_abi::ItemStack, ticks: f32, speed: f32) -> f32 {
@@ -879,6 +884,7 @@ pub struct PaletteDef {
 }
 
 pub struct ModMeta {
+    pub revision: u64,
     pub id: String,
     pub version: String,
     pub deps: Vec<String>,
@@ -918,6 +924,7 @@ pub struct Ids {
     pub use_ticks: Option<u32>,
     pub sweeps: Option<u32>,
     pub no_creative_break: Option<u32>,
+    pub body_grab: Option<u32>,
     pub inventory: Option<u32>,
     pub contents: Option<u32>,
     pub layers: Option<u32>,
@@ -1050,8 +1057,6 @@ pub struct Content {
     pub fire_texture: u32,
     /// Engine commands first, then mods' in name order.
     pub commands: Vec<crate::commands::CommandDef>,
-    /// The first state of `core:covered`, a big block's other cell (`StateInfo::cells`).
-    pub covered: u32,
     /// Where players start: the dimension marked `PLAYER_SPAWN` by the mod loaded last, else the
     /// first one registered, else the engine's void (`void_dim`).
     pub spawn_dim: u32,
@@ -1137,52 +1142,9 @@ pub fn item_tint(tint: u8) -> u32 {
         .map_or(0xFFFFFF, |k| k.1)
 }
 
-/// A cell a big block takes besides its own: nothing of its own, it points (`to`, a face) one
-/// step nearer that block's cell, and stands for the block.
-pub const COVERED: &str = "core:covered";
-
-fn covered_entry() -> RawEntry {
-    use abi::comp::block as b;
-    let faces = abi::FACE_NAMES.iter().map(|f| f.to_string()).collect();
-    RawEntry::engine(abi::entry_kind::BLOCK, COVERED)
-        .set(b::PROPS, vec![abi::BlockProp { name: "to".into(), values: faces }])
-        .set(b::MODEL, BlockModel::None as u32)
-        .tag(b::NOT_SOLID)
-        .tag(b::NOT_TARGETABLE)
-}
-
 impl Content {
     pub fn solid(&self, state: u32) -> bool {
         self.states[state as usize].solid()
-    }
-
-    /// The way from a big block's other cell one step nearer its own, if `state` is one.
-    pub fn covered_step(&self, state: u32) -> Option<IVec3> {
-        let d = state.wrapping_sub(self.covered);
-        (d < 6).then(|| crate::world::DIRS[d as usize])
-    }
-
-    /// The cell whose block `p` is and that block: a big block's own cell for its others, `p`
-    /// itself otherwise. A covered cell no block takes any more is air. `None`: not loaded.
-    pub fn block_at(&self, get: impl Fn(IVec3) -> Option<u32>, p: IVec3) -> Option<(IVec3, u32)> {
-        let (mut at, mut s) = (p, get(p)?);
-        let mut steps = 0;
-        while let Some(d) = self.covered_step(s) {
-            (at, steps) = (at + d, steps + 1);
-            s = get(at)?;
-            if steps > 4096 {
-                return Some((p, AIR));
-            }
-        }
-        if at != p
-            && !self.states[s as usize]
-                .cells
-                .iter()
-                .any(|(o, _)| at + *o == p)
-        {
-            return Some((p, AIR));
-        }
-        Some((at, s))
     }
 
     /// In creative this item doesn't break blocks.
@@ -1190,6 +1152,11 @@ impl Content {
         self.ids
             .no_creative_break
             .is_some_and(|t| self.components.has(comps::ITEM, item, t))
+    }
+
+    pub fn body_grab_tool(&self, item: abi::ItemStack, mode: crate::world::GameMode) -> bool {
+        use crate::tag_bits::game_mode as f;
+        !item.is_empty() && mode.has(f::CREATIVE_INVENTORY) && !mode.has(f::NO_INTERACT) && self.item_has(item.item, self.ids.body_grab)
     }
 
     /// `state` turned `toward` (`north`..) if its block has a `facing`: how a block item shows its
@@ -1355,17 +1322,6 @@ impl Content {
     pub fn spawn_egg_of(&self, kind: u32) -> Option<u32> {
         let (name, egg) = (&self.game.entities.get(kind as usize)?.name, self.ids.spawn_egg?);
         (1..self.items.len() as u32).find(|&i| self.components.text(comps::ITEM, i, egg) == Some(name.as_str()))
-    }
-
-    /// Whether the shapes of two states overlap, in one cell.
-    pub fn overlap(&self, a: u32, b: u32) -> bool {
-        const TOUCHING: f32 = 1e-4;
-        self.states[a as usize].selection.iter().any(|x| {
-            self.states[b as usize]
-                .selection
-                .iter()
-                .any(|y| (0..3).all(|i| x[i] + TOUCHING < y[i + 3] && y[i] + TOUCHING < x[i + 3]))
-        })
     }
 
     /// A condition met at run time, compiled the first time; `None` (said once) for a wrong one.
@@ -1986,7 +1942,12 @@ struct Lookups<'a> {
 /// depend on which mod finished registering first. The order of the stages is the meaning here:
 /// each one reads what the ones before it settled.
 /// `step_order` is the pack's own order of steps (`config/step_order.txt`).
-pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str) -> Result<Content, Vec<String>> {
+pub fn freeze(
+    mut mods: Vec<ModMeta>,
+    regs: Vec<RawRegistrar>,
+    step_order: &str,
+    core_assets: &std::path::Path,
+) -> Result<Content, Vec<String>> {
     let order = load_order(&mods);
     for (m, o) in mods.iter_mut().zip(&order) {
         m.order = *o;
@@ -2020,8 +1981,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
     textures.ids.insert(String::new(), 0);
     let crack_textures: [u32; 10] = std::array::from_fn(|i| textures.id(&format!("core:block/destroy_{i}")));
     let fire_texture = textures.id("core:block/fire");
-    let mut raw_blocks = entries_of(&mut games, abi::entry_kind::BLOCK);
-    raw_blocks.insert(0, covered_entry());
+    let raw_blocks = entries_of(&mut games, abi::entry_kind::BLOCK);
     let read_model = |name: &str| model_file(&mods, name);
     let liquid_names: Vec<String> = liquids.entries.iter().map(|e| e.name.clone()).collect();
     let mut block_tables =
@@ -2164,14 +2124,6 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
     game.item_model_for_stack = item_looks;
     link_particles(&mut game, &mut textures);
     check_ambient_particles(&game, &components, states.len() as u32, &mut errors);
-    for m in &mut game.menus {
-        for g in m.groups.iter_mut().filter(|g| !g.accepts.is_empty()) {
-            match crate::refs::bits(&g.accepts, comps::ITEM, &item_names, item_defs.len() as u32, &components, "item") {
-                Ok(bits) => g.accepted = Some(bits.into()),
-                Err(e) => errors.push(format!("menu {}: group {} accepts {}: {e}", m.name, g.name, g.accepts)),
-            }
-        }
-    }
     link_entity_templates(&mut game, &templates, &template_names, &mut errors);
     link_equipment(&game, &mut item_defs, &components);
     for d in &mut dim_defs {
@@ -2249,6 +2201,7 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
     );
     check_loot_smelting(&loot, &game, &mut errors);
     resolve_effects(&mut states, &mut game, &block_defs, &components, &mut errors);
+    crate::hitbox::bind_rigs(core_assets, &mods, &components, &mut game.entities, &mut errors);
     let face_layers = face_layers(&mut textures, &tint_kinds, &mut errors);
     if !errors.is_empty() {
         return Err(errors);
@@ -2273,9 +2226,6 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
         .iter()
         .map(|s| if s.liquid_walls == u8::MAX { covered_faces(s) } else { s.liquid_walls })
         .collect();
-    let covered = block_names
-        .get(COVERED)
-        .map_or(u32::MAX, |&b| block_defs[b as usize].first_state);
     for (kind, names) in [
         (abi::entry_kind::BLOCK, block_names),
         (abi::entry_kind::ITEM, item_names),
@@ -2314,7 +2264,6 @@ pub fn freeze(mut mods: Vec<ModMeta>, regs: Vec<RawRegistrar>, step_order: &str)
         crack_textures,
         fire_texture,
         commands,
-        covered,
         creative_tabs,
         spawn_dim,
         void_dim,
@@ -2836,6 +2785,7 @@ fn component_ids(components: &Components) -> Ids {
         use_ticks: id(abi::comp::USE_TICKS),
         sweeps: id(abi::comp::SWEEPS),
         no_creative_break: id(abi::comp::NO_CREATIVE_BREAK),
+        body_grab: id("body_grab"),
         inventory: id(abi::comp::INVENTORY),
         contents: id(abi::comp::CONTENTS),
         layers: id(abi::comp::LAYERS),
@@ -3149,6 +3099,11 @@ fn freeze_features(
             return None;
         }
         let mut def = FeatureDef {
+            impostor: e.has(f::IMPOSTOR),
+            surface_cover: e
+                .has(f::SURFACE_PROJECTION)
+                .then(|| e.callback(f::SURFACE_COVER))
+                .flatten(),
             name: e.name.clone(),
             id,
             owner: e.owner,
@@ -3830,7 +3785,7 @@ fn link_entity_templates(
 /// Items worn in an equipment slot carry its `worn/<slot>` tag.
 fn link_equipment(game: &crate::registry::Game, item_defs: &mut [ItemDef], components: &Components) {
     for (e, slot) in game.player_layout.equipment.iter().enumerate() {
-        if let Some(t) = components.id(&format!("worn/{}", slot.name)) {
+        if let Some(t) = components.id(&format!("worn/{}", slot.group.name)) {
             for (i, d) in item_defs.iter_mut().enumerate() {
                 if components.has(comps::ITEM, i as u32, t) {
                     d.equip = Some(e as u32);
@@ -4113,6 +4068,7 @@ mod tests {
 
     fn meta(id: &str, deps: &[&str]) -> ModMeta {
         ModMeta {
+            revision: 0,
             id: id.into(),
             version: "1".into(),
             deps: deps.iter().map(|d| d.to_string()).collect(),

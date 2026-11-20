@@ -454,6 +454,8 @@ pub trait Backend: Send {
     }
     fn destroy_pipeline(&mut self, pipeline: PipelineId);
 
+    /// Waits for the staging slot before a budgeted batch of uploads.
+    fn prepare_uploads(&mut self);
     /// `None` when the surface cannot be drawn to right now (minimized).
     fn begin_frame(&mut self) -> Option<FrameInfo>;
     fn end_frame(&mut self, cmds: &CommandList);

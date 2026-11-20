@@ -317,6 +317,7 @@ pub fn register(r: &mut Registry) {
 
     // Trees wherever a biome asks for them, in any dimension.
     r.scatter(&TREE_SITES)
+        .impostor()
         .spacing(5)
         .reach(20)
         .density(&TREES)
@@ -337,6 +338,7 @@ pub fn register(r: &mut Registry) {
             place_tree(&mut TreePlaceData::new(s));
         });
     r.scatter(&BOULDER_SITES)
+        .impostor()
         .spacing(5)
         .reach(3)
         .density(&BOULDER_COVER)
@@ -388,11 +390,13 @@ pub fn register(r: &mut Registry) {
             }
         });
     r.scatter(&BUSH_SITES)
+        .impostor()
         .spacing(5)
         .reach(3)
         .density(&BUSH_COVER)
         .plan(|s| place_bush(s, |_r| BUSH_LEAVES.id(), BUSH_STEM.id()));
     r.scatter(&RASPBERRY_SITES)
+        .impostor()
         .spacing(5)
         .reach(3)
         .density(&RASPBERRY_COVER)
@@ -404,6 +408,7 @@ pub fn register(r: &mut Registry) {
             )
         });
     r.scatter(&SNOWBERRY_SITES)
+        .impostor()
         .spacing(5)
         .reach(3)
         .density(&SNOWBERRY_COVER)
@@ -423,7 +428,7 @@ pub fn register(r: &mut Registry) {
             let mut rng = Rng(s.random());
             s.put(s.pos(), fungi[rng.next() as usize % fungi.len()].id());
         });
-    r.decoration(decorate);
+    r.decoration(decorate).surface_cover(plant_at);
 }
 
 static FUNGI_SITES: Feature = Feature::named("fungis");

@@ -443,15 +443,6 @@ fn appearance(c: &Content, kind: What, index: usize) -> Thing {
         t.calls
             .push(Call::new("sound_group", &[&code::quote(sound)]));
     }
-    if !state.cells.is_empty() {
-        let cells: Vec<_> = state
-            .cells
-            .iter()
-            .map(|(o, _)| format!("[{}, {}, {}]", o.x, o.y, o.z))
-            .collect();
-        t.calls
-            .push(Call::new("cells", &[&format!("&[{}]", cells.join(", "))]));
-    }
     let level = c
         .components
         .id(abi::comp::HARVEST_LEVEL)

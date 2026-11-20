@@ -190,10 +190,48 @@ impl Wire for LodColumn {
     fn put(&self, w: &mut W) {
         (self.x, self.z, self.y, self.top, self.under, self.light).put(w);
         self.spans.put(w);
+        self.removed_scatter.put(w);
     }
     fn get(r: &mut R) -> Option<Self> {
         let (x, z, y, top, under, light) = Wire::get(r)?;
-        Some(LodColumn { x, z, y, top, under, light, spans: Wire::get(r)? })
+        Some(LodColumn { x, z, y, top, under, light, spans: Wire::get(r)?, removed_scatter: Wire::get(r)? })
+    }
+}
+
+use crate::world::placement::{CellLayout, Part};
+
+impl Wire for crate::wire::Site {
+    fn put(&self, w: &mut W) {
+        self.cell.put(w);
+        self.offset.put(w);
+        self.port.put(w);
+    }
+    fn get(r: &mut R) -> Option<Self> {
+        Some(Self { cell: Wire::get(r)?, offset: Wire::get(r)?, port: Wire::get(r)? })
+    }
+}
+
+impl Wire for Part {
+    fn put(&self, w: &mut W) {
+        self.state.put(w);
+        self.offset.put(w);
+    }
+    fn get(r: &mut R) -> Option<Self> {
+        Some(Self { state: Wire::get(r)?, offset: Wire::get(r)? })
+    }
+}
+
+impl Item for Part {}
+
+impl Wire for CellLayout {
+    fn put(&self, w: &mut W) {
+        self.extras.put(w);
+        self.offsets.put(w);
+        self.covers.put(w);
+    }
+    fn get(r: &mut R) -> Option<Self> {
+        let layout = Self { extras: Wire::get(r)?, offsets: Wire::get(r)?, covers: Wire::get(r)? };
+        (layout.offsets.len() <= layout.extras.len() + 1).then_some(layout)
     }
 }
 
@@ -361,7 +399,7 @@ mod tests {
             ToServer::Join { name: "Ann".into(), key: "k".into() },
             ToServer::Use {
                 pos: IVec3::new(-5, 70, 3),
-                part: 7,
+                part: Part { state: 7, offset: IVec3::new(0, 32768, 0) },
                 face: 3,
                 hit: [0.5, 1.0, 0.25],
                 look: [0.1, -0.5, 0.8],
@@ -372,6 +410,7 @@ mod tests {
             ToServer::Move {
                 jumped: false,
                 pos: DVec3::new(1.5, 64.0, -3.25),
+                vel: DVec3::new(-4.5, 0.0, 1.0),
                 yaw: 1.0,
                 pitch: -0.5,
                 on_ground: true,
@@ -380,7 +419,7 @@ mod tests {
                 flying: false,
                 frame: Some((7, DVec3::ONE)),
             },
-            ToServer::UseItem { target: Some((IVec3::new(1, 2, 3), 4)) },
+            ToServer::UseItem,
             ToServer::Click { slot: 7, button: 1, shift: true },
             ToServer::Drag { slots: vec![3, 4, 9], button: 0 },
             ToServer::Chat("/give stone 5".into()),

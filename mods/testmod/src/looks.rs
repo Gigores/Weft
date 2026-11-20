@@ -128,6 +128,7 @@ pub fn register(r: &mut Registry) {
     }
     drop(obelisk.key('s', "base:sandstone").key('g', "glow_crystal"));
     r.structure(&OBELISK)
+        .impostor()
         .dimension(&crate::MARS)
         .spacing(128)
         .chance(0.5)
@@ -319,8 +320,6 @@ pub fn register(r: &mut Registry) {
     r.item(&FOX_TAIL)
         .max_stack(1)
         .wearable_model(&EquipmentSlot::named("base:legs"), "fox_tail", "body");
-    r.bone_motion("fox_tail", "tail2", BoneMotion::SPRINGY);
-    r.bone_motion("fox_tail", "tail3", BoneMotion::SPRINGY);
     // Both hands, or one if the other is busy.
     static MAP_SHEET: Item = Item::named("map_sheet");
     r.item(&MAP_SHEET)

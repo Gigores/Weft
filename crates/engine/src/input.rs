@@ -410,6 +410,10 @@ impl Input {
 
     /// One resolution for held state, press edges and per-frame amounts.
     fn read(&self, action: &str, pressed: bool, raw: bool) -> f32 {
+        self.read_except(action, pressed, raw, |_| false)
+    }
+
+    pub(crate) fn read_except(&self, action: &str, pressed: bool, raw: bool, excluded: impl Fn(Key) -> bool) -> f32 {
         let Some(&i) = self.lookup.get(action) else { return 0.0 };
         if !self.enabled(i, raw) {
             return 0.0;
@@ -420,6 +424,9 @@ impl Input {
         let mut amount = 0.0;
         for (s, binding) in b.keys.iter().enumerate() {
             let Some(binding) = binding else { continue };
+            if excluded(binding.chord.key) {
+                continue;
+            }
             let active = match binding.trigger {
                 Trigger::Hold => self.active(i, binding.chord, keys, raw),
                 _ => {
@@ -531,6 +538,14 @@ impl Input {
 
     pub fn held_key(&self, k: Key) -> bool {
         self.held.contains(&k)
+    }
+
+    /// A held key or an instantaneous wheel press.
+    pub fn active_key(&self, k: Key) -> bool {
+        match k {
+            Key::Wheel(_) => self.pressed_key(k),
+            _ => self.held_key(k),
+        }
     }
 
     pub fn pressed_key(&self, k: Key) -> bool {

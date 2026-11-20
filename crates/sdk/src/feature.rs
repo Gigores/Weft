@@ -226,6 +226,10 @@ impl FeatureBuilder<'_> {
         self.set(&f::SPREAD, abi::spread::GRID)
             .set(&f::SPACING, blocks)
     }
+    /// Show the shape of this grid feature as an impostor in distant terrain.
+    pub fn impostor(self) -> Self {
+        self.tag(abi::comp::feature::IMPOSTOR)
+    }
     /// The chance of a start per square (1 unless said).
     pub fn chance(self, c: f32) -> Self {
         self.set(&f::CHANCE, c)
@@ -267,6 +271,22 @@ impl FeatureBuilder<'_> {
     pub fn generate(self, f: impl Fn(&mut Gen) + Send + Sync + 'static) -> Self {
         self.set(&f::SPREAD, abi::spread::EVERY_CUBE)
             .set(&f::GENERATE, callback(move |a: &mut abi::GenArgs| f(Gen::wrap(a))))
+    }
+
+    /// Low vegetation used to color distant ground. Given seed, surface position, biome id
+    /// and ground state, return the plant state (0 for bare ground). Share this pure function
+    /// with the decoration that places the plant.
+    pub fn surface_cover(self, f: impl Fn(u64, BlockPos, u32, u32) -> u32 + Send + Sync + 'static) -> Self {
+        self.tag(abi::comp::feature::SURFACE_PROJECTION).set(
+            &f::SURFACE_COVER,
+            callback(move |a: &mut abi::SurfaceCoverArgs| {
+                for s in unsafe { std::slice::from_raw_parts_mut(a.samples, a.len) } {
+                    if s.ground != 0 && s.plant == 0 {
+                        s.plant = f(a.seed, s.surface, s.biome, s.ground);
+                    }
+                }
+            }),
+        )
     }
 
     // Shape.

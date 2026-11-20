@@ -66,6 +66,7 @@ item.testmod.pouch = Pouch
 block.testmod.pipe = Pipe
 testmod.notes.sample = Notes go here
 menu.testmod.pouch = Pouch
+menu.testmod.shelves = Storage shelves
 block.testmod.reinforced_stone = Reinforced Stone
 block.testmod.vent = Vent
 config.testmod.volume_machines = Machine volume

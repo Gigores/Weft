@@ -15,8 +15,8 @@ use winit::keyboard::{KeyCode, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::assets::Assets;
-use crate::client::Client;
 use crate::client::textures::GameTextures;
+use crate::client::{Client, DragPreview};
 use crate::content::content;
 use crate::hud::Hud;
 use crate::input::{Input, Key};
@@ -69,7 +69,7 @@ pub enum Request {
     /// a frame hook, after the input is handled.
     ModCall(weft_abi::ModId, weft_abi::Callback, u32),
     /// A mod's input or slider changed: its `on_change` with the text or value.
-    ModChange(weft_abi::ModId, weft_abi::Callback, String, f32),
+    ModChange(weft_abi::ModId, weft_abi::Callback, String, f32, u32),
     /// A key for a mod's screen (`on_key`), by its settings name.
     ModKey(weft_abi::ModId, weft_abi::Callback, String),
     Close,
@@ -227,6 +227,7 @@ pub(crate) const CLIENT_COMMANDS: &[(&str, &str, fn(&mut Running, &crate::comman
 
 pub(crate) struct Running {
     gpu: Box<dyn Backend>,
+    cache_dir: PathBuf,
     /// Which of the game's renderers `gpu` is.
     renderer: &'static str,
     window: Arc<Window>,
@@ -342,6 +343,7 @@ pub fn run(renderers: Renderers, opts: Options) -> Result<(), String> {
 #[cfg(target_os = "android")]
 pub fn run_android(app: winit::platform::android::activity::AndroidApp, renderers: Renderers, opts: Options) -> Result<(), String> {
     use winit::platform::android::EventLoopBuilderExtAndroid;
+    crate::clipboard::init(app.clone());
     run_on(
         EventLoop::builder()
             .with_android_app(app)
@@ -364,7 +366,7 @@ fn run_on(event_loop: EventLoop<()>, renderers: Renderers, opts: Options) -> Res
 
 /// The engine's own assets: those a distribution ships, else (a build run from the source tree, or
 /// `--dev`) the source tree's.
-fn engine_assets(dev: bool) -> PathBuf {
+pub(crate) fn engine_assets(dev: bool) -> PathBuf {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
     let shipped = crate::paths::shipped().map(|d| d.join("assets").join("core"));
     match shipped {
@@ -407,7 +409,8 @@ impl App {
     fn start(&mut self, el: &ActiveEventLoop) -> Result<Running, String> {
         // Mods first: the engine's settings are `core:` configs like theirs.
         let off = modloader::off_file(&self.opts.run_dir, self.opts.automated);
-        let mods = modloader::load(&self.opts.mod_dirs, &self.opts.cache_dir, &off, &self.opts.mods_off)?;
+        let core_assets = engine_assets(self.opts.dev);
+        let mods = modloader::load(&self.opts.mod_dirs, &self.opts.cache_dir, &off, &self.opts.mods_off, &core_assets)?;
         crate::config::set_automated(self.opts.automated);
         crate::config::load(&self.opts.run_dir);
         if self.opts.no_vsync {
@@ -420,7 +423,7 @@ impl App {
             crate::config::override_for_run("core:renderer", r);
         }
         let mut settings = Settings::new(&self.opts.run_dir);
-        let icon = crate::assets::decode_png_file(&engine_assets(self.opts.dev).join("icon.png"))
+        let icon = crate::assets::decode_png_file(&core_assets.join("icon.png"))
             .and_then(|(w, h, px)| winit::window::Icon::from_rgba(px, w, h).ok());
         let mut attrs = Window::default_attributes()
             .with_title("Weft")
@@ -471,7 +474,7 @@ impl App {
         }
         let (mut gpu, renderer) = gpu.ok_or_else(|| failed.join("; "))?;
 
-        let mut roots: Vec<(String, PathBuf)> = vec![("core".into(), engine_assets(self.opts.dev))];
+        let mut roots: Vec<(String, PathBuf)> = vec![("core".into(), core_assets)];
         roots.extend(mods.iter().map(|m| (m.id.clone(), m.assets.clone())));
         // Not in automated runs: their pictures are compared against fixed expectations.
         if !self.opts.automated {
@@ -504,6 +507,7 @@ impl App {
         let gpu_name = format!("{} ({})", gpu.device_name(), gpu.name());
         let mut r = Running {
             gpu,
+            cache_dir: self.opts.cache_dir.clone(),
             renderer,
             window,
             depth,
@@ -836,6 +840,7 @@ impl Running {
             &mut *self.gpu,
             &self.assets,
             &self.textures,
+            &self.cache_dir,
             client_conn,
             &crate::settings::name(),
             &key,
@@ -923,6 +928,24 @@ impl Running {
 
     /// Closes the top screen, and the menu it shows if it does.
     pub(crate) fn close_top(&mut self) {
+        let mut requests = Vec::new();
+        if let Some((screen, ui)) = self.screens.last_mut()
+            && let Some(action) = screen.close_action()
+        {
+            let close = action(&mut Ctx {
+                settings: &mut self.settings,
+                client: self.game.as_mut().map(|g| &mut g.client),
+                input: &self.input,
+                requests: &mut requests,
+                stats: &self.stats,
+                debug: self.debug,
+                top: Some(Top { screen: Some(&mut **screen), ui }),
+            });
+            if !close {
+                self.handle(requests);
+                return;
+            }
+        }
         if self.screens.last().is_some_and(|(s, _)| s.shows_menu()) {
             if let Some(g) = &mut self.game {
                 g.client.close_menu();
@@ -930,6 +953,7 @@ impl Running {
         }
         self.screens.pop();
         self.screens_gone();
+        self.handle(requests);
     }
 
     pub(crate) fn handle(&mut self, reqs: Vec<Request>) {
@@ -957,9 +981,9 @@ impl Running {
                     let mut a = weft_abi::UiArgs { ui: std::ptr::null_mut(), client: v.raw(), data };
                     crate::host::invoke(owner, cb, &mut a);
                 }
-                Request::ModChange(owner, cb, text, value) => {
+                Request::ModChange(owner, cb, text, value, handle) => {
                     let mut v = self.frame_view();
-                    let mut a = weft_abi::UiChangeArgs { client: v.raw(), text: weft_abi::Str::new(&text), value };
+                    let mut a = weft_abi::UiChangeArgs { client: v.raw(), text: weft_abi::Str::new(&text), value, handle };
                     crate::host::invoke(owner, cb, &mut a);
                 }
                 Request::ModKey(owner, cb, key) => {
@@ -1039,6 +1063,7 @@ impl Running {
                             &mut *self.gpu,
                             &self.assets,
                             &self.textures,
+                            &self.cache_dir,
                             conn,
                             &crate::settings::name(),
                             &key,
@@ -1181,7 +1206,10 @@ impl Running {
                                 .send(net::ToServer::Click { slot: s, button: GATHER, shift: false });
                             g.client.last_click = None;
                         }
-                        Some(s) if holding && !shift && g.client.drag.is_none() => g.client.drag = Some((button, vec![s])),
+                        Some(s) if holding && !shift && g.client.drag.is_none() => {
+                            g.client.drag = Some((button, vec![s]));
+                            self.quads_dirty = true;
+                        }
                         Some(s) => {
                             g.client
                                 .send(net::ToServer::Click { slot: s, button, shift });
@@ -1312,7 +1340,9 @@ impl Running {
                             .clone()?;
                         Some(crate::ui::text::rich(self.lang.get(&key), &self.lang, Some(&self.input)))
                     };
-                    let tip = if !stack.is_empty() {
+                    let tip = if g.client.drag.is_some() {
+                        None
+                    } else if !stack.is_empty() {
                         Some(crate::hud::item_tooltip(&self.lang, &self.input, stack))
                     } else if tag == crate::client::modui::TAG_SLOT {
                         hint()
@@ -1336,7 +1366,15 @@ impl Running {
         let Some((_, ui)) = self.screens.last_mut() else { return UiCallbacks::default() };
         if self.input.pressed_button(0) {
             ui.pressed = hovered;
-            ui.focused = hovered.filter(|&h| matches!(ui.nodes[h].kind, Kind::Input { .. } | Kind::Slider { enabled: true, .. }));
+            ui.focused = hovered.filter(|&h| {
+                matches!(ui.nodes[h].kind, Kind::Input { .. } | Kind::Slider(crate::ui::slider::Slider { enabled: true, .. }))
+            });
+            if let Some(h) = hovered {
+                let r = ui.nodes[h].rect;
+                if let Kind::Slider(s) = &mut ui.nodes[h].kind {
+                    s.begin(crate::ui::slider::Slider::value_at(cursor.x - r.x, r.w));
+                }
+            }
             ui.anchor = None;
             if let Some(f) = ui.focused
                 && let Some(at) = self.ui.caret_at(ui, f, cursor)
@@ -1387,18 +1425,20 @@ impl Running {
         if self.input.held_button(0) {
             if let Some(p) = ui.pressed {
                 let r = ui.nodes[p].rect;
-                if let Kind::Slider { value, on_change, enabled: true, .. } = &mut ui.nodes[p].kind {
-                    let v = ((cursor.x - r.x) / r.w).clamp(0.0, 1.0);
-                    if (v - *value).abs() > 1e-4 {
-                        *value = v;
-                        slider.push((on_change.clone(), v));
-                        self.quads_dirty = true;
-                    }
+                if let Kind::Slider(s) = &mut ui.nodes[p].kind
+                    && s.enabled
+                    && let Some((change, value)) = s.drag(crate::ui::slider::Slider::value_at(cursor.x - r.x, r.w))
+                {
+                    slider.extend(change.map(|f| (f, value)));
+                    self.quads_dirty = true;
                 }
             }
         } else if let Some(p) = ui.pressed.take() {
-            if let Kind::Slider { value, on_release: Some(f), enabled: true, .. } = &ui.nodes[p].kind {
-                slider.push((f.clone(), *value));
+            if let Kind::Slider(s) = &ui.nodes[p].kind
+                && s.enabled
+                && let Some(t) = s.thumbs.get(s.active)
+            {
+                slider.extend(t.release.clone().map(|f| (f, t.value)));
             }
             if Some(p) == hovered {
                 if let Kind::Button { action, on_double, enabled: true, .. } = &ui.nodes[p].kind {
@@ -1440,20 +1480,28 @@ impl Running {
                         text_changed = Some((cb.clone(), value.clone()));
                     }
                 }
-            } else if let Kind::Slider { value, on_change, on_release, steps, step_value, enabled: true, .. } = &mut ui.nodes[f].kind {
+            } else if let Kind::Slider(s) = &mut ui.nodes[f].kind
+                && s.enabled
+                && ui.pressed != Some(f)
+            {
+                if self.input.pressed_key(Key::Code(KeyCode::ArrowUp)) && s.active > 0 {
+                    s.active -= 1;
+                    self.quads_dirty = true;
+                }
+                if self.input.pressed_key(Key::Code(KeyCode::ArrowDown)) && s.active + 1 < s.thumbs.len() {
+                    s.active += 1;
+                    self.quads_dirty = true;
+                }
                 let by: f32 = [(KeyCode::ArrowLeft, -1.0), (KeyCode::ArrowRight, 1.0)]
                     .into_iter()
                     .filter(|(k, _)| self.input.pressed_or_repeated(Key::Code(*k)))
                     .map(|(_, by)| by)
                     .sum();
-                if by != 0.0 {
-                    let n = (*steps).max(1) as f32;
-                    let v = step_value
-                        .as_ref()
-                        .map_or_else(|| (((*value * n).round() + by) / n).clamp(0.0, 1.0), |step| step(*value, by).clamp(0.0, 1.0));
-                    *value = v;
-                    slider.push((on_change.clone(), v));
-                    slider.extend(on_release.clone().map(|f| (f, v)));
+                if by != 0.0
+                    && let Some((change, value)) = s.nudge(by)
+                {
+                    slider.extend(change.map(|f| (f, value)));
+                    slider.extend(s.thumbs[s.active].release.clone().map(|f| (f, value)));
                     self.quads_dirty = true;
                 }
             }
@@ -1793,15 +1841,7 @@ impl Running {
                             redraw = true;
                         }
                     }
-                    // One that applies when let go stays where it is dragged meanwhile.
-                    Kind::Slider { on_release: Some(_), .. } if held == Some(i) => {}
-                    Kind::Slider { bind, value, .. } => {
-                        let v = bind(&ctx);
-                        if v.is_finite() && (v - *value).abs() > 1e-4 {
-                            *value = v;
-                            redraw = true;
-                        }
-                    }
+                    Kind::Slider(s) => redraw |= s.poll(&ctx, held == Some(i)),
                     Kind::Item { bind, last } => {
                         let v = bind(&ctx);
                         if v != *last {
@@ -2069,10 +2109,14 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
         r.ui.biome = biome;
         r.quads_dirty = true;
     }
+    let drag = r.game.as_ref().and_then(|g| {
+        let (button, slots) = g.client.drag.as_ref()?;
+        Some(g.client.menu.as_ref()?.drag_preview(*button, slots))
+    });
     if r.quads_dirty {
-        build_ui_quads(r, scale);
+        build_ui_quads(r, scale, drag.as_ref());
     }
-    draw_overlays(r, &info, scale, text_unit);
+    draw_overlays(r, &info, scale, text_unit, drag.as_ref());
     record_passes(r, &info, scale);
     let capture_now = r.shot_pending;
     let t3 = Instant::now();
@@ -2256,8 +2300,10 @@ fn reload_assets(r: &mut Running, opts: &Options) {
         g.client.particles.reload(&mut *r.gpu, &r.assets);
         g.client.wires.reload(&mut *r.gpu, &r.assets);
         g.client.weather_render.reload(&mut *r.gpu, &r.assets);
+        g.client.wake_render.reload(&mut *r.gpu, &r.assets);
         g.client.sky.reload(&mut *r.gpu, &r.assets);
         g.client.world.remesh_all();
+        g.client.lod.reload();
         g.client
             .entities
             .values_mut()
@@ -2347,6 +2393,7 @@ fn client_events(r: &mut Running) {
         .unwrap_or_default();
     for ev in events {
         match ev {
+            crate::client::ClientEvent::ControllerEdit => r.open(screens::engine(crate::controller::SCREEN)),
             crate::client::ClientEvent::OpenMenu => {
                 let kind = r
                     .game
@@ -2485,6 +2532,13 @@ fn refresh_hud(r: &mut Running) {
         ) {
             h = crate::world::mix(h ^ ((s.item as u64) << 32 | s.count as u64) ^ (s.data as u64) << 48);
         }
+        if g.client.drag.is_some()
+            && let Some(menu) = &g.client.menu
+        {
+            for target in &menu.drag_targets {
+                h = crate::world::mix(h ^ ((u64::from(target.slot) << 32) | u64::from(target.room)));
+            }
+        }
         if h != r.client_hash {
             r.client_hash = h;
             r.quads_dirty = true;
@@ -2538,7 +2592,7 @@ fn visible_height(r: &Running) -> Option<f32> {
     }
 }
 
-fn build_ui_quads(r: &mut Running, scale: f32) {
+fn build_ui_quads(r: &mut Running, scale: f32, drag: Option<&DragPreview>) {
     let mut all = Vec::new();
     let game = crate::content::try_content().map(|c| (c, &r.textures));
     let client = r.game.as_ref().map(|g| &g.client);
@@ -2566,7 +2620,7 @@ fn build_ui_quads(r: &mut Running, scale: f32) {
         let look = &r.look;
         let textures = &r.textures;
         let mut custom = |ren: &mut UiRenderer, tag: u32, data: u64, rect: crate::ui::Rect, hovered: bool, icon: Option<u32>| {
-            crate::hud::draw_custom(ren, look, textures, client, tag, data, rect, hovered, icon, scale);
+            crate::hud::draw_custom(ren, look, textures, client, tag, data, rect, hovered, icon, scale, drag);
             let preview = match tag {
                 crate::client::modui::TAG_ENTITY => Some(ModelPreview {
                     rect: crate::ui::Rect { x: rect.x + scale, y: rect.y + scale, w: rect.w - 2.0 * scale, h: rect.h - 2.0 * scale },
@@ -2604,7 +2658,7 @@ fn build_ui_quads(r: &mut Running, scale: f32) {
     r.previews = previews;
 }
 
-fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, text_unit: f32) {
+fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, text_unit: f32, drag: Option<&DragPreview>) {
     // The stack held by the mouse follows it every frame, outside the cached quads.
     r.ui.quads.clear();
     r.ui.quads.extend_from_slice(&r.ui_cached);
@@ -2677,7 +2731,7 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
         .game
         .as_ref()
         .and_then(|g| g.client.menu.as_ref())
-        .map(|m| m.cursor)
+        .map(|m| drag.map_or(m.cursor, |preview| preview.cursor))
         .filter(|s| !s.is_empty())
     {
         let p = r.input.cursor;

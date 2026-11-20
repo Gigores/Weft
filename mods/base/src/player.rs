@@ -41,7 +41,8 @@ pub fn register(r: &mut Registry) {
     ] {
         r.equipment_slot(slot, covers, &format!("slot_{piece}"));
     }
-    r.equipment_slot(&OFF_HAND, &[], "slot_offhand");
+    r.equipment_slot(&OFF_HAND, &[], "slot_offhand")
+        .priority(1, "#offhand_preferred");
     r.entity_component(
         &HUNGER,
         Hunger { food: 20.0, saturation: 5.0, exhaustion: 0.0, air: MAX_AIR, food_timer: 0 },

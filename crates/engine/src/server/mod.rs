@@ -6,6 +6,7 @@ pub mod area;
 pub(crate) mod assembly;
 mod builtin;
 pub(crate) mod buoyancy;
+mod controls;
 pub mod dim;
 pub mod energy;
 pub mod entity;
@@ -26,6 +27,7 @@ pub use builtin::COMMANDS as BUILTIN_COMMANDS;
 pub use extend::explanation;
 use load::send_far;
 use player_file::save_player;
+mod grab;
 pub mod menu;
 pub mod persist;
 mod placing;
@@ -133,6 +135,7 @@ pub struct Player {
     /// Its client has what bodies' lights give the cells of this dimension.
     glow_sent: bool,
     menu: Option<OpenMenu>,
+    controller_edit: Option<u64>,
     window: u32,
     /// The frame its last move was in and where in that: walking and falls are measured there.
     last_place: (Option<u64>, DVec3),
@@ -543,6 +546,7 @@ impl Server {
                 glow_sent: false,
                 sent_cracks: Vec::new(),
                 menu: None,
+                controller_edit: None,
                 window: 0,
                 last_place: (None, DVec3::ZERO),
                 deaths: 0,
@@ -583,7 +587,7 @@ impl Server {
         let runs = !self.frozen || self.steps > 0 || self.sprint.is_some();
         // Hands go on while frozen for players, who still act.
         for r in self.dims.iter_mut().flat_map(|d| &mut d.regions) {
-            r.finish_uses(c, !runs);
+            r.finish_uses(0, c, !runs);
             r.mine(c, !runs);
         }
         self.steps -= (self.frozen && self.steps > 0) as u32;
@@ -706,7 +710,7 @@ impl Server {
     fn settle(&mut self, c: &'static Content) {
         for d in &mut self.dims {
             for r in &mut d.regions {
-                r.settle(c);
+                r.settle_actions(c);
             }
         }
         self.dim_events(c);
@@ -777,7 +781,7 @@ impl Server {
                             }
                             r.entities.comps.remove(&(entity, c.game.fields.trash));
                             if crate::config::get(c.game.keep_inventory) == 0.0 {
-                                r.drop_inventory(c, entity);
+                                r.drop_inventory(0, c, entity);
                             }
                         }
                         p.deaths += 1;
@@ -823,6 +827,26 @@ impl Server {
                         .filter(|p| p.joined && p.entity != id && p.known.contains(&id))
                     {
                         p.conn.send(ToClient::EntitySwing { id, off });
+                    }
+                }
+                DimEvent::GrabReleased(player) => {
+                    if let Some(pi) = self.player_index(player) {
+                        self.players[pi].conn.send(ToClient::BodyGrab(None));
+                    }
+                }
+                DimEvent::Controller { player, controller, face, data } => {
+                    if let Some(pi) = self.player_index(player) {
+                        self.players[pi].controller_edit = Some(controller);
+                        self.players[pi]
+                            .conn
+                            .send(ToClient::ControllerEdit { controller, face, data });
+                    }
+                }
+                DimEvent::HelmProfile { player, mount, controller, data } => {
+                    if let Some(pi) = self.player_index(player) {
+                        self.players[pi]
+                            .conn
+                            .send(ToClient::HelmProfile { mount, controller, data });
                     }
                 }
                 DimEvent::ForceLoad { dim, key, min, max, mode, ticks } => self.force_load(dim, key, min, max, mode, ticks),
@@ -913,7 +937,7 @@ impl Server {
             r.entities
                 .get(owner)
                 .and_then(|e| e.anchor)
-                .and_then(|a| r.get(a))
+                .and_then(|a| r.get(0, a))
                 .unwrap_or(0)
         };
         p.conn
@@ -1133,7 +1157,9 @@ impl Server {
         p.last_place = (None, pos);
         p.teleported = Some(pos);
         p.conn.send(ToClient::Teleport { dim: to, pos, frame });
-        if let Some(s) = storage {
+        if from != to as usize
+            && let Some(s) = storage
+        {
             let cols = s.lock().lod[to as usize]
                 .columns
                 .values()
@@ -1206,7 +1232,7 @@ impl Server {
                 let values = crate::commands::abi_values(&args, &selected);
                 let mut reply: Vec<Msg> = Vec::new();
                 let reply_ptr = &mut reply as *mut Vec<Msg> as *mut core::ffi::c_void;
-                r.call(owner, cb, |w| abi::CommandArgs {
+                r.call(0, owner, cb, |w| abi::CommandArgs {
                     world: w,
                     player,
                     values: values.as_ptr(),
@@ -1317,16 +1343,27 @@ impl Server {
     /// Moves any entity; players go through `change_dim` so their client follows. Changing
     /// dimension asks `enter_dimension` first.
     fn teleport(&mut self, c: &'static Content, dim: u32, id: u64, to_dim: u32, pos: DVec3) {
+        let id = if let Some(r) = self.dims[dim as usize].entity_region_ref(id)
+            && let Some(e) = r.entities.get(id).filter(|e| e.mount.is_some())
+        {
+            let root = r.entities.follows(e);
+            if root.mount.is_some() {
+                return;
+            }
+            root.id
+        } else {
+            id
+        };
         if dim != to_dim {
             let Some(r) = self.dims[dim as usize].entity_region(id) else { return };
             let mut q = abi::Query { entity: id, dim: to_dim, ..abi::Query::DEFAULT };
-            if !r.ask(c, abi::action::ENTER_DIMENSION, &mut q) {
+            if !r.ask(0, c, abi::action::ENTER_DIMENSION, &mut q) {
                 return;
             }
         }
         if dim != to_dim {
             if let Some(r) = self.dims[dim as usize].entity_region(id) {
-                r.emit_engine(c, abi::action::ENTER_DIMENSION, &abi::DimensionChange { entity: id, from: dim, to: to_dim });
+                r.emit_engine(0, c, abi::action::ENTER_DIMENSION, &abi::DimensionChange { entity: id, from: dim, to: to_dim });
             }
         }
         // Off what it rides, as in vanilla; what rides it comes along.
@@ -1350,15 +1387,16 @@ impl Server {
             return;
         }
         let Some(from) = self.dims[dim as usize].entity_region(id) else { return };
+        let attached = from.entities.structure_tree(&[id]);
         let Some((mut e, inv, mut comps)) = from.entities.take(id) else { return };
         // The blocks of a structure travel with its entity.
         let structure = from.bodies.remove(&id);
-        let on_it: Vec<_> = from
-            .entities
-            .on_body(id)
+        let on_it: Vec<_> = attached
             .into_iter()
-            .filter_map(|b| from.entities.take(b))
+            .skip(1)
+            .filter_map(|b| Some((from.entities.take(b)?, from.bodies.remove(&b))))
             .collect();
+        let delta = pos - e.pos;
         e.pos = pos;
         let by = self.dims[to_dim as usize].time as i64 - self.dims[dim as usize].time as i64;
         extend::rebase_clock(c, &mut e, &mut comps, by);
@@ -1369,9 +1407,15 @@ impl Server {
             (s.cell, s.in_touch) = (None, false);
             r.bodies.insert(id, s);
         }
-        for (mut b, inv, mut comps) in on_it {
+        for ((mut b, inv, mut comps), structure) in on_it {
+            let id = b.id;
+            b.pos += delta;
             extend::rebase_clock(c, &mut b, &mut comps, by);
             r.entities.insert_with(c, b, inv, comps);
+            if let Some(mut space) = structure {
+                (space.cell, space.in_touch) = (None, false);
+                r.bodies.insert(id, space);
+            }
         }
     }
 
@@ -1410,10 +1454,10 @@ impl Server {
 
 pub(super) fn serialize(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
     // What is on a body comes right after it, for it to be there when those are read back.
-    let ids: Vec<u64> = ids
-        .iter()
-        .flat_map(|&id| std::iter::once(id).chain(d.entities.on_body(id)))
-        .collect();
+    serialize_tree(c, d, &d.entities.structure_tree(ids))
+}
+
+pub(super) fn serialize_tree(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
     let list: Vec<persist::ToSave> = ids
         .iter()
         .filter_map(|&id| {
@@ -1425,7 +1469,7 @@ pub(super) fn serialize(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
                 .filter(|((eid, _), _)| *eid == id)
                 .map(|((_, k), v)| (*k, &v[..]))
                 .collect();
-            Some((e, d.entities.inventories.get(&id), comps, d.bodies.get(&id).map(|s| s.structure_blocks(c))))
+            Some((e, d.entities.inventories.get(&id), comps, d.bodies.get(&id).map(Box::as_ref)))
         })
         .collect();
     let mut out = Vec::new();

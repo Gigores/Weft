@@ -16,6 +16,18 @@ Inside any callback you get a `World` (`w`). What it can do is grouped by what i
 | [Events, chains and questions](events.md) | hooking into what the game does |
 | [Text](details/text.md), [commands](details/commands.md) | |
 
+## Block spaces
+
+`World` uses the local coordinates of the calling space. `w.frame()` identifies a moving body. `w.in_space(0)` selects the dimension's terrain in the current region, and `w.in_space(body_id)` selects a loaded body's grid. The views keep their own coordinates and can be used side by side during the callback.
+
+```rust
+if let Some(deck) = w.in_space(body_id) {
+    deck.set_block([0, 1, 0], state);
+}
+```
+
+Mods that used `on_body` can switch to `in_space`. Rebuild binary mods when upgrading to this host ABI.
+
 ## Seeds
 
 The world's seed (`seed`, and `seed_at(pos)`, `seed_of_cube(pos)` for a number that belongs to a place: what a chest holds when first opened, a villager's trades)

@@ -145,6 +145,8 @@ pub async fn armor(t: T) -> R {
     for (slot, name) in [(0, "iron_helmet"), (1, "diamond_chestplate"), (2, "gold_leggings"), (3, "leather_boots")] {
         t.op(&format!("put me {slot} {name} 1")).await?;
     }
+    t.op("put me 4 shield 1").await?;
+    t.op("put me 5 dirt 3").await?;
     t.press("core:inventory");
     t.screen("core:menu").await?;
     for i in 36..40 {
@@ -155,10 +157,31 @@ pub async fn armor(t: T) -> R {
     }
     t.until("armor worn", Duration::from_secs(5), |t| (36..40).all(|s| !t.c().inventory_slot(s).is_empty()))
         .await?;
+    // Sweep from the dirt to the shield with Shift held.
+    let dirt = t.c().ui_rect("slot:41").ok_or("no dirt slot")?;
+    let shield = t.c().ui_rect("slot:40").ok_or("no shield slot")?;
+    t.c()
+        .input_cursor(dirt.x + dirt.w / 2.0, dirt.y + dirt.h / 2.0);
+    t.c().input_key("ShiftLeft", 1.0);
+    t.frames(2).await?;
+    t.c().input_click(0, 0.5);
+    t.frames(2).await?;
+    t.c()
+        .input_cursor(shield.x + shield.w / 2.0, shield.y + shield.h / 2.0);
+    t.until("shield in the other hand", Duration::from_secs(3), |t| t.c().inventory_slot(40).item == item("base:shield"))
+        .await?;
+    t.check_eq(t.slot("me", 9).await?.1, 3, "ordinary items go to main storage");
     // The player's inventory by group name: four equipment slots, all filled; the hotbar empty.
     t.check_eq(t.op("group me core:equipment").await?, "4 4".to_string(), "equipment group (slots, filled)");
     t.check_eq(t.op("group me base:head").await?, "1 1".to_string(), "the head slot");
     t.check_eq(t.op("group me hotbar").await?, "9 0".to_string(), "hotbar group");
+    t.op("put me 0 cobblestone 1").await?;
+    t.op("put me 17 dirt 5").await?;
+    t.c().menu_sort(None);
+    t.until("main stacks joined", Duration::from_secs(3), |t| t.c().inventory_slot(9).count == 8)
+        .await?;
+    t.check_eq(t.slot("me", 40).await?.0, "base:shield".into(), "sorting keeps the shield equipped");
+    t.check_eq(t.slot("me", 0).await?.0, "base:cobblestone".into(), "sorting main storage skips the hotbar");
     t.shot("worn").await?;
     t.c().menu_close();
     t.no_screen().await?;
@@ -1393,6 +1416,143 @@ pub async fn block_shapes(t: T) -> R {
     Ok(())
 }
 
+/// Clicking interior faces creates persistent instances at the physical surface.
+pub async fn surface_placement(t: T) -> R {
+    t.flat().await?;
+    t.op("mode creative").await?;
+    let f = t.feet();
+    let cell = [f[0], (f[1] + 15).div_euclid(16) * 16 - 1, f[2] - 3];
+    let point = |x, y, z| [f64::from(cell[0]) + x, f64::from(cell[1]) + y, f64::from(cell[2]) + z];
+    t.c().set_flying(true);
+    t.c().teleport(point(0.5, 0.0, 3.2));
+    t.set(cell, "base:oak_planks_vertical_slab[facing=south]")
+        .await?;
+    t.op("put me 0 base:ladder 8").await?;
+    t.c().select_slot(0);
+    t.secs(0.4).await?;
+    aim(&t, point(0.5, 0.5, 0.5));
+    t.frames(4).await?;
+    t.press("core:use");
+    t.secs(0.35).await?;
+    let parts = t.op(&format!("parts {}", at(cell))).await?;
+    t.check(parts.contains("ladder") && parts.contains("vertical_slab"), format!("ladder mounted inside the slab cell: {parts}"));
+    t.check(t.op("look").await?.contains("ladder"), "the inner ladder is in front of its support");
+    t.shot("ladder_on_inner_face").await?;
+    let copy = add(cell, [-3, 0, 0]);
+    t.cmd(&format!("/structure save inner_ladder {} {}", at(cell), at(cell)))
+        .await?;
+    t.cmd(&format!("/structure load inner_ladder {}", at(copy)))
+        .await?;
+    let copied = t.op(&format!("parts {}", at(copy))).await?;
+    t.check(copied.contains("ladder") && copied.contains("vertical_slab"), format!("structure retains both parts: {copied}"));
+    t.cmd("/structure undo").await?;
+    t.check_eq(t.block(copy).await?, "core:air".to_string(), "undo clears the copied assembly");
+    t.press("core:attack");
+    t.secs(0.35).await?;
+    t.check(t.op("look").await?.contains("vertical_slab"), "picking the ladder leaves the slab behind");
+
+    t.set(cell, "base:oak_planks_slab").await?;
+    t.op("put me 0 base:gold_block 8").await?;
+    t.c().teleport(point(0.5, 2.0, 2.2));
+    t.secs(0.3).await?;
+    aim(&t, point(0.5, 0.5, 0.5));
+    t.frames(4).await?;
+    t.press("core:use");
+    t.secs(0.35).await?;
+    let above = add(cell, [0, 1, 0]);
+    t.check(t.block(above).await?.contains("gold_block"), "upper half of the cube crosses the chunk boundary");
+    t.c().teleport(point(0.5, 2.3, 0.5));
+    t.c().set_flying(false);
+    t.secs(0.9).await?;
+    let height = t.state().pos.y - f64::from(cell[1]);
+    t.probe("top of the offset cube", height as f32, (height - 1.5).abs() < 0.02);
+    // Two wires at half height connect to full-height ports. A line at floor level beside
+    // the raised line cannot pick up its power.
+    t.op("mode creative").await?;
+    t.c().set_flying(true);
+    let wire = add(cell, [4, 0, 0]);
+    for x in 0..3 {
+        let at = add(wire, [x, 0, 0]);
+        t.set(at, "base:oak_planks_slab").await?;
+        t.op("put me 0 base:redstone 8").await?;
+        let p = |dx: f64, dy: f64, dz: f64| [f64::from(at[0]) + dx, f64::from(at[1]) + dy, f64::from(at[2]) + dz];
+        t.c().teleport(p(0.5, 2.0, 2.2));
+        t.secs(0.2).await?;
+        aim(&t, p(0.5, 0.5, 0.5));
+        t.frames(4).await?;
+        t.press("core:use");
+        t.secs(0.3).await?;
+    }
+    let feed = add(wire, [-1, 0, 0]);
+    t.set(feed, "base:redstone_block").await?;
+    let lamp = add(wire, [3, 0, 0]);
+    t.set(lamp, "base:redstone_lamp").await?;
+    let lower = add(wire, [1, 0, 1]);
+    t.set(add(lower, [0, -1, 0]), "base:stone").await?;
+    t.set(lower, "base:redstone[down=true]").await?;
+    let dark = add(lower, [0, 0, 1]);
+    t.set(dark, "base:redstone_lamp").await?;
+    t.secs(0.7).await?;
+    t.check(t.block(lamp).await?.contains("power=on"), "a full-height lamp receives the wire on a slab");
+    t.check(t.block(dark).await?.contains("power=off"), "different heights stay separate");
+    t.set(feed, "air").await?;
+    t.secs(0.5).await?;
+    t.check(t.block(lamp).await?.contains("power=off"), "removing the source updates the raised circuit");
+    t.set(add(wire, [0, 0, -1]), "base:piston[facing=south]")
+        .await?;
+    t.set(add(wire, [0, 0, -2]), "base:redstone_block").await?;
+    t.secs(0.6).await?;
+    let carried = t.op(&format!("parts {}", at(add(wire, [0, 0, 1])))).await?;
+    t.check(carried.contains("redstone[") && carried.contains("oak_planks_slab"), format!("wire rides the half-height support: {carried}"));
+
+    let sand = add(cell, [-3, 0, 0]);
+    t.set(sand, "base:oak_planks_slab").await?;
+    t.set(add(sand, [0, 3, 0]), "base:sand").await?;
+    t.secs(2.0).await?;
+    let resting = t.op(&format!("parts {}", at(sand))).await?;
+    t.check(
+        resting.contains("base:sand") && resting.contains("oak_planks_slab"),
+        format!("sand lands on the half-height surface: {resting}"),
+    );
+    t.check(t.block(add(sand, [0, 1, 0])).await?.contains("base:sand"), "the fallen sand reaches into the upper cell");
+
+    let piston = add(cell, [2, 3, -3]);
+    let target = add(piston, [2, 0, 0]);
+    t.set(piston, "base:piston[facing=east]").await?;
+    t.set(add(piston, [1, 0, 0]), "base:oak_planks_slab")
+        .await?;
+    t.set(target, "base:sandstone_slab[type=top]").await?;
+    t.set(add(piston, [-1, 0, 0]), "base:redstone_block")
+        .await?;
+    t.secs(0.6).await?;
+    let pushed = t.op(&format!("parts {}", at(target))).await?;
+    t.check(
+        pushed.contains("oak_planks_slab") && pushed.contains("sandstone_slab"),
+        format!("piston slides the lower slab under the upper one: {pushed}"),
+    );
+
+    let switches = add(cell, [0, 0, -3]);
+    t.set(add(switches, [0, -1, 0]), "base:redstone_lamp")
+        .await?;
+    t.set(add(switches, [0, 1, 0]), "base:redstone_lamp")
+        .await?;
+    t.set(switches, "base:stone_button[attach=down,front=east,power=off]")
+        .await?;
+    t.op(&format!("addpart {} base:stone_button[attach=up,front=east,power=on]", at(switches)))
+        .await?;
+    t.secs(0.45).await?;
+    let lights = [t.block(add(switches, [0, -1, 0])).await?, t.block(add(switches, [0, 1, 0])).await?];
+    t.check(lights.iter().any(|s| s.contains("power=on")), format!("second button powers its support: {lights:?}"));
+    t.c().world_leave();
+    t.screen("core:title").await?;
+    t.c().world_open(&format!("test-{}", t.name()), 1);
+    t.loaded().await?;
+    t.check(t.block(above).await?.contains("gold_block"), "the covered cell finds the cube after reopening");
+    t.op(&format!("break {}", at(above))).await?;
+    t.check(t.block(cell).await?.contains("oak_planks_slab"), "breaking through the upper chunk keeps the lower support");
+    Ok(())
+}
+
 /// Any blocks in one cell: placed next to each other where their shapes leave room, or when they
 /// say they may; each broken by itself, drawn, solid and saved; a slab holds water, which flows
 /// out but not through it; and a body takes all of a cell along.
@@ -1835,6 +1995,32 @@ pub async fn inventory_tools(t: T) -> R {
     };
     t.check_eq(dirt, 15, "all the dirt in the chest");
     t.c().menu_close();
+    t.no_screen().await?;
+    t.op(&format!("menu testmod:shelves {at}")).await?;
+    t.screen("core:menu").await?;
+    t.op(&format!("put {at} 2 stick 2")).await?;
+    t.op("put me 0 stick 11").await?;
+    t.c().input_key("ShiftLeft", 0.3);
+    t.frames(2).await?;
+    t.click_ui("slot:34", 0);
+    t.until("sticks transferred", Duration::from_secs(3), |t| t.c().menu_slot(2).count == 5)
+        .await?;
+    t.check_eq(t.slot(&at, 3).await?.1, 4, "preferred empty slots fill before an existing stack");
+    t.check_eq(t.slot(&at, 4).await?.1, 4, "priority applies up to each slot's limit");
+    t.op(&format!("put {at} 0 coal 0")).await?;
+    t.op(&format!("put {at} 1 stick 1")).await?;
+    t.op(&format!("put {at} 3 stick 1")).await?;
+    t.op(&format!("put {at} 6 dirt 3")).await?;
+    t.c().menu_sort(Some(2));
+    t.until("only stock sorted", Duration::from_secs(3), |t| t.c().menu_slot(0).count == 6)
+        .await?;
+    t.check_eq(t.slot(&at, 3).await?.1, 1, "sorting a particular group leaves its neighbor alone");
+    t.c().menu_sort(None);
+    t.until("fuel sorted to the slot limit", Duration::from_secs(3), |t| t.c().menu_slot(3).count == 4)
+        .await?;
+    t.check_eq(t.slot(&at, 4).await?.1, 1, "filtered stock stays on its shelf");
+    t.check_eq(t.slot(&at, 6).await?.1, 3, "the display keeps its arrangement");
+    t.c().menu_close();
     Ok(())
 }
 
@@ -2152,6 +2338,37 @@ pub async fn attack_charge(t: T) -> R {
     let full = before - health(t.clone(), id.clone()).await?;
     t.note(format!("charged: {full:.2}"));
     t.check((5.5..6.5).contains(&full), format!("a charged iron sword does 6: {full:.2}"));
+
+    t.op(&format!("remove {id}")).await?;
+    let target: u64 = t
+        .op(&format!("spawn core:player {} {} {}", spot[0], spot[1], spot[2]))
+        .await?
+        .parse()
+        .map_err(|_| "target id")?;
+    let torch = add(f, [1, 1, 0]);
+    t.set(torch, "base:torch[facing=up]").await?;
+    t.until("torch ready", Duration::from_secs(2), |t| t.c().block(torch).is_some_and(|s| s != 0))
+        .await?;
+    t.secs(0.8).await?;
+    t.hold("core:jump", 0.12);
+    t.until("descending", Duration::from_secs(2), |t| t.state().vel.y < -0.14 && t.state().pos.y > f[1] as f64 + 0.3)
+        .await?;
+    let mob = t.c().entity(target).ok_or("missing melee target")?;
+    aim(&t, [mob.pos.x, mob.pos.y + mob.size.height as f64 * 0.65, mob.pos.z]);
+    t.until("mob under crosshair", Duration::from_millis(100), |t| t.c().target().is_some_and(|hit| hit.entity == target))
+        .await?;
+    let particles = t.state().particles;
+    t.hold("core:attack", 1.6);
+    t.until("critical hit burst", Duration::from_millis(300), |t| t.state().particles >= particles + 16)
+        .await?;
+    t.shot("critical").await?;
+    t.look_at(torch);
+    t.secs(0.1).await?;
+    t.check(t.c().block(torch).is_some_and(|s| s != 0), "a held melee swing cannot mine during recovery");
+    t.secs(0.2).await?;
+    t.look_at(torch);
+    t.until("same held click mines after recovery", Duration::from_secs(2), |t| t.c().block(torch) == Some(0))
+        .await?;
     Ok(())
 }
 
@@ -2166,7 +2383,7 @@ pub async fn permissions(t: T) -> R {
     t.cmd("/op @s 0").await?;
     let no = t.cmd("/time set 1000").await?;
     t.check(no.contains("permission level 2"), format!("/time at level 0: {no}"));
-    t.cmd("/rename shiny").await?;
+    t.c().say("/rename shiny");
     t.until("a command for everyone still works", Duration::from_secs(2), |t| t.c().inventory_slot(0).data != 0)
         .await?;
     let up = t.cmd("/op @s 4").await?;

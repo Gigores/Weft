@@ -285,10 +285,12 @@ pub struct Registrar {
     _p: [u8; 0],
 }
 
-/// Opaque view of one world (dimension) handed to callbacks. Only valid during the call.
+/// View of a space in the callback's region. Only valid during the call.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct WorldCtx {
-    _p: [u8; 0],
+    pub region: *mut core::ffi::c_void,
+    pub frame: u64,
 }
 
 #[repr(C)]
@@ -795,10 +797,11 @@ pub mod comp {
 
     /// An equipment slot's: `COVERS` (`[str]`, bones what is worn there covers; a name with a role,
     /// `head`, `leftArm`, `leg0`, covers every bone of that role) and `BACKGROUND` (`str`, the GUI
-    /// texture of the empty slot).
+    /// texture of the empty slot). `PRIORITIES` holds the group's quick-transfer rules.
     pub mod equipment_slot {
         pub const COVERS: &str = "equipment_slot.covers";
         pub const BACKGROUND: &str = "equipment_slot.background";
+        pub const PRIORITIES: &str = "equipment_slot.priorities";
     }
 
     /// An entity category's: `CAP` (`u32`, at most this many spawn naturally near a player, 0),
@@ -1068,6 +1071,12 @@ pub mod comp {
         pub const PRIORITY: &str = "feature.priority";
         pub const SEPARATION: &str = "feature.separation";
         pub const GENERATE: &str = "feature.generate";
+        /// Draw the completed grid feature as a view-dependent impostor in distant terrain.
+        pub const IMPOSTOR: &str = "feature.impostor";
+        /// Project the feature's sampled surface cover. On a block this also allows an opaque
+        /// or solid model to supply a projection texture when the sampler returns it.
+        pub const SURFACE_PROJECTION: &str = "surface_projection";
+        pub const SURFACE_COVER: &str = "feature.surface_cover";
         pub const SHAPE: &str = "feature.shape";
         pub const VEIN: &str = "feature.vein";
         pub const SIZE: &str = "feature.size";
@@ -1225,8 +1234,7 @@ pub mod comp {
     /// whole block) and `OUTLINE` (likewise, what is outlined and cracked when it isn't the
     /// hitbox), `SIGNAL` (`SignalDesc`), `LIQUID_WALLS` (`u8`, a bit per `FACE_DIRS` side a liquid
     /// in its cell can't pass; none: the sides its hitbox covers whole), `PIECES` (`[Piece]`, what a
-    /// hit breaks off alone; none: all of it), `CELLS` (`[[i32;3]]`, the other cells it takes
-    /// besides its own, a door's upper half; joined by faces), `RULES` (`[BlockRule]`, what happens to it by
+    /// hit breaks off alone; none: all of it), `RULES` (`[BlockRule]`, what happens to it by
     /// itself), `HAZARDS` (`[Hazard]`, what it does to entities touching it), `TURN` (`u8`, `Turn::index`:
     /// all of the above written facing north, turned so; none: as written). It is opaque (hides its
     /// neighbors' faces, gets ambient occlusion) as a cube on the opaque layer. Any other component
@@ -1235,6 +1243,9 @@ pub mod comp {
     pub mod block {
         /// Mass per full block relative to a block of water (`f32`).
         pub const DENSITY: &str = "density";
+        /// The force a block puts on its body when fully powered.
+        pub const THRUST: &str = "thrust";
+        pub const GUIDE_RAIL: &str = "guide_rail";
         pub const ON_SIDES: &str = "on_sides";
         pub const PROPS: &str = "block.props";
         pub const ON_USE: &str = "block.on_use";
@@ -1265,6 +1276,7 @@ pub mod comp {
         pub const TURN: &str = "block.turn";
         pub const BOXES: &str = "block.boxes";
         pub const HITBOX: &str = "block.hitbox";
+        pub const CYLINDER: &str = "block.cylinder";
         pub const OUTLINE: &str = "block.outline";
         pub const SIGNAL: &str = "block.signal";
         pub const LIQUID_WALLS: &str = "block.liquid_walls";
@@ -1278,7 +1290,6 @@ pub mod comp {
         pub const STICKY: &str = "block.sticky";
         pub const NOT_STOOD_ON: &str = "block.not_stood_on";
         pub const PIECES: &str = "block.pieces";
-        pub const CELLS: &str = "block.cells";
         pub const RULES: &str = "block.rules";
         pub const HAZARDS: &str = "block.hazards";
     }
@@ -1471,11 +1482,16 @@ pub mod comp {
 
     /// A bone motion's (`entry_kind::BONE_MOTION`): `GRAVITY`, the pull toward hanging straight
     /// down, `SPRING`, the pull back to where the clips have it, `DRAG`, how fast a swing dies down
-    /// (`f32` each, 0).
+    /// (`f32` each, 0). `MAX_ANGLE` is the cone half-angle in degrees.
     pub mod bone_motion {
         pub const GRAVITY: &str = "bone_motion.gravity";
         pub const SPRING: &str = "bone_motion.spring";
         pub const DRAG: &str = "bone_motion.drag";
+        pub const MAX_ANGLE: &str = "bone_motion.max_angle";
+
+        pub fn default_max_angle(spring: f32) -> f32 {
+            if spring > 0.0 { 30.0 } else { 180.0 }
+        }
     }
 
     /// A weather's (`entry_kind::WEATHER`). How it looks, each `f32` 0..1 (rain's unless set):
@@ -2119,10 +2135,44 @@ pub mod signal_flags {
     pub const BREAKS: u32 = 4;
     /// A body mount turns around its front axis while powered.
     pub const ROTATES: u32 = 8;
-    /// A rotor holds its current pose when power cuts out or its path is blocked.
+    /// A rotor or floater holds its current pose when power cuts out or its path is blocked.
     pub const HOLD: u32 = 16;
     /// The controller rides in a freely moving structure and can be piloted from a seat.
     pub const HELM: u32 = 32;
+    /// A body mount slides alongside a run of guide rails.
+    pub const SLIDES: u32 = 64;
+}
+
+pub mod assembly_flags {
+    pub const TOOL: u8 = 1;
+    pub const DIRECT: u8 = 4;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ControllerBinding {
+    pub key: Str,
+    pub face: u8,
+    pub level: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RotorRule {
+    pub min: u8,
+    pub max: u8,
+    /// A `rotor_motion` value.
+    pub motion: u8,
+    pub degrees: f32,
+    pub speed: f32,
+}
+
+pub mod rotor_motion {
+    pub const ABSOLUTE: u8 = 0;
+    pub const RELATIVE: u8 = 1;
+    pub const CLOCKWISE: u8 = 2;
+    pub const COUNTERCLOCKWISE: u8 = 3;
+    pub const FREEWHEEL: u8 = 4;
 }
 
 pub mod assembly_result {
@@ -2136,6 +2186,7 @@ pub mod assembly_result {
     pub const CLEARED: u32 = 7;
     pub const SEATED: u32 = 8;
     pub const DOCKING: u32 = 9;
+    pub const ALREADY_ASSEMBLED: u32 = 10;
 }
 
 crate::data! {
@@ -2959,6 +3010,9 @@ pub struct CameraArgs {
     pub anchor: Vec3,
     /// Previous mode pose for a shot, current computed pose for a global modifier.
     pub out: CameraPose,
+    /// Multiply the displayed FOV by this for terrain detail selection. Starts at 1 each frame.
+    /// A scope can undo its visual easing here once the player releases it.
+    pub lod_fov_scale: f32,
 }
 
 /// Eye height as a share of an entity's height unless it says otherwise (vanilla's default).
@@ -3115,6 +3169,8 @@ crate::data! {
     /// `swing` radians at a full stride, `phase` (radians) after the stride's own beat.
     pub struct HitboxPart {
         pub name: crate::data::String,
+        /// If named, the entity's gameplay skeleton moves this box from its rest pose.
+        pub bone: crate::data::String,
         pub min: [f32; 3],
         pub max: [f32; 3],
         pub pivot: [f32; 3],
@@ -3704,6 +3760,8 @@ pub mod slot_flags {
     /// what it makes in the menu's output group, and taking that uses the grid up as the recipe
     /// says (`comp::recipe::USES`), with shift as many runs as fit in the player's inventory.
     pub const GRID: u32 = 128;
+    /// Sorting may rearrange stacks within this group.
+    pub const ALLOW_SORTING: u32 = 256;
 }
 
 /// The equipment slot of the second hand. Without it, players have one.
@@ -3729,6 +3787,14 @@ pub mod slot_owner {
 }
 
 crate::data! {
+    /// A quick-transfer priority for the items matching a reference. An empty reference matches all items.
+    pub struct SlotPriority {
+        pub priority: i32,
+        pub items: alloc::string::String,
+    }
+}
+
+crate::data! {
     /// Slots shown and handled together (`comp::menu::GROUPS`, the player's
     /// `comp::entity::SLOT_GROUPS`): a grid of `cols` by `rows` of one `owner`'s (`slot_owner`)
     /// inventory with the same rules, found by `name` by the screen and the menu's callbacks.
@@ -3736,8 +3802,7 @@ crate::data! {
     /// group of the same owner), `flags` are `slot_flags`; only the items reference `accepts`
     /// names go in (`#fuel #mymod:fire_starter`; empty: any), at most `limit` a slot (0: as many as the item stacks to);
     /// `size` is a slot's side in GUI pixels (0: 18), `background` a GUI texture and `tooltip` a
-    /// translation shown while it is empty. Shift-clicks from the player's inventory fill groups
-    /// with a higher `priority` first.
+    /// translation shown while it is empty. Quick transfers use the highest matching priority, or zero.
     pub struct SlotGroupDef {
         pub name: alloc::string::String,
         pub owner: u32,
@@ -3750,7 +3815,7 @@ crate::data! {
         pub size: f32,
         pub background: alloc::string::String,
         pub tooltip: alloc::string::String,
-        pub priority: i32,
+        pub priorities: alloc::vec::Vec<SlotPriority>,
     }
 }
 
@@ -3827,8 +3892,8 @@ pub mod ui_kind {
     /// A one-line text field showing `text` (a ready value, not a key), at most `count`
     /// characters (0: any); `on_change` gets each edit.
     pub const INPUT: u32 = 15;
-    /// A slider at `bind` (0..1); `on_change` gets the value the player drags it to. Clicked, the
-    /// arrow keys move it one of `count` steps across (0: a hundred).
+    /// A track with normalized handles in `slider_values`. `bind` uses `UiSliderBindArgs` and
+    /// `on_change` receives the changed handle in `UiChangeArgs`.
     pub const SLIDER: u32 = 16;
     /// Item `data` as its icon, with `count` under it when above 1.
     pub const ITEM: u32 = 17;
@@ -3903,6 +3968,10 @@ pub struct UiNode {
     pub dir: u32,
     /// ICONS: how the row moves and lights up (`IconEffect`).
     pub effects: Slice<IconEffect>,
+    /// SLIDER: initial positions of its handles (0..1) in stable index order.
+    pub slider_values: Slice<f32>,
+    /// SLIDER: the indices delimiting a highlighted span, or `u32::MAX` for none.
+    pub slider_fill: [u32; 2],
 }
 
 /// Something a row of icons does (`UiNode::effects`), each by its own value read every frame.
@@ -3974,6 +4043,8 @@ defaults!(UiNode {
     tooltip: Str::EMPTY,
     dir: 0,
     effects: Slice::EMPTY,
+    slider_values: Slice::EMPTY,
+    slider_fill: [u32::MAX; 2],
 });
 
 #[repr(C)]
@@ -4005,6 +4076,15 @@ pub struct UiChangeArgs {
     pub client: *mut ClientCtx,
     pub text: Str,
     pub value: f32,
+    pub handle: u32,
+}
+
+/// Updates all bound slider positions together. The buffer is valid during the callback.
+#[repr(C)]
+pub struct UiSliderBindArgs {
+    pub client: *mut ClientCtx,
+    pub values: *mut f32,
+    pub len: usize,
 }
 
 /// `UiNode::flags`.
@@ -4023,6 +4103,10 @@ pub mod ui_flags {
     pub const SLIDER_RELEASE: u32 = 32;
     /// A scrolling container uses a narrow bar.
     pub const THIN_SCROLLBAR: u32 = 64;
+    /// Keep slider handles in index order.
+    pub const SLIDER_ORDERED: u32 = 128;
+    /// Use `count` equally spaced intervals for pointer input as well as arrow keys.
+    pub const SLIDER_SNAP: u32 = 256;
 }
 
 #[repr(C)]
@@ -4113,8 +4197,7 @@ pub struct Host {
     /// What item `item` is; 0 if there is none.
     pub item_info: unsafe extern "C" fn(item: u32, out: *mut ItemInfo) -> u32,
 
-    /// The block where the running callback is: the world, or the body a block of it is on or
-    /// `world_enter_body` entered. `u32::MAX` for what isn't loaded.
+    /// The block in the selected space. `u32::MAX` for what isn't loaded.
     pub block_get: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos) -> u32,
     /// The id of the dimension this callback runs in.
     pub world_dimension: unsafe extern "C" fn(world: *mut WorldCtx) -> u32,
@@ -4575,7 +4658,10 @@ pub struct Host {
     /// Takes blocks of the world out into a new moving body: `center` is its block
     /// (0, 0, 0), they keep their places around that. Returns its entity, 0 if nothing came.
     pub body_from_blocks: unsafe extern "C" fn(world: *mut WorldCtx, center: *const BlockPos, cells: *const BlockPos, count: usize) -> u64,
-    pub assembly_select: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, cell: *const BlockPos, tool: u8) -> u32,
+    pub assembly_select: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, cell: *const BlockPos, flags: u8) -> u32,
+    pub controller_bindings: unsafe extern "C" fn(world: *mut WorldCtx, at: *const BlockPos, bindings: Slice<ControllerBinding>) -> u8,
+    pub rotor_program: unsafe extern "C" fn(world: *mut WorldCtx, at: *const BlockPos, rules: Slice<RotorRule>, hold: u8) -> u8,
+    pub assembly_bounds: unsafe extern "C" fn(world: *mut WorldCtx, at: *const BlockPos, min: *const BlockPos, max: *const BlockPos) -> u8,
     /// An active ship's inputs until replaced, or null to return control to the helm.
     pub ship_controls: unsafe extern "C" fn(world: *mut WorldCtx, ship: u64, input: *const ShipControls) -> u32,
     /// Flooded hull cells, in the ship's coordinates. Returns their count, or `usize::MAX` if absent.
@@ -4589,13 +4675,10 @@ pub struct Host {
     /// What a piston behind `pos` facing `dir` (`FACE_DIRS` index) would push goes one block
     /// that way, slime and all, as a piston moves it. 0 if it can't.
     pub push_blocks: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos, dir: u32) -> u32,
-    /// Every call with this world addresses body `entity`'s blocks, in its coordinates, until
-    /// `world_leave_body`; they nest. 0 if it isn't a body here.
-    pub world_enter_body: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64) -> u32,
-    pub world_leave_body: unsafe extern "C" fn(world: *mut WorldCtx),
-    /// The current body's entity id, zero in the world frame.
-    pub world_frame: unsafe extern "C" fn(world: *mut WorldCtx) -> u64,
+    pub world_has_space: unsafe extern "C" fn(world: *mut WorldCtx, frame: u64) -> u32,
     pub body_move_to: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, pos: *const Vec3, ticks: u32),
+    pub body_dynamics: unsafe extern "C" fn(world: *mut WorldCtx, body: u64) -> u32,
+    pub body_force: unsafe extern "C" fn(world: *mut WorldCtx, body: u64, at: *const Vec3, force: *const Vec3) -> u32,
     /// What a comparator would read of the block at `pos` may be different now.
     pub signal_read_changed: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos),
     /// Column (`x`, `z`) of dimension `dim` for `seed` (its terrain's or `comp::dimension::COLUMN`),
@@ -5869,6 +5952,23 @@ pub struct TerrainColumn {
     /// The top solid block of the terrain itself (water, caves and decorations aside).
     pub height: i32,
     pub biome: u32,
+}
+
+/// A visual sample of the low vegetation on one terrain column before structures.
+#[repr(C)]
+pub struct SurfaceCoverArgs {
+    pub seed: u64,
+    pub samples: *mut SurfaceCoverSample,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct SurfaceCoverSample {
+    pub surface: BlockPos,
+    pub biome: u32,
+    pub ground: u32,
+    /// Plant state, or 0 for bare ground.
+    pub plant: u32,
 }
 
 crate::data! {

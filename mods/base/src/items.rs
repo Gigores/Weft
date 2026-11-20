@@ -39,6 +39,7 @@ const MATERIALS: [Material; 5] = [
 
 pub fn register(r: &mut Registry) {
     r.item(&SHIELD)
+        .tag("offhand_preferred")
         .max_stack(1)
         .durability(336)
         .use_until_released()

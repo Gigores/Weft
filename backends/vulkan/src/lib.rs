@@ -1910,6 +1910,10 @@ impl Backend for VulkanBackend {
         }
     }
 
+    fn prepare_uploads(&mut self) {
+        self.ensure_slot_ready();
+    }
+
     fn begin_frame(&mut self) -> Option<FrameInfo> {
         self.ensure_slot_ready();
         if self.surface == vk::SurfaceKHR::null() {

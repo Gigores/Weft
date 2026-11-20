@@ -211,7 +211,7 @@ impl DimSet {
 
     pub fn get(&self, p: IVec3) -> Option<u32> {
         let r = *self.owner.get(&section_of_cube(cube_of(p)))?;
-        self.regions[r].get(p)
+        self.regions[r].get(0, p)
     }
 
     pub fn insert(&mut self, c: &'static Content, pos: IVec3, mut cube: Cube, entities: &[u8], mut conn: u16, mut prelit: bool) {
@@ -239,27 +239,28 @@ impl DimSet {
         if !timers.is_empty() || entities.len() > 12 {
             d.on_disk.insert(pos);
         }
-        d.restore_timers(timers);
+        d.space.restore_timers(timers);
         let mut bodies = Vec::new();
         let now = d.time;
         for (e, inv, comps, blocks) in super::persist::read(c, entities, now) {
             let id = e.id;
-            if d.entities.get(id).is_some() {
+            if d.entities.get(id).is_some()
+                || e.mount.is_some()
+                    && e.frame
+                        .is_some_and(|parent| !d.bodies.contains_key(&parent))
+            {
                 continue;
             }
-            if c.game.is_block_entity(e.kind)
-                && !d
-                    .in_frame(e.block_frame(), |d| d.block_entity_fits(c, &e))
-                    .unwrap_or(false)
-            {
+            if c.game.is_block_entity(e.kind) && (!d.has_space(e.block_frame()) || !d.block_entity_fits(e.block_frame(), c, &e)) {
                 // Its block is gone (or it never had one): what it held stays in the world.
                 for s in inv.into_iter().flatten() {
-                    d.spawn_item(c, e.pos, s);
+                    d.spawn_item(0, c, e.pos, s);
                 }
                 continue;
             }
-            if let Some(blocks) = blocks {
-                let mut body = super::space::Space::from_saved(c, blocks);
+            if let Some(saved) = blocks {
+                let mut body = super::space::Space::from_saved(c, saved.blocks);
+                body.restore_timers(saved.timers);
                 if e.mount.is_some() || e.ship.is_some() {
                     body.track_mounted_blocks();
                 }
@@ -267,13 +268,14 @@ impl DimSet {
                 bodies.push(id);
             }
             d.entities.insert_with(c, e, inv, comps);
+            d.entities.update_mount_pose(id);
         }
         for id in bodies {
             d.add_missing_on_body(c, id);
         }
-        d.add_missing_block_entities(c, pos);
+        d.add_missing_block_entities(0, c, pos);
         if let Some(g) = generated {
-            d.joined(c, *g);
+            d.joined(0, c, *g);
         }
     }
 
@@ -388,7 +390,7 @@ impl DimSet {
         self.timers.retain(|(at, event, data)| {
             let due = *at <= time;
             if due {
-                r.emit(c, *event, data);
+                r.emit(0, c, *event, data);
             }
             !due
         });
@@ -399,7 +401,7 @@ impl DimSet {
     pub fn tick_weather(&mut self, c: &Content) {
         let tick = abi::WeatherTick { dim: self.id, weather: self.weather as u32 };
         if let Some(r) = self.regions.first_mut() {
-            r.emit_engine(c, abi::event::WEATHER_TICK, &tick);
+            r.emit_engine(0, c, abi::event::WEATHER_TICK, &tick);
         }
         if self.time < self.weather_until {
             return;

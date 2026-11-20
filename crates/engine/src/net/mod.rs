@@ -11,6 +11,7 @@ use weft_abi::ItemStack;
 
 use crate::server::lod_tops::LodColumn;
 use crate::world::Cube;
+use crate::world::placement::Part;
 use codec::Wire;
 
 pub mod codec;
@@ -61,6 +62,12 @@ macro_rules! wire_struct {
 
         impl codec::Item for $name {}
     };
+}
+
+wire_struct! {
+    /// Capacity for the held item and the first menu slot showing this inventory slot.
+    #[derive(Clone)]
+    pub struct DragSlot { pub slot: u32, pub room: u32 }
 }
 
 wire_struct! {
@@ -280,6 +287,7 @@ wire_struct! {
     pub struct EntityView {
         pub id: u64,
         pub kind: u32,
+        pub has_space: bool,
         pub pos: DVec3,
         pub yaw: f32,
         pub pitch: f32,
@@ -325,7 +333,7 @@ impl GizmoShape {
 }
 
 /// Someone's mining as others see it: who, the cell, which of what is in it, how far along (0..1).
-pub type Crack = (u64, IVec3, u32, f32);
+pub type Crack = (u64, IVec3, Part, f32);
 
 wire_struct! {
     #[derive(Clone, Copy, Debug)]
@@ -334,6 +342,9 @@ wire_struct! {
         pub pos: DVec3,
         pub yaw: f32,
         pub pitch: f32,
+        pub body_yaw: f32,
+        pub strode: f32,
+        pub stride: f32,
         pub pose: crate::world::Pose,
         pub sprinting: bool,
         pub frame: u64,
@@ -364,7 +375,7 @@ messages! {
         LodColumns { dim: u32, all: bool, cols: Vec<LodColumn> },
         /// Of the world, or of body `frame`.
         /// `extras`: what else is in cells, after `changes` (which take it away).
-        Blocks { dim: u32, frame: u64, changes: Vec<(IVec3, u32)>, extras: Vec<(IVec3, Vec<u32>)> },
+        Blocks { dim: u32, frame: u64, changes: Vec<(IVec3, u32)>, extras: Vec<(IVec3, crate::world::placement::CellLayout)> },
         /// What moving bodies' lights give cells of the world besides what is there, for a client
         /// to work out light as the server would: (cell, its light), none taking it away.
         BodyGlow { dim: u32, cells: Vec<(IVec3, [u8; 3])> },
@@ -373,7 +384,7 @@ messages! {
         /// Dry sections of a body's hull, as local half-open box bounds.
         BodyAir { frame: u64, boxes: Vec<(IVec3, IVec3)> },
         /// Power of pieces of wire: (cell, face, level), of the world or of body `frame`.
-        Signals { dim: u32, frame: u64, changes: Vec<(IVec3, u8, u8)> },
+        Signals { dim: u32, frame: u64, changes: Vec<(crate::wire::Site, u8, u8)> },
         /// The dimension's time of day, the ticks it ran (what entity effects end by, unlike the time
         /// `/time set` moves), its weather (`registry::WeatherDef` by id) and the ticks a second the
         /// server runs at.
@@ -387,6 +398,7 @@ messages! {
         Moves { tick: u64, moves: Vec<Move> },
         /// Entities out of sight, and whether they were killed (they play the death animation).
         Despawn(Vec<(u64, bool)>),
+        SpaceLanded { dim: u32, frame: u64, destination: u64, cubes: Vec<IVec3> },
         /// Items picked up: (item entity, who took it). They fly to the taker before going.
         Taken(Vec<(u64, u64)>),
         /// A use (right click) did something: the arm swings, and dips if the held item was used.
@@ -429,7 +441,8 @@ messages! {
         /// `block`: the state it was opened on (0: none), `name`: what it belongs to is called.
         OpenMenu { kind: u32, window: u32, slots: u32, owner: u64, block: u32, name: String },
         MenuSlots(Vec<(u32, ItemStack)>),
-        Cursor(ItemStack),
+        /// The held stack and how many of it can go into each menu slot.
+        Cursor { stack: ItemStack, targets: Vec<DragSlot> },
         CloseMenu,
         Died,
         /// Formatted by the client in its own language.
@@ -455,6 +468,9 @@ messages! {
         Avatar { entity: u64, avatar: AvatarData },
         /// That player left: what they brought can go.
         PlayerGone { entity: u64 },
+        ControllerEdit { controller: u64, face: u8, data: Vec<u8> },
+        HelmProfile { mount: u64, controller: u64, data: Vec<u8> },
+        BodyGrab(Option<u64>),
     }
 }
 
@@ -466,7 +482,7 @@ messages! {
         /// `frame`: the body it rides and its position relative to that body as the client shows it
         /// (the client shows bodies behind the server; only the relative position agrees).
         /// `jumped`: it jumped since the last one.
-        Move { pos: DVec3, yaw: f32, pitch: f32, on_ground: bool, pose: crate::world::Pose, sprint: bool, flying: bool, jumped: bool, frame: Option<(u64, DVec3)> },
+        Move { pos: DVec3, vel: DVec3, yaw: f32, pitch: f32, on_ground: bool, pose: crate::world::Pose, sprint: bool, flying: bool, jumped: bool, frame: Option<(u64, DVec3)> },
         /// Where the mount the player steers went this tick (its client moves it).
         MountMove { pos: DVec3, yaw: f32, vel: DVec3, on_ground: bool },
         /// Off what the player rides (`core:dismount`).
@@ -474,23 +490,25 @@ messages! {
         /// May it turn on camera mode `mode` (`camera_flags::ASK`)? Answered with `Camera`.
         Camera(u32),
         /// Started mining this block (`frame` and `part` like `Break`'s).
-        StartBreak { pos: IVec3, part: u32, frame: u64 },
+        StartBreak { pos: IVec3, part: Part, frame: u64 },
         /// Stopped mining without finishing.
         StopBreak,
         /// Actions (key ids) that went down and up since the last.
         Keys { down: Vec<u32>, up: Vec<u32> },
+        HelmHeld { mount: u64, controller: u64, held: u64 },
+        ControllerSave { controller: u64, data: Vec<u8> },
         /// The main hand's item goes to the other hand and back.
         SwapHands,
         /// `frame`: the structure (entity) the block is part of, its position in the structure's
         /// coordinates; 0 for the world. `face`: of its selection that was hit.
         /// `part`: which of what is in the cell; `hit`: where on it, from its corner (`Use`'s).
-        Break { pos: IVec3, part: u32, face: u8, hit: [f32; 3], frame: u64 },
+        Break { pos: IVec3, part: Part, face: u8, hit: [f32; 3], frame: u64 },
         /// Right click on a block: the block reacts first (chests), otherwise the held item is used or
         /// placed against the clicked face. `frame` like `Break`'s; `look` in world space.
         /// `hit`: where on the block, from its corner. `placed`: the cell the client already
         /// shows the held block in, sent back as it really is whatever happens.
-        Use { pos: IVec3, part: u32, face: u8, look: [f32; 3], hit: [f32; 3], sneak: bool, frame: u64, placed: Option<IVec3> },
-        UseItem { target: Option<(IVec3, u8)> },
+        Use { pos: IVec3, part: Part, face: u8, look: [f32; 3], hit: [f32; 3], sneak: bool, frame: u64, placed: Option<IVec3> },
+        UseItem,
         Select(u32),
         Attack(u64),
         /// A swing that spends its charge, whatever it hit, sent after any `Attack` of that swing.
@@ -523,6 +541,9 @@ messages! {
         Avatar(AvatarData),
         /// The client's view distance in cubes: what the server announces edited cubes in.
         View(u32),
+        GrabBody,
+        ReleaseBody,
+        TurnGrab([f32; 2]),
     }
 }
 

@@ -512,7 +512,7 @@ const OPS: &[(&str, &str, Run)] = &[
     ("structureset", "<id:int> <x:int> <y:int> <z:int> <block:block>", |w, cmd, _, _| {
         let (id, p) = (int::<u64>(cmd, "id")?, [int::<i32>(cmd, "x")?, int::<i32>(cmd, "y")?, int::<i32>(cmd, "z")?]);
         let block = self::id(cmd, "block")?;
-        match w.on_body(id) {
+        match w.in_space(id) {
             Some(f) if f.set_block(p, block) => Ok(String::new()),
             _ => Err(format!("no structure {id}")),
         }
@@ -596,7 +596,9 @@ const OPS: &[(&str, &str, Run)] = &[
             .unwrap_or("none")
             .to_string())
     }),
-    ("parts", "<pos:pos>", |w, cmd, _, _| {
+    ("parts", "<pos:pos> [body:int]", |w, cmd, _, _| {
+        let frame = int::<u64>(cmd, "body").unwrap_or(0);
+        let w = w.in_space(frame).ok_or("no space")?;
         Ok(w.parts(pos(cmd, "pos")?)
             .into_iter()
             .map(block_name)
@@ -644,7 +646,7 @@ const OPS: &[(&str, &str, Run)] = &[
     ("sblock", "<id:int> <pos:pos> [block:block]", |w, cmd, _, _| {
         // A block of a moving structure, or set it.
         let (id_, p) = (int::<u64>(cmd, "id")?, pos(cmd, "pos")?);
-        let f = w.on_body(id_).ok_or("not a structure")?;
+        let f = w.in_space(id_).ok_or("not a structure")?;
         match cmd.id("block") {
             Some(b) => Ok((f.set_block(p, b) as u32).to_string()),
             None => f
@@ -956,14 +958,24 @@ const OPS: &[(&str, &str, Run)] = &[
     }),
     // A timer on the player, `dim` or `block` under them: `after 60`, then `rings` counts the
     // ones that fired.
-    ("after", "<ticks:int> [on:word]", |w, cmd, player, me| {
+    ("after", "<ticks:int> [on:word] [body:int]", |w, cmd, player, me| {
+        let body = int::<u64>(cmd, "body").ok();
         let on = match cmd.text("on") {
             Some("dim") => Holder::NONE,
+            Some("block") if body.is_some() => Holder::from([0, 1, 0]),
             Some("block") => Holder::from([me[0], me[1] - 1, me[2]]),
             _ => Holder::entity(player),
         };
-        w.timer(on, int(cmd, "ticks")?, &RANG, player);
+        w.in_space(body.unwrap_or(0))
+            .ok_or("no space")?
+            .timer(on, int(cmd, "ticks")?, &RANG, player);
         Ok(String::new())
+    }),
+    ("assemble_one", "<pos:pos>", |w, cmd, player, _| {
+        let cell = BlockPos::from(pos(cmd, "pos")?);
+        w.assembly_select(player, Some(cell), true);
+        w.assembly_select(player, Some(cell), true);
+        Ok(w.assembly_select(player, None, true).to_string())
     }),
     ("rings", "", |_, _, _, _| Ok(RINGS.load(Ordering::Relaxed).to_string())),
     ("edited", "", |w, _, player, _| {

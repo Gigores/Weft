@@ -28,7 +28,7 @@ r.block(&FURNACE)
     .opens(&FURNACE_MENU);
 r.menu(&FURNACE_MENU)
     .group("input", Slots::single().holder())
-    .group("fuel", Slots::single().accepts("#fuel").holder())
+    .group("fuel", Slots::single().accepts("#fuel").priority(1, "").holder())
     .group("output", Slots::single().output().holder())
     .player_inventory()
     .screen(|ui| { /* see below */ });
@@ -49,9 +49,12 @@ Slots come in named groups. The block entity's inventory holds all of its `holde
 | `large()`, `size(px)` | a bigger slot, 18 GUI pixels by default |
 | `background("flame_slot")` | a texture from `gui/` shown while the slot is empty, like the armor silhouettes |
 | `tooltip("mymod.fuel_slot")` | a translation shown over the empty slot |
-| `priority(n)` | shift-clicks from the inventory fill groups with a higher priority first |
+| `priority(1, "#food")` | quick transfers prefer this group for matching items. An empty reference matches every accepted item |
+| `allow_sorting(bool)` | controls whether sorting can rearrange stacks within this group |
 
-Without `input()` or `output()` a slot takes and gives like a chest's. Shift-clicking an item in the player's inventory puts it into the first group that takes it, groups with an `accepts` rule before plain ones, so ore goes into the input and coal into the fuel slot without you saying anything.
+Quick transfers use the highest priority whose item reference matches, or zero if none match. They fill existing stacks and then empty slots at that priority before trying the next one. In the furnace above, coal goes to the fuel slot first. A storage group can prefer food and still accept other items.
+
+The sort button packs each enabled group separately, respecting its slot limit. Grids, rows, columns and chests allow sorting by default. Single slots, crafting grids, inputs, outputs, tanks and trash disable it in their presets. Use `allow_sorting` after a preset to override its choice.
 
 Its state is a component, a `value!` struct of plain numbers like any other. Slots hold items and liquids, so anything else it keeps (heat, progress) goes into a component like this one:
 ```rust

@@ -80,7 +80,7 @@ impl Server {
         r.entities.insert_with(c, e, inventory, components);
         r.keep_sources(c, id);
         // Known only now that the modifiers are back; a new player (no saved health) starts full.
-        let max = r.max_health(c, id);
+        let max = r.max_health(0, c, id);
         let mut dead = false;
         if let Some(e) = r.entities.get_mut(id) {
             if e.health < 0.0 {
@@ -88,7 +88,7 @@ impl Server {
             }
             dead = !e.alive();
         }
-        r.emit_engine(c, abi::event::PLAYER_JOINED, &abi::PlayerEvent { player: id });
+        r.emit_engine(0, c, abi::event::PLAYER_JOINED, &abi::PlayerEvent { player: id });
         let p = &mut self.players[pi];
         p.identity = identity;
         p.joined = true;

@@ -1,6 +1,13 @@
 
 var<private> TRI_FLIP: array<u32, 6> = array<u32, 6>(1u, 2u, 3u, 1u, 3u, 0u);
 var<private> AO: array<f32, 4> = array<f32, 4>(0.42, 0.62, 0.8, 1.0);
+const WORLD_LIQUID: u32 = 1u;
+const COVER_WALL: u32 = 2u;
+const LOD_DIR_SHIFT: u32 = 2u;
+const LOD_BOX: u32 = 32u;
+const LOD_CUTOUT: u32 = 64u;
+const LOD_LEAVES: u32 = 128u;
+const COVER_SIZE_SHIFT: u32 = 8u;
 
 struct VOut {
     @builtin(position) clip: vec4<f32>,
@@ -12,6 +19,7 @@ struct VOut {
     @location(4) dist: f32,
     @location(5) @interpolate(flat) layer2: u32,
     @location(6) @interpolate(flat) blend: f32,
+    @location(7) clip_cube: vec3<f32>,
     // The face's tint, also in `color`; alone it colors emission.
     @location(8) tint: vec3<f32>,
     // Glow mask texture (LabPBR emission), all ones: none.
@@ -22,7 +30,7 @@ struct VOut {
     @location(12) @interpolate(flat) size: f32,
     @location(13) @interpolate(flat) lod_fade: f32,
     @location(14) rel: vec3<f32>,
-    @location(15) @interpolate(flat) world_liquid: u32,
+    @location(15) @interpolate(flat) flags: u32,
 }
 
 fn shader_of(tex: u32) -> u32 {
@@ -149,8 +157,8 @@ fn vs_face(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     out.lod_fade = 0.0;
     out.dist = length(pos.xyz);
     out.rel = pos.xyz;
-    out.world_liquid = 0u;
-    out.uv = UVS[(c + ((w0 >> FACE_TURN_SHIFT) & FACE_TURN_MASK)) % 4u];
+    out.flags = 0u;
+    out.uv = UVS[(c + 4u - ((w0 >> FACE_TURN_SHIFT) & FACE_TURN_MASK)) % 4u];
     let tex_id = w1 & FACE_TEX_MASK;
     let fr = texture_frame(tex_id);
     out.size = fr.size;
@@ -204,7 +212,18 @@ fn vs_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     out.lod_fade = 0.0;
     out.dist = length(pos.xyz);
     out.rel = pos.xyz;
-    out.world_liquid = select(0u, 1u, origins[ii].w == 0 && ((uvw >> QUAD_TINT_SHIFT) & QUAD_LIQUID) != 0u);
+    let light0 = records[base + 6u];
+    var light1 = records[base + 7u];
+    if ((uvw >> QUAD_TINT_SHIFT) & QUAD_CLIP) != 0u {
+        let planes = vec3<u32>(light1) >> vec3<u32>(0u, 2u, 4u);
+        let min_pos = -f32(QUAD_POS_OFFSET) / 16.0;
+        let max_pos = f32(QUAD_POS_MASK - QUAD_POS_OFFSET) / 16.0;
+        let lo = select(vec3(min_pos), vec3(0.0), (planes & vec3(1u)) != vec3(0u));
+        let hi = select(vec3(max_pos), vec3(16.0), (planes & vec3(2u)) != vec3(0u));
+        out.clip_cube = (local - lo) / (hi - lo) - 0.5;
+        light1 = light0;
+    }
+    out.flags = select(0u, WORLD_LIQUID, origins[ii].w == 0 && ((uvw >> QUAD_TINT_SHIFT) & QUAD_LIQUID) != 0u);
     out.uv = uvs[c];
     let tex_id = w4 & FACE_TEX_MASK;
     let fr = texture_frame(tex_id);
@@ -213,7 +232,7 @@ fn vs_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     out.layer2 = fr.b;
     out.blend = fr.blend;
     out.glow = glow_of(fr.a);
-    out.light = on_body(corner_light(records[base + 6u], records[base + 7u], c), origins[ii].w);
+    out.light = on_body(corner_light(light0, light1, c), origins[ii].w);
     let o = origins[ii] + g.cam_cube;
     out.slot = shader_of(tex_id);
     out.pos = pos.xyz + vec3<f32>(g.cam_cube.xyz * 16) + g.cam_frac.xyz;
@@ -228,10 +247,11 @@ fn vs_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 }
 
 fn shade(in: VOut, albedo: vec4<f32>) -> vec4<f32> {
+    if any(abs(in.clip_cube) > vec3(0.5)) { discard; }
     var light = in.color * lightmap(in.light, scene.params.z, scene.light.x, scene.light.y, scene.light.w, scene.environment.x);
     // Glowing texels are lifted towards full brightness by their mask: lit = albedo * max(light,
     // emission), so they stay their own (tinted, unshaded) color in the dark.
-    if in.glow != 0xffffffffu {
+    if in.glow != 0xffffffffu && (in.flags & COVER_WALL) == 0u {
         let e = textureSampleLevel(textures[in.glow], nearest_clamp, in.uv, 0.0).r;
         light = max(light, in.tint * e);
     }
@@ -336,7 +356,7 @@ fn in_dry_hull(rel: vec3<f32>) -> bool {
 }
 
 fn clip_dry_liquid(in: VOut) {
-    if in.world_liquid != 0u && in_dry_hull(in.rel) {
+    if (in.flags & WORLD_LIQUID) != 0u && in_dry_hull(in.rel) {
         discard;
     }
 }
@@ -382,27 +402,47 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
     let w2 = records[f * 4u + 2u];
     let w3 = records[f * 4u + 3u];
     let dir = lod_dir(w0);
-    let a = lod_ao(w3);
+    let covered = ((w3 >> LOD_FACE_COVER_SHIFT) & 1u) != 0u;
+    let partial = ((w0 >> LOD_FACE_PARTIAL_SHIFT) & 1u) != 0u;
+    let kind = lod_tint(w0);
+    let plant = partial && covered && kind == LOD_FACE_PLANT;
+    let grass_wall = covered && !partial && dir != 3u;
+    let a = select(lod_ao(w3), vec4(3u), grass_wall);
     var c = vi % 4u;
     if a.x + a.z < a.y + a.w {
         c = (c + 1u) % 4u;
     }
     let data = u32(origins[ii].w);
     let scale = exp2(f32((data >> LOD_DRAW_SCALE_SHIFT) & LOD_DRAW_SCALE_MASK));
-    let local = (lod_pos(w0, w2) + lod_corner(w0, w2, w3, CORNERS[dir * 4u + c])) * vec3(scale, 1.0, scale) - vec3(0.0, 0.125, 0.0);
+    let corner = CORNERS[dir * 4u + c];
+    var shape = lod_corner(w0, w2, w3, corner);
+    let u = select(corner.x, corner.z, dir < 2u);
+    if plant {
+        // The packed X/Z edge pairs are the endpoints of the plane.
+        let edge = vec4<f32>(vec4<u32>(w3, w3 >> 5u, w3 >> 10u, w3 >> 15u) & vec4(LOD_FACE_EDGE_MASK)) / 16.0;
+        shape = vec3(mix(edge.x, edge.y, u), shape.y, mix(edge.z, edge.w, u));
+    }
+    let local = (lod_pos(w0, w2) + shape) * vec3(scale, 1.0, scale) - vec3(0.0, 0.125, 0.0);
     let pos = finish(local, vec4<i32>(origins[ii].xyz, 0));
     var out: VOut;
     out.clip = scene.view_proj * pos;
+    // Reverse-Z: a fallback wall sharing a plane with loaded geometry stays behind it.
+    out.clip.z -= abs(out.clip.z) * 0.00001;
     out.lod_fade = f32(data & LOD_DRAW_FADE_MASK) / f32(LOD_DRAW_FADE_MASK) * 3.0 - 1.0;
     out.dist = length(pos.xyz);
     out.rel = pos.xyz;
-    out.world_liquid = 0u;
+    out.flags = (dir << LOD_DIR_SHIFT) | select(0u, LOD_BOX, partial) | select(0u, LOD_CUTOUT, partial && covered);
     let o = origins[ii] + g.cam_cube;
     let world = vec3<f32>(o.xyz * 16) + local + vec3(0.0, 0.125, 0.0);
     out.uv = lod_uv(dir, world);
     // A wall lies on the line between two columns: it is of the one its box stands in, a little
     // behind it, or the mask's pick between them flickers along it.
     out.pos = world - vec3(0.0, 0.125, 0.0) - FACE_DIRS[dir] * 0.25;
+    if plant {
+        out.uv = vec2(select(1.0 - u, u, dir == 0u || dir == 5u), 1.0 - corner.y);
+        let owner = vec3<f32>(o.xyz * 16) + lod_pos(w0, w2) + vec3(0.5, 0.0, 0.5);
+        out.pos = vec3(owner.x, world.y, owner.z);
+    }
     let tex_id = w1 & FACE_TEX_MASK;
     let fr = texture_frame(tex_id);
     out.size = fr.size;
@@ -412,13 +452,30 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
     out.glow = 0xffffffffu;
     out.slot = 0u;
     out.light = lod_light(w0, w2, w3);
-    let kind = lod_tint(w0);
+    if partial && covered && kind == LOD_FACE_FILLED_LEAVES {
+        out.flags |= LOD_LEAVES;
+    }
     var tint = vec3(1.0);
-    if kind != 0u {
+    var shade = select(SHADE[dir] * AO[a[c]], 1.0, plant);
+    if covered {
+        let rgb = w1 >> FACE_BIOME_SHIFT;
+        tint = f32(LOD_FACE_COVER_GAIN) * vec3(f32(rgb >> 11u) / 31.0, f32((rgb >> 5u) & 63u) / 63.0, f32(rgb & 31u) / 31.0);
+        if grass_wall {
+            // The texture represents the grass emerging from the lower step.
+            shade = mix(SHADE[dir], 1.0, 0.65);
+            let pattern_id = (w3 >> LOD_FACE_PATTERN_LOW_SHIFT)
+                | (((w2 >> LOD_FACE_LIGHT_RG_SHIFT) & LOD_FACE_PATTERN_MID_MASK) << 8u)
+                | (((w3 >> LOD_FACE_LIGHT_B_SHIFT) & LOD_FACE_PATTERN_HIGH_MASK) << 14u);
+            let pattern = texture_frame(pattern_id);
+            out.flags |= COVER_WALL | (u32(pattern.size) << COVER_SIZE_SHIFT);
+            out.glow = pattern.a;
+            out.light = vec4(out.light.x, 0.0, 0.0, 0.0);
+        }
+    } else if kind != 0u {
         tint = unpack_rgb(biomes[(w1 >> FACE_BIOME_SHIFT) * g.extra.z + kind - 1u]);
     }
     out.tint = tint;
-    out.color = tint * SHADE[dir] * AO[a[c]];
+    out.color = tint * shade;
     return out;
 }
 
@@ -432,8 +489,20 @@ fn shown_by_cubes(pos: vec3<f32>, part: u32) -> bool {
         return false;
     }
     let w = 2 * half + 1;
-    let i = u32(((col.y % w) + w) % w * w + ((col.x % w) + w) % w) + part * ((u32(w * w) + 31u) / 32u) * 32u;
-    return ((lod_mask[i / 32u] >> (i % 32u)) & 1u) != 0u;
+    let i = u32(((col.y % w) + w) % w * w + ((col.x % w) + w) % w);
+    let words = (u32(w * w) + 31u) / 32u;
+    let shown = ((lod_mask[i / 32u + part * words] >> (i % 32u)) & 1u) != 0u;
+    if !shown {
+        return false;
+    }
+    let mask_header = 2u * words;
+    let layer = i32(floor(pos.y / 16.0)) - bitcast<i32>(lod_mask[mask_header]);
+    let stride = lod_mask[mask_header + 1u];
+    if layer < 0 || u32(layer) / 32u >= stride {
+        return false;
+    }
+    let bit = u32(layer);
+    return ((lod_mask[mask_header + 2u + i * stride + bit / 32u] >> (bit % 32u)) & 1u) != 0u;
 }
 
 fn lod_fade_visible(fade: f32, pixel: vec2<f32>) -> bool {
@@ -460,6 +529,87 @@ fn lod_fade_visible(fade: f32, pixel: vec2<f32>) -> bool {
     return threshold < fade;
 }
 
+@vertex
+fn vs_forest(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+    let f = (vi / 4u) * 4u;
+    let xz = records[f];
+    let y = records[f + 1u];
+    let radius = bitcast<f32>(records[f + 2u]);
+    let data = u32(origins[ii].w);
+    let scale = exp2(f32((data >> LOD_DRAW_SCALE_SHIFT) & LOD_DRAW_SCALE_MASK));
+    // Records keep tile-local x/z, signed ground height, model height, horizontal radius and atlas.
+    let half = vec3(radius, f32(y >> 16u) * 0.5, radius);
+    let center = vec3(f32(xz & 65535u) * scale, f32(i32(y << 16u) >> 16u) + half.y - 0.125, f32(xz >> 16u) * scale);
+    let rel = finish(center, vec4<i32>(origins[ii].xyz, 0)).xyz;
+    // Select the view in object space. Coarse groves are wider but keep their physical height.
+    let normal = normalize(-rel / half);
+    let yaw = atan2(normal.x, select(1.0, normal.z, dot(normal.xz, normal.xz) > 1e-12));
+    let right = vec3(cos(yaw), 0.0, -sin(yaw));
+    let up = cross(normal, right);
+    let corner = array<vec2<f32>, 4>(vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0))[vi % 4u];
+    let offset = (right * corner.x + up * corner.y) * sqrt(3.0) * half;
+    var out: VOut;
+    out.rel = rel + offset;
+    out.clip = scene.view_proj * vec4(out.rel, 1.0);
+    out.uv = corner * vec2(0.5, -0.5) + 0.5;
+    out.layer = records[f + 3u];
+    out.pos = vec3<f32>((origins[ii].xyz + g.cam_cube.xyz) * 16) + center + offset;
+    out.dist = length(out.rel);
+    out.lod_fade = f32(data & LOD_DRAW_FADE_MASK) / f32(LOD_DRAW_FADE_MASK) * 3.0 - 1.0;
+    out.light = vec4(1.0, 0.0, 0.0, 0.0);
+    out.color = vec3(1.0);
+    out.glow = 0xffffffffu;
+    let pi = 3.14159265;
+    // Both coordinates are constant across the primitive. Interpolate the four enclosing views.
+    out.blend = fract(yaw / (2.0 * pi) + 1.0) * f32(FOREST_VIEWS);
+    out.size = (asin(clamp(normal.y, -1.0, 1.0)) / pi + 0.5) * f32(FOREST_ELEVATIONS - 1u);
+    return out;
+}
+
+fn forest_view(layer: u32, local: vec2<f32>, frame: vec2<u32>, level: f32) -> vec4<f32> {
+    let edge = 0.5 * exp2(ceil(level)) / f32(FOREST_FRAME);
+    let uv = (vec2<f32>(frame) + clamp(local, vec2(edge), vec2(1.0 - edge))) / vec2(f32(FOREST_VIEWS), f32(FOREST_ELEVATIONS));
+    let p = textureSampleLevel(textures[layer], linear_mipped, uv, level);
+    return vec4(p.rgb * p.a, p.a);
+}
+
+// Only views near an angular boundary need blending. This preserves small branches at
+// magnification and skips the other texture reads when a single view describes the tree.
+fn forest_row(layer: u32, uv: vec2<f32>, frame: vec2<u32>, weight: f32, level: f32) -> vec4<f32> {
+    let first = forest_view(layer, uv, frame, level);
+    if weight <= 0.0 {
+        return first;
+    }
+    let next = vec2((frame.x + 1u) % FOREST_VIEWS, frame.y);
+    return mix(first, forest_view(layer, uv, next, level), weight);
+}
+
+@fragment
+fn fs_forest(in: VOut) -> @location(0) vec4<f32> {
+    let du = dpdx(in.uv);
+    let dv = dpdy(in.uv);
+    let footprint = max(length(du), length(dv)) * f32(FOREST_FRAME);
+    let level = clamp(log2(max(1.0, footprint)), 0.0, log2(f32(FOREST_FRAME)));
+    let uv = nearest_uv(f32(FOREST_FRAME), in.uv, du, dv);
+    if !lod_fade_visible(in.lod_fade, in.clip.xy) || shown_by_cubes(in.pos, 0u) {
+        discard;
+    }
+    let angles = vec2(in.blend, in.size);
+    var weight = smoothstep(vec2(0.25), vec2(0.75), fract(angles));
+    let base = vec2<u32>(angles) + select(vec2(0u), vec2(1u), weight == vec2(1.0));
+    weight = select(weight, vec2(0.0), weight == vec2(1.0));
+    let frame = vec2(base.x % FOREST_VIEWS, min(base.y, FOREST_ELEVATIONS - 1u));
+    var p = forest_row(in.layer, uv, frame, weight.x, level);
+    if weight.y > 0.0 {
+        let next = vec2(frame.x, min(frame.y + 1u, FOREST_ELEVATIONS - 1u));
+        p = mix(p, forest_row(in.layer, uv, next, weight.x, level), weight.y);
+    }
+    if p.a < 0.32 {
+        discard;
+    }
+    return vec4(shade(in, vec4(p.rgb / p.a, 1.0)).rgb, 1.0);
+}
+
 @fragment
 fn fs_lod(in: VOut) -> @location(0) vec4<f32> {
     let du = dpdx(in.uv);
@@ -468,14 +618,33 @@ fn fs_lod(in: VOut) -> @location(0) vec4<f32> {
         discard;
     }
     if shown_by_cubes(in.pos, 0u) {
-        discard;
+        let dir = (in.flags >> LOD_DIR_SHIFT) & FACE_DIR_MASK;
+        // A near column may omit a side against its neighbor. Keep the wall
+        // across the boundary until that neighboring column also draws cubes.
+        if (in.flags & LOD_BOX) != 0u || dir == 2u || dir == 3u || shown_by_cubes(in.pos + FACE_DIRS[dir] * 0.5, 0u) {
+            discard;
+        }
     }
     let uv = fract(in.uv);
     let nuv = nearest_uv(in.size, uv, du, dv);
     var albedo = sample(in, nuv, du, dv);
+    if (in.flags & LOD_CUTOUT) != 0u {
+        if (in.flags & LOD_LEAVES) != 0u {
+            albedo = vec4(albedo.rgb * albedo.a, 1.0);
+        } else if albedo.a <= 0.1 {
+            discard;
+        }
+        return vec4(shade(in, albedo).rgb, 1.0);
+    }
     let cover = smoothstep(0.1, 0.6, albedo.a);
     let tinted = any(in.tint != vec3(1.0));
     albedo = vec4(mix(select(albedo.rgb, vec3(1.0), tinted), albedo.rgb, cover), 1.0);
+    if (in.flags & COVER_WALL) != 0u {
+        let leaf_uv = nearest_uv(f32(in.flags >> COVER_SIZE_SHIFT), uv, du, dv);
+        let plant = textureSampleGrad(textures[in.glow], linear_mipped, leaf_uv, du, dv);
+        let leaf = dot(plant.rgb, vec3(0.2126, 0.7152, 0.0722));
+        albedo = vec4(albedo.rgb * mix(0.75, 1.25 + 0.35 * leaf, plant.a), 1.0);
+    }
     return vec4(shade(in, albedo).rgb, 1.0);
 }
 

@@ -875,6 +875,7 @@ pub static DAMAGE: Component<u32> = Component::named(abi::comp::WEAR);
 pub static LOOT_ROLLS: Component<u32> = Component::named(abi::comp::LOOT_ROLLS);
 pub static HARDNESS: Component<f32> = Component::named(abi::comp::HARDNESS);
 pub static DENSITY: Component<f32> = Component::named(abi::comp::block::DENSITY);
+pub static THRUST: Component<f32> = Component::named(abi::comp::block::THRUST);
 pub static FRICTION: Component<f32> = Component::named(abi::comp::FRICTION);
 pub static DRAG: Component<f32> = Component::named(abi::comp::DRAG);
 pub static LIGHT: Component<[u8; 3]> = Component::named(abi::comp::LIGHT);

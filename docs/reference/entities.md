@@ -153,16 +153,17 @@ A game mode being registered: survival's rules unless told otherwise.
 
 ## Hitboxes
 
-What hits land on, part by part (`EntityBuilder::hitboxes`): boxes in pixels (1/16 block, its feet at 0, -Z its front, -X its right) at the kind's size; one made bigger is hit bigger. Rays, arrows and blows tell the part they hit (`RayHit::part`, `Damage::part`, the `part` a chain step reads in its query). They go with the body, a head with the look, arms and legs swing as it walks: run and an arrow may pass between them. Not the model's boxes: how a mob looks never changes where it can be hit.
+What hits land on, part by part (`EntityBuilder::hitboxes`): boxes in pixels (1/16 block, its feet at 0, -Z its front, -X its right) at the kind's size; one made bigger is hit bigger. Rays, arrows and blows tell the part they hit (`RayHit::part`, `Damage::part`, the `part` a chain step reads in its query). A box bound to a bone follows the registered model's base pose on the server and client. Its dimensions are authored independently of the model's mesh.
 
-- <a id="Hitboxes-new"></a>`.new() -> Hitboxes` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2328)
-- <a id="Hitboxes-part"></a>`.part(name: &str, min: [f32`: A part going with the body. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2338)
-- <a id="Hitboxes-head"></a>`.head(name: &str, min: [f32`: A head: it turns with the look about `pivot`, its neck. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2342)
-- <a id="Hitboxes-limb"></a>`.limb(name: &str, min: [f32`: A leg or an arm: it swings about `pivot` as it walks, `swing` radians at a full stride, `phase` radians after the beat (`PI` the other half of the step). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2347)
-- <a id="Hitboxes-humanoid"></a>`.humanoid() -> Hitboxes`: Two legs, two arms, a body and a head, 32 pixels tall: the player's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2351)
-- <a id="Hitboxes-quadruped"></a>`.quadruped() -> Hitboxes`: A body on four legs with a head ahead, 25 pixels tall: a cow's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2362)
-- <a id="Hitboxes-reaching"></a>`.reaching(mut self)`: Its arms held out ahead, not swinging, as a zombie's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2373)
-- <a id="Hitboxes-slim"></a>`.slim(px: f32)`: Arms and legs `px` pixels thick, as a skeleton's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2388)
+- <a id="Hitboxes-new"></a>`.new() -> Hitboxes` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2346)
+- <a id="Hitboxes-part"></a>`.part(name: &str, min: [f32`: A part going with the body. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2356)
+- <a id="Hitboxes-bone"></a>`.bone(name: &str, bone: &str, min: [f32`: A box in rest-pose model pixels that follows a bone of the registered entity model. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2364)
+- <a id="Hitboxes-head"></a>`.head(name: &str, min: [f32`: A head: it turns with the look about `pivot`, its neck. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2368)
+- <a id="Hitboxes-limb"></a>`.limb(name: &str, min: [f32`: A leg or an arm: it swings about `pivot` as it walks, `swing` radians at a full stride, `phase` radians after the beat (`PI` the other half of the step). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2373)
+- <a id="Hitboxes-humanoid"></a>`.humanoid() -> Hitboxes`: Two legs, two arms, a body and a head, 32 pixels tall: the player's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2377)
+- <a id="Hitboxes-quadruped"></a>`.quadruped() -> Hitboxes`: A body on four legs with a head ahead, 25 pixels tall: a cow's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2388)
+- <a id="Hitboxes-reaching"></a>`.reaching(mut self)`: Its arms held out ahead, not swinging, as a zombie's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2399)
+- <a id="Hitboxes-slim"></a>`.slim(px: f32)`: Arms and legs `px` pixels thick, as a skeleton's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2414)
 
 ## Looks
 

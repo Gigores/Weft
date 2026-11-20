@@ -9,7 +9,7 @@ use super::dim::Dim;
 use crate::content::Content;
 use crate::stack;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum At {
     Entity(u64),
     /// The stack in `slot` of `entity`'s inventory.
@@ -19,14 +19,16 @@ pub enum At {
     },
 }
 
-pub fn resolve(d: &Dim, h: &abi::Holder) -> Option<At> {
+pub fn resolve(d: &Dim, space_id: u64, h: &abi::Holder) -> Option<At> {
     match h.kind {
         abi::holder::ENTITY => d
             .entities
             .get(h.entity)
             .filter(|e| !e.removed)
             .map(|_| At::Entity(h.entity)),
-        abi::holder::BLOCK => d.anchored(crate::world::ivec(h.pos)).map(At::Entity),
+        abi::holder::BLOCK => d
+            .anchored(space_id, crate::world::ivec(h.pos))
+            .map(At::Entity),
         abi::holder::HELD => d
             .entities
             .inventories
@@ -38,7 +40,7 @@ pub fn resolve(d: &Dim, h: &abi::Holder) -> Option<At> {
 }
 
 /// An inventory: the one a holder has itself (`storage` 0), or one of the storages it carries.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Inv {
     pub at: At,
     pub storage: u32,
@@ -52,8 +54,8 @@ impl Inv {
 
 /// The inventory `h` points at, `None` when it isn't there: a storage that isn't one, or an
 /// entity that doesn't carry it. Stacks can carry any storage.
-pub fn inventory(d: &Dim, c: &Content, h: &abi::Holder) -> Option<Inv> {
-    let inv = Inv { at: resolve(d, h)?, storage: h.storage };
+pub fn inventory(d: &Dim, space_id: u64, c: &Content, h: &abi::Holder) -> Option<Inv> {
+    let inv = Inv { at: resolve(d, space_id, h)?, storage: h.storage };
     let carried = match inv.at {
         _ if h.storage == 0 => true,
         At::Entity(id) => storage_slots(c, h.storage).is_some() && d.entities.comps.contains_key(&(id, h.storage)),
@@ -143,6 +145,8 @@ pub fn len(d: &Dim, c: &Content, inv: Inv) -> u32 {
             .get(&id)
             .map_or(0, |i| i.len() as u32),
         (At::Stack { entity, slot }, 0) => item_slots(c, stack_at(d, entity, slot).item),
+        (At::Entity(id), comp) if !d.entities.comps.contains_key(&(id, comp)) => 0,
+        (At::Stack { entity, slot }, _) if stack_at(d, entity, slot).is_empty() => 0,
         (_, comp) => storage_slots(c, comp).unwrap_or(0),
     }
 }

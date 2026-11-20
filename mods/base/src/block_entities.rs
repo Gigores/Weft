@@ -41,6 +41,7 @@ pub fn register(r: &mut Registry) {
             "fuel",
             Slots::single()
                 .accepts("#fuel")
+                .priority(1, "")
                 .background("slot_fuel")
                 .holder(),
         )

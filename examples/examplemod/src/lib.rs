@@ -252,7 +252,11 @@ fn client(_r: &mut Registry) {
     // static ADJUST: Key = Key::named("adjust");
     // r.key(&ADJUST, "wheel_up").while_held(&DASH);
     // r.client_frame(|c| { let _amount = c.key(&ADJUST).amount; });
-    // r.menu(&ABOUT).screen(|ui| ui.panel("background", S::column().pad(8.0), |ui| ui.text("examplemod.about")));
+    // static WINDOW: std::sync::Mutex<[f32; 2]> = std::sync::Mutex::new([0.25, 0.75]);
+    // r.menu(&ABOUT).screen(|ui| ui.panel("background", S::column().pad(8.0), |ui| {
+    //     ui.text("examplemod.about");
+    //     ui.range_slider(S::row(), |_| *WINDOW.lock().unwrap(), |_, handle, position| WINDOW.lock().unwrap()[handle] = position);
+    // }));
     // r.hud_element(&MANA, hud_anchor::HOTBAR_RIGHT, 2, |ui| ui.text_bind(|c, out| { /* ... */ }));
     // static TARGET_INFO: HudElement = HudElement::named("base:target_info");
     // r.screen_part(&TARGET_INFO, "details", 0, |ui| {

@@ -117,7 +117,7 @@ fn structure(s: &mut Server, x: &Ctx) -> Vec<Msg> {
         let Some(dir) = s.structures_dir() else { return say("structure.no_folder", Vec::new()) };
         let Some(parts) = s.dims[dim as usize]
             .region_at(lo)
-            .and_then(|r| r.capture(c, lo, hi))
+            .and_then(|r| r.capture(0, c, lo, hi))
         else {
             return say("not_loaded", Vec::new());
         };
@@ -151,7 +151,7 @@ fn structure(s: &mut Server, x: &Ctx) -> Vec<Msg> {
             }
         };
         return match s.dims[dim as usize].region_at(at) {
-            Some(r) => match r.place_template(c, def, at, t, None) {
+            Some(r) => match r.place_template(0, c, def, at, t, None) {
                 Some(_) => say("structure.placed", vec![text(name)]),
                 None => say("not_loaded", Vec::new()),
             },
@@ -162,7 +162,7 @@ fn structure(s: &mut Server, x: &Ctx) -> Vec<Msg> {
         let at = x.here.floor().as_ivec3();
         let Some(r) = s.dims[dim as usize].region_at(at) else { return say("not_loaded", Vec::new()) };
         return match r.last_placing() {
-            Some(id) if r.unplace(c, id) => say("structure.undone", Vec::new()),
+            Some(id) if r.unplace(0, c, id) => say("structure.undone", Vec::new()),
             _ => say("structure.nothing", Vec::new()),
         };
     }
@@ -368,7 +368,7 @@ fn summon(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     }
     let r = s.dims[me.0 as usize].ensure_region(c, pos);
     for _ in 0..count {
-        r.spawn_by(c, kind, pos, weft_abi::spawn_cause::COMMAND, |_| {});
+        r.spawn_by(0, c, kind, pos, weft_abi::spawn_cause::COMMAND, |_| {});
     }
     say("summon.done", vec![int(count), text(&kname)])
 }
@@ -379,7 +379,7 @@ fn clear(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     if x.a.get("entity").is_some() {
         for &(d, id) in &who {
             if let Some(r) = s.dims[d as usize].entity_region(id) {
-                r.damage(c, id, &weft_abi::Damage::new(f32::MAX, damage::VOID));
+                r.damage(0, c, id, &weft_abi::Damage::new(f32::MAX, damage::VOID));
             }
         }
         return say("clear.killed", vec![int(who.len())]);
@@ -409,7 +409,7 @@ fn set_block(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     }
     match s.dims[dim as usize].region_at(p) {
         Some(r) => {
-            r.set(c, p, state);
+            r.set(0, c, p, state);
             say("setblock.done", vec![Arg::Name(Name::Block(state))])
         }
         None => say("not_loaded", Vec::new()),
@@ -421,7 +421,7 @@ fn insert(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let (Some(p), Some(item)) = (block_at(a), a.id("item")) else { return Vec::new() };
     let count = a.int("count").unwrap_or(1).clamp(1, 1 << 20) as u32;
     match s.dims[dim as usize].region_at(p) {
-        Some(r) => match r.anchored(p) {
+        Some(r) => match r.anchored(0, p) {
             Some(owner) => {
                 let left = r
                     .entities
@@ -511,7 +511,7 @@ fn heal(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let c = x.c;
     for (d, id) in x.targets(s, "who") {
         if let Some(r) = s.dims[d as usize].entity_region(id) {
-            let max = r.max_health(c, id);
+            let max = r.max_health(0, c, id);
             if let Some(e) = r.entities.get_mut(id) {
                 if e.alive() {
                     e.health = max;
@@ -554,14 +554,14 @@ fn effect(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     for (d, id) in x.targets(s, "who") {
         let Some(r) = s.dims[d as usize].entity_region(id) else { continue };
         match (give, one) {
-            (true, Some(e)) => r.give_effect(c, id, e, level, ticks),
+            (true, Some(e)) => r.give_effect(0, c, id, e, level, ticks),
             (false, _) => {
                 let on: Vec<u32> = crate::world::effects_on(r.entities.comps.get(&(id, comp)).map(|b| &b[..]), r.time)
                     .map(|f| f.id)
                     .filter(|&f| one.is_none_or(|o| o == f))
                     .collect();
                 for e in on {
-                    r.give_effect(c, id, e, 1, 0);
+                    r.give_effect(0, c, id, e, 1, 0);
                 }
             }
             _ => {}

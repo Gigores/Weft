@@ -1,5 +1,6 @@
 pub mod cube;
 pub mod light;
+pub mod placement;
 pub mod view;
 
 use glam::{DVec3, IVec3};
@@ -219,7 +220,7 @@ pub fn block_bounds<'a>(cubes: impl Iterator<Item = (&'a IVec3, &'a cube::Cube)>
             continue;
         }
         for i in 0..cube::VOLUME {
-            if cube.get(i) != 0 {
+            if cube.get(i) != 0 || !cube.layout(i).covers.is_empty() {
                 let p = cp * 16 + crate::world::cube::offset(i);
                 out = Some(out.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
             }

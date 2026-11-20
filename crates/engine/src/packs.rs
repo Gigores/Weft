@@ -129,6 +129,15 @@ pub fn compose(
             Err(e) => log::error!("shader pack {name}: {}", e.0),
         }
     }
+    compose_engine(assets, name, parts)
+}
+
+/// Use the engine's entry points for a pass an older shader pack predates.
+pub(crate) fn compose_engine(
+    assets: &Assets,
+    name: &str,
+    parts: &[(&crate::shaders::Hook, &[(String, String)])],
+) -> Result<(Shader, Vec<crate::shaders::Slots>), ShaderError> {
     crate::shaders::compose(name, &with_common(assets, name, &engine_source(assets, name)), parts)
 }
 

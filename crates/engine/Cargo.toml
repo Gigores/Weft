@@ -10,6 +10,7 @@ weft_noise.workspace = true
 weft_render.workspace = true
 winit.workspace = true
 glam.workspace = true
+parry3d-f64 = { version = "0.31.1", default-features = false, features = ["required-features", "std", "alloc"] }
 bytemuck.workspace = true
 log.workspace = true
 rayon.workspace = true
@@ -43,8 +44,8 @@ libc.workspace = true
 
 # NativeActivity: no Java of our own to build.
 [target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22.4"
 winit = { workspace = true, features = ["android-native-activity"] }
 
-# Android's clipboard is only reached through Java.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard.workspace = true

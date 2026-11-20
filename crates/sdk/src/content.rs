@@ -1330,10 +1330,20 @@ impl Registry {
 
     /// `bone` of `model` moves by itself. A bone called `hanging` or `hanging_<anything>` does without this.
     pub fn bone_motion(&mut self, model: &str, bone: &str, motion: BoneMotion) {
+        self.bone_motion_with_limit(model, bone, motion, abi::comp::bone_motion::default_max_angle(motion.spring));
+    }
+
+    /// Limits the swing from this bone's animated direction, in degrees (0 locks it, 180 leaves it free).
+    pub fn bone_motion_with_limit(&mut self, model: &str, bone: &str, motion: BoneMotion, max_angle: f32) {
         use crate::comps::bone_motion as m;
         let name = format!("{}/{bone}", crate::asset("", model));
         let mut e = crate::entry::Entry::new(abi::entry_kind::BONE_MOTION, name);
-        e.ops = vec![m::GRAVITY.raw_value(&motion.gravity), m::SPRING.raw_value(&motion.spring), m::DRAG.raw_value(&motion.drag)];
+        e.ops = vec![
+            m::GRAVITY.raw_value(&motion.gravity),
+            m::SPRING.raw_value(&motion.spring),
+            m::DRAG.raw_value(&motion.drag),
+            m::MAX_ANGLE.raw_value(&max_angle),
+        ];
         e.send(self);
     }
 }
@@ -1705,7 +1715,6 @@ macro_rules! state_setters {
         pub fn tall_plant(self, lower: &str, upper: &str) -> Self {
             let mut b = self
                 .plant()
-                .cells(&[[0, 1, 0]])
                 .hitbox([2.0, 0.0, 2.0], [14.0, 30.0, 14.0])
                 .texture(lower)
                 .top(upper);
@@ -1811,6 +1820,12 @@ macro_rules! state_setters {
         pub fn hitbox(self, min: [f32; 3], max: [f32; 3]) -> Self {
             self.push(&bc::HITBOX, [min[0], min[1], min[2], max[0], max[1], max[2]])
         }
+        /// A solid cylinder centered in its cell, along the model's north-south axis.
+        /// Radius and half length are in blocks. Reserve every extra cell of its bounds with
+        /// `cells`. Grip is the friction coefficient for rolling contact on an assembled body.
+        pub fn cylinder(self, radius: f32, half_length: f32, grip: f32) -> Self {
+            self.set(&bc::CYLINDER, [radius, half_length, grip])
+        }
         /// What the crosshair outlines and cracks, one box a call, when it shouldn't be the
         /// hitbox's: a hollow log stopped by its walls and outlined whole.
         pub fn outline(self, min: [f32; 3], max: [f32; 3]) -> Self {
@@ -1822,13 +1837,6 @@ macro_rules! state_setters {
         /// "type=top", "type=bottom")`. Without pieces a hit breaks all of it.
         pub fn piece(self, min: [f32; 3], max: [f32; 3], left: &str, alone: &str) -> Self {
             self.push(&bc::PIECES, abi::Piece { min, max, left: left.into(), alone: alone.into() })
-        }
-        /// More cells than its own, as its model is written (facing north, its top up): a door
-        /// `&[[0, 1, 0]]`, a 3x3x3 machine every cell around. It is one block in all of them: what
-        /// is done to any is done to it, and it is placed and gone whole. Its model and boxes span
-        /// them from its own cell. The cells touch each other by faces.
-        pub fn cells(self, cells: &[[i32; 3]]) -> Self {
-            self.set(&bc::CELLS, cells.to_vec())
         }
         /// The sides a liquid in its cell can't pass (`.shares_cell_with("#water")`): without
         /// this, the ones its hitbox covers whole (a stair's back holds water, a hollow log's open
@@ -2427,15 +2435,24 @@ impl<'a> BlockBuilder<'a> {
         let cb = callback(move |a: &mut abi::SignalReadArgs| a.output = f(&World::from_raw(a.world), a.pos) as u32);
         self.set(&bc::SIGNAL_READ, cb)
     }
-    /// Goes along its `facing` (after `facing`), any of the six ways. Its front is what sticks: with
-    /// power from any other side it carries itself, the block in front of it and what is stuck to
-    /// that the way slime does, half a block a second per level of power. Circuits on it go on.
-    /// Without power, or against what it can't go through, it all lands on a whole block.
+    /// Goes along its `facing` (after `facing`), any of the six ways. With power from any other
+    /// side it carries itself and the structure connected to its front, half a block a second
+    /// per level of power. Circuits on it go on.
+    /// On stopping, the default `mode` of `disassemble` lands the platform on whole blocks.
+    /// `hold` keeps it assembled.
     /// `power`: 0 idle, 1 going, 2 stuck. `breaks`: it breaks what is in its way instead.
     pub fn signal_floater(mut self, breaks: bool) -> Self {
         let flags = if breaks { abi::signal_flags::BREAKS } else { 0 };
         self.signal = Some(SignalBuild { flags, ..SignalBuild::default() });
+        self.entity.get_or_insert_with(|| Box::new(|e| e));
         self.signal_props(abi::signal_kind::FLOATER, 3, false, false)
+            .prop("mode", ["disassemble", "hold"])
+    }
+    /// After `facing`, applies force in that direction on a free assembled body. Its lever arm
+    /// from the center of mass also turns the body. `power` scales from zero to `force`.
+    pub fn signal_thruster(self, force: f32) -> Self {
+        self.signal_props(abi::signal_kind::SINK, 16, false, false)
+            .set(&crate::THRUST, force)
     }
     /// Assembles the blocks attached to its front while powered. If `rotates`, power sets
     /// the speed around its facing axis. The `mode` is `disassemble` by default, or `hold` to
@@ -2443,15 +2460,29 @@ impl<'a> BlockBuilder<'a> {
     pub fn signal_body_mount(mut self, rotates: bool) -> Self {
         let flags = if rotates { abi::signal_flags::ROTATES } else { 0 };
         self.signal = Some(SignalBuild { flags, ..SignalBuild::default() });
+        self.entity.get_or_insert_with(|| Box::new(|e| e));
         self = self.signal_props(abi::signal_kind::BODY_MOUNT, 3, false, false);
         if rotates {
             self = self.prop("mode", ["disassemble", "hold"]);
         }
         self
     }
+    /// Holds a carriage beside the guide rails in its facing direction. A signal
+    /// assembles the carriage, which then travels along the rails under load.
+    pub fn signal_guide(mut self) -> Self {
+        self.signal = Some(SignalBuild { flags: abi::signal_flags::SLIDES, ..SignalBuild::default() });
+        self.entity.get_or_insert_with(|| Box::new(|e| e));
+        self.signal_props(abi::signal_kind::BODY_MOUNT, 3, false, false)
+    }
+
+    /// A section of track for a linear guide.
+    pub fn guide_rail(self) -> Self {
+        self.tag(abi::comp::block::GUIDE_RAIL)
+    }
     /// A controller that assembles a free, buoyant body and provides its steering seat.
     pub fn body_helm(mut self) -> Self {
         self.signal = Some(SignalBuild { flags: abi::signal_flags::HELM, ..SignalBuild::default() });
+        self.entity.get_or_insert_with(|| Box::new(|e| e));
         self.signal_props(abi::signal_kind::BODY_MOUNT, 0, false, false)
     }
     /// Mass per cubic block for a freely moving body, in units of water density.
@@ -2460,7 +2491,7 @@ impl<'a> BlockBuilder<'a> {
     }
     /// Pushes blocks at its `facing` with power from any other side (after `facing`). Its `power`
     /// property: `off` in, `moving` while its head is on the way, `on` out, the head being the
-    /// state's own cell in front (`.cells`). `head`: what the head looks like on the way, a block
+    /// extended state's hitbox in front. `head`: what the head looks like on the way, a block
     /// with a `facing` property that is never in the world. `sticky` brings a block back.
     pub fn signal_piston(mut self, head: &'static str, sticky: bool) -> Self {
         let flags = if sticky { abi::signal_flags::STICKY } else { 0 };
@@ -3379,13 +3410,21 @@ impl SignalBuild {
                 let f = facing.unwrap_or(crate::Dir::North);
                 (sig.watches, sig.gives, sig.strong) = (own(f), own(f.opposite()), own(f.opposite()));
             }
-            k::SINK => sig.inputs = 0x3F,
+            k::SINK => {
+                sig.inputs = 0x3F;
+                if let Some(f) = facing {
+                    sig.front = turn.own(f).face();
+                }
+            }
             // Their front is stuck to what they take along, or is where the head goes.
             k::PISTON | k::FLOATER | k::BODY_MOUNT | k::PISTON_HEAD => {
                 let f = turn.own(facing.unwrap_or(crate::Dir::Up)).face();
                 sig.front = f;
                 sig.inputs = if self.kind == k::PISTON_HEAD || sig.flags & abi::signal_flags::HELM != 0 { 0 } else { 0x3F & !(1 << f) };
-                if sig.flags & abi::signal_flags::ROTATES != 0 && p.is("mode", "hold") {
+                if sig.flags & abi::signal_flags::HELM != 0 {
+                    (sig.gives, sig.strong) = (0x3F, 0x3F);
+                }
+                if p.is("mode", "hold") && (self.kind == k::FLOATER || sig.flags & abi::signal_flags::ROTATES != 0) {
                     sig.flags |= abi::signal_flags::HOLD;
                 }
             }

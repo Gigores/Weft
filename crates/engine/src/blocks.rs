@@ -700,7 +700,26 @@ fn bake_state(
             })
             .collect()
     };
-    let (hitbox, outline) = (sixteenths(b::HITBOX), sixteenths(b::OUTLINE));
+    let (mut hitbox, outline) = (sixteenths(b::HITBOX), sixteenths(b::OUTLINE));
+    let cylinder = s
+        .get::<[f32; 3]>(b::CYLINDER)
+        .and_then(|[radius, half, grip]| {
+            if !(0.0 < radius && radius <= 1.5 && 0.0 < half && half <= 0.5 && (0.0..=4.0).contains(&grip)) {
+                errors.push(format!("{name}: invalid cylinder radius, half length or grip"));
+                return None;
+            }
+            let axis = glam::DVec3::from_array(turn.vector([0, 0, 1]).map(f64::from));
+            let shape = crate::physics::Cylinder {
+                center: glam::DVec3::splat(0.5),
+                axis,
+                radius: f64::from(radius),
+                half: f64::from(half),
+                grip: f64::from(grip),
+            };
+            let b = shape.bounds();
+            hitbox = vec![[b.min.x as f32, b.min.y as f32, b.min.z as f32, b.max.x as f32, b.max.y as f32, b.max.z as f32]];
+            (flags & bf::SOLID != 0).then_some(shape)
+        });
     let rules = s.or::<Vec<abi::BlockRule>>(b::RULES, Vec::new());
     let pieces = s
         .or::<Vec<abi::Piece>>(b::PIECES, Vec::new())
@@ -757,20 +776,6 @@ fn bake_state(
             .map(|b| [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]])
             .collect()
     };
-    let own_cells = s.or::<Vec<[i32; 3]>>(b::CELLS, Vec::new());
-    let tall = own_cells.contains(&[0, 1, 0]);
-    let cells = cells_of(name, turn, own_cells, errors);
-    // A big block's reach out of its cell is its cells.
-    let (lo, hi) = cells
-        .iter()
-        .fold((IVec3::ZERO, IVec3::ZERO), |(lo, hi), (o, _)| (lo.min(*o), hi.max(*o)));
-    for bx in &hitbox {
-        let out = (0..3).any(|i| bx[i] < lo[i] as f32 - 1.0 || bx[i + 3] > hi[i] as f32 + 2.0);
-        if out {
-            errors
-                .push(format!("{name}: hitbox {:?} reaches more than a block out of its cell (it is in sixteenths)", bx.map(|v| v * 16.0)));
-        }
-    }
     // What stops a walker: nothing at all unless it is solid, decided here once for whoever asks.
     let collision = if flags & bf::SOLID == 0 {
         Vec::new()
@@ -792,6 +797,25 @@ fn bake_state(
     } else {
         vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]
     };
+    // Offsets in coverage records use signed 16.16 coordinates. Bound the indexing work
+    // before enumerating cells, including malformed bounds read from a model file.
+    let valid = selection
+        .iter()
+        .all(|b| b.iter().all(|v| v.is_finite() && v.abs() < 32767.0) && (0..3).all(|i| b[i] <= b[i + 3]))
+        && selection
+            .iter()
+            .map(|b| {
+                (0..3)
+                    .map(|i| f64::from(b[i + 3].ceil() - b[i].floor()))
+                    .product::<f64>()
+            })
+            .sum::<f64>()
+            <= 1_048_576.0;
+    if !valid {
+        errors.push(format!("{name}: invalid or excessively large block hitbox"));
+    }
+    let cells = if valid { crate::world::placement::covered_cells(&selection, cylinder, glam::IVec3::ZERO) } else { Vec::new() };
+    let tall = cells.contains(&IVec3::Y);
     let own: [u32; 6] = if model == BlockModel::None { [0; 6] } else { std::array::from_fn(|i| tex(&faces[i])) };
     let item_face = match s.get::<u8>(b::ITEM_FACE) {
         Some(f) => Some(f),
@@ -846,6 +870,7 @@ fn bake_state(
         textures: crate::content::turned_faces(turn, own),
         boxes,
         collision,
+        cylinder,
         selection,
         outline,
         hardness: 1.0,
@@ -893,39 +918,9 @@ fn face_texture(spec: &str, retexture: &[(String, String)]) -> String {
     )
 }
 
-/// A big block's other cells turned, each with its step toward the block's own cell, found
-/// spreading from it face by face.
-fn cells_of(name: &str, turn: weft_abi::Turn, own: Vec<[i32; 3]>, errors: &mut Vec<String>) -> Vec<(IVec3, u8)> {
-    use crate::world::DIRS;
-    let mut left: Vec<IVec3> = own
-        .into_iter()
-        .map(|o| IVec3::from_array(turn.vector(o)))
-        .filter(|o| *o != IVec3::ZERO)
-        .collect();
-    left.sort_by_key(|o| o.to_array());
-    left.dedup();
-    let (mut out, mut reached) = (Vec::new(), vec![IVec3::ZERO]);
-    let mut at = 0;
-    while at < reached.len() {
-        let from = reached[at];
-        at += 1;
-        for (d, step) in DIRS.iter().enumerate() {
-            if let Some(i) = left.iter().position(|o| *o == from + *step) {
-                let o = left.swap_remove(i);
-                // The way back is the opposite face.
-                out.push((o, (d ^ 1) as u8));
-                reached.push(o);
-            }
-        }
-    }
-    if !left.is_empty() {
-        errors.push(format!("{name}: cells {left:?} don't touch the rest of the block by a face"));
-    }
-    out
-}
-
 fn air() -> StateInfo {
     StateInfo {
+        cylinder: None,
         turn: weft_abi::Turn::NONE,
         sides: 0,
         liquid_walls: u8::MAX,

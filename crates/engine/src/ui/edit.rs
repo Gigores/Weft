@@ -140,8 +140,7 @@ impl Field<'_> {
             out.moved = true;
         } else if ctrl && (key(KeyCode::KeyC) || key(KeyCode::KeyX)) {
             if let Some((a, b)) = self.selection() {
-                crate::clipboard::set(&chars[a..b].iter().collect::<String>());
-                if key(KeyCode::KeyX) {
+                if crate::clipboard::set(&chars[a..b].iter().collect::<String>()) && key(KeyCode::KeyX) {
                     self.delete_range(a, b);
                     out.changed = true;
                 }

@@ -145,7 +145,7 @@ pub struct EntityKind {
     /// How it flies when it is a projectile (`comp::entity::PROJECTILE`).
     pub projectile: Option<abi::Projectile>,
     /// What hits land on, part by part (`comp::entity::HITBOXES`); none: its box.
-    pub hitboxes: Option<abi::Hitboxes>,
+    pub hitboxes: Option<crate::hitbox::Rig>,
     /// What the keys of a player steering it do (`abi::SteerArgs`), and where riders get off
     /// when a seat asks it (`abi::DismountArgs`).
     pub steer: Option<(ModId, Callback)>,
@@ -213,19 +213,64 @@ pub struct GroupDef {
     pub cols: u32,
     pub rows: u32,
     pub flags: u32,
-    /// What items it takes, a reference (`#fuel #mymod:fire_starter !base:lava_bucket`), empty
-    /// for any.
-    pub accepts: String,
-    /// `accepts` as a bit per item, made at the freeze; `None` any.
-    pub accepted: Option<std::sync::Arc<[u64]>>,
+    /// A bit per accepted item, or `None` for any.
+    accepted: Option<std::sync::Arc<[u64]>>,
     pub limit: u32,
     pub size: f32,
     pub background: Option<String>,
     pub tooltip: Option<String>,
-    pub priority: i32,
+    priorities: Vec<(i32, Option<std::sync::Arc<[u64]>>)>,
 }
 
 impl GroupDef {
+    fn bake(g: abi::SlotGroupDef, mut filter: impl FnMut(&str) -> Option<std::sync::Arc<[u64]>>) -> Self {
+        let text = |s: String| (!s.is_empty()).then_some(s);
+        Self {
+            name: g.name,
+            owner: g.owner,
+            start: g.start,
+            cols: g.cols.max(1),
+            rows: g.rows.max(1),
+            flags: g.flags,
+            accepted: filter(&g.accepts),
+            limit: g.limit,
+            size: if g.size > 0.0 { g.size } else { 18.0 },
+            background: text(g.background),
+            tooltip: text(g.tooltip),
+            priorities: g
+                .priorities
+                .iter()
+                .map(|p| (p.priority, filter(&p.items)))
+                .collect(),
+        }
+    }
+
+    pub fn priority(&self, item: Option<u32>) -> i32 {
+        self.priorities
+            .iter()
+            .filter(|(_, items)| {
+                items
+                    .as_ref()
+                    .is_none_or(|bits| item.is_some_and(|i| crate::refs::has(bits, i)))
+            })
+            .map(|(priority, _)| *priority)
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn accepts(&self, item: u32, liquid: bool) -> bool {
+        item == 0
+            || ((self.flags & abi::slot_flags::LIQUID != 0) == liquid
+                && self
+                    .accepted
+                    .as_ref()
+                    .is_none_or(|bits| crate::refs::has(bits, item)))
+    }
+
+    pub fn capacity(&self, max_stack: u32) -> u32 {
+        if self.limit == 0 { max_stack } else { self.limit.min(max_stack) }
+    }
+
     /// (owner inventory start, slot count, columns); the player's presets follow `layout`.
     pub fn span(&self, layout: &PlayerLayout) -> (u32, u32, u32) {
         use weft_abi::slot_owner as so;
@@ -239,17 +284,16 @@ impl GroupDef {
     /// Owner inventory index of the group's `i`-th slot (the main inventory skips worn slots).
     pub fn index(&self, layout: &PlayerLayout, i: u32) -> u32 {
         let (start, _, _) = self.span(layout);
-        if self.owner == weft_abi::slot_owner::PLAYER_MAIN { layout.main().nth(i as usize).unwrap_or(u32::MAX) } else { start + i }
+        start + i
     }
 }
 
 impl MenuDef {
     /// (group, its first menu slot, slot count) in menu slot order.
-    pub fn slot_groups(&self, layout: &PlayerLayout) -> impl Iterator<Item = (&GroupDef, u32, u32)> + '_ {
+    pub fn slot_groups(&self, layout: &PlayerLayout) -> impl Iterator<Item = (&GroupDef, u32, u32)> {
         let mut at = 0;
-        let layout = layout.clone();
         self.groups.iter().map(move |g| {
-            let n = g.span(&layout).1;
+            let n = g.span(layout).1;
             at += n;
             (g, at - n, n)
         })
@@ -480,7 +524,9 @@ pub struct Game {
     /// Config IDs for ship motion.
     pub ship_thrust: u32,
     pub ship_water_drag: u32,
-    pub ship_max_speed: u32,
+    pub ship_water_side_drag: u32,
+    pub thrust_comp: u32,
+    pub guide_rail_comp: u32,
     /// (owner, component, system) in mod order.
     pub systems: Vec<(ModId, u32, Callback)>,
     /// `{if:name}` conditions mods answer.
@@ -736,6 +782,8 @@ fn engine_components() -> Vec<RawEntry> {
         (EFFECT, "bytes", own | cf::SAVE, Vec::new()),
         (FORCED_POSE, "bytes", own | shown, Vec::new()),
         (RIDING, "bytes", own | shown | cf::SAVE, Vec::new()),
+        (HELM, "bytes", shown | cf::SAVE, Vec::new()),
+        (crate::controller::SETTINGS, "bytes", cf::SAVE, Vec::new()),
         (STUCK, "bytes", shown, Vec::new()),
         (GAME_MODE, "u32", cf::SYNC_OWNER, vec![0; 4]),
         (PERMISSION, "u32", cf::SYNC_OWNER, vec![0; 4]),
@@ -875,26 +923,17 @@ pub struct PlayerLayout {
     pub off: Option<u32>,
     /// Equipment: never filled by pickups, worn on the model.
     pub worn: std::ops::Range<u32>,
-    /// Named groups: the declared ones, each equipment slot, and `core:equipment` for all of them.
-    pub groups: Vec<PlayerGroup>,
+    /// Storage groups in inventory order, starting with the hotbar.
+    pub storage: Vec<GroupDef>,
     pub equipment: Vec<EquipmentSlot>,
 }
 
 #[derive(Clone, Debug)]
-pub struct PlayerGroup {
-    pub name: String,
-    pub start: u32,
-    pub count: u32,
-    pub cols: u32,
-}
-
-#[derive(Clone, Debug)]
 pub struct EquipmentSlot {
-    pub name: String,
+    pub group: GroupDef,
     /// Bones it covers by name, and the roles (`1 << role`) of the names that have one.
     pub bones: Vec<String>,
     pub roles: u32,
-    pub background: String,
 }
 
 /// The group holding every equipment slot.
@@ -902,53 +941,68 @@ pub const EQUIPMENT_GROUP: &str = "core:equipment";
 
 impl Default for PlayerLayout {
     fn default() -> Self {
-        PlayerLayout::new(&[("hotbar".into(), 9, 1, weft_abi::slot_flags::HOTBAR), ("main".into(), 9, 3, 0)], Vec::new())
+        let storage = default_player_groups()
+            .into_iter()
+            .map(|g| GroupDef::bake(g, |_| None))
+            .collect();
+        Self::new(storage, Vec::new())
     }
 }
 
 impl PlayerLayout {
     /// The hotbar group first, then the other groups in order, then the equipment slots.
-    pub fn new(groups: &[(String, u32, u32, u32)], mut equipment: Vec<EquipmentSlot>) -> PlayerLayout {
-        // The other hand shows among the equipment but isn't worn: last, past `worn`.
-        equipment.sort_by_key(|e| e.name == weft_abi::OFF_HAND_SLOT);
-        let off = equipment.iter().any(|e| e.name == weft_abi::OFF_HAND_SLOT) as u32;
-        let mut ordered: Vec<&(String, u32, u32, u32)> = groups
-            .iter()
-            .filter(|g| g.3 & weft_abi::slot_flags::HOTBAR != 0)
-            .take(1)
-            .collect();
-        ordered.extend(
-            groups
-                .iter()
-                .filter(|g| g.3 & weft_abi::slot_flags::HOTBAR == 0),
-        );
-        let hotbar = ordered
-            .first()
-            .filter(|g| g.3 & weft_abi::slot_flags::HOTBAR != 0)
-            .map_or(0, |g| g.1 * g.2);
+    fn new(mut storage: Vec<GroupDef>, mut equipment: Vec<EquipmentSlot>) -> PlayerLayout {
+        let off = equipment
+            .last()
+            .is_some_and(|e| e.group.flags & abi::slot_flags::OFF_HAND != 0) as u32;
+        storage.sort_by_key(|g| g.flags & abi::slot_flags::HOTBAR == 0);
+        let mut hotbar = 0;
         let mut at = 0;
-        let mut out = Vec::new();
-        for (name, cols, rows, _) in ordered {
-            out.push(PlayerGroup { name: name.clone(), start: at, count: cols * rows, cols: *cols });
-            at += cols * rows;
-        }
+        storage.retain_mut(|g| {
+            g.start = at;
+            g.owner = if g.flags & abi::slot_flags::HOTBAR != 0 {
+                if hotbar != 0 {
+                    return false;
+                }
+                hotbar = g.cols * g.rows;
+                abi::slot_owner::PLAYER_HOTBAR
+            } else {
+                abi::slot_owner::PLAYER_MAIN
+            };
+            at += g.cols * g.rows;
+            true
+        });
         let worn = at..at + equipment.len() as u32 - off;
-        for (i, e) in equipment.iter().enumerate() {
-            out.push(PlayerGroup { name: e.name.clone(), start: worn.start + i as u32, count: 1, cols: 1 });
+        for (i, e) in equipment.iter_mut().enumerate() {
+            e.group.start = i as u32;
         }
-        out.push(PlayerGroup { name: EQUIPMENT_GROUP.into(), start: worn.start, count: worn.len() as u32, cols: 1 });
-        PlayerLayout { slots: worn.end + off, off: (off == 1).then_some(worn.end), hotbar, worn, groups: out, equipment }
+        PlayerLayout { slots: worn.end + off, off: (off == 1).then_some(worn.end), hotbar, worn, storage, equipment }
     }
 
-    pub fn group(&self, name: &str) -> Option<&PlayerGroup> {
-        self.groups.iter().find(|g| g.name == name)
+    pub fn group(&self, name: &str) -> Option<abi::SlotGroup> {
+        if let Some(g) = self.storage.iter().find(|g| g.name == name) {
+            return Some(abi::SlotGroup { start: g.start, len: g.cols * g.rows, cols: g.cols });
+        }
+        if name == EQUIPMENT_GROUP {
+            return Some(abi::SlotGroup { start: self.worn.start, len: self.worn.len() as u32, cols: 1 });
+        }
+        let slot = self.equipment.iter().find(|e| e.group.name == name)?;
+        Some(abi::SlotGroup { start: self.worn.start + slot.group.start, len: 1, cols: 1 })
+    }
+
+    pub fn storage_at(&self, index: u32) -> Option<&GroupDef> {
+        if index >= self.worn.start {
+            return None;
+        }
+        let next = self.storage.partition_point(|g| g.start <= index);
+        next.checked_sub(1).map(|i| &self.storage[i])
     }
 }
 
 impl PlayerLayout {
     /// Main inventory slots: neither hotbar nor equipment.
     pub fn main(&self) -> impl Iterator<Item = u32> + '_ {
-        (self.hotbar..self.slots).filter(move |i| !self.worn.contains(i) && Some(*i) != self.off)
+        self.hotbar..self.worn.start
     }
 }
 
@@ -1742,7 +1796,8 @@ fn bake_entity(e: &Entry) -> EntityKind {
         projectile: e.get::<abi::Projectile>(k::PROJECTILE),
         hitboxes: e
             .get::<abi::Hitboxes>(k::HITBOXES)
-            .filter(|h| !h.parts.is_empty()),
+            .filter(|h| !h.parts.is_empty())
+            .map(crate::hitbox::Rig::new),
         steer: e.callback(k::STEER),
         dismount: e.callback(k::DISMOUNT),
         ride_camera: e.or(k::RIDE_CAMERA, f32::NAN),
@@ -1750,33 +1805,20 @@ fn bake_entity(e: &Entry) -> EntityKind {
 }
 
 /// A menu as its entry says (`abi::comp::menu`).
-fn bake_menu(e: &Entry) -> MenuDef {
+fn bake_menu(e: &Entry, mut bake: impl FnMut(abi::SlotGroupDef) -> GroupDef) -> MenuDef {
     use abi::comp::menu as m;
     // Groups without a start take the slots right after the previous one of their owner.
     let mut next = [0u32; 5];
-    let text = |s: String| (!s.is_empty()).then_some(s);
     let groups: Vec<GroupDef> = e
         .or::<Vec<abi::SlotGroupDef>>(m::GROUPS, Vec::new())
         .into_iter()
-        .map(|g| {
+        .map(|mut g| {
             let o = (g.owner as usize).min(4);
-            let start = if g.start == u32::MAX { next[o] } else { g.start };
-            next[o] = next[o].max(start + g.cols * g.rows);
-            GroupDef {
-                name: g.name,
-                owner: g.owner,
-                start,
-                cols: g.cols.max(1),
-                rows: g.rows.max(1),
-                flags: g.flags,
-                accepts: g.accepts,
-                accepted: None,
-                limit: g.limit,
-                size: if g.size > 0.0 { g.size } else { 18.0 },
-                background: text(g.background),
-                tooltip: text(g.tooltip),
-                priority: g.priority,
+            if g.start == u32::MAX {
+                g.start = next[o];
             }
+            next[o] = next[o].max(g.start + g.cols * g.rows);
+            bake(g)
         })
         .collect();
     MenuDef {
@@ -1798,11 +1840,20 @@ fn bake_menu(e: &Entry) -> MenuDef {
     }
 }
 
+fn default_player_groups() -> Vec<abi::SlotGroupDef> {
+    let group = |name: &str, rows, flags| abi::SlotGroupDef {
+        name: name.into(),
+        cols: 9,
+        rows,
+        flags: flags | abi::slot_flags::ALLOW_SORTING,
+        ..Default::default()
+    };
+    vec![group("hotbar", 1, abi::slot_flags::HOTBAR), group("main", 3, 0)]
+}
+
 /// The engine's own entity kinds.
 fn engine_entities() -> Vec<RawEntry> {
     use abi::comp::entity as k;
-    let group = |name: &str, rows, flags| abi::SlotGroupDef { name: name.into(), cols: 9, rows, flags, ..Default::default() };
-    let groups = vec![group("hotbar", 1, weft_abi::slot_flags::HOTBAR), group("main", 3, 0)];
     let kind = |name: &str, width: f32, height: f32| {
         RawEntry::engine(ek::ENTITY, name)
             .set(k::SIZE, abi::BodySize { width, height })
@@ -1827,7 +1878,7 @@ fn engine_entities() -> Vec<RawEntry> {
     vec![
         kind(PLAYER, 0.6, 1.8)
             .set(k::EYE, 1.62f32)
-            .set(k::SLOT_GROUPS, groups)
+            .set(k::SLOT_GROUPS, default_player_groups())
             .set(abi::comp::ATTACK_SPEED, 4.0f32)
             .tag(k::PICKS_UP)
             .tag(k::POSES),
@@ -1930,6 +1981,8 @@ pub const EFFECT: &str = "core:effect";
 pub const FORCED_POSE: &str = "core:forced_pose";
 /// What it rides and its seat; empty: nothing. Saved, and seen by everyone.
 pub const RIDING: &str = "core:riding";
+/// The active helm in the body's block coordinates.
+pub const HELM: &str = "core:helm";
 /// A projectile attached to an entity, placed on its model by the client.
 pub const STUCK: &str = "core:stuck";
 /// Entity component (stack list wire codec, synced to watchers): its kind's `SHOWN_SLOTS`.
@@ -1957,6 +2010,8 @@ pub struct FieldComps {
     pub effect: u32,
     pub forced: u32,
     pub riding: u32,
+    pub helm: u32,
+    pub controller: u32,
     pub stuck: u32,
     pub game_mode: u32,
     pub permission: u32,
@@ -2096,7 +2151,11 @@ pub fn freeze(
     (g.bone_motions, _) = tables.bake(kind(ek::BONE_MOTION), ek::BONE_MOTION, mod_name, errors, |e, _| {
         use abi::comp::bone_motion as b;
         let (model, bone) = e.name.rsplit_once('/').unwrap_or((&e.name, ""));
-        let motion = crate::model::BoneMotion { gravity: e.or(b::GRAVITY, 0.0), spring: e.or(b::SPRING, 0.0), drag: e.or(b::DRAG, 0.0) };
+        let spring = e.or(b::SPRING, 0.0);
+        let default_angle = b::default_max_angle(spring);
+        let angle = e.or(b::MAX_ANGLE, default_angle);
+        let max_angle = if angle.is_finite() { angle.clamp(0.0, 180.0) } else { default_angle };
+        let motion = crate::model::BoneMotion { gravity: e.or(b::GRAVITY, 0.0), spring, drag: e.or(b::DRAG, 0.0), max_angle };
         (model.to_string(), bone.to_string(), motion)
     });
     (g.screen_parts, _) = tables.bake(kind(ek::SCREEN_PART), ek::SCREEN_PART, mod_name, errors, |e, _| {
@@ -2217,7 +2276,7 @@ pub fn freeze(
     g.simulation_distance = tables.1.ids(ek::CONFIG)["core:simulation_distance"];
     g.ship_thrust = tables.1.ids(ek::CONFIG)["core:ship_thrust"];
     g.ship_water_drag = tables.1.ids(ek::CONFIG)["core:ship_water_drag"];
-    g.ship_max_speed = tables.1.ids(ek::CONFIG)["core:ship_max_speed"];
+    g.ship_water_side_drag = tables.1.ids(ek::CONFIG)["core:ship_water_side_drag"];
     (g.categories, _) = tables.bake(kind(ek::ENTITY_CATEGORY), ek::ENTITY_CATEGORY, mod_name, errors, |e, _| bake_category(e));
     for k in g
         .entities
@@ -2247,15 +2306,43 @@ pub fn freeze(
         (e.name.clone(), def)
     });
     g.recipe_kind_defs = recipe_kinds.into_iter().collect();
+    let bake_group = |group: abi::SlotGroupDef, owner: &str, errors: &mut Vec<String>| {
+        GroupDef::bake(group, |text| {
+            if text.is_empty() {
+                return None;
+            }
+            match crate::refs::bits(text, comps::ITEM, item_names, items.len() as u32, c, "item") {
+                Ok(bits) => Some(bits.into()),
+                Err(e) => {
+                    errors.push(format!("{owner}: slot item filter {text}: {e}"));
+                    None
+                }
+            }
+        })
+    };
     // The other hand numbered last, as the player's layout has it.
     let off_last = |e: &Entry| e.name == abi::OFF_HAND_SLOT;
-    let (equipment, _) = tables.bake_by(kind(ek::EQUIPMENT_SLOT), ek::EQUIPMENT_SLOT, mod_name, errors, off_last, |e, _| {
+    let (equipment, _) = tables.bake_by(kind(ek::EQUIPMENT_SLOT), ek::EQUIPMENT_SLOT, mod_name, errors, off_last, |e, errors| {
         let bones: Vec<String> = e.or(abi::comp::equipment_slot::COVERS, Vec::new());
-        let background = e
-            .text(abi::comp::equipment_slot::BACKGROUND)
-            .unwrap_or_default()
-            .to_string();
-        EquipmentSlot { name: e.name.clone(), roles: crate::model::roles_of(&bones), bones, background }
+        let off = off_last(e);
+        let group = abi::SlotGroupDef {
+            name: e.name.clone(),
+            owner: abi::slot_owner::WORN,
+            cols: 1,
+            rows: 1,
+            flags: if off { abi::slot_flags::OFF_HAND } else { 0 },
+            accepts: if off { String::new() } else { format!("#worn/{}", e.name) },
+            limit: if off { 0 } else { 1 },
+            background: e
+                .text(abi::comp::equipment_slot::BACKGROUND)
+                .unwrap_or_default()
+                .into(),
+            priorities: e
+                .get(abi::comp::equipment_slot::PRIORITIES)
+                .unwrap_or_else(|| if off { Vec::new() } else { vec![abi::SlotPriority { priority: 1, items: String::new() }] }),
+            ..Default::default()
+        };
+        EquipmentSlot { group: bake_group(group, &e.name, errors), roles: crate::model::roles_of(&bones), bones }
     });
     (g.game_modes, _) = tables.bake(kind(ek::GAME_MODE), ek::GAME_MODE, mod_name, errors, |e, _| bake_game_mode(e));
     (g.poses, _) = tables.bake(kind(ek::POSE), ek::POSE, mod_name, errors, |e, _| bake_pose(e, conds));
@@ -2358,8 +2445,20 @@ pub fn freeze(
     world_ticks.sort_by_key(|h: &(ModId, Callback)| order(h.0));
     g.world_ticks = world_ticks;
 
-    (g.menus, _) = tables.bake_by(kind(ek::MENU), ek::MENU, mod_name, errors, |e| e.name.clone(), |e, _| bake_menu(e));
-    lay_out_slots(&mut g, entities.player_groups, equipment, c, errors);
+    (g.menus, _) = tables.bake_by(
+        kind(ek::MENU),
+        ek::MENU,
+        mod_name,
+        errors,
+        |e| e.name.clone(),
+        |e, errors| bake_menu(e, |group| bake_group(group, &e.name, errors)),
+    );
+    let storage = entities
+        .player_groups
+        .into_iter()
+        .map(|group| bake_group(group, PLAYER, errors))
+        .collect();
+    lay_out_slots(&mut g, storage, equipment, c, errors);
     g.player_menu = entities.player_menu.and_then(|n| {
         let m = tables.1.ids(ek::MENU).get(&n).copied();
         if m.is_none() {
@@ -2458,6 +2557,8 @@ fn freeze_entity_storage(
         }
     }
     g.energy = c.id(abi::comp::ENERGY).unwrap();
+    g.thrust_comp = c.id(abi::comp::block::THRUST).unwrap();
+    g.guide_rail_comp = c.id(abi::comp::block::GUIDE_RAIL).unwrap();
     g.modifiers_comp = c.id(MODIFIERS).unwrap();
     g.timers_comp = c.id(TIMERS).unwrap();
     g.name_comp = c.id(abi::comp::NAME).unwrap();
@@ -2483,6 +2584,8 @@ fn freeze_entity_storage(
         effect: id(EFFECT),
         forced: id(FORCED_POSE),
         riding: id(RIDING),
+        helm: id(HELM),
+        controller: id(crate::controller::SETTINGS),
         stuck: id(STUCK),
         game_mode: id(GAME_MODE),
         permission: id(PERMISSION),
@@ -2551,24 +2654,11 @@ fn freeze_entity_storage(
 
 /// The player's inventory layout, the slots each kind carries and wears, and a group per
 /// equipment slot in the menus that show equipment.
-fn lay_out_slots(
-    g: &mut Game,
-    player_groups: Vec<abi::SlotGroupDef>,
-    equipment: Vec<EquipmentSlot>,
-    c: &Components,
-    errors: &mut Vec<String>,
-) {
-    let groups: Vec<(String, u32, u32, u32)> = player_groups
-        .into_iter()
-        .map(|g| (g.name, g.cols.max(1), g.rows.max(1), g.flags))
-        .collect();
-    if !groups
-        .iter()
-        .any(|g| g.3 & weft_abi::slot_flags::HOTBAR != 0)
-    {
+fn lay_out_slots(g: &mut Game, storage: Vec<GroupDef>, equipment: Vec<EquipmentSlot>, c: &Components, errors: &mut Vec<String>) {
+    g.player_layout = PlayerLayout::new(storage, equipment);
+    if g.player_layout.hotbar == 0 {
         errors.push("player inventory: no group is the hotbar (`.hotbar()`)".into());
     }
-    g.player_layout = PlayerLayout::new(&groups, equipment);
     // Their `inventory` component is the slots each one carries; kinds that wear get the
     // equipment slots after those, the player where its layout says.
     let inventory = c.id(weft_abi::comp::INVENTORY);
@@ -2590,7 +2680,6 @@ fn lay_out_slots(
     }
     // Menus showing equipment get a group per slot: what the entity the menu is on wears, or the
     // player (`menu::slots`). The other hand is the slot after the equipment, theirs too.
-    let layout = g.player_layout.clone();
     for m in &mut g.menus {
         let Some(at) = m
             .groups
@@ -2600,28 +2689,10 @@ fn lay_out_slots(
             continue;
         };
         m.groups.remove(at);
-        for (i, e) in layout.equipment.iter().enumerate().rev() {
-            let off = e.name == weft_abi::OFF_HAND_SLOT;
+        for e in g.player_layout.equipment.iter().rev() {
             // The other hand shows with the equipment but is numbered last, as in vanilla.
-            let at = if off { m.groups.len() } else { at };
-            m.groups.insert(
-                at,
-                GroupDef {
-                    name: e.name.clone(),
-                    owner: weft_abi::slot_owner::WORN,
-                    start: i as u32,
-                    cols: 1,
-                    rows: 1,
-                    flags: if off { weft_abi::slot_flags::OFF_HAND } else { 0 },
-                    accepts: if off { String::new() } else { format!("#worn/{}", e.name) },
-                    accepted: None,
-                    limit: if off { 0 } else { 1 },
-                    size: 18.0,
-                    background: (!e.background.is_empty()).then(|| e.background.clone()),
-                    tooltip: None,
-                    priority: 1,
-                },
-            );
+            let at = if e.group.flags & abi::slot_flags::OFF_HAND != 0 { m.groups.len() } else { at };
+            m.groups.insert(at, e.group.clone());
         }
     }
 }
@@ -2801,6 +2872,14 @@ fn freeze_recipes(
 }
 
 impl Game {
+    pub(crate) fn helm_seats(&self) -> &[Seat] {
+        &self.entities[self.ship_kind as usize].seats
+    }
+
+    pub(crate) fn seats(&self, kind: u32, helm: bool) -> &[Seat] {
+        if helm { self.helm_seats() } else { &self.entities[kind as usize].seats }
+    }
+
     /// Entities of `kind` belong to a block (machines, chests): they come and go with it.
     pub fn is_block_entity(&self, kind: u32) -> bool {
         self.block_entities.values().any(|&k| k == kind)
@@ -2984,9 +3063,18 @@ fn engine_particles() -> Vec<RawEntry> {
     vec![
         kind(k::BLOCK, Vec::new(), [[0.2, 1.0], [0.05, 0.1]], [16.0, 0.98], [0x999999FF; 2], pf::COLLIDE),
         kind(k::POOF, generic.clone(), [[0.4, 1.1], [0.15, 0.3]], [-2.0, 0.9], [0xD0D0D0FF, 0x909090FF], 0),
-        kind(k::CRIT, generic.clone(), [[0.3, 0.7], [0.1, 0.2]], [8.0, 0.8], [0xFFE9A0FF, 0xC08030FF], pf::FULLBRIGHT),
+        kind(k::CRIT, one("glint_3"), [[0.3, 0.48], [0.16, 0.25]], [8.0, 0.91], [0xFFF0B2FF, 0xE1A259FF], pf::FULLBRIGHT | pf::SHRINK),
         kind(k::FLAME, one("flame"), [[0.3, 0.8], [0.08, 0.14]], [0.0, 0.96], white, pf::FULLBRIGHT | pf::SHRINK),
-        kind(k::SMOKE, generic, [[0.6, 1.4], [0.08, 0.16]], [-1.5, 0.96], [0x505050FF, 0x303030FF], 0),
+        kind(k::SMOKE, generic.clone(), [[0.6, 1.4], [0.08, 0.16]], [-1.5, 0.96], [0x505050FF, 0x303030FF], 0),
+        kind(
+            "core:thruster_exhaust",
+            generic.clone(),
+            [[0.18, 0.38], [0.13, 0.33]],
+            [0.0, 0.96],
+            [0xFFF3B2FF, 0xFF4B18CC],
+            pf::FULLBRIGHT | pf::TRANSLUCENT | pf::SHRINK,
+        ),
+        kind("core:thruster_smoke", generic, [[0.5, 0.85], [0.19, 0.44]], [-0.8, 0.9], [0xA0A6A9A8, 0x67696C00], pf::TRANSLUCENT),
         // Pops at the surface, as vanilla's does.
         kind(k::BUBBLE, one("bubble"), [[0.5, 1.5], [0.05, 0.1]], [-4.0, 0.85], white, 0)
             .set(p::RULES, rule(pe::LEAVE_LIQUID, pt::DIE, "")),

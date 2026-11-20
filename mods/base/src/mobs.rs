@@ -354,39 +354,35 @@ fn with_passive(goals: ai::Goals) -> ai::Goals {
 
 // Where each of base's mobs is hit, part by part, in the pixels of its model: what its body
 // looks like, not the model itself (`Hitboxes`).
-const PI: f32 = std::f32::consts::PI;
-
 fn four_legs(h: Hitboxes, x: [f32; 2], tall: f32, front: [f32; 2], back: [f32; 2]) -> Hitboxes {
-    let mid = |a: [f32; 2]| (a[0] + a[1]) / 2.0;
-    let (xm, fz, bz) = (mid(x), mid(front), mid(back));
-    h.limb("front_right_leg", [-x[1], 0.0, front[0]], [-x[0], tall, front[1]], [-xm, tall, fz], 0.8, PI)
-        .limb("front_left_leg", [x[0], 0.0, front[0]], [x[1], tall, front[1]], [xm, tall, fz], 0.8, 0.0)
-        .limb("back_right_leg", [-x[1], 0.0, back[0]], [-x[0], tall, back[1]], [-xm, tall, bz], 0.8, 0.0)
-        .limb("back_left_leg", [x[0], 0.0, back[0]], [x[1], tall, back[1]], [xm, tall, bz], 0.8, PI)
+    h.bone("front_right_leg", "leg3", [-x[1], 0.0, front[0]], [-x[0], tall, front[1]])
+        .bone("front_left_leg", "leg2", [x[0], 0.0, front[0]], [x[1], tall, front[1]])
+        .bone("back_right_leg", "leg0", [-x[1], 0.0, back[0]], [-x[0], tall, back[1]])
+        .bone("back_left_leg", "leg1", [x[0], 0.0, back[0]], [x[1], tall, back[1]])
 }
 
 fn sheep_parts() -> Hitboxes {
     let h = Hitboxes::new()
-        .head("head", [-4.0, 14.0, -14.0], [4.0, 22.0, -6.0], [0.0, 18.0, -8.0])
-        .part("body", [-4.5, 10.0, -8.0], [4.5, 18.0, 10.0]);
+        .bone("head", "head", [-4.0, 14.0, -14.0], [4.0, 22.0, -6.0])
+        .bone("body", "body", [-4.5, 10.0, -8.0], [4.5, 18.0, 10.0]);
     four_legs(h, [1.0, 5.0], 12.0, [-7.0, -3.0], [5.0, 9.0])
 }
 
 fn pig_parts() -> Hitboxes {
     let h = Hitboxes::new()
-        .head("head", [-4.0, 8.0, -15.0], [4.0, 16.0, -6.0], [0.0, 12.0, -6.0])
-        .part("body", [-5.0, 6.0, -8.0], [5.0, 14.0, 9.0]);
+        .bone("head", "head", [-4.0, 8.0, -15.0], [4.0, 16.0, -6.0])
+        .bone("body", "body", [-5.0, 6.0, -8.0], [5.0, 14.0, 9.0]);
     four_legs(h, [1.0, 5.0], 6.0, [-7.0, -3.0], [5.0, 9.0])
 }
 
 fn chicken_parts() -> Hitboxes {
     Hitboxes::new()
-        .head("head", [-2.0, 9.0, -8.0], [2.0, 15.0, -3.0], [0.0, 9.0, -4.0])
-        .part("body", [-3.0, 5.0, -4.0], [3.0, 11.0, 4.0])
-        .part("right_wing", [-4.0, 7.0, -3.0], [-3.0, 11.0, 3.0])
-        .part("left_wing", [3.0, 7.0, -3.0], [4.0, 11.0, 3.0])
-        .limb("right_leg", [-2.5, 0.0, -1.0], [-1.5, 5.0, 1.0], [-2.0, 5.0, 0.0], 0.8, 0.0)
-        .limb("left_leg", [0.5, 0.0, -1.0], [1.5, 5.0, 1.0], [1.0, 5.0, 0.0], 0.8, PI)
+        .bone("head", "head", [-2.0, 9.0, -8.0], [2.0, 15.0, -3.0])
+        .bone("body", "body", [-3.0, 5.0, -4.0], [3.0, 11.0, 4.0])
+        .bone("right_wing", "wing0", [-4.0, 7.0, -3.0], [-3.0, 11.0, 3.0])
+        .bone("left_wing", "wing1", [3.0, 7.0, -3.0], [4.0, 11.0, 3.0])
+        .bone("right_leg", "rightLeg", [-2.5, 0.0, -1.0], [-1.5, 5.0, 1.0])
+        .bone("left_leg", "leftLeg", [0.5, 0.0, -1.0], [1.5, 5.0, 1.0])
 }
 
 fn spider_parts() -> Hitboxes {

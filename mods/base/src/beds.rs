@@ -179,7 +179,6 @@ pub fn register(r: &mut Registry) {
         .sound_group("wood")
         .facing(Facings::HORIZONTAL, Toward::Player)
         // One block on two cells, its own the foot, the head away from the player.
-        .cells(&[[0, 0, -1]])
         .states(|p, s| {
             // What the model file of a bed says for one facing south, turned to this one; the head
             // is the next cell north.

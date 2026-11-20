@@ -1315,11 +1315,37 @@ impl UiRenderer {
                 }
             }
             Kind::Icons { .. } => {}
-            Kind::Slider { value, enabled, .. } => {
-                let k = Rect { x: r.x + (r.w - 8.0 * scale) * value.clamp(0.0, 1.0), y: r.y, w: 8.0 * scale, h: r.h };
-                self.class_background(gpu, assets, look, "slider", "", r, scale);
-                if *enabled {
-                    self.class_background(gpu, assets, look, "slider_knob", if hovered { "hover" } else { "" }, k, scale);
+            Kind::Slider(s) => {
+                let width = (super::slider::Slider::KNOB_WIDTH * scale).min(r.w);
+                let knob_x = |value| r.x + (r.w - width) * value;
+                background(self, &s.track, "");
+                if let Some([a, b]) = s.fill {
+                    let a = knob_x(s.thumbs[a].value) + width / 2.0;
+                    let b = knob_x(s.thumbs[b].value) + width / 2.0;
+                    self.rect(
+                        Rect { x: a.min(b), y: r.y + r.h / 2.0 - scale, w: (b - a).abs(), h: 2.0 * scale },
+                        look.text("slider_fill", ""),
+                    );
+                }
+                if s.enabled {
+                    let custom_knob = (s.track != "slider").then(|| format!("{}_knob", s.track));
+                    let knob = custom_knob
+                        .as_deref()
+                        .filter(|class| look.texture(class, "").is_some())
+                        .unwrap_or("slider_knob");
+                    let active = ui.focused == Some(id) || ui.pressed == Some(id);
+                    let draw = |me: &mut UiRenderer, index, t: &super::slider::Thumb| {
+                        let k = Rect { x: knob_x(t.value), y: r.y, w: width, h: r.h };
+                        let highlight = if active && index == s.active || hovered && s.thumbs.len() == 1 { "hover" } else { "" };
+                        me.class_background(gpu, assets, look, knob, highlight, k, scale);
+                    };
+                    let mut draw = draw;
+                    for (i, thumb) in s.thumbs.iter().enumerate().filter(|(i, _)| *i != s.active) {
+                        draw(self, i, thumb);
+                    }
+                    if let Some(thumb) = s.thumbs.get(s.active) {
+                        draw(self, s.active, thumb);
+                    }
                 }
             }
             Kind::Input { value, caret, area: Some(area), .. } => {

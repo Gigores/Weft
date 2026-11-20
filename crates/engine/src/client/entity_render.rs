@@ -12,7 +12,7 @@ use weft_abi::entry_kind as ek;
 use super::models::{Act, Clips, Fade, Play};
 use crate::block_model::Display;
 use crate::gpu_layout::rows;
-use crate::model::{Drive, role};
+use crate::model::{self, Drive, role};
 use weft_abi::ItemStack;
 use weft_render::*;
 
@@ -33,7 +33,7 @@ pub struct Crack {
     pub pos: IVec3,
     pub progress: f32,
     pub place: Transform,
-    pub state: u32,
+    pub part: crate::world::placement::Part,
 }
 
 pub struct Hand {
@@ -1412,36 +1412,20 @@ impl EntityRenderer {
             // Lying down in its low box: head first where it looks when swimming (vanilla's
             // setupRotations), flat when crawling, turned around the middle of the body.
             let pose = e.pose.def();
-            let lying = match pose.tilt {
-                weft_abi::pose_tilt::ALONG_LOOK => Some(e.pitch - std::f32::consts::FRAC_PI_2),
-                weft_abi::pose_tilt::FACE_DOWN => Some(-std::f32::consts::FRAC_PI_2),
-                // On its back, the head toward its back's side.
-                weft_abi::pose_tilt::ON_BACK => Some(std::f32::consts::FRAC_PI_2),
-                _ => None,
-            };
+            let lying = model::body_tilt(e.pose, e.pitch);
             let sleeping = pose.tilt == weft_abi::pose_tilt::ON_BACK;
             let body_yaw = if sleeping { e.yaw } else { e.body_yaw };
             // A projectile points all of itself where it flies, not just a head.
             let flies = c.game.entities[e.kind as usize].projectile.is_some();
             let swim = match lying {
                 _ if flies => Mat4::from_rotation_x(e.pitch),
-                Some(a) => {
-                    Mat4::from_translation(Vec3::new(0.0, 0.3, 0.0))
-                        * Mat4::from_rotation_x(a)
-                        * Mat4::from_translation(Vec3::new(0.0, -0.9, 0.0))
-                }
+                Some(a) => model::tilted_body(a),
                 None => Mat4::IDENTITY,
             };
             let mut root =
                 Mat4::from_translation(base) * Mat4::from_rotation_y(body_yaw) * swim * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
             // Its head up to look ahead when lying down.
-            let (pitch, head_yaw) = if sleeping || flies {
-                (0.0, 0.0)
-            } else if lying.is_some() {
-                (std::f32::consts::FRAC_PI_4, 0.0)
-            } else {
-                (e.pitch, e.yaw - e.body_yaw)
-            };
+            let (pitch, head_yaw) = model::head_look(sleeping || flies, lying.is_some(), e.pitch, e.yaw - e.body_yaw);
             // Far away a pose lasts a few frames, each entity at its own turn. Who is dying or was
             // just hit still shows it.
             let every = if id == self.local || e.dying.is_some() || shader_effect.is_some() || e.hurt > 0.0 {
@@ -1541,7 +1525,10 @@ impl EntityRenderer {
             .draw(gpu, list, frame, super::models::Batch::World, self.model_pipe, vb);
 
         if let Some((hit, place)) = target {
-            let root = Mat4::from_rotation_translation(place.rotation().as_quat(), rel(place.to_world(hit.origin.as_dvec3())));
+            let root = Mat4::from_rotation_translation(
+                place.rotation().as_quat(),
+                rel(place.to_world(hit.origin.as_dvec3() + hit.offset.as_dvec3() / f64::from(crate::world::placement::UNIT))),
+            );
             outline_boxes(&mut boxes, c.states[hit.state as usize].outlined(), root);
         }
         gizmo_line_boxes(&mut boxes, gizmo_lines, cam.pos);
@@ -1736,31 +1723,20 @@ impl EntityRenderer {
         let Some(m) = self.models.kinds.get(kind as usize) else { return (clips, standing) };
         let how = Play { clock: e.age, distance: e.walk * 0.6, speed: e.swing, ..Play::default() };
         // Stands for what it says unless a mod swapped it for now, and has a clip for that.
-        let swapped = |item: u32, name: &'static str| -> &str {
+        let replacement = |item: u32, name: &str| -> Option<&str> {
             match e.swaps.iter().find(|s| s.0 == name) {
-                Some(s) if !m.action_seen(item, &s.1, in_view).is_empty() => &s.1,
-                _ => name,
+                Some(s) if !m.action_seen(item, &s.1, in_view).is_empty() => Some(&s.1),
+                _ => None,
             }
         };
+        let swapped = |item, name: &'static str| replacement(item, name).unwrap_or(name);
         let act = |a: Act| if e.swaps.is_empty() { m.act(a) } else { m.action(0, swapped(0, a.name())) };
-        m.play(&mut clips, act(Act::Idle), &Play { looping: true, ..how });
-        // A rider sits, whatever its mount's walking does to where it is.
-        if e.vehicle.is_some() {
-            m.play(&mut clips, m.action(0, swapped(0, "ride")), &Play { looping: true, ..how });
-        } else if lying.is_none() {
-            m.play(&mut clips, act(Act::Walk), &Play { drive: Drive::Distance, by_speed: true, ..how });
-        }
-        if e.crouched > 0.0 {
-            m.play(&mut clips, act(Act::Sneak), &Play { looping: true, weight: e.crouched, ..how });
-        }
-        // Lying, its pose's own clip; one the model hasn't got swims.
-        if !sleeping && lying.is_some() {
-            let own = m.action(0, &pose.action);
-            let limbs = if own.is_empty() { act(Act::Swim) } else { own };
-            m.play(&mut clips, limbs, &Play { drive: Drive::Distance, ..how });
-        } else if lying.is_none() && !pose.action.is_empty() && e.pose != crate::world::Pose::CROUCH {
-            m.play(&mut clips, m.action(0, &pose.action), &Play { looping: true, ..how });
-        }
+        e.posture().play(|name, how, swap| {
+            let action = if swap { replacement(0, name).unwrap_or(name) } else { name };
+            let ids = m.action(0, action);
+            m.play(&mut clips, ids, how);
+            !ids.is_empty()
+        });
         standing = clips.n;
         // From the eyes it stays in view whatever the body does.
         if lying.is_none() || (in_view && !sleeping) {
@@ -2133,17 +2109,18 @@ fn gizmo_fill_boxes(out: &mut Vec<GpuBox>, fills: &[super::gizmo::Fill], cam: DV
 /// textured like the block's own faces there.
 fn crack_boxes(out: &mut Vec<GpuBox>, breaking: &[Crack], textures: &GameTextures, cam: DVec3, light: &impl Fn(IVec3) -> u32) {
     let c = content();
-    for &Crack { pos: p, progress, place, state } in breaking {
+    for &Crack { pos: p, progress, place, part } in breaking {
         if progress <= 0.0 {
             continue;
         }
         let stage = ((progress * 10.0) as usize).min(9);
         let l = textures.texture(c.crack_textures[stage]);
         let lit = light(place.cell_at(p));
-        let root = Mat4::from_rotation_translation(place.rotation().as_quat(), (place.to_world(p.as_dvec3()) - cam).as_vec3());
+        let root =
+            Mat4::from_rotation_translation(place.rotation().as_quat(), (place.to_world(p.as_dvec3() + part.shift()) - cam).as_vec3());
         let shape = c
             .states
-            .get(state as usize)
+            .get(part.state as usize)
             .map_or(&[][..], |s| s.outlined());
         for b in shape {
             let (mn, mx) = (Vec3::new(b[0], b[1], b[2]), Vec3::new(b[3], b[4], b[5]));

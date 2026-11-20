@@ -8,6 +8,7 @@ use crate::gpu_layout::{face, quad};
 use weft_abi::{BlockModel, RenderLayer, block_flags as bf};
 
 use crate::content::Content;
+use crate::world::placement::{CellLayout, Part};
 
 pub const PAD: usize = 18;
 pub const PAD_VOLUME: usize = PAD * PAD * PAD;
@@ -22,7 +23,7 @@ pub const fn pidx(x: i32, y: i32, z: i32) -> usize {
 pub struct Neighborhood {
     pub states: Box<[u32; PAD_VOLUME]>,
     /// What else is in cells, by padded index.
-    pub extras: rustc_hash::FxHashMap<usize, Vec<u32>>,
+    pub extras: rustc_hash::FxHashMap<usize, CellLayout>,
     pub light: Box<[u32; PAD_VOLUME]>,
     /// Biome id per column of the center cube.
     pub biomes: [u16; 256],
@@ -48,6 +49,7 @@ impl Neighborhood {
         if !self.extras.is_empty()
             && let Some(parts) = self.extras.get(&i)
             && let Some(&l) = parts
+                .extras
                 .iter()
                 .find(|&&s| c.states[s as usize].liquid.is_some())
         {
@@ -89,12 +91,19 @@ pub fn build(c: &Content, n: &Neighborhood, ctm: &super::ctm::Ctm) -> Mesh {
         for (x, &s) in states[row * PAD..(row + 1) * PAD].iter().enumerate() {
             if s != 0 {
                 *f |= 1 << x;
-                if n.light[row * PAD + x] != ABSENT && ctm.hides(c.tight[s as usize].flags, s) {
+                if (n.extras.is_empty() || !n.extras.contains_key(&(row * PAD + x)))
+                    && n.light[row * PAD + x] != ABSENT
+                    && ctm.hides(c.tight[s as usize].flags, s)
+                {
                     *o |= 1 << x;
                 }
             }
         }
     }
+    for &i in n.extras.keys() {
+        filled[i / PAD] |= 1 << (i % PAD);
+    }
+    let mut outside = rustc_hash::FxHashSet::default();
     let row = |y: i32, z: i32| ((y + 1) as usize) * PAD + (z + 1) as usize;
     // Padded index to its bit in `solid`.
     let opaque = |i: usize| solid[i / PAD] >> (i % PAD) & 1 != 0;
@@ -108,14 +117,20 @@ pub fn build(c: &Content, n: &Neighborhood, ctm: &super::ctm::Ctm) -> Mesh {
                 let x = todo.trailing_zeros() as i32 - 1;
                 todo &= todo - 1;
                 let i = pidx(x, y, z);
-                draw_block(c, n, ctm, &looks, &opaque, &mut mesh, x, y, z, states[i]);
-                // What else is in the cell.
-                if !n.extras.is_empty()
-                    && let Some(parts) = n.extras.get(&i)
-                {
-                    for &part in parts {
+                if let Some(layout) = n.extras.get(&i) {
+                    for part in layout.residents(states[i]) {
                         draw_block(c, n, ctm, &looks, &opaque, &mut mesh, x, y, z, part);
                     }
+                    for &part in &layout.covers {
+                        let (owner, resident) = part.owner(glam::IVec3::new(x, y, z));
+                        if (owner.cmplt(glam::IVec3::ZERO).any() || owner.cmpge(glam::IVec3::splat(16)).any())
+                            && outside.insert((owner, resident))
+                        {
+                            draw_block(c, n, ctm, &looks, &opaque, &mut mesh, x, y, z, part);
+                        }
+                    }
+                } else {
+                    draw_block(c, n, ctm, &looks, &opaque, &mut mesh, x, y, z, Part::aligned(states[i]));
                 }
             }
         }
@@ -139,10 +154,33 @@ fn draw_block(
     x: i32,
     y: i32,
     z: i32,
-    s: u32,
+    part: Part,
 ) {
+    let s = part.state;
+    let shift = part.shift().as_vec3();
     let i = pidx(x, y, z);
     let info = &c.states[s as usize];
+    // Only split at boundaries with another chunk holding this block. The outermost
+    // chunk also draws decorative geometry beyond the hitbox.
+    let mut clip = 0u8;
+    if part.offset != glam::IVec3::ZERO || !info.cells.is_empty() {
+        let cell = glam::IVec3::new(x, y, z);
+        let base = cell.as_dvec3();
+        let mut lo = part.owner(cell).0.as_dvec3();
+        let mut hi = lo + glam::DVec3::ONE;
+        for b in part.bounds(c) {
+            lo = lo.min(base + b.min);
+            hi = hi.max(base + b.max);
+        }
+        for a in 0..3 {
+            if lo[a] < 0.0 {
+                clip |= 1 << (2 * a);
+            }
+            if hi[a] > 16.0 {
+                clip |= 2 << (2 * a);
+            }
+        }
+    }
     let biome = n.biomes[(z * 16 + x) as usize] as u32;
     if info.liquid.is_some() {
         liquid(c, n, ctm, mesh, x, y, z, s, biome);
@@ -156,12 +194,14 @@ fn draw_block(
     if tile.is_none() && matches!(drawn.model, BlockModel::None | BlockModel::Wire) {
         return;
     }
-    if let Some(cube) = crate::content::ModelBox::full_cube(boxes) {
+    if part.offset == glam::IVec3::ZERO
+        && let Some(cube) = crate::content::ModelBox::full_cube(boxes)
+    {
         let textures = cube.textures;
         for dir in 0..6 {
             let [dx, dy, dz] = NORMALS[dir];
             let ni = pidx(x + dx, y + dy, z + dz);
-            if face_hidden(c, ctm, s, n.states[ni]) {
+            if !n.extras.contains_key(&ni) && face_hidden(c, ctm, s, n.states[ni]) {
                 continue;
             }
             let (ao, light) = corner_data(c, n, ctm, opaque, x, y, z, dir);
@@ -205,7 +245,7 @@ fn draw_block(
         for bx in boxes {
             let center = std::array::from_fn(|a| (bx.min[a] + bx.max[a]) * 0.5);
             let center = if bx.tilt.degrees == 0.0 { center } else { tilted(center, &bx.tilt) };
-            let at = [x, y, z].map(|v| v as f32);
+            let at = [x as f32 + shift.x, y as f32 + shift.y, z as f32 + shift.z];
             let sample: [i32; 3] = std::array::from_fn(|a| ((at[a] + center[a]).floor() as i32).clamp(-1, 16));
             let l = if dark_inside { l } else { light16(n.light[pidx(sample[0], sample[1], sample[2])]) };
             for dir in 0..6 {
@@ -214,14 +254,17 @@ fn draw_block(
                 // Against one neighbor only if it stays in the cell along the other axes: a
                 // big block's box runs past several.
                 let within = (0..3).all(|a| a == axis || (bx.min[a] >= 0.0 && bx.max[a] <= 1.0));
-                let at_edge = bx.tilt.degrees == 0.0 && within && if dir % 2 == 0 { bx.min[axis] <= 0.0 } else { bx.max[axis] >= 1.0 };
+                let at_edge = part.offset == glam::IVec3::ZERO
+                    && bx.tilt.degrees == 0.0
+                    && within
+                    && if dir % 2 == 0 { bx.min[axis] == 0.0 } else { bx.max[axis] == 1.0 };
                 let (ns, nl) = (n.states[pidx(x + dx, y + dy, z + dz)], n.light[pidx(x + dx, y + dy, z + dz)]);
-                if at_edge && ctm.hides(c.states[ns as usize].flags, ns) {
+                if at_edge && !n.extras.contains_key(&pidx(x + dx, y + dy, z + dz)) && ctm.hides(c.states[ns as usize].flags, ns) {
                     continue;
                 }
                 let fl = if at_edge && !dark_inside { light16(nl) } else { l };
                 let Some((corners, uv)) = box_face(bx, dir) else { continue };
-                let corners = corners.map(|p| [p[0] + x as f32, p[1] + y as f32, p[2] + z as f32]);
+                let corners = corners.map(|p| [p[0] + at[0], p[1] + at[1], p[2] + at[2]]);
                 for (k, l) in face_layers(c, info, bx.textures[dir] & face::TEX_MASK, dir)
                     .iter()
                     .enumerate()
@@ -229,10 +272,99 @@ fn draw_block(
                     let tex = ctm.resolve(c, n, x, y, z, dir, l.tex, [sample[0] - x, sample[1] - y, sample[2] - z]);
                     let tint = l.tint | if bx.flat { FLAT } else { 0 };
                     let to = if k == 0 || layer == RenderLayer::Translucent { layer as usize } else { UPPER };
-                    mesh.quads[to].push(quad(corners, uv, tex, biome, tint, [fl; 4]));
+                    if clip != 0 {
+                        clipped_face(corners, uv, clip, &mut |corners, uv, tilted| {
+                            let tint = tint | if tilted { quad::CLIP as u8 } else { 0 };
+                            let mut record = quad(corners, uv, tex, biome, tint, [fl; 4]);
+                            if tilted {
+                                record[7] = u32::from(clip);
+                            }
+                            mesh.quads[to].push(record);
+                        });
+                    } else {
+                        mesh.quads[to].push(quad(corners, uv, tex, biome, tint, [fl; 4]));
+                    }
                 }
             }
         }
+    }
+}
+
+/// Each cube owns only the portion of a spanning model inside it. Crop along the
+/// face's texture axes; tilted faces use the same bounds again at the fragment.
+fn clipped_face(corners: [[f32; 3]; 4], uv: [f32; 4], clip: u8, draw: &mut impl FnMut([[f32; 3]; 4], [f32; 4], bool)) {
+    use glam::Vec3;
+    let [p, b, _, d] = corners.map(Vec3::from_array);
+    let (u, v) = (b - p, d - p);
+    let normal = u.cross(v).normalize_or_zero();
+    let bounds = corners.map(Vec3::from_array);
+    let lo = bounds.into_iter().fold(Vec3::MAX, Vec3::min);
+    let hi = bounds.into_iter().fold(Vec3::MIN, Vec3::max);
+    let packed_min = -(quad::POS_OFFSET as f32) / 16.0;
+    let packed_max = (quad::POS_MASK - quad::POS_OFFSET) as f32 / 16.0;
+    let mut min = lo.max(Vec3::splat(packed_min));
+    let mut max = hi.min(Vec3::splat(packed_max));
+    for axis in 0..3 {
+        if clip & (1 << (2 * axis)) != 0 {
+            if hi[axis] < 0.0 || (hi[axis] == 0.0 && normal[axis] > 0.0) {
+                return;
+            }
+            min[axis] = min[axis].max(0.0);
+        }
+        if clip & (2 << (2 * axis)) != 0 {
+            if lo[axis] > 16.0 || (lo[axis] == 16.0 && normal[axis] < 0.0) {
+                return;
+            }
+            max[axis] = max[axis].min(16.0);
+        }
+    }
+    if min.cmpgt(max).any() {
+        return;
+    }
+    let middle = (min + max) * 0.5;
+    let extent = (max - min) * 0.5;
+    let crop = |edge: Vec3| {
+        let axis = edge / edge.length_squared();
+        let start = (middle - p).dot(axis);
+        let half = extent.dot(axis.abs());
+        ((start - half).max(0.0), (start + half).min(1.0))
+    };
+    let ((u0, u1), (v0, v1)) = (crop(u), crop(v));
+    if !(u0 < u1 && v0 < v1) {
+        return;
+    }
+    let pos = |x: f32, y: f32| (p + u * x + v * y).to_array();
+    let us = |x| uv[0] + (uv[2] - uv[0]) * x;
+    let vs = |y| uv[3] + (uv[1] - uv[3]) * y;
+    let tilted = [u, v]
+        .iter()
+        .any(|edge| edge.normalize_or_zero().abs().max_element() < 0.999999);
+    let tile = |u0, u1, v0, v1| ([pos(u0, v0), pos(u1, v0), pos(u1, v1), pos(u0, v1)], [us(u0), vs(v1), us(u1), vs(v0)]);
+    let (face, rect) = tile(u0, u1, v0, v1);
+    let wide = u.length_squared() * (u1 - u0).powi(2);
+    let tall = v.length_squared() * (v1 - v0).powi(2);
+    if tilted
+        && wide.max(tall) > (1.0f32 / 16.0).powi(2)
+        && face
+            .iter()
+            .flatten()
+            .any(|&v| v < packed_min - 0.03125 || v > packed_max + 0.03125)
+    {
+        // A tilted face can have a corner past the packed vertex range even after
+        // projection. Split the longer edge until each visible piece fits.
+        if wide > tall {
+            for (a, b) in [(u0, (u0 + u1) * 0.5), ((u0 + u1) * 0.5, u1)] {
+                let (face, rect) = tile(a, b, v0, v1);
+                clipped_face(face, rect, clip, draw);
+            }
+        } else {
+            for (a, b) in [(v0, (v0 + v1) * 0.5), ((v0 + v1) * 0.5, v1)] {
+                let (face, rect) = tile(u0, u1, a, b);
+                clipped_face(face, rect, clip, draw);
+            }
+        }
+    } else {
+        draw(face, rect, tilted);
     }
 }
 
@@ -462,7 +594,12 @@ fn liquid(c: &Content, n: &Neighborhood, ctm: &super::ctm::Ctm, mesh: &mut Mesh,
     let tint = info.tint | crate::gpu_layout::quad::LIQUID as u8;
     // In a block (waterlogged): its sides it covers whole stand where the liquid's would, which
     // would fight them.
-    let parts = std::iter::once(n.states[i]).chain(n.extras.get(&i).into_iter().flatten().copied());
+    let parts = std::iter::once(n.states[i]).chain(
+        n.extras
+            .get(&i)
+            .into_iter()
+            .flat_map(|l| l.extras.iter().copied()),
+    );
     let walls = parts
         .filter(|&p| c.states[p as usize].liquid.is_none())
         .fold(0u8, |m, p| m | c.liquid_walls[p as usize]);

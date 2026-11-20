@@ -10,10 +10,20 @@ static SOURCE: Mutex<Option<MusicSource>> = Mutex::new(None);
 
 pub fn register(r: &mut Registry) {
     r.block(&PLAYER)
-        .texture("planks_spruce")
-        .model_box([0.0; 3], [16.0, 13.0, 16.0])
-        .model_box_faces([2.0, 13.0, 2.0], [14.0, 14.0, 14.0], [("obsidian", UV_FROM_BOX); 6])
-        .model_box_faces([7.0, 14.0, 7.0], [9.0, 15.0, 9.0], [("iron_block", UV_FROM_BOX); 6])
+        .facing(Facings::HORIZONTAL, Toward::Away)
+        .texture("music_player_side")
+        .states(|p, s| {
+            let full = [0.0, 0.0, 16.0, 16.0];
+            let mut faces = [("music_player_side", full); 6];
+            faces[Dir::North as usize].0 = "music_player_front";
+            faces[Dir::South as usize].0 = "music_player_back";
+            faces[Dir::Up as usize].0 = "music_player_top";
+            let mut record = [("music_player_side", UV_FROM_BOX); 6];
+            record[Dir::Up as usize] = ("music_player_record", full);
+            s.orientation(Orientation::front(p.facing()))
+                .model_box_faces([0.0; 3], [16.0, 14.0, 16.0], faces)
+                .model_box_faces([1.0, 14.0, 1.0], [15.0, 15.0, 15.0], record)
+        })
         .sound_group("wood")
         .hardness(2.0)
         .mined_by("axe", tool_tier::HAND)

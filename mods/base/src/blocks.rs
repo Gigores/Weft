@@ -112,8 +112,11 @@ fn log(r: &mut Registry, handle: &'static Block, wood: &str, wood_block: bool) {
 }
 
 /// Dyed blocks' colors: name, glass tint, wool tint, the light the glass takes away per channel.
-const COLORS: &[(&str, u32, u32, [u8; 3])] =
-    &[("red", 0xED3737, 0xB02E26, [0, 12, 12]), ("green", 0x37C837, 0x5E7C16, [12, 0, 12]), ("blue", 0x375BFF, 0x3C44AA, [12, 12, 0])];
+const COLORS: &[(&str, u32, u32, [u8; 3], [u8; 3])] = &[
+    ("red", 0xED3737, 0xB02E26, [0, 12, 12], [15u8, 3, 2]),
+    ("green", 0x37C837, 0x5E7C16, [12, 0, 12], [2, 15, 4]),
+    ("blue", 0x375BFF, 0x3C44AA, [12, 12, 0], [3, 6, 15]),
+];
 
 fn leaves(r: &mut Registry, handle: &'static Block, tex: &str, tint: bool) {
     let mut b = r
@@ -660,7 +663,7 @@ pub fn register(r: &mut Registry) {
         .drops_nothing()
         .tab(&crate::tabs::BUILDING);
     // Every color of glass and wool is one white picture tinted: a color more is a line here.
-    for &(name, glass, wool, filter) in COLORS {
+    for &(name, glass, wool, filter, light) in COLORS {
         r.block(Block::generated(format!("{name}_stained_glass")))
             .signal_blocker()
             .sound_group("glass")
@@ -679,13 +682,12 @@ pub fn register(r: &mut Registry) {
             .hardness(0.8)
             .set(&FLAMMABLE, 30)
             .tab(&crate::tabs::COLORED);
-    }
-    for (name, rgb) in [("red", [15u8, 3, 2]), ("green", [2, 15, 4]), ("blue", [3, 6, 15])] {
         r.block(Block::generated(format!("{name}_lamp")))
             .sound_group("glass")
             .tag(&format!("lamps/{name}"))
-            .texture(&format!("lamp_{name}"))
-            .light_rgb(rgb[0], rgb[1], rgb[2])
+            .texture(&format!("lamp_white"))
+            .light_rgb(light[0], light[1], light[2])
+            .tint(glass)
             .hardness(0.3)
             .tab(&crate::tabs::COLORED);
     }

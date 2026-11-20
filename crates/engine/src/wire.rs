@@ -7,7 +7,141 @@ use glam::IVec3;
 use weft_abi::{block_flags as bf, signal_kind as sk};
 
 use crate::content::{Content, StateInfo};
+use crate::world::placement::{CellLayout, Part};
 use crate::world::{Cube, DIRS};
+
+/// The physical origin of a circuit part, in the same fixed point as block placement.
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+pub struct Site {
+    pub cell: IVec3,
+    pub offset: IVec3,
+    /// Unpowered state of a second circuit sharing this origin. Zero is the default grid port.
+    pub port: u32,
+}
+
+impl From<IVec3> for Site {
+    fn from(cell: IVec3) -> Self {
+        Self { cell, ..Self::default() }
+    }
+}
+
+impl std::ops::Add<IVec3> for Site {
+    type Output = Self;
+    fn add(self, d: IVec3) -> Self {
+        Self { cell: self.cell + d, port: 0, ..self }
+    }
+}
+
+impl Site {
+    pub fn part(self, state: u32) -> crate::world::placement::Part {
+        crate::world::placement::Part { state, offset: self.offset }
+    }
+
+    fn key(c: &Content, state: u32) -> u32 {
+        let s = &c.states[state as usize].signal;
+        if s.kind == sk::WIRE {
+            return c.block_of(state).first_state;
+        }
+        let level = if s.levels == 2 { u32::from(s.level > 0) } else { u32::from(s.level) };
+        state - level * s.stride
+    }
+
+    pub fn of(c: &Content, cell: IVec3, part: Part, main: u32, layout: &CellLayout) -> Self {
+        let mut site = Self { cell, offset: part.offset, port: 0 };
+        if !layout.extras.is_empty() && site.state(c, main, layout) != part.state {
+            site.port = Self::key(c, part.state);
+        }
+        site
+    }
+
+    pub fn state(self, c: &Content, main: u32, layout: &CellLayout) -> u32 {
+        if layout.extras.is_empty() && layout.offsets.is_empty() {
+            return if self.offset == IVec3::ZERO && self.port == 0 { main } else { crate::content::AIR };
+        }
+        if self.port != 0 {
+            let first = Self { port: 0, ..self }.state(c, main, layout);
+            if Self::key(c, first) == self.port {
+                return crate::content::AIR;
+            }
+        }
+        let mut found = crate::content::AIR;
+        for part in layout.residents(main).filter(|v| v.offset == self.offset) {
+            if self.port != 0 {
+                if Self::key(c, part.state) == self.port {
+                    return part.state;
+                }
+            } else {
+                if c.states[part.state as usize].signal.kind != sk::NONE {
+                    return part.state;
+                }
+                if found == crate::content::AIR {
+                    found = part.state;
+                }
+            }
+        }
+        found
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Contact {
+    pub at: Site,
+    /// From the near shape to the far shape.
+    pub dir: u8,
+    pub near_faces: u8,
+    pub far_faces: u8,
+}
+
+pub(crate) fn wire_faces(c: &Content, part: crate::world::placement::Part, b: crate::physics::Aabb) -> u8 {
+    if c.states[part.state as usize].signal.kind != sk::WIRE {
+        return 0;
+    }
+    let axis = (b.max - b.min).min_position();
+    let high = (b.min[axis] + b.max[axis]) * 0.5 - part.shift()[axis] > 0.5;
+    (1 << (axis * 2 + high as usize)) & mask(c, part.state)
+}
+
+pub fn needs_contacts<'a>(site: Site, get: impl Fn(IVec3) -> Option<(u32, &'a CellLayout)>) -> bool {
+    site.offset != IVec3::ZERO
+        || site.port != 0
+        || DIRS
+            .into_iter()
+            .chain(std::iter::once(IVec3::ZERO))
+            .any(|dir| get(site.cell + dir).is_some_and(|(_, l)| !l.offsets.is_empty() || !l.covers.is_empty() || !l.extras.is_empty()))
+}
+
+/// Contacts between different placement origins. Aligned circuits retain their authored
+/// face ports; a fractional placement meets another one at their actual surfaces.
+pub fn contacts<'a>(
+    c: &Content,
+    site: Site,
+    state: u32,
+    get: impl Fn(IVec3) -> Option<(u32, &'a crate::world::placement::CellLayout)>,
+) -> Vec<Contact> {
+    let mut out = Vec::new();
+    let part = site.part(state);
+    for patch in part.bounds(c) {
+        let near_faces = wire_faces(c, part, patch);
+        for dir in 0..6u8 {
+            let a = dir as usize / 2;
+            let plane = if dir % 2 == 0 { patch.min[a] } else { patch.max[a] };
+            crate::world::placement::face_contacts(c, site.cell, patch, dir as usize, plane, &get, |cell, other, bounds| {
+                let (cell, resident) = other.owner(cell);
+                let Some((main, layout)) = get(cell) else { return false };
+                let at = Site::of(c, cell, resident, main, layout);
+                if at == site || (at == site + DIRS[dir as usize] && site.port == 0) {
+                    return false;
+                }
+                let contact = Contact { at, dir, near_faces, far_faces: wire_faces(c, other, bounds) };
+                if !out.contains(&contact) {
+                    out.push(contact);
+                }
+                false
+            });
+        }
+    }
+    out
+}
 
 /// A direction's name as `facing` properties have it.
 pub fn dir_name(d: u8) -> &'static str {
@@ -55,19 +189,25 @@ pub fn dirs(mask: u8) -> impl Iterator<Item = u8> {
 
 /// Whether a cube has wire.
 pub fn has_wire(c: &Content, cube: &Cube) -> bool {
-    cube.palette()
-        .iter()
-        .any(|&s| c.states[s as usize].signal.kind == sk::WIRE)
+    let wire = |s: u32| c.states[s as usize].signal.kind == sk::WIRE;
+    cube.palette().iter().copied().any(wire)
+        || cube
+            .all_extras()
+            .any(|(_, states)| states.iter().copied().any(wire))
 }
 
-/// The cells with wire in the cube at `pos`.
-pub fn cells(c: &Content, pos: IVec3, cube: &Cube) -> Vec<IVec3> {
+/// Wire origins in this cube; foreign coverage is indexed by its owner.
+pub fn cells(c: &Content, pos: IVec3, cube: &Cube) -> Vec<Site> {
     if !has_wire(c, cube) {
         return Vec::new();
     }
-    (0..4096usize)
-        .filter(|&i| c.states[cube.get(i) as usize].signal.kind == sk::WIRE)
-        .map(|i| pos * 16 + crate::world::cube::offset(i))
+    (0..4096)
+        .flat_map(|i| {
+            let cell = pos * 16 + crate::world::cube::offset(i);
+            cube.layout(i).residents(cube.get(i)).filter_map(move |p| {
+                (c.states[p.state as usize].signal.kind == sk::WIRE).then(|| Site::of(c, cell, p, cube.get(i), cube.layout(i)))
+            })
+        })
         .collect()
 }
 
@@ -80,7 +220,7 @@ pub fn edges(face: u8) -> impl Iterator<Item = u8> {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Link {
     /// Another piece of the same wire: `(cell, face)`.
-    Piece(IVec3, u8),
+    Piece(Site, u8),
     /// No wire goes on from here.
     End,
     /// Past it isn't loaded.
@@ -89,7 +229,7 @@ pub enum Link {
 
 /// Follows edge `e` of the piece on `face` of `cell`: into the corner on the wall at that edge,
 /// on along the same plane, or around the edge of the block it lies on, in that order.
-pub fn link(c: &Content, get: &impl Fn(IVec3) -> Option<u32>, cell: IVec3, face: u8, e: u8) -> Link {
+pub fn link(c: &Content, get: &impl Fn(Site) -> Option<u32>, cell: Site, face: u8, e: u8) -> Link {
     let Some(here) = get(cell) else { return Link::Unknown };
     let block = c.states[here as usize].block;
     if mask(c, here) & (1 << e) != 0 {

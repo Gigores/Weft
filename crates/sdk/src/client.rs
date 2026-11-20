@@ -370,9 +370,8 @@ impl Client {
         self.op(abi::client_op::CLOSE_SCREEN, "", 0.0);
     }
 
-    /// Sorts the open menu's storage: slot `slot`'s group, or with `None` what the menu is
-    /// opened on (a chest), else the player's main inventory. Items of a kind come together,
-    /// stacked, in the order they were registered.
+    /// Sorts the group containing `slot`. With `None`, sorts each enabled group of the open
+    /// container, falling back to the player's main storage. Stacks stay within their group and slot limit.
     pub fn menu_sort(&self, slot: Option<u32>) -> bool {
         self.op(abi::client_op::MENU_SORT, "", slot.map_or(-1.0, |s| s as f64)) != 0
     }

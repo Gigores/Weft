@@ -702,13 +702,63 @@ impl Ui {
         on_change: impl Fn(&ClientView, f32) + Send + Sync + 'static,
         release: bool,
     ) {
+        self.slider_track(
+            s,
+            &[0.0],
+            SliderOptions { release, ..SliderOptions::default() },
+            move |c, values| values[0] = value(c),
+            move |c, _, v| on_change(c, v),
+        );
+    }
+
+    /// A range with two ordered handles. The edit reports the endpoint index and its new 0..1 value.
+    pub fn range_slider(
+        &mut self,
+        s: S,
+        value: impl Fn(&ClientView) -> [f32; 2] + Send + Sync + 'static,
+        on_change: impl Fn(&ClientView, usize, f32) + Send + Sync + 'static,
+    ) {
+        self.slider_track(
+            s,
+            &[0.0, 1.0],
+            SliderOptions { ordered: true, fill: Some([0, 1]), ..SliderOptions::default() },
+            move |c, values| values.copy_from_slice(&value(c)),
+            on_change,
+        );
+    }
+
+    /// A slider track with any number of handles. `values` defines the starting positions and
+    /// handle order. `bind` can update all positions at once; an edit names the modified index.
+    pub fn slider_track(
+        &mut self,
+        s: S,
+        values: &[f32],
+        options: SliderOptions,
+        bind: impl Fn(&ClientView, &mut [f32]) + Send + Sync + 'static,
+        change: impl Fn(&ClientView, usize, f32) + Send + Sync + 'static,
+    ) {
+        if values.is_empty() {
+            return;
+        }
         let mut n = node(k::SLIDER, s);
-        if release {
+        n.slider_values = abi::Slice::new(values);
+        n.slider_fill = options.fill.unwrap_or([u32::MAX; 2]);
+        n.count = options.steps;
+        if options.release {
             n.flags |= abi::ui_flags::SLIDER_RELEASE;
         }
-        n.bind = bind_cb(value);
-        n.on_change = callback(move |a: &mut abi::UiChangeArgs| on_change(&ClientView { raw: a.client }, a.value));
-        self.leaf(n)
+        if options.ordered {
+            n.flags |= abi::ui_flags::SLIDER_ORDERED;
+        }
+        if options.snap {
+            n.flags |= abi::ui_flags::SLIDER_SNAP;
+        }
+        n.bind = callback(move |a: &mut abi::UiSliderBindArgs| {
+            let values = unsafe { std::slice::from_raw_parts_mut(a.values, a.len) };
+            bind(&ClientView { raw: a.client }, values);
+        });
+        n.on_change = callback(move |a: &mut abi::UiChangeArgs| change(&ClientView { raw: a.client }, a.handle as usize, a.value));
+        self.leaf(n);
     }
 
     /// An item's icon, with `count` under it when above 1.
@@ -718,6 +768,17 @@ impl Ui {
         n.count = count;
         self.leaf(n)
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SliderOptions {
+    /// Steps across the track for arrow keys. Zero uses the default of 100.
+    pub steps: u32,
+    pub snap: bool,
+    pub ordered: bool,
+    pub release: bool,
+    /// Indices of the two handles marking a highlighted span.
+    pub fill: Option<[u32; 2]>,
 }
 
 fn bind_cb(f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> abi::Callback {

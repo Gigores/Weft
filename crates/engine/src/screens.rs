@@ -83,6 +83,10 @@ pub trait Screen: std::any::Any {
     fn escape_closes(&self) -> bool {
         true
     }
+    /// Validates or applies edits before closing the top screen. False keeps it open.
+    fn close_action(&self) -> Option<fn(&mut Ctx) -> bool> {
+        None
+    }
     fn closes_on_respawn(&self) -> bool {
         false
     }
@@ -114,6 +118,7 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         }
         "core:language" => Box::new(LanguageScreen),
         "core:controls" => Box::new(Controls::default()),
+        crate::controller::SCREEN => Box::new(crate::controller_screen::ControllerScreen::default()),
         "core:mod_settings" => Box::new(ModSettings),
         "core:worlds" => Box::new(crate::saves::WorldSelect::default()),
         "core:create_world" => Box::new(crate::saves::CreateWorld::new()),
@@ -735,18 +740,17 @@ fn config_row(ui: &mut Ui, cx: &BuildCx, id: u32, d: &crate::config::ConfigDef, 
                     }) as Box<dyn Fn(f32, f32) -> f32>
                 });
                 let definition = d.clone();
-                ui.add(
-                    Kind::Slider {
-                        enabled: true,
-                        value: 0.0,
-                        bind: Box::new(move |_: &Ctx| definition.slider_position(crate::config::get(id))),
-                        on_change,
-                        on_release,
-                        steps,
-                        step_value,
-                    },
-                    Style::default().h(20.0).stretch(),
-                );
+                let thumb = crate::ui::slider::Thumb { value: 0.0, change: Some(on_change), release: on_release };
+                let mut slider = crate::ui::slider::Slider::new(vec![thumb]);
+                slider.binding = Some((
+                    vec![0.0],
+                    Box::new(move |_, values| {
+                        values[0] = definition.slider_position(crate::config::get(id));
+                    }),
+                ));
+                slider.steps = steps;
+                slider.step_value = step_value;
+                ui.add(Kind::Slider(slider), Style::default().h(20.0).stretch());
             }
         }),
     };

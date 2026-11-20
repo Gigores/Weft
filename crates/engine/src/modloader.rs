@@ -1,5 +1,6 @@
 //! Finds mod libraries, loads them and runs registration in parallel.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -13,6 +14,7 @@ pub struct LoadedMod {
     pub id: String,
     pub assets: PathBuf,
     source: PathBuf,
+    revision: u64,
     _lib: libloading::Library,
     decl: &'static abi::ModDecl,
 }
@@ -415,7 +417,13 @@ pub fn restart_pending() -> bool {
 pub const ABI_VERSION: u64 = abi::ABI_VERSION;
 
 /// `also_off`: off for this run only, besides what the player turned off (a launcher's choice).
-pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[String]) -> Result<Vec<LoadedMod>, String> {
+pub fn load(
+    mod_dirs: &[PathBuf],
+    cache: &Path,
+    off_file: &Path,
+    also_off: &[String],
+    core_assets: &Path,
+) -> Result<Vec<LoadedMod>, String> {
     let start = Instant::now();
     let mut wanted: Vec<String> = std::fs::read_to_string(off_file)
         .unwrap_or_default()
@@ -447,6 +455,7 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
             log::warn!("mod {name} is off: {reason}");
             errors.insert(name.clone(), reason);
             off.push(ModMeta {
+                revision: 0,
                 id: name.clone(),
                 version: String::new(),
                 deps: Vec::new(),
@@ -491,7 +500,12 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
             rejected(format!("the library declares mod {id}; its folder or zip must use that name"), &mut off, &mut errors);
             continue;
         }
-        mods.push(LoadedMod { id, assets: dir.join("assets"), source, _lib: lib, decl });
+        let mut revision = DefaultHasher::new();
+        let versioned = if source.is_file() { &source } else { &lib_path };
+        if let Ok(file) = std::fs::metadata(versioned) {
+            (file.len(), file.modified().ok()).hash(&mut revision);
+        }
+        mods.push(LoadedMod { id, assets: dir.join("assets"), source, revision: revision.finish(), _lib: lib, decl });
     }
     mods.sort_by(|a, b| a.id.cmp(&b.id));
     // Out go the ones turned off, then what needs them, and what needs that.
@@ -526,6 +540,7 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
             log::warn!("mod {} is off, as it needs one that is", m.id);
         }
         off.push(ModMeta {
+            revision: 0,
             id: m.id.clone(),
             version: unsafe { m.decl.version.as_str() }.to_string(),
             deps: deps_of(&m),
@@ -562,6 +577,7 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
                     .collect()
             };
             ModMeta {
+                revision: m.revision,
                 id: m.id.clone(),
                 version: m.decl.version.as_str().to_string(),
                 deps: names(&m.decl.deps),
@@ -601,7 +617,7 @@ pub fn load(mod_dirs: &[PathBuf], cache: &Path, off_file: &Path, also_off: &[Str
         .collect();
 
     let step_order = std::fs::read_to_string(off_file.with_file_name("step_order.txt")).unwrap_or_default();
-    let content = content::freeze(metas, regs, &step_order).map_err(|e| e.join("\n"))?;
+    let content = content::freeze(metas, regs, &step_order, core_assets).map_err(|e| e.join("\n"))?;
     log::info!(
         "{} mods, {} blocks ({} states), {} items, {} dimensions in {:.1} ms",
         mods.len(),
@@ -658,6 +674,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(id, deps)| ModMeta {
+            revision: 0,
             id: id.to_string(),
             version: String::new(),
             deps: off(&deps),

@@ -560,12 +560,12 @@ pub unsafe extern "C" fn client_block_in(c: *mut abi::ClientCtx, frame: u64, pos
         let Some(cl) = client(c) else { return u32::MAX };
         let p = crate::world::ivec(*pos);
         if frame == 0 {
-            return cl.world.block(p);
+            return cl.world.seen(p);
         }
         cl.entities
             .get(&frame)
             .and_then(|e| e.structure.as_ref())
-            .map_or(u32::MAX, |s| s.block(p))
+            .map_or(u32::MAX, |s| s.seen(p))
     }
 }
 
@@ -650,7 +650,7 @@ pub unsafe extern "C" fn client_ui_rect(c: *mut abi::ClientCtx, query: Str, out:
         } else if q == "slider" {
             ui.nodes
                 .iter()
-                .position(|node| matches!(node.kind, Kind::Slider { .. }))
+                .position(|node| matches!(node.kind, Kind::Slider(_)))
         } else if q == "entity" {
             ui.nodes
                 .iter()

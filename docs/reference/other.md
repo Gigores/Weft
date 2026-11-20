@@ -14,6 +14,12 @@ A component's declaration being registered (`Registry::entity_component`, `stack
 
 - <a id="DeclarationBuilder-stack"></a>`.stack(flags: u32)`: Stacks carry it, with `stack_flags`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2109)
 
+## EquipmentSlotBuilder
+
+An equipment slot being registered (`Registry::equipment_slot`).
+
+- <a id="EquipmentSlotBuilder-priority"></a>`.priority(priority: i32, items: &str)`: Sets quick-transfer preferences like `Slots::priority`. Explicit rules replace the worn slot's default priority of one. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2031)
+
 ## Generation
 
 The completed stages before this callback, plus its own earlier writes. Reads in the same stage never depend on another start's execution order. This view cannot outlive the callback it was borrowed from.

@@ -28,6 +28,7 @@ pub const CHANNELS: &[(&str, &str)] = &[
     ("frame", "frame, GPU pass and server phase times every second"),
     ("summary", "tick time, world size, memory and costliest mods every 10 seconds"),
     ("modifiers", "how value chains computed damage and other numbers"),
+    ("bones", "trace: simulated bone pivots and tips every frame"),
 ];
 
 #[derive(Clone, Copy)]
@@ -41,9 +42,10 @@ pub enum Channel {
     Frame,
     Summary,
     Modifiers,
+    Bones,
 }
 
-static CHANNEL_LEVEL: [AtomicU8; 9] = [const { AtomicU8::new(0) }; 9];
+static CHANNEL_LEVEL: [AtomicU8; 10] = [const { AtomicU8::new(0) }; 10];
 
 /// Hot paths ask this instead of the logger: one atomic load.
 #[inline]

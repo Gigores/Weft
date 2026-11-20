@@ -291,6 +291,11 @@ impl IdTable {
         let to_runtime: Vec<u32> = names
             .iter()
             .map(|n| {
+                // Earlier saves filled a large block's other cells with directional placeholders.
+                // The owner's shape reconstructs those entries when its cube loads.
+                if n == "core:covered" || n.starts_with("core:covered[") {
+                    return AIR;
+                }
                 c.state_by_name(n).unwrap_or_else(|| {
                     missing.push(n.clone());
                     AIR
@@ -562,6 +567,10 @@ impl Storage {
             .palette()
             .iter()
             .chain(cube.all_extras().flat_map(|(_, parts)| parts))
+            .chain(
+                cube.layouts()
+                    .flat_map(|(_, layout)| layout.covers.iter().map(|p| &p.state)),
+            )
         {
             map.insert(s, self.ids.world_id(c, s));
         }

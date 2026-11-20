@@ -11,6 +11,7 @@ pub mod lang;
 pub mod look;
 pub mod meter;
 pub mod render;
+pub mod slider;
 pub mod text;
 
 use std::rc::Rc;
@@ -298,18 +299,7 @@ pub enum Kind {
         on_change: Option<Rc<dyn Fn(&mut Ctx, &str)>>,
         area: Option<Area>,
     },
-    /// Focused by a click, the arrow keys move it a step of `steps` across.
-    Slider {
-        enabled: bool,
-        value: f32,
-        bind: FloatBind,
-        on_change: Rc<dyn Fn(&mut Ctx, f32)>,
-        /// With one, dragging only shows (`on_change`) and this takes the value when let go: a
-        /// GUI scale that would change under the cursor on its way.
-        on_release: Option<Rc<dyn Fn(&mut Ctx, f32)>>,
-        steps: u32,
-        step_value: Option<Box<dyn Fn(f32, f32) -> f32>>,
-    },
+    Slider(slider::Slider),
     /// Engine-drawn content (slots, 3D previews) identified by a tag.
     Custom {
         tag: u32,
@@ -865,7 +855,7 @@ impl Ui {
                     let (along, across) = (*count as f32 * 8.0 + 1.0, 9.0 + (rows - 1) as f32 * step);
                     if matches!(*dir, weft_abi::ui_dir::UP | weft_abi::ui_dir::DOWN) { [across, along] } else { [along, across] }
                 }
-                Kind::Slider { .. } => [100.0, 12.0],
+                Kind::Slider(_) => [100.0, 12.0],
                 Kind::Input { .. } => [120.0, 18.0],
                 _ => {
                     let children = self.nodes[id].children.clone();
@@ -1081,9 +1071,10 @@ impl Ui {
                 return;
             }
             let button = matches!(n.kind, Kind::Button { .. });
-            let interactive = matches!(n.kind, Kind::Input { .. } | Kind::Slider { enabled: true, .. } | Kind::Custom { .. })
-                || n.tooltip.is_some()
-                || matches!(&n.kind, Kind::Text(t) if !t.layout.links.is_empty());
+            let interactive =
+                matches!(n.kind, Kind::Input { .. } | Kind::Slider(crate::ui::slider::Slider { enabled: true, .. }) | Kind::Custom { .. })
+                    || n.tooltip.is_some()
+                    || matches!(&n.kind, Kind::Text(t) if !t.layout.links.is_empty());
             // What a button contains (labels, icons) is part of the button, but for another button.
             if (button || interactive && !in_button) && id != 0 {
                 *best = Some(id);

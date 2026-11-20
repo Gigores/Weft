@@ -393,7 +393,8 @@ impl Particles {
             let piece = [(self.random() * 12.0) as u8, (self.random() * 12.0) as u8];
             let at = pos + off.as_dvec3();
             // A block can still be here on this client: the news of it going come separately.
-            let through = k.flags & pf::COLLIDE != 0 && crate::physics::collides(c, &|p| world.block_or_air(p), particle_box(at));
+            let through = k.flags & pf::COLLIDE != 0
+                && crate::physics::collides(c, &super::world::SeenCells { world, air_if_missing: false }, particle_box(at));
             // Born in a liquid is no going into one.
             let middle = (at + DVec3::Y * 0.1).floor().as_ivec3();
             let in_liquid = c.states[world.block(middle) as usize].liquid.is_some();

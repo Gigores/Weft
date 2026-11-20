@@ -96,19 +96,48 @@ pub fn sky_below(above: Option<&Cube>, open: bool) -> SkyBelow {
 /// Channel index: 0 sky, 1..4 red, green, blue.
 const SKY: usize = 0;
 
-/// What a change `change` tells the lighter about (`Lighter::block_changed`, `source_changed`)
-/// does to the light around it, what bodies' lights give included, on the server and in a
-/// client's guess alike. Returns the cubes that changed.
+#[derive(Clone, Copy)]
+pub enum Sky {
+    Dark,
+    Loaded,
+    Open,
+}
+
+impl Sky {
+    pub fn local(finite: bool, sky_light: bool) -> Self {
+        if finite {
+            Self::Open
+        } else if sky_light {
+            Self::Loaded
+        } else {
+            Self::Dark
+        }
+    }
+}
+
+/// Relights a cell edit, with light from outside the grid included. `old` is the previous main
+/// state, or `None` for a change to the emitters only.
 pub fn relight<M: CubeMap>(
     map: &mut M,
     c: &crate::content::Content,
-    sky: bool,
+    sky: Sky,
     glow: &rustc_hash::FxHashMap<IVec3, [u8; 3]>,
-    change: impl FnOnce(&mut Lighter<M>),
+    pos: IVec3,
+    old: Option<u32>,
 ) -> Vec<IVec3> {
-    let mut lighter = Lighter::new(map, c, sky).with_extra(glow);
-    change(&mut lighter);
-    std::mem::take(&mut lighter.changed).into_iter().collect()
+    let mut lighter = Lighter::new(map, c, !matches!(sky, Sky::Dark)).with_extra(glow);
+    lighter.open_sky = matches!(sky, Sky::Open);
+    match old {
+        Some(old) => lighter.block_changed(pos, old),
+        None => {
+            if let Some((material, _)) = lighter.read(pos) {
+                for &ch in lighter.channels() {
+                    lighter.relight_at(pos, material, ch);
+                }
+            }
+        }
+    }
+    lighter.changed.into_iter().collect()
 }
 
 fn ch(v: u32, c: usize) -> u8 {
@@ -124,6 +153,7 @@ pub struct Lighter<'a, M: CubeMap> {
     pub map: &'a mut M,
     c: &'a Content,
     sky: bool,
+    open_sky: bool,
     /// Cubes whose light changed, the caller resends them.
     pub changed: FxHashSet<IVec3>,
     add: VecDeque<(IVec3, u8)>,
@@ -148,6 +178,7 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
             map,
             c,
             sky,
+            open_sky: false,
             changed: FxHashSet::default(),
             add: VecDeque::new(),
             remove: VecDeque::new(),
@@ -175,9 +206,10 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
     }
 
     #[inline]
-    fn read(&self, p: IVec3) -> Option<(u32, u32)> {
+    fn read(&self, p: IVec3) -> Option<(Tight, u32)> {
         let (c, i) = split(p);
-        self.lookup(c).map(|cube| (cube.get(i), cube.light(i)))
+        self.lookup(c)
+            .map(|cube| (cube.light_material(self.c, i), cube.light(i)))
     }
 
     #[inline]
@@ -214,21 +246,20 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
     /// `passed` from the block at `p` (air where nothing is loaded: open sky) into a neighbor
     /// of state `to`.
     #[inline]
-    fn passed_from(&self, p: IVec3, to: u32, dir: usize, v: u8, c: usize) -> u8 {
-        let from = self.read(p).map_or(0, |(s, _)| s);
-        passed(self.tight(from), self.tight(to), dir, v, c)
+    fn passed_from(&self, p: IVec3, to: Tight, dir: usize, v: u8, c: usize) -> u8 {
+        let from = self.read(p).map_or(self.c.tight[0], |(s, _)| s);
+        passed(&from, &to, dir, v, c)
     }
 
     #[inline]
-    fn emit(&self, p: IVec3, state: u32, c: usize) -> u8 {
+    fn emit(&self, p: IVec3, state: Tight, c: usize) -> u8 {
         if c == SKY {
+            if self.open_sky && p.y & 15 == 15 && self.lookup((p + IVec3::Y) >> 4).is_none() {
+                return passed(self.tight(crate::content::AIR), &state, 2, SKY_FULL, SKY);
+            }
             return 0;
         }
-        let (cp, i) = split(p);
-        let parts = self
-            .lookup(cp)
-            .map_or(0, |cube| parts_glow(&self.c.tight, cube.extras(i))[c - 1]);
-        let own = self.c.tight[state as usize].light[c - 1].max(parts);
+        let own = state.light[c - 1];
         match self.extra {
             Some(extra) if !extra.is_empty() => extra.get(&p).map_or(own, |e| own.max(e[c - 1])),
             _ => own,
@@ -242,11 +273,11 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
             if self.get(p, c) != Some(v) {
                 continue;
             }
-            let from = self.read(p).map_or(0, |(s, _)| s);
+            let from = self.read(p).map_or(self.c.tight[0], |(s, _)| s);
             for (d, dir) in DIRS.iter().enumerate() {
                 let n = p + *dir;
                 let Some((state, light)) = self.read(n) else { continue };
-                let nv = passed(self.tight(from), self.tight(state), d, v, c);
+                let nv = passed(&from, &state, d, v, c);
                 if nv > ch(light, c) && self.put(n, c, nv) {
                     self.add.push_back((n, nv));
                     steps += 1;
@@ -291,15 +322,15 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
         let base = cp * 16;
         let Some(cube) = self.map.cube(cp) else { return };
         let states = &self.c.tight;
-        let all_clear = cube.palette().iter().all(|&s| states[s as usize].clear());
-        let all_opaque = cube.palette().iter().all(|&s| states[s as usize].dark());
+        let all_clear = cube.layouts().next().is_none() && cube.palette().iter().all(|&s| states[s as usize].clear());
+        let all_opaque = cube.layouts().next().is_none() && cube.palette().iter().all(|&s| states[s as usize].dark());
         let emits = cube
             .palette()
             .iter()
             .any(|&s| states[s as usize].light != [0; 3])
             || cube
-                .all_extras()
-                .any(|(_, parts)| parts_glow(states, parts) != [0; 3]);
+                .layouts()
+                .any(|(i, _)| cube.light_material(self.c, i).light != [0; 3]);
         self.map.cube_mut(cp).unwrap().fill_light(0);
         self.cache.set((IVec3::MAX, std::ptr::null()));
         self.changed.insert(cp);
@@ -374,7 +405,7 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
             }
             if emits {
                 for i in 0..4096usize {
-                    let state = self.map.cube(cp).unwrap().get(i);
+                    let state = self.map.cube(cp).unwrap().light_material(self.c, i);
                     let p = base + crate::world::cube::offset(i);
                     let e = self.emit(p, state, c);
                     if e > 0 {
@@ -396,10 +427,11 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
         self.changed.insert(cp);
         let base = cp * 16;
         let Some(cube) = self.map.cube(cp) else { return };
-        let all_opaque = cube
-            .palette()
-            .iter()
-            .all(|&s| self.c.tight[s as usize].dark());
+        let all_opaque = cube.layouts().next().is_none()
+            && cube
+                .palette()
+                .iter()
+                .all(|&s| self.c.tight[s as usize].dark());
         if all_opaque {
             return;
         }
@@ -456,10 +488,11 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
         if cube.uniform_light().is_some_and(|l| ch(l, c) >= level) {
             return false;
         }
-        !cube
-            .palette()
-            .iter()
-            .all(|&s| self.c.tight[s as usize].dark())
+        cube.layouts().next().is_some()
+            || !cube
+                .palette()
+                .iter()
+                .all(|&s| self.c.tight[s as usize].dark())
     }
 
     fn seed_from_neighbors(&mut self, cp: IVec3, c: usize, dirs: &[usize]) {
@@ -503,7 +536,7 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
     /// Relights after the block at `p` changed from `old` to the state now stored there.
     pub fn block_changed(&mut self, p: IVec3, old: u32) {
         let Some((new, _)) = self.read(p) else { return };
-        if self.tight(old).same_light(self.tight(new)) {
+        if self.tight(old).same_light(&new) {
             return;
         }
         for &c in self.channels() {
@@ -519,7 +552,7 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
         }
     }
 
-    fn relight_at(&mut self, p: IVec3, new: u32, c: usize) {
+    fn relight_at(&mut self, p: IVec3, new: Tight, c: usize) {
         {
             let cur = self.get(p, c).unwrap_or(0);
             self.put(p, c, 0);
@@ -546,7 +579,7 @@ impl<'a, M: CubeMap> Lighter<'a, M> {
 /// value), for `Lighter::spread`. Only reads, so cubes lit apart can be looked at side by side.
 pub fn outward<M: CubeMap>(map: &M, c: &Content, sky: bool, cp: IVec3, out: &mut Vec<(IVec3, u8, u8)>) {
     let Some(cube) = map.cube(cp) else { return };
-    let opaque = |cube: &Cube| cube.palette().iter().all(|&s| c.tight[s as usize].dark());
+    let opaque = |cube: &Cube| cube.layouts().next().is_none() && cube.palette().iter().all(|&s| c.tight[s as usize].dark());
     if opaque(cube) {
         return;
     }
@@ -578,10 +611,10 @@ pub fn outward<M: CubeMap>(map: &M, c: &Content, sky: bool, cp: IVec3, out: &mut
                     if v <= 1 {
                         continue;
                     }
-                    let from = &c.tight[cube.get(index(local.x as usize, local.y as usize, local.z as usize)) as usize];
+                    let from = cube.light_material(c, index(local.x as usize, local.y as usize, local.z as usize));
                     let q = (local + DIRS[d]) & 15;
                     let i = index(q.x as usize, q.y as usize, q.z as usize);
-                    if passed(from, &c.tight[n.get(i) as usize], d, v, ch_) > ch(n.light(i), ch_) {
+                    if passed(&from, &n.light_material(c, i), d, v, ch_) > ch(n.light(i), ch_) {
                         out.push((base + local, ch_ as u8, v));
                     }
                 }
@@ -600,6 +633,9 @@ fn parts_glow(t: &[Tight], parts: &[u32]) -> [u8; 3] {
 /// Lights a cube alone, as if open sky were above it and nothing beside it: the expensive
 /// inside part of `light_new`, done on a generation worker.
 pub fn prelight(c: &Content, cube: &mut Cube, sky: bool) {
+    if cube.layouts().next().is_some() {
+        return prelight_reference(c, cube, sky);
+    }
     let t = &c.tight;
     let palette = cube.palette();
     let all_opaque = palette.iter().all(|&s| t[s as usize].dark());

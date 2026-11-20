@@ -225,7 +225,7 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
         let on_change = move |ctx: &mut Ctx, text: String, value: f32| {
             if change.is_some() {
                 ctx.requests
-                    .push(crate::app::Request::ModChange(owner, change, text, value));
+                    .push(crate::app::Request::ModChange(owner, change, text, value, 0));
             }
         };
         let id = match n.kind {
@@ -267,16 +267,50 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
                 id
             }
             uk::SLIDER => {
-                let bind = float_bind(owner, n.bind);
-                let on_change: Rc<dyn Fn(&mut Ctx, f32)> = Rc::new(move |ctx: &mut Ctx, v: f32| on_change(ctx, String::new(), v));
-                let (on_change, on_release) = if flag(abi::ui_flags::SLIDER_RELEASE) {
-                    (Rc::new(|_: &mut Ctx, _: f32| {}) as Rc<dyn Fn(&mut Ctx, f32)>, Some(on_change))
-                } else {
-                    (on_change, None)
-                };
-                let steps = if n.count == 0 { 100 } else { n.count };
-                let enabled = !flag(abi::ui_flags::DISABLED);
-                b.ui.open(Kind::Slider { enabled, value: 0.0, bind, on_change, on_release, steps, step_value: None }, style)
+                use crate::ui::slider::{Change, Slider, Thumb};
+                let values = n.slider_values.as_slice();
+                let ordered = flag(abi::ui_flags::SLIDER_ORDERED);
+                let mut min = 0.0_f32;
+                let thumbs = values
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &value)| {
+                        let value = if value.is_finite() { value.clamp(min, 1.0) } else { min };
+                        if ordered {
+                            min = value;
+                        }
+                        let callback: Option<Change> = change.is_some().then(|| {
+                            Rc::new(move |ctx: &mut Ctx, value| {
+                                ctx.requests
+                                    .push(crate::app::Request::ModChange(owner, change, String::new(), value, i as u32));
+                            }) as Change
+                        });
+                        let (change, release) = if flag(abi::ui_flags::SLIDER_RELEASE) { (None, callback) } else { (callback, None) };
+                        Thumb { value, change, release }
+                    })
+                    .collect();
+                let mut slider = Slider::new(thumbs);
+                slider.enabled = !flag(abi::ui_flags::DISABLED) && !values.is_empty();
+                slider.ordered = ordered;
+                slider.snap = flag(abi::ui_flags::SLIDER_SNAP);
+                if n.count != 0 {
+                    slider.steps = n.count;
+                }
+                slider.track = class_or("slider");
+                let fill = n.slider_fill.map(|i| i as usize);
+                slider.fill = fill.iter().all(|&i| i < values.len()).then_some(fill);
+                if n.bind.is_some() && !values.is_empty() {
+                    let cb = n.bind;
+                    slider.binding = Some((
+                        vec![0.0; values.len()],
+                        Box::new(move |ctx, values| {
+                            let mut client = ClientView::bound(ctx);
+                            let mut args = abi::UiSliderBindArgs { client: client.raw(), values: values.as_mut_ptr(), len: values.len() };
+                            host::invoke(owner, cb, &mut args);
+                        }),
+                    ));
+                }
+                b.ui.open(Kind::Slider(slider), style)
             }
             uk::ITEM => {
                 let (item, count) = (n.data, n.count);
@@ -344,9 +378,9 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
                 for e in layout
                     .equipment
                     .iter()
-                    .filter(|e| e.name != weft_abi::OFF_HAND_SLOT)
+                    .filter(|e| e.group.flags & weft_abi::slot_flags::OFF_HAND == 0)
                 {
-                    if let Some((g, first, _)) = def.and_then(|d| d.group(layout, &e.name)) {
+                    if let Some((g, first, _)) = def.and_then(|d| d.group(layout, &e.group.name)) {
                         let s = b.ui.add(
                             Kind::Custom { tag: TAG_SLOT, data: first as u64 },
                             Style { w: Len::Px(g.size), h: Len::Px(g.size), ..Style::default() },
