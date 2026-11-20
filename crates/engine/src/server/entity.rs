@@ -697,18 +697,29 @@ impl Entities {
         if roots.is_empty() {
             return Vec::new();
         }
+        Self::indexed_structure_tree(roots, &self.structure_children())
+    }
+
+    pub(super) fn structure_children(&self) -> FxHashMap<u64, Vec<u64>> {
         let mut children: FxHashMap<u64, Vec<u64>> = FxHashMap::default();
         for e in self.list.iter().filter(|e| !e.removed) {
             if let Some(parent) = e.structure_parent() {
                 children.entry(parent).or_default().push(e.id);
             }
         }
+        children
+    }
+
+    pub(super) fn indexed_structure_tree(roots: &[u64], children: &FxHashMap<u64, Vec<u64>>) -> Vec<u64> {
         let mut pending: Vec<_> = roots.iter().rev().copied().collect();
         let mut order = Vec::new();
+        let mut expanded = rustc_hash::FxHashSet::default();
         while let Some(id) = pending.pop() {
             order.push(id);
-            if let Some(attached) = children.remove(&id) {
-                pending.extend(attached.into_iter().rev());
+            if let Some(attached) = children.get(&id)
+                && expanded.insert(id)
+            {
+                pending.extend(attached.iter().rev().copied());
             }
         }
         order

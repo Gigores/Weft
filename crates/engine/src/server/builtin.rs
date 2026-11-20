@@ -62,7 +62,7 @@ pub const COMMANDS: &[(&str, &str, Handler, u32)] = &[
     ("give", "<who:targets> <item:item> [count:int] | <item:item> [count:int]", give, p::GAME_MASTER),
     ("time", "set <time:time> | add <ticks:int> | query", time, p::GAME_MASTER),
     ("summon", "<entity:entity> [pos:pos] [count:int]", summon, p::GAME_MASTER),
-    ("clear", "item <who:targets> [filter:item] | item [filter:item] | entity <who:targets>", clear, p::GAME_MASTER),
+    ("clear", " | item <who:targets> [filter:item] | item [filter:item] | entity <who:targets>", clear, p::GAME_MASTER),
     ("setblock", "<pos:pos> <block:block>", set_block, p::GAME_MASTER),
     ("insert", "<pos:pos> <item:item> [count:int]", insert, p::GAME_MASTER),
     ("block", "<pos:pos>", block, p::GAME_MASTER),
@@ -77,7 +77,7 @@ pub const COMMANDS: &[(&str, &str, Handler, u32)] = &[
     ("tick", "query | rate <tps:int> | freeze | unfreeze | step [ticks:int] | sprint <ticks:int>", tick, p::ADMIN),
     ("regions", "", regions, p::GAME_MASTER),
     ("seed", "", seed, p::GAME_MASTER),
-    ("weather", "<weather:word(#core:weathers)> [ticks:int]", weather, p::GAME_MASTER),
+    ("weather", "vary | default | <weather:word(#core:weathers)> [ticks:int]", weather, p::GAME_MASTER),
     ("op", "<who:targets> [level:int]", op, p::ADMIN),
     ("deop", "<who:targets>", deop, p::ADMIN),
     ("rule", "[name:word(#core:rules)] [value:float]", rule, p::ADMIN),
@@ -374,6 +374,9 @@ fn summon(s: &mut Server, x: &Ctx) -> Vec<Msg> {
 }
 
 fn clear(s: &mut Server, x: &Ctx) -> Vec<Msg> {
+    if x.a.get("item").is_none() && x.a.get("entity").is_none() {
+        return weather(s, x);
+    }
     let c = x.c;
     let who = x.targets(s, "who");
     if x.a.get("entity").is_some() {
@@ -467,7 +470,11 @@ fn weather(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     if !x.c.dims[d.id as usize].has_weather() {
         return say("weather.none", Vec::new());
     }
-    let named = x.a.text("weather").unwrap_or("");
+    if x.a.get("vary").is_some() || x.a.get("default").is_some() {
+        d.set_weather(None, 0);
+        return say("weather.done", Vec::new());
+    }
+    let named = x.a.text("weather").unwrap_or("clear");
     let names = x.c.game.catalog.ids(ek::WEATHER);
     let Some(&w) = names
         .get(named)
@@ -475,8 +482,8 @@ fn weather(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     else {
         return say("weather.unknown", vec![text(named)]);
     };
-    let ticks = x.a.int("ticks").map_or(12000, |t| t.max(1) as u64);
-    d.set_weather(w as u16, ticks);
+    let ticks = x.a.int("ticks").map_or(u64::MAX, |t| t.max(1) as u64);
+    d.set_weather(Some(w as u16), ticks);
     say("weather.done", Vec::new())
 }
 

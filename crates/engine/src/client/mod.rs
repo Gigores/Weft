@@ -747,7 +747,8 @@ pub struct Client {
     pub sounds: Vec<crate::audio::Play>,
     rng: weft_noise::Rng,
     pub dead: bool,
-    /// The weather the server says it is (`registry::WeatherDef`).
+    /// A server override and the weather at the camera.
+    weather_override: Option<u16>,
     pub weather_id: u16,
     /// How much of it there is by now, 0..1 over about five seconds.
     /// The weather's look as it is by now, going over to the weather's own (`weather_effects`).
@@ -1079,6 +1080,7 @@ impl Client {
             moved_over: 0.0,
             dead: false,
             permission: 0,
+            weather_override: None,
             weather_id: 0,
             look: Default::default(),
             environment: Default::default(),
@@ -1177,6 +1179,7 @@ impl Client {
         self.wires.clear();
         self.meshes.clear();
         self.landings.clear();
+        self.weather_override = None;
         self.world.dim = dim;
         self.terrain_resets += 1;
         self.terrain_view = (IVec3::MAX, 0);
@@ -3021,6 +3024,7 @@ impl Client {
     /// The weather's look going over to the current one's, its sound now and then, and a
     /// lightning's flash (`weather` draws the precipitation).
     fn weather_effects(&mut self, dt: f32) {
+        self.weather_id = self.weather_at(self.camera().pos);
         let weather = &content().game.weathers[self.weather_id as usize];
         let (to, step) = (weather.look, dt / 5.0);
         let go = |v: &mut f32, t: f32| *v += (t - *v).clamp(-step, step);
@@ -3046,6 +3050,14 @@ impl Client {
                     .push(crate::audio::Play { sound, pos: None, volume, pitch: 0.0 });
             }
         }
+    }
+
+    fn weather_field(&self, ticks: f64) -> crate::weather::WeatherField {
+        crate::weather::WeatherField::new(content(), self.world.dim, self.seed, ticks, self.weather_override)
+    }
+
+    pub(crate) fn weather_at(&self, pos: DVec3) -> u16 {
+        self.weather_field(self.ticks() as f64).at_pos(pos)
     }
 
     /// Ticks the dimension ran by now, what entity effects end by.
@@ -3180,6 +3192,9 @@ impl Client {
         late.clear();
         // The sky fills what the opaque world left, and translucent things are seen against it.
         let overlays = self.overlays(textures);
+        let ticks = self.smooth_time();
+        let weather_ticks = ticks - self.world.time as f64 + self.world.ticks as f64;
+        let weather = self.weather_field(weather_ticks);
         scene.cloud = self.sky.draw(
             gpu,
             &mut late,
@@ -3187,7 +3202,8 @@ impl Client {
             &cam,
             scene_buf,
             self.world.dim as usize,
-            self.smooth_time(),
+            ticks,
+            weather,
             self.camera().pos.y,
             &self.environment.values,
             &self.environment.sky,
@@ -3242,9 +3258,8 @@ impl Client {
             &mut hand_late,
         );
         self.particles.draw(list, &mut late, scene_buf);
-        let ticks = self.smooth_time();
         self.weather_render
-            .draw(gpu, &mut late, frame, &cam, scene_buf, &self.world, self.look.falls, ticks, self.frame_dt);
+            .draw(gpu, &mut late, frame, &cam, scene_buf, &self.world, weather, weather_ticks, self.frame_dt);
         self.sky.draw_overlay(&mut hand_late, scene_buf);
         after.append(&mut late);
         after.append(&mut hand_late);

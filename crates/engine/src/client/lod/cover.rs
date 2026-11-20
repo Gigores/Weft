@@ -199,7 +199,7 @@ impl Cover {
                 // Apply color relative to the original texture so its full contrast survives.
                 let color = ground + delta / n as f32;
                 let gain = color / material.rgb.max(Vec3::splat(1.0 / 255.0));
-                colors[i as usize + 1][j as usize + 1] = Some(Cell {
+                colors[(i + 1) as usize][(j + 1) as usize] = Some(Cell {
                     texture: material.texture,
                     gain: lod_color_gain(gain.to_array()),
                     height: height * 2.0 / n as f32,

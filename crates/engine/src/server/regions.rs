@@ -24,9 +24,9 @@ pub struct DimSet {
     pub day_offset: i64,
     /// `/time` moved the sky: players hear at once, not at the next second.
     pub day_moved: bool,
-    /// The weather now (`registry::WeatherDef`).
-    pub weather: u16,
-    /// When the weather changes by itself.
+    /// A forced weather, or the moving weather field.
+    pub weather: Option<u16>,
+    /// When a timed override ends.
     pub weather_until: u64,
     /// Changed: players hear at once.
     pub weather_moved: bool,
@@ -54,7 +54,7 @@ impl DimSet {
             time: 1000,
             day_offset: 0,
             day_moved: false,
-            weather: 0,
+            weather: None,
             weather_until: 0,
             weather_moved: false,
             seed,
@@ -72,7 +72,7 @@ impl DimSet {
         d.set_rng(weft_noise::hash(self.seed ^ self.time, section.x as i64, section.y as i64, section.z as i64));
         d.time = self.time;
         d.day_offset = self.day_offset;
-        d.weather = self.weather;
+        d.weather = self.weather_field(crate::content::content(), self.time);
         self.regions.push(d);
         self.regions.len() - 1
     }
@@ -107,20 +107,31 @@ impl DimSet {
 
     /// Folds regions into the largest of them; returns its index afterwards.
     fn merge(&mut self, c: &Content, list: &[usize]) -> usize {
-        let target = *list
+        let original = *list
             .iter()
             .max_by_key(|&&i| self.regions[i].space.cubes.len())
             .unwrap();
+        let mut target = original;
         for &i in list.iter().rev() {
-            if i != target {
+            if i != original {
                 let parcel = self.regions[i].take_sections(|_| true);
                 self.regions[target].absorb(c, parcel);
                 self.regions.remove(i);
+                if i < target {
+                    target -= 1;
+                }
             }
         }
+        // Area edits can reserve a section before it has any cubes to rebuild ownership from.
+        for region in self.owner.values_mut() {
+            *region = if list.binary_search(region).is_ok() {
+                target
+            } else {
+                *region - (list.partition_point(|&i| i < *region) - usize::from(original < *region))
+            };
+        }
         log::debug!("dimension {}: {} regions merged", self.id, list.len());
-        self.rebuild_owner();
-        target - list.iter().filter(|&&i| i < target).count()
+        target
     }
 
     pub fn region_index(&self, pos: IVec3) -> Option<usize> {
@@ -370,14 +381,22 @@ impl DimSet {
         }
     }
 
-    /// The time of day's own clock.
-    pub fn set_weather(&mut self, weather: u16, ticks: u64) {
+    pub fn set_weather(&mut self, weather: Option<u16>, ticks: u64) {
         self.weather = weather;
-        self.weather_until = self.time + ticks;
+        self.weather_until = weather.map_or(0, |_| self.time.saturating_add(ticks));
         self.weather_moved = true;
+        let field = self.weather_field(crate::content::content(), self.time);
         for r in &mut self.regions {
-            r.weather = self.weather;
+            r.weather = field;
         }
+    }
+
+    fn weather_field(&self, c: &Content, tick: u64) -> crate::weather::WeatherField {
+        crate::weather::WeatherField::new(c, self.id, self.seed, tick as f64, self.weather)
+    }
+
+    pub fn weather_wire(&self) -> u32 {
+        self.weather.map_or(crate::weather::AUTOMATIC, u32::from)
     }
 
     /// Fires the dimension's timers that are due, in its first region; with none loaded they wait.
@@ -396,37 +415,20 @@ impl DimSet {
         });
     }
 
-    /// After clear weather one of the others by their weights, after any other clear again, each
-    /// for as long as its `duration` says.
-    pub fn tick_weather(&mut self, c: &Content) {
-        let tick = abi::WeatherTick { dim: self.id, weather: self.weather as u32 };
-        if let Some(r) = self.regions.first_mut() {
+    pub fn tick_weather(&mut self, c: &Content, time: u64) {
+        if self.weather.is_some() && time >= self.weather_until {
+            self.set_weather(None, 0);
+        }
+        let field = self.weather_field(c, time);
+        for region in &mut self.regions {
+            region.weather = field;
+        }
+        if c.dims[self.id as usize].has_weather()
+            && let Some(r) = self.regions.first_mut()
+        {
+            let tick = abi::WeatherTick { dim: self.id, weather: field.at_pos(DVec3::ZERO) as u32 };
             r.emit_engine(0, c, abi::event::WEATHER_TICK, &tick);
         }
-        if self.time < self.weather_until {
-            return;
-        }
-        let all = &c.game.weathers;
-        let r = weft_noise::hash(self.seed ^ 0x5745_4154, self.time as i64, 0, 0);
-        let first = self.weather_until == 0;
-        let here = &c.dims[self.id as usize].weathers;
-        let total: u64 = here.iter().map(|&w| all[w as usize].weight as u64).sum();
-        let next = if first || self.weather != 0 || total == 0 {
-            0
-        } else {
-            let mut pick = (r >> 32) % total;
-            here.iter()
-                .copied()
-                .find(|&w| {
-                    let weight = all[w as usize].weight as u64;
-                    let hit = pick < weight;
-                    pick = pick.saturating_sub(weight);
-                    hit
-                })
-                .unwrap_or(0) as usize
-        };
-        let [lo, hi] = all[next].duration;
-        self.set_weather(next as u16, lo + r % (hi - lo + 1));
     }
 
     pub fn day_time(&self) -> u64 {

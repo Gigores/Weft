@@ -22,9 +22,49 @@ fn fog_amount(dist: f32, start: f32, end: f32) -> f32 {
     return (dist - start) / (end - start);
 }
 
+// Keep the lattice aligned with weather.rs, which uses the same cells for precipitation.
+fn cloud_corner(seed: u32, grid: vec2<i32>, mask: u32) -> f32 {
+    let x = bitcast<u32>(grid.x) & mask;
+    let z = bitcast<u32>(grid.y) & mask;
+    var h = seed ^ (x * 0x9e3779b1u) ^ (z * 0x85ebca77u);
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    return f32((h ^ (h >> 15u)) >> 8u) / 16777216.0;
+}
+
+fn cloud_noise(seed: u32, cell: vec2<i32>, span: i32) -> f32 {
+    let grid = vec2<i32>(floor(vec2<f32>(cell) / f32(span)));
+    let frac = vec2<f32>(cell - grid * span) / f32(span);
+    let f = frac * frac * (3.0 - 2.0 * frac);
+    let mask = u32(1048576 / span - 1);
+    let a = cloud_corner(seed, grid, mask);
+    let b = cloud_corner(seed, grid + vec2(1, 0), mask);
+    let c = cloud_corner(seed, grid + vec2(0, 1), mask);
+    let d = cloud_corner(seed, grid + vec2(1, 1), mask);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 fn cloud_at(s: Sky, cell: vec2<f32>, dims: vec2<f32>) -> bool {
+    if s.ids.x == 0xffffffffu {
+        return cloud_noise(s.ids.z, vec2<i32>(cell + s.uv.zw), 8) >= 0.48;
+    }
     let at = fract((cell + s.uv.zw + vec2(0.5)) / dims);
     return textureSampleLevel(textures[s.ids.x], nearest_clamp, at, 0.0).a >= 0.5;
+}
+
+fn cloud_color_at(s: Sky, cell: vec2<f32>) -> vec3<f32> {
+    if s.ids.x != 0xffffffffu || s.ids.w == 0u {
+        return s.color.rgb;
+    }
+    let seed = s.ids.z ^ 0xa341316cu;
+    let at = vec2<i32>(cell + s.uv.zw) + vec2(i32(s.extra.w), 0);
+    let amount = mix(cloud_noise(seed, at, 32), cloud_noise(seed, at + vec2(1, 0), 32), fract(s.extra.w));
+    if amount >= 0.78 {
+        return s.axes[1].xyz;
+    }
+    if amount >= 0.56 {
+        return s.axes[0].xyz;
+    }
+    return s.color.rgb;
 }
 
 struct CloudHit {
@@ -93,7 +133,7 @@ fn trace_cloud(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> CloudHit {
         shade = select(1.0, 0.7, dir.y > 0.0);
     }
     let fog = fog_amount(t, view.environment.y, reach);
-    let color = mix(s.color.rgb * shade, view.fog_color.rgb, smoothstep(0.0, 1.0, fog));
+    let color = mix(cloud_color_at(s, cell) * shade, view.fog_color.rgb, smoothstep(0.0, 1.0, fog));
     let alpha = s.color.a * (1.0 - smoothstep(0.6, 1.0, fog));
     return CloudHit(vec4(color, alpha), t);
 }

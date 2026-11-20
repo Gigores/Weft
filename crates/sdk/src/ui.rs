@@ -53,7 +53,7 @@ impl ClientView {
     pub fn day_time(&self) -> u64 {
         unsafe { (host().client_day_time)(self.raw) }
     }
-    /// The weather's id now (`weathers::RAIN.id()`), as the server says.
+    /// The weather's id at the camera (`weathers::RAIN.id()`).
     pub fn weather(&self) -> u32 {
         unsafe { (host().client_weather)(self.raw) }
     }

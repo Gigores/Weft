@@ -94,7 +94,15 @@ impl Client {
                 }
             }
             ToClient::Saved { dim, cubes } if dim == self.world.dim => fwd.push(terrain::In::Saved(cubes)),
-            ToClient::Edits { dim, specs, all } if dim == self.world.dim => fwd.push(terrain::In::Edits { specs, all }),
+            ToClient::Edits { dim, specs, all } if dim == self.world.dim => {
+                let c = content();
+                let edits = specs
+                    .iter()
+                    .filter_map(|s| crate::server::area::AreaFill::parse(c, s))
+                    .collect::<Vec<_>>();
+                self.lod.set_edits(dim, all, &edits);
+                fwd.push(terrain::In::Edits { edits, all });
+            }
             ToClient::Signals { dim, frame, changes } if dim == self.world.dim => self.wires.power_changed(frame, &changes),
             ToClient::BodyGlow { dim, cells } if dim == self.world.dim => self.world.body_glow_changed(cells),
             ToClient::Clock { dim, time, ticks, weather, rate } => {
@@ -102,8 +110,10 @@ impl Client {
                     self.world.time = time;
                     self.world.ticks = ticks;
                     self.since_time = 0.0;
+                    self.weather_override = u16::try_from(weather)
+                        .ok()
+                        .filter(|&id| (id as usize) < content().game.weathers.len());
                 }
-                self.weather_id = (weather as usize).min(content().game.weathers.len() - 1) as u16;
                 self.tick_rate = rate.max(1) as f64;
             }
             ToClient::Teleport { dim, pos, frame } => self.teleported(dim, pos, frame, fwd),

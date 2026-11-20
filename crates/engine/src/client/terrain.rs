@@ -39,7 +39,7 @@ pub enum In {
     Unload(IVec3),
     Saved(Vec<IVec3>),
     Edits {
-        specs: Vec<String>,
+        edits: Vec<AreaFill>,
         all: bool,
     },
     /// Every cube held within `reach` cubes of `center` lit again from nothing (`area::relight_anew`).
@@ -520,18 +520,17 @@ impl Terrain {
                     self.saved.insert(p);
                 }
             }
-            In::Edits { specs, all } => {
+            In::Edits { edits, all } => {
                 self.whole |= !all;
-                let parsed: Vec<AreaFill> = specs.iter().filter_map(|s| AreaFill::parse(c, s)).collect();
                 if all {
-                    self.edits = Arc::new(parsed);
+                    self.edits = Arc::new(edits);
                     return;
                 }
                 let mut dirty = FxHashSet::default();
-                for fill in &parsed {
+                for fill in &edits {
                     area::fill_cubes(c, self.dim, fill, &mut self.cubes, &mut dirty);
                 }
-                Arc::make_mut(&mut self.edits).extend(parsed);
+                Arc::make_mut(&mut self.edits).extend(edits);
                 for &p in &dirty {
                     if self.conn.remove(&p).is_some() {
                         self.edited.push(p);

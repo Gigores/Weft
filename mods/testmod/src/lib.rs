@@ -275,6 +275,7 @@ fn init(r: &mut Registry) {
         .ends("machine_top")
         .hardness(3.0)
         .mined_by("pickaxe", 0)
+        .tag("conductor")
         .entity(|e| {
             e.attach(&WORK)
                 .attach_with(&ENERGY, Energy { stored: 0, capacity: 40_000, max_in: 400, max_out: 0 })

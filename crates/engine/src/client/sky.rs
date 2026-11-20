@@ -337,7 +337,7 @@ impl Sky {
     /// `time`: game ticks with the fraction of the current one. `eye_y`: where the horizon's dark
     /// lower half starts to show.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(
+    pub(super) fn draw(
         &mut self,
         gpu: &mut dyn Backend,
         list: &mut CommandList,
@@ -346,6 +346,7 @@ impl Sky {
         scene: BufferId,
         dim: usize,
         time: f64,
+        weather: crate::weather::WeatherField,
         eye_y: f64,
         environment: &weft_abi::environment::EnvironmentValues,
         weights: &FxHashMap<String, f32>,
@@ -406,7 +407,7 @@ impl Sky {
                 continue;
             }
             if s.kind == sky_kind::CLOUDS {
-                const CELL: f64 = 12.0;
+                use crate::weather::{CLOUD_CELL, CLOUD_PERIOD};
                 let setting = |name: &str| {
                     c.game
                         .catalog
@@ -419,30 +420,52 @@ impl Sky {
                 if low >= environment.cloud_fog_end || low + 4.0 <= -environment.cloud_fog_end {
                     continue;
                 }
-                let Some((index, [w, h])) = self.picture(gpu, &s.texture) else { continue };
-                let (x, z) = ((cam.pos.x + time * s.drift as f64) / CELL, cam.pos.z / CELL);
-                let color = rained(rgb(s.color), 1.0, environment.cloud_gray)
-                    * Vec3::from_array(environment.cloud_color)
-                        .max(Vec3::ZERO)
-                        .powf(1.0 / 2.2);
-                let color = color.lerp(Vec3::splat((color.x * 0.3 + color.y * 0.59 + color.z * 0.11) * 0.2), environment.cloud_dark);
                 let ambient = environment.ambient.max(0.0);
                 let light = ambient + (1.0 - ambient).max(0.0) * environment.sunlight;
-                let color = color.powf(2.2) * light;
+                let tint = Vec3::from_array(environment.cloud_color)
+                    .max(Vec3::ZERO)
+                    .powf(1.0 / 2.2);
+                let shade = |gray, dark| {
+                    let rgb = rained(rgb(s.color), 1.0, gray) * tint;
+                    rgb.lerp(Vec3::splat((rgb.x * 0.3 + rgb.y * 0.59 + rgb.z * 0.11) * 0.2), dark)
+                        .powf(2.2)
+                        * light
+                };
+                let automatic = weather.clouds.is_some() && weather.forced.is_none();
+                let color = if automatic { shade(0.0, 0.0) } else { shade(environment.cloud_gray, environment.cloud_dark) };
+                let (ids, period, pos, colors, shift) = if let Some(field) = weather.clouds {
+                    let color_for = |id: u16| {
+                        let look = c.game.weathers[id as usize].look;
+                        shade(look.cloud_gray, look.cloud_dark)
+                            .extend(0.0)
+                            .to_array()
+                    };
+                    (
+                        [u32::MAX, kind::CLOUDS, field.seed, automatic as u32],
+                        CLOUD_PERIOD as f64,
+                        field.coords(glam::DVec2::new(cam.pos.x, cam.pos.z)),
+                        [color_for(field.rain), color_for(field.thunder), [0.0; 4]],
+                        field.rain_shift,
+                    )
+                } else {
+                    let Some((index, [w, h])) = self.picture(gpu, &s.texture) else { continue };
+                    let pos = glam::DVec2::new(cam.pos.x + time * s.drift as f64, cam.pos.z) / CLOUD_CELL;
+                    ([index, kind::CLOUDS, w, h], 4096.0, pos, [[0.0; 4]; 3], 0.0)
+                };
                 clouds = Some(self.list.len() as u32);
                 self.list.push(GpuSky {
-                    axes: [[0.0; 4]; 3],
+                    axes: colors,
                     uv: [
-                        x.rem_euclid(1.0) as f32,
-                        z.rem_euclid(1.0) as f32,
-                        x.floor().rem_euclid(4096.0) as f32,
-                        z.floor().rem_euclid(4096.0) as f32,
+                        pos.x.rem_euclid(1.0) as f32,
+                        pos.y.rem_euclid(1.0) as f32,
+                        pos.x.floor().rem_euclid(period) as f32,
+                        pos.y.floor().rem_euclid(period) as f32,
                     ],
                     color: color
                         .extend(0.8 * environment.cloud_opacity * opacity)
                         .to_array(),
-                    ids: [index, kind::CLOUDS, w, h],
-                    extra: [CELL as f32, 4.0, low, 0.0],
+                    ids,
+                    extra: [CLOUD_CELL as f32, 4.0, low, shift],
                 });
                 continue;
             }

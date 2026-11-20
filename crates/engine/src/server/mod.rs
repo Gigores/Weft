@@ -45,7 +45,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use glam::{DVec3, IVec3};
 use parking_lot::Mutex;
 use rayon::prelude::*;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use weft_abi::{self as abi, ItemStack, component_flags as cf, entry_kind as ek};
 
 pub use dim::{Dim, DimEvent};
@@ -429,7 +429,7 @@ impl Server {
             for (name, weather, until) in &s.meta.weather {
                 if let (Some(&i), Some(&w)) = (c.game.catalog.ids(ek::DIMENSION).get(name), c.game.catalog.ids(ek::WEATHER).get(weather)) {
                     let d = &mut dims[i as usize];
-                    d.set_weather(w as u16, 0);
+                    d.set_weather(Some(w as u16), 0);
                     d.weather_until = *until;
                 }
             }
@@ -608,9 +608,7 @@ impl Server {
             }
             d.time += 1;
             d.tick_timers(c);
-            if c.dims[d.id as usize].has_weather() {
-                d.tick_weather(c);
-            }
+            d.tick_weather(c, t);
         }
         if runs {
             self.dims
@@ -806,7 +804,7 @@ impl Server {
                         self.set_permission(pi, level);
                     }
                 }
-                DimEvent::SetWeather { dim, weather, ticks } => self.dims[dim as usize].set_weather(weather, ticks as u64),
+                DimEvent::SetWeather { dim, weather, ticks } => self.dims[dim as usize].set_weather(Some(weather), ticks as u64),
 
                 // What the entity's own client hears of its uses: everyone else sees the swing.
                 DimEvent::Using { entity, using } => {
@@ -993,27 +991,33 @@ impl Server {
                 // spawn in untouched cubes too).
                 let mut cubes: Vec<IVec3> = std::mem::take(&mut r.space.modified).into_iter().collect();
                 cubes.extend(r.on_disk.iter().copied());
-                cubes.extend(
-                    r.entities
-                        .list
-                        .iter()
-                        .filter(|e| e.saved_with_cube())
-                        .map(|e| cube_of(e.pos.floor().as_ivec3())),
-                );
+                let mut roots: FxHashMap<IVec3, Vec<u64>> = FxHashMap::default();
+                for e in r.entities.list.iter().filter(|e| e.saved_with_cube()) {
+                    roots
+                        .entry(cube_of(e.pos.floor().as_ivec3()))
+                        .or_default()
+                        .push(e.id);
+                }
+                cubes.extend(roots.keys().copied());
                 cubes.sort_unstable_by_key(|p| (p.x, p.y, p.z));
                 cubes.dedup();
+                let children = r.entities.structure_children();
+                let mut components: FxHashMap<u64, Vec<_>> = FxHashMap::default();
+                for (&(id, kind), bytes) in &r.entities.comps {
+                    components
+                        .entry(id)
+                        .or_default()
+                        .push((kind, bytes.as_ref()));
+                }
                 for pos in cubes {
                     if let Some(cube) = r.space.cubes.get(&pos) {
-                        let mut bytes = entities_in(c, r, pos);
+                        let ids = roots.get(&pos).map_or(&[][..], Vec::as_slice);
+                        let tree = entity::Entities::indexed_structure_tree(ids, &children);
+                        let mut bytes = serialize_indexed(c, r, &tree, |id| components.get(&id).cloned().unwrap_or_default());
                         let ticks = r.timers_in(pos);
-                        let holds = r
-                            .entities
-                            .list
-                            .iter()
-                            .any(|e| e.saved_with_cube() && cube_of(e.pos.floor().as_ivec3()) == pos);
                         persist::append_timers(&mut bytes, c, &ticks);
                         s.save(c, r.id, pos, cube, &r.around(pos, |_| None), &bytes);
-                        if holds || !ticks.is_empty() {
+                        if !ids.is_empty() || !ticks.is_empty() {
                             r.on_disk.insert(pos);
                         } else {
                             r.on_disk.remove(&pos);
@@ -1037,8 +1041,10 @@ impl Server {
         s.meta.weather = self
             .dims
             .iter()
-            .filter(|d| d.weather_until != 0)
-            .map(|d| (c.dims[d.id as usize].name.clone(), c.game.weathers[d.weather as usize].name.clone(), d.weather_until))
+            .filter_map(|d| {
+                let id = d.weather?;
+                Some((c.dims[d.id as usize].name.clone(), c.game.weathers[id as usize].name.clone(), d.weather_until))
+            })
             .collect();
         s.meta.timers = self
             .dims
@@ -1174,7 +1180,7 @@ impl Server {
             .send(ToClient::Edits { dim: to, specs: dims[to as usize].edits.iter().map(|e| e.spec(c)).collect(), all: true });
         let d = &dims[to as usize];
         p.conn
-            .send(ToClient::Clock { dim: to, time: d.day_time(), ticks: d.time, weather: d.weather as u32, rate: p.sent_rate });
+            .send(ToClient::Clock { dim: to, time: d.day_time(), ticks: d.time, weather: d.weather_wire(), rate: p.sent_rate });
         if to == c.void_dim && from != to as usize {
             p.conn
                 .send(ToClient::Show(crate::net::Shown::chat(void_note(c))));
@@ -1458,34 +1464,27 @@ pub(super) fn serialize(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
 }
 
 pub(super) fn serialize_tree(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
+    serialize_indexed(c, d, ids, |id| {
+        d.entities
+            .comps
+            .iter()
+            .filter(|((eid, _), _)| *eid == id)
+            .map(|((_, k), v)| (*k, &v[..]))
+            .collect()
+    })
+}
+
+fn serialize_indexed<'a>(c: &Content, d: &'a Dim, ids: &[u64], mut components: impl FnMut(u64) -> Vec<(u32, &'a [u8])>) -> Vec<u8> {
     let list: Vec<persist::ToSave> = ids
         .iter()
         .filter_map(|&id| {
             let e = d.entities.get(id)?;
-            let comps = d
-                .entities
-                .comps
-                .iter()
-                .filter(|((eid, _), _)| *eid == id)
-                .map(|((_, k), v)| (*k, &v[..]))
-                .collect();
-            Some((e, d.entities.inventories.get(&id), comps, d.bodies.get(&id).map(Box::as_ref)))
+            Some((e, d.entities.inventories.get(&id), components(id), d.bodies.get(&id).map(Box::as_ref)))
         })
         .collect();
     let mut out = Vec::new();
     persist::write(c, &mut out, &list, d.time);
     out
-}
-
-fn entities_in(c: &Content, d: &Dim, cube: IVec3) -> Vec<u8> {
-    let ids: Vec<u64> = d
-        .entities
-        .list
-        .iter()
-        .filter(|e| e.saved_with_cube() && cube_of(e.pos.floor().as_ivec3()) == cube)
-        .map(|e| e.id)
-        .collect();
-    serialize(c, d, &ids)
 }
 
 /// Said to a player arriving in the engine's void.

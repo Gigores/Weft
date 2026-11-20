@@ -62,7 +62,13 @@ Stars turn together on the orbit you give them, or with the day if you don't giv
 ```rust
 r.sky_clouds(&OVERWORLD, &MY_CLOUDS).texture("clouds").height(300.0).drift(0.03).color(0xFFE0E0);
 ```
-Every filled pixel of the texture becomes a box that is 12 blocks wide and 4 blocks high, and the texture repeats across the sky, further than the terrain and distant terrain reach. They are one draw whatever the size of the picture, as a shader walks it pixel by pixel. Without `.height` the underside is at 224.33, and players can raise any clouds in the video settings. Clouds exist in the world, which means that they hide what is behind them and you can fly through them. Rain makes them gray and hides bodies and stars, and which weathers come is the dimension's `.weathers(&[..])`, while `w.raining()`, `w.weather()` and `w.set_weather(&weathers::THUNDER, ticks)` let you read and change it. Weathers are values like any: `r.weather(&ACID_RAIN).darkness(0.5).duration(2400, 6000).weight(1)` adds one, which comes now and then after clear weather where a dimension lists it, and `/weather mymod:acid_rain` sets it. What falls is the biome's: rain, snow with `.snows()`, or your own picture with `r.precipitation(&ASH).texture("ash").speed(0.3).density(0.4)` and `.precipitation(&ASH)` on the biome.
+Each cloud cell is 12 blocks wide and 4 blocks high. Without `.height` the underside is at 224.33. Players can raise the visible layer in video settings. Dimensions without weather use the texture's alpha to decide which cells are filled.
+
+In a dimension with weather, a moving field picks the cloud cells and the patches of rain or thunder underneath them. Rain clouds are gray and thunderclouds are darker. The colors are visible from either side of the layer. The climate uses elapsed world ticks, so changing the hour with `/time` leaves the field in place.
+
+`/weather rain` and `/weather thunder` force a preset across the dimension. `/clear` or `/weather clear` forces clear weather. `/weather vary` and `/weather default` restore local weather. Add an optional tick count to a preset to have it expire automatically.
+
+A dimension's `.weathers(&[..])` supplies the available presets. Register custom ones with `r.weather(&ACID_RAIN).darkness(0.5).weight(1)` and force one with `/weather mymod:acid_rain`. `w.weather_at(pos)` returns the weather at a block and `w.set_weather(&weathers::THUNDER, ticks)` sets a timed override. The biome picks the precipitation, including snow via `.snows()` or a custom kind via `.precipitation(&ASH)`.
 
 ## Skyboxes
 A dome covers the entire sky at once and doesn't move unless you give it an orbit, and it is drawn over the sky's colors, but under the stars and bodies:

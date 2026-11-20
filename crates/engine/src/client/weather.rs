@@ -2,7 +2,7 @@
 //! turned toward it only about the vertical, with its picture scrolling down. Nothing is simulated:
 //! the columns are looked up a few times a second, the strips are one instanced draw.
 
-use glam::{DVec3, IVec3};
+use glam::{DVec2, DVec3, IVec3};
 use weft_render::*;
 
 use crate::assets::{Assets, decode_png};
@@ -165,9 +165,9 @@ impl Weather {
         }
     }
 
-    /// `level`: how much of it there is, 0..1. `ticks`: game ticks, with the fraction of one.
+    /// `ticks`: elapsed game ticks, with the fraction of one.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(
+    pub(super) fn draw(
         &mut self,
         gpu: &mut dyn Backend,
         list: &mut CommandList,
@@ -175,30 +175,45 @@ impl Weather {
         cam: &Camera,
         scene: BufferId,
         world: &ClientWorld,
-        level: f32,
+        field: crate::weather::WeatherField,
         ticks: f64,
         dt: f32,
     ) {
         let Some(pipe) = self.pipe else { return };
-        if level <= 0.0 {
+        let content = content();
+        if field
+            .forced
+            .map_or(field.clouds.is_none(), |id| !content.game.weathers[id as usize].falls())
+        {
             self.built = None;
             return;
         }
+        let ceiling = field
+            .clouds
+            .filter(|_| field.forced.is_none())
+            .map_or(f64::INFINITY, |cloud| {
+                cloud.height + crate::config::by_name("core:cloud_height").map_or(0.0, crate::config::get) as f64
+            });
         let eye = cam.pos.floor().as_ivec3();
-        let at = eye * IVec3::new(1, 0, 1);
         match &mut self.built {
-            Some((was, since)) if *was == at && *since + dt < REFRESH => *since += dt,
+            Some((was, since)) if *was == eye && *since + dt < REFRESH => *since += dt,
             _ => {
                 self.look_up(eye, world);
-                self.built = Some((at, 0.0));
+                self.built = Some((eye, 0.0));
             }
         }
         // Kept small for the float, not to one picture: the stretches that show go by its whole count.
         let scroll = |speed: f64| (ticks * speed).rem_euclid(1024.0) as f32;
         self.gpu.clear();
         for c in &self.columns {
+            let xz = DVec2::new(c.x as f64 + 0.5, c.z as f64 + 0.5);
+            let weather = &content.game.weathers[field.at(xz) as usize];
+            let top_y = (c.top as f64).min(ceiling);
+            if !weather.falls() || weather.look.falls <= 0.0 || top_y <= c.bottom as f64 {
+                continue;
+            }
             let Some(Some((_, picture))) = self.pictures.get(c.kind as usize) else { continue };
-            let p = &content().game.precipitations[c.kind as usize];
+            let p = &content.game.precipitations[c.kind as usize];
             let random = (c.seed & 255) as f64 / 255.0;
             let rel = DVec3::new(c.x as f64 + 0.5, 0.0, c.z as f64 + 0.5) - DVec3::new(cam.pos.x, 0.0, cam.pos.z);
             let dist = (rel.length() as f32 / RADIUS as f32).min(1.0);
@@ -210,12 +225,17 @@ impl Weather {
             } else {
                 (0.0, scroll((3.0 + random) * 3.0 / 32.0 * speed))
             };
-            let alpha = ((1.0 - dist * dist) * 0.5 + 0.5) * level;
-            let (bottom, top) = ((c.bottom as f64 - cam.pos.y) as f32, (c.top as f64 - cam.pos.y) as f32);
+            let alpha = ((1.0 - dist * dist) * 0.5 + 0.5) * weather.look.falls;
+            let (bottom, top) = ((c.bottom as f64 - cam.pos.y) as f32, (top_y - cam.pos.y) as f32);
             self.gpu.push(GpuWeather {
                 place: [rel.x as f32, bottom, rel.z as f32, top],
                 // A quarter of the picture across, four blocks of it up.
-                uv: [((c.seed >> 8) & 3) as f32 * 0.25 + slide, c.bottom as f32 * 0.25 - drop, (c.top - c.bottom) as f32 * 0.25, alpha],
+                uv: [
+                    ((c.seed >> 8) & 3) as f32 * 0.25 + slide,
+                    c.bottom as f32 * 0.25 - drop,
+                    (top_y - c.bottom as f64) as f32 * 0.25,
+                    alpha,
+                ],
                 data: [*picture, c.light, c.seed, (p.density * 255.0) as u32],
             });
         }

@@ -76,3 +76,22 @@ Several blocks, any mod's, can share one model file: `.model_file("othermod:holl
 ## Reading what a builder set
 
 Everything a builder set is readable from code, any mod's block or item: `block_info(state)` (its block, mod, `solid()`, `opaque()`, light, hardness, friction, model, textures, liquid, item), `item_info(item)` (mod, stack size, durability, attack, what it places, where it is worn), `components_of(entry_kind::BLOCK, state)` for every component and tag by name, values then through their handles, and `entries_with(entry_kind::BLOCK, "logs")` for every state with a tag. That's a WAILA, or hollow logs made for every mod's logs. `texture_exists("othermod:block/log_oak_inner")` says whether a mod has a picture (its own files, not resource packs), so you make one only where there is one; `asset_exists(name, "models", "json")` for any other file.
+
+For a drill reading the block in front of it, use the state from the world. A state can override the block's components and tags. `block_info(state).name` (after unwrapping the result) is the block's registered name, while `name_of(entry_kind::BLOCK, state)` includes the state's properties.
+
+```rust
+use weft_sdk::*;
+
+static PICKAXE: Tag = Tag::named("mineable/pickaxe");
+
+fn drill_target(world: &World, pos: BlockPos) -> Option<(&'static str, f32, Option<u32>, bool)> {
+    let state = world.block(pos);
+    if state == 0 {
+        return None;
+    }
+    let info = block_info(state)?;
+    Some((info.name, info.hardness, HARVEST_LEVEL.on_block(state), PICKAXE.on_block(state)))
+}
+```
+
+Use `Component::<T>::named("othermod:property").on_block(state)` to read a custom component with its declared type. The same lookup works with `HARDNESS.on_block(state)` when a machine only needs the configured hardness. For an inspector, `components_of(entry_kind::BLOCK, state)` returns names and schemas. An empty schema is a tag.

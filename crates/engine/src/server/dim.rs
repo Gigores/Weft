@@ -175,8 +175,7 @@ pub struct Dim {
     pub time: u64,
     /// What `/time` moved the time of day by, from `time`.
     pub day_offset: i64,
-    /// The weather now (`registry::WeatherDef`).
-    pub weather: u16,
+    pub(crate) weather: crate::weather::WeatherField,
     rng: Rng,
     /// Cubes whose copy on disk holds entities or ticks, written again even if nothing else
     /// changed: what left them must not come back from there.
@@ -529,7 +528,7 @@ impl Dim {
             bodies: FxHashMap::default(),
             time: 1000,
             day_offset: 0,
-            weather: 0,
+            weather: Default::default(),
             on_disk: Default::default(),
             idle: Default::default(),
             rng: Rng(weft_noise::mix(seed ^ id as u64)),

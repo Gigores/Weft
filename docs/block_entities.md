@@ -152,7 +152,7 @@ r.recipe_kind(&ALLOYING)
 `info_line` is a line under every recipe, a translation like `Uses {0} FE/t for {1} s` whose numbers come from the recipe's values and its time. For a layout of your own, `layout(|ui, recipe| ..)` builds each recipe with the usual UI parts plus `ui.recipe_inputs()`, `ui.recipe_outputs()` and `ui.recipe_input(i)` for its slots (`infusing` in testmod is one, with a fluid).
 
 ## Energy
-Generators, cables and machines from different mods work together through one contract in the engine. An entity with the `core:energy` component takes part, and a block tagged `conductor` is a cable. The block entities next to a cable, or a chain of them, form a network, and once per tick the engine shares what the generators offer among the machines that want it.
+Generators, cables and machines from different mods work together through one contract in the engine. Blocks tagged `conductor` connect the network. A block entity with `core:energy` joins the network if its own block or a neighbor is a conductor. A conducting machine can connect other machines while drawing or supplying power itself. Once per tick the engine shares what the generators offer among the machines that want it.
 
 ```rust
 r.block(&ELECTRIC_FURNACE)

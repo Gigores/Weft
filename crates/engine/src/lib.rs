@@ -54,6 +54,7 @@ pub mod tag_bits;
 pub mod template;
 pub mod touch;
 pub mod ui;
+mod weather;
 pub mod wire;
 pub mod world;
 

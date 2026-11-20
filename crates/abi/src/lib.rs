@@ -4561,8 +4561,10 @@ pub struct Host {
     pub reg_command_permission: unsafe extern "C" fn(reg: *mut Registrar, command: Str, level: u32),
     /// Weather `weather` in this dimension for `ticks`, after which it changes by itself.
     pub set_weather: unsafe extern "C" fn(world: *mut WorldCtx, weather: u32, ticks: u32),
-    /// The weather's id now.
+    /// The weather at the dimension's origin.
     pub weather_now: unsafe extern "C" fn(world: *mut WorldCtx) -> u32,
+    /// The weather at a block position, in the callback's space.
+    pub weather_at: unsafe extern "C" fn(world: *mut WorldCtx, pos: BlockPos) -> u32,
     /// The weather the client has now.
     pub client_weather: unsafe extern "C" fn(client: *mut ClientCtx) -> u32,
     /// Effect `effect` on an entity at `level` (1 and up) for `ticks`, seen by everyone (players
@@ -5110,7 +5112,7 @@ pub mod event {
     pub const PLAYER_RESPAWNED: &str = "core:player_respawned";
     /// `Hurt` with what was healed as `amount`: health went up (after every `HEAL` modifier).
     pub const ENTITY_HEALED: &str = "core:entity_healed";
-    /// `WeatherTick`: every tick in each dimension with weather, what the weather is.
+    /// `WeatherTick`: every tick in each dimension with weather, what it is at the origin.
     pub const WEATHER_TICK: &str = "core:weather_tick";
     /// `Removed`: an entity left the world, and why.
     pub const ENTITY_REMOVED: &str = "core:entity_removed";

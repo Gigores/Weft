@@ -162,6 +162,11 @@ impl AreaFill {
         self.shape.contains(p.as_dvec3() + DVec3::splat(0.5))
     }
 
+    /// The state an area edit leaves at one block, for sparse samples such as distant terrain.
+    pub(crate) fn state_at(&self, p: IVec3, state: u32) -> u32 {
+        if self.keeps(state) || !self.inside(p) { state } else { self.state }
+    }
+
     fn may_span(c: &Content, cube: &Cube) -> bool {
         cube.layouts().next().is_some()
             || cube

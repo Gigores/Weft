@@ -186,6 +186,7 @@ pub static HOST: Host = Host {
     reg_system,
     set_weather,
     weather_now,
+    weather_at,
     entity_effect,
     entity_effects,
     entity_set_pose,
@@ -2213,7 +2214,13 @@ unsafe extern "C" fn set_weather(w: *mut abi::WorldCtx, weather: u32, ticks: u32
 }
 
 unsafe extern "C" fn weather_now(w: *mut abi::WorldCtx) -> u32 {
-    unsafe { dim(w).weather as u32 }
+    unsafe { dim(w).weather.at_pos(DVec3::ZERO) as u32 }
+}
+
+unsafe extern "C" fn weather_at(w: *mut abi::WorldCtx, pos: abi::BlockPos) -> u32 {
+    let d = unsafe { dim(w) };
+    let at = unsafe { d.space_pose(space_id(w)) }.to_world(IVec3::from_array(pos.to_array()).as_dvec3() + DVec3::splat(0.5));
+    d.weather.at_pos(at) as u32
 }
 
 unsafe extern "C" fn entity_effect(w: *mut abi::WorldCtx, id: u64, effect: u32, level: u32, ticks: u32) {

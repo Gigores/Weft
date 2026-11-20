@@ -431,11 +431,11 @@ pub async fn clouds(t: T) -> R {
     t.secs(0.4).await?;
     let sky_lum = |shot: &crate::runner::Shot| crate::runner::lum(shot.avg(0.1, 0.05, 0.9, 0.8));
     let clear = sky_lum(&t.shot("clear_clouds").await?);
-    t.cmd("/weather rain").await?;
+    t.c().say("/weather rain");
     t.until("rain cloud tint", Duration::from_secs(8), |t| t.c().environment_values().cloud_gray > 0.9)
         .await?;
     let rain = sky_lum(&t.shot("rain_clouds").await?);
-    t.cmd("/weather thunder").await?;
+    t.c().say("/weather thunder");
     t.until("thunder cloud tint", Duration::from_secs(8), |t| t.c().environment_values().cloud_dark > 0.9)
         .await?;
     let thunder = sky_lum(&t.shot("thunder_clouds").await?);

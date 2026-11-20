@@ -1,7 +1,7 @@
 //! The `core:energy` contract: any mod's generator, cable and machine work together without
-//! knowing each other. Cables are blocks tagged `core:conductor`; block entities next to a cable
-//! with a `core:energy` component join its network. Networks are rebuilt only when a conductor or
-//! an endpoint changes, and balanced in one pass per tick: total offer vs total demand, like
+//! knowing each other. Blocks tagged `conductor` form networks; block entities with
+//! `core:energy` join the network of their own block or an adjacent conductor. Networks are
+//! rebuilt when a conductor or endpoint changes and balanced in one pass per tick, like
 //! Factorio's electric networks, instead of ticking every cable block.
 
 use glam::IVec3;
@@ -90,6 +90,11 @@ impl Grid {
             let mut stack = vec![start];
             let mut ends: Vec<u64> = Vec::new();
             while let Some(p) = stack.pop() {
+                if let Some(id) = e.anchored(frame, p)
+                    && e.comps.contains_key(&(id, c.game.energy))
+                {
+                    ends.push(id);
+                }
                 for d in DIRS {
                     let n = p + d;
                     if self.conductors.contains(&n) {

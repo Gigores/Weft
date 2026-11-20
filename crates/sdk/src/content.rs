@@ -541,7 +541,7 @@ pub mod precipitations {
 /// static ACID_RAIN: Weather = Weather::named("acid_rain");
 /// r.weather(&ACID_RAIN).darkness(0.5).duration(2400, 6000).weight(1);
 /// ```
-/// `/weather mymod:acid_rain` sets it; the engine brings it now and then after clear weather.
+/// `/weather mymod:acid_rain` sets it across a dimension. Dimensions list presets for local weather.
 pub struct WeatherBuilder<'a> {
     reg: &'a mut crate::Registry,
     e: crate::entry::Entry,

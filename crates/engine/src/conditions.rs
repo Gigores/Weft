@@ -542,8 +542,8 @@ impl Context<'_> {
                 (k::SKY, _) => in_range(arg, abi::light::sky(self.light(p)) as f32),
                 (k::SHELTERED, _) => {
                     let weather = match self {
-                        Self::Server(d, _) => d.weather,
-                        Self::Client(cl) => cl.as_ref()?.weather_id,
+                        Self::Server(d, _) => d.weather.at_pos(a.pos),
+                        Self::Client(cl) => cl.as_ref()?.weather_at(a.pos),
                     };
                     c.game.weathers[weather as usize].shelters()
                 }

@@ -486,9 +486,14 @@ impl World {
         unsafe { (host().set_weather)(self.raw(), weather.into().raw(), ticks) }
     }
 
-    /// The weather's id now (`weathers::RAIN.id()`).
+    /// The weather's id at the dimension's origin (`weathers::RAIN.id()`).
     pub fn weather(&self) -> u32 {
         unsafe { (host().weather_now)(self.raw()) }
+    }
+
+    /// The weather's id at this block in the current space.
+    pub fn weather_at(&self, pos: impl Into<BlockPos>) -> u32 {
+        unsafe { (host().weather_at)(self.raw(), pos.into()) }
     }
 
     /// Effect `effect` on an entity at `level` (1 and up) for `ticks` (0 ends it,
