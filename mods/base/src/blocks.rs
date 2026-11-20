@@ -27,12 +27,16 @@ pub static BIRCH_LOG: Block = Block::named("birch_log");
 pub static BIRCH_WOOD: Block = Block::named("birch_wood");
 pub static SPRUCE_LOG: Block = Block::named("spruce_log");
 pub static SPRUCE_WOOD: Block = Block::named("spruce_wood");
+pub static PALM_LOG: Block = Block::named("palm_log");
+pub static PALM_WOOD: Block = Block::named("palm_wood");
 pub static OAK_PLANKS: Block = Block::named("oak_planks");
 pub static BIRCH_PLANKS: Block = Block::named("birch_planks");
 pub static SPRUCE_PLANKS: Block = Block::named("spruce_planks");
+pub static PALM_PLANKS: Block = Block::named("palm_planks");
 pub static OAK_LEAVES: Block = Block::named("oak_leaves");
 pub static BIRCH_LEAVES: Block = Block::named("birch_leaves");
 pub static SPRUCE_LEAVES: Block = Block::named("spruce_leaves");
+pub static PALM_LEAVES: Block = Block::named("palm_leaves");
 /// What a cactus does to who touches it.
 pub static PRICKED: DamageCause = DamageCause::named("cactus");
 pub static WATER: Block = Block::named("water");
@@ -220,6 +224,7 @@ pub fn register(r: &mut Registry) {
             "base:oak_planks",
             "base:birch_planks",
             "base:spruce_planks",
+            "base:palm_planks",
         ],
     );
     r.stairs("#has_shapes").tab(&crate::tabs::BUILDING);
@@ -386,9 +391,11 @@ pub fn register(r: &mut Registry) {
     log(r, &OAK_LOG, "oak", false);
     log(r, &BIRCH_LOG, "birch", false);
     log(r, &SPRUCE_LOG, "spruce", false);
+    log(r, &PALM_LOG, "palm", false);
     log(r, &OAK_WOOD, "oak", true);
     log(r, &BIRCH_WOOD, "birch", true);
     log(r, &SPRUCE_WOOD, "spruce", true);
+    log(r, &PALM_WOOD, "palm", true);
     r.shapes_of("hollow_log", "#logs", "_hollow")
         .sound_group("wood")
         .model_file("hollow_log")
@@ -409,7 +416,7 @@ pub fn register(r: &mut Registry) {
         .signal_blocker()
         .mined_by("shears", tool_tier::HAND)
         .tab(&crate::tabs::NATURAL);
-    for (h, wood) in [(&OAK_PLANKS, "oak"), (&BIRCH_PLANKS, "birch"), (&SPRUCE_PLANKS, "spruce")] {
+    for (h, wood) in [(&OAK_PLANKS, "oak"), (&BIRCH_PLANKS, "birch"), (&SPRUCE_PLANKS, "spruce"), (&PALM_PLANKS, "palm")] {
         r.block(h)
             .sound_group("wood")
             .texture(&format!("planks_{wood}"))
@@ -425,6 +432,7 @@ pub fn register(r: &mut Registry) {
     leaves(r, &OAK_LEAVES, "leaves_oak", true);
     leaves(r, &BIRCH_LEAVES, "leaves_birch", true);
     leaves(r, &SPRUCE_LEAVES, "leaves_spruce", true);
+    leaves(r, &PALM_LEAVES, "leaves_palm", true);
     leaves(r, &BUSH_LEAVES, "raspberry_leaves", false);
     berry_leaves(r, &RASPBERRY_LEAVES, "raspberry_leaves", "raspberry_leaves_berried", &crate::items::RASPBERRY);
     berry_leaves(r, &SNOWBERRY_LEAVES, "raspberry_leaves", "snowberry_leaves_berried", &crate::items::SNOWBERRY);
