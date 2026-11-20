@@ -179,6 +179,7 @@ impl Readback {
 pub struct GpuTerrain {
     pipeline: Option<PipelineId>,
     lod_pipeline: Option<PipelineId>,
+    pub far_lod_pipeline: Option<PipelineId>,
     rx: Receiver<Job>,
     queue: VecDeque<Job>,
     /// Distant terrain tiles asked for (`lod::Lod`).
@@ -195,6 +196,11 @@ pub struct GpuTerrain {
 
 /// The terrain's pipelines: label and entry point.
 const PIPELINES: [(&str, &str); 2] = [("terrain", "generate"), ("terrain lod", "lod")];
+const FAR_LOD_PIPELINE: (&str, &str) = ("far terrain lod", "lod_far");
+
+fn far_lod_enabled() -> bool {
+    !crate::app::api::launch_options().contains_key("legacy-lod")
+}
 
 impl GpuTerrain {
     /// Its pipelines compiled ahead on another thread (`Backend::precompile`), from the title
@@ -205,7 +211,10 @@ impl GpuTerrain {
         }
         match Self::shader(assets) {
             Ok(s) => {
-                for (label, entry) in PIPELINES {
+                for (label, entry) in PIPELINES
+                    .into_iter()
+                    .chain(far_lod_enabled().then_some(FAR_LOD_PIPELINE))
+                {
                     gpu.precompile(&ComputeDesc { label, shader: &s, entry });
                 }
             }
@@ -224,13 +233,22 @@ impl GpuTerrain {
                 gpu.create_compute(&ComputeDesc { label, shader: &s, entry })
                     .map_err(|e| e.0)
             });
-            Ok((terrain?, lod?, s.hash))
+            let (terrain, lod) = (terrain?, lod?);
+            let far = far_lod_enabled()
+                .then(|| {
+                    let (label, entry) = FAR_LOD_PIPELINE;
+                    gpu.create_compute(&ComputeDesc { label, shader: &s, entry })
+                        .map_err(|e| log::warn!("far LOD compute: {e}"))
+                        .ok()
+                })
+                .flatten();
+            Ok((terrain, lod, far, s.hash))
         });
-        let (pipeline, lod_pipeline, lod_shader) = match pipelines {
-            Ok((p, l, hash)) => (Some(p), Some(l), Some(hash)),
+        let (pipeline, lod_pipeline, far_lod_pipeline, lod_shader) = match pipelines {
+            Ok((p, l, far, hash)) => (Some(p), Some(l), far, Some(hash)),
             Err(e) => {
                 log::error!("terrain on the GPU unavailable, generating on the CPU: {e}");
-                (None, None, None)
+                (None, None, None, None)
             }
         };
         on.store(pipeline.is_some() && enabled(), Ordering::Relaxed);
@@ -238,6 +256,7 @@ impl GpuTerrain {
         GpuTerrain {
             pipeline,
             lod_pipeline,
+            far_lod_pipeline,
             rx,
             queue: VecDeque::new(),
             lod_tx,
@@ -263,7 +282,7 @@ impl GpuTerrain {
                 gpu.destroy_buffer(b);
             }
         }
-        for p in [self.pipeline.take(), self.lod_pipeline.take()]
+        for p in [self.pipeline.take(), self.lod_pipeline.take(), self.far_lod_pipeline.take()]
             .into_iter()
             .flatten()
         {

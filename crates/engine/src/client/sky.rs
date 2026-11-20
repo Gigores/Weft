@@ -114,6 +114,7 @@ struct Picture {
 pub struct Sky {
     pipe: Option<PipelineId>,
     clouds_pipe: Option<PipelineId>,
+    atmosphere_pipe: Option<PipelineId>,
     /// Shader slot of each object, per dimension.
     slots: Vec<Vec<u32>>,
     buffers: Vec<(BufferId, u32)>,
@@ -169,6 +170,7 @@ impl Sky {
         let mut s = Sky {
             pipe: None,
             clouds_pipe: None,
+            atmosphere_pipe: None,
             slots: Vec::new(),
             buffers: Vec::new(),
             pictures: FxHashMap::default(),
@@ -219,20 +221,41 @@ impl Sky {
                         topology: Topology::Triangles,
                     })
                     .map_err(|e| e.0)?;
-                Ok((pipe, clouds, slots.pop().unwrap_or_default()))
+                let atmosphere = gpu.create_pipeline(&PipelineDesc {
+                    label: "atmosphere",
+                    shader: &shader,
+                    vertex: "vs_clouds",
+                    fragment: Some("fs_atmosphere"),
+                    color: Some(Format::Surface),
+                    depth: Some(DepthState { write: false, compare: Compare::Always }),
+                    blend: Blend::Premultiplied,
+                    cull_back: false,
+                    topology: Topology::Triangles,
+                });
+                let atmosphere = atmosphere
+                    .map_err(|e| log::warn!("atmosphere shader: {e}"))
+                    .ok();
+                Ok((pipe, clouds, atmosphere, slots.pop().unwrap_or_default()))
             });
         match made {
-            Ok((pipe, clouds, slots)) => {
+            Ok((pipe, clouds, atmosphere, slots)) => {
                 if let Some(old) = self.pipe.replace(pipe) {
                     gpu.destroy_pipeline(old);
                 }
                 if let Some(old) = self.clouds_pipe.replace(clouds) {
                     gpu.destroy_pipeline(old);
                 }
+                if let Some(old) = std::mem::replace(&mut self.atmosphere_pipe, atmosphere) {
+                    gpu.destroy_pipeline(old);
+                }
                 self.set_slots(&slots);
             }
             Err(e) => log::error!("sky shader: {e}"),
         }
+    }
+
+    pub(super) fn has_atmosphere(&self) -> bool {
+        self.atmosphere_pipe.is_some()
     }
 
     pub fn block_color(&self, state: u32) -> Vec3 {
@@ -266,6 +289,7 @@ impl Sky {
                 color: o.color,
                 ids: [index, kind::OVERLAY, 0, 0],
                 extra: [o.tiles, o.lower as u32 as f32, (o.frame as f32 * frame_h).fract(), 0.0],
+                cloud_sun: [0.0; 4],
             });
             n += 1;
         }
@@ -298,7 +322,7 @@ impl Sky {
 
     pub fn destroy(&mut self, gpu: &mut dyn Backend) {
         self.drop_pictures(gpu);
-        for p in [self.pipe.take(), self.clouds_pipe.take()]
+        for p in [self.pipe.take(), self.clouds_pipe.take(), self.atmosphere_pipe.take()]
             .into_iter()
             .flatten()
         {
@@ -344,6 +368,7 @@ impl Sky {
         frame: &FrameInfo,
         cam: &Camera,
         scene: BufferId,
+        world_depth: Option<BufferId>,
         dim: usize,
         time: f64,
         weather: crate::weather::WeatherField,
@@ -391,11 +416,46 @@ impl Sky {
                 .extend(environment.sky_opacity)
                 .to_array(),
             ids: [u32::MAX, kind::GRADIENT, 0, 0],
-            extra: [0.0; 4],
+            extra: [frame.width as f32, 0.0, 0.0, 0.0],
+            cloud_sun: [0.0; 4],
         });
         let mut draws: Vec<(u32, u32)> = vec![(3, 0)];
 
         let objects = c.game.sky.get(dim).map_or(&[][..], |l| &l[..]);
+        // Use the visible sun's orbit, including its heading and tilt. A small
+        // color curve models the longer path through the air near the horizon.
+        let (cloud_sun_dir, cloud_sun) = if d.sky_light && weather.clouds.is_some() && environment.sunlight > 0.0 {
+            objects
+                .iter()
+                .filter(|s| s.glow != 0 && s.kind == sky_kind::BODY)
+                .find_map(|s| {
+                    let toward = frame_of(s, turn_of(s, d, time)).x_axis;
+                    let opacity = (s.opacity[0] + (s.opacity[1] - s.opacity[0]) * night) * weights.get(&s.name).copied().unwrap_or(1.0);
+                    let fade = ((toward.y + 0.09) * 9.0).clamp(0.0, 1.0);
+                    if opacity <= 0.0 || fade <= 0.0 {
+                        return None;
+                    }
+                    let warmth = (1.0 - toward.y.max(0.0) / 0.46).clamp(0.0, 1.0);
+                    let color = Vec3::ONE.lerp(Vec3::new(1.0, 0.36, 0.10), warmth)
+                        * rgb(s.color).powf(2.2)
+                        * (opacity * fade * environment.sunlight);
+                    let path = 0.21 / toward.y.max(0.24);
+                    Some((toward.extend(0.0).to_array(), color.extend(path).to_array()))
+                })
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        let forced_kind = weather.forced.map_or(0.0, |id| {
+            let preset = &c.game.weathers[id as usize];
+            if preset.lightning() {
+                2.0
+            } else if preset.falls() {
+                1.0
+            } else {
+                0.0
+            }
+        });
         let mut clouds = None;
         for (i, s) in objects.iter().enumerate() {
             // Cloud cover hides celestial objects, not the clouds or sky behind them.
@@ -407,7 +467,7 @@ impl Sky {
                 continue;
             }
             if s.kind == sky_kind::CLOUDS {
-                use crate::weather::{CLOUD_CELL, CLOUD_PERIOD};
+                use crate::weather::{CLOUD_CELL, CLOUD_HEIGHT};
                 let setting = |name: &str| {
                     c.game
                         .catalog
@@ -417,7 +477,8 @@ impl Sky {
                 };
                 let lifted = s.height as f64 + setting("core:cloud_height");
                 let low = (lifted - cam.pos.y) as f32;
-                if low >= environment.cloud_fog_end || low + 4.0 <= -environment.cloud_fog_end {
+                let height = if weather.clouds.is_some() { CLOUD_HEIGHT } else { 4.0 };
+                if low >= environment.cloud_fog_end || low + height <= -environment.cloud_fog_end {
                     continue;
                 }
                 let ambient = environment.ambient.max(0.0);
@@ -433,39 +494,37 @@ impl Sky {
                 };
                 let automatic = weather.clouds.is_some() && weather.forced.is_none();
                 let color = if automatic { shade(0.0, 0.0) } else { shade(environment.cloud_gray, environment.cloud_dark) };
-                let (ids, period, pos, colors, shift) = if let Some(field) = weather.clouds {
+                let (ids, size, pos, colors) = if let Some(field) = weather.clouds {
                     let color_for = |id: u16| {
-                        let look = c.game.weathers[id as usize].look;
-                        shade(look.cloud_gray, look.cloud_dark)
-                            .extend(0.0)
+                        let preset = &c.game.weathers[id as usize];
+                        let look = preset.look;
+                        shade(look.cloud_gray, look.cloud_dark * 0.74)
+                            .extend(if world_depth.is_some() && preset.falls() { look.falls } else { 0.0 })
                             .to_array()
                     };
                     (
                         [u32::MAX, kind::CLOUDS, field.seed, automatic as u32],
-                        CLOUD_PERIOD as f64,
+                        CLOUD_CELL,
                         field.coords(glam::DVec2::new(cam.pos.x, cam.pos.z)),
-                        [color_for(field.rain), color_for(field.thunder), [0.0; 4]],
-                        field.rain_shift,
+                        [color_for(field.rain), color_for(field.thunder), cloud_sun_dir],
                     )
                 } else {
                     let Some((index, [w, h])) = self.picture(gpu, &s.texture) else { continue };
-                    let pos = glam::DVec2::new(cam.pos.x + time * s.drift as f64, cam.pos.z) / CLOUD_CELL;
-                    ([index, kind::CLOUDS, w, h], 4096.0, pos, [[0.0; 4]; 3], 0.0)
+                    const TEXTURE_CELL: f64 = 12.0;
+                    let pos = glam::DVec2::new(cam.pos.x + time * s.drift as f64, cam.pos.z) / TEXTURE_CELL;
+                    ([index, kind::CLOUDS, w, h], TEXTURE_CELL, pos, [[0.0; 4]; 3])
                 };
+                let origin = if weather.clouds.is_some() { pos.floor() } else { pos.floor().rem_euclid(glam::DVec2::splat(4096.0)) };
                 clouds = Some(self.list.len() as u32);
                 self.list.push(GpuSky {
                     axes: colors,
-                    uv: [
-                        pos.x.rem_euclid(1.0) as f32,
-                        pos.y.rem_euclid(1.0) as f32,
-                        pos.x.floor().rem_euclid(period) as f32,
-                        pos.y.floor().rem_euclid(period) as f32,
-                    ],
+                    uv: [pos.x.rem_euclid(1.0) as f32, pos.y.rem_euclid(1.0) as f32, origin.x as f32, origin.y as f32],
                     color: color
-                        .extend(0.8 * environment.cloud_opacity * opacity)
+                        .extend(if weather.clouds.is_some() { 1.0 } else { 0.8 } * environment.cloud_opacity * opacity)
                         .to_array(),
                     ids,
-                    extra: [CLOUD_CELL as f32, 4.0, low, shift],
+                    extra: [size as f32, height, low, forced_kind],
+                    cloud_sun,
                 });
                 continue;
             }
@@ -509,6 +568,7 @@ impl Sky {
                 color: rgb(s.color).powf(2.2).extend(opacity).to_array(),
                 ids: [picture.map_or(u32::MAX, |p| p.0), kind_id, slot, s.additive as u32],
                 extra: [half, 0.0, 0.0, 0.0],
+                cloud_sun: [0.0; 4],
             });
             draws.push((vertices, at));
         }
@@ -530,6 +590,7 @@ impl Sky {
                     .to_array(),
                 ids: [u32::MAX, kind::GLOW, 0, 0],
                 extra: [0.0; 4],
+                cloud_sun: [0.0; 4],
             });
             draws.insert(first_body + n, (3, at));
         }
@@ -547,8 +608,13 @@ impl Sky {
         for (vertices, first_instance) in draws {
             list.push(Cmd::Draw { vertices, instances: 1, first_vertex: 0, first_instance });
         }
-        if let (Some(first_instance), Some(pipe)) = (clouds, self.clouds_pipe) {
-            list.pipeline(pipe);
+        if let (Some(first_instance), Some(cloud_pipe)) = (clouds, self.clouds_pipe) {
+            if let (Some(depth), Some(pipe)) = (world_depth, self.atmosphere_pipe) {
+                list.pipeline(pipe);
+                list.bind(bind::sky::WORLD_DEPTH, depth);
+            } else {
+                list.pipeline(cloud_pipe);
+            }
             list.bind(bind::sky::OBJECTS, buf);
             list.bind(bind::sky::SCENE, scene);
             list.push(Cmd::Draw { vertices: 3, instances: 1, first_vertex: 0, first_instance });

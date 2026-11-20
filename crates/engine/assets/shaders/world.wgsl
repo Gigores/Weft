@@ -663,3 +663,69 @@ fn fs_lod_surface(in: VOut) -> @location(0) vec4<f32> {
     let nuv = nearest_uv(in.size, fract(in.uv), du, dv);
     return through_cloud(shade(in, sample(in, nuv, du, dv)), in.rel, scene);
 }
+
+struct FarDraw {
+    cube: vec3<i32>,
+    step: i32,
+    fade: f32,
+}
+
+var<immediate> far_draw: FarDraw;
+
+struct FarOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) rel: vec3<f32>,
+    @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) dir: u32,
+}
+
+@vertex
+fn vs_lod_far(@builtin(vertex_index) vi: u32) -> FarOut {
+    let at = 8u + (vi / 6u) * 3u;
+    let face = records[at];
+    let y = records[at + 1u];
+    let rgba = records[at + 2u];
+    let dir = face >> 10u;
+    let tri = array<u32, 6>(0u, 1u, 2u, 0u, 2u, 3u);
+    let corner = CORNERS[dir * 4u + tri[vi % 6u]];
+    let lo = f32(bitcast<i32>(y << 16u) >> 16u);
+    let hi = f32(bitcast<i32>(y) >> 16u);
+    let local = vec3(
+        (f32(face & 31u) + corner.x) * f32(far_draw.step),
+        mix(lo, hi, corner.y) - 0.125,
+        (f32((face >> 5u) & 31u) + corner.z) * f32(far_draw.step)
+    );
+    let rel = vec3<f32>(far_draw.cube) * 16.0 + local - g.cam_frac.xyz;
+    var clip = scene.view_proj * vec4(rel, 1.0);
+    clip.z -= abs(clip.z) * 0.00001;
+    let color = vec4<f32>((vec4(rgba) >> vec4(0u, 8u, 16u, 24u)) & vec4(255u)) / 255.0;
+    return FarOut(clip, rel, color, dir);
+}
+
+fn far_lit(in: FarOut) -> vec4<f32> {
+    let light = lightmap(vec4(1.0, 0.0, 0.0, 0.0), scene.params.z, scene.light.x, scene.light.y, scene.light.w, scene.environment.x);
+    let lit = in.color.rgb * pow(light * SHADE[in.dir], vec3(2.2));
+    let fog = fog_amount(length(in.rel), scene.params.x, scene.params.y);
+    return vec4(mix(lit, scene.fog_color.rgb, fog), in.color.a);
+}
+
+@fragment
+fn fs_lod_far(in: FarOut) -> @location(0) vec4<f32> {
+    let p = in.rel + vec3<f32>(g.cam_cube.xyz * 16) + g.cam_frac.xyz - FACE_DIRS[in.dir] * 0.25;
+    if !lod_fade_visible(far_draw.fade, in.clip.xy) {
+        discard;
+    }
+    if shown_by_cubes(p, 0u) && (in.dir == 3u || shown_by_cubes(p + FACE_DIRS[in.dir] * 0.5, 0u)) {
+        discard;
+    }
+    return vec4(far_lit(in).rgb, 1.0);
+}
+
+@fragment
+fn fs_lod_far_water(in: FarOut) -> @location(0) vec4<f32> {
+    let p = in.rel + vec3<f32>(g.cam_cube.xyz * 16) + g.cam_frac.xyz - vec3(0.0, 0.25, 0.0);
+    if !lod_fade_visible(far_draw.fade, in.clip.xy) || shown_by_cubes(p, 1u) {
+        discard;
+    }
+    return through_cloud(far_lit(in), in.rel, scene);
+}

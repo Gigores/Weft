@@ -36,7 +36,12 @@ mod forest;
 /// Columns that differ from the terrain, as the server said.
 type Columns = FxHashMap<IVec2, Arc<LodColumn>>;
 // A failed warm-cache probe goes back through normal coarse-first generation.
-type TileResult = Result<Arc<LodMesh>, TileKey>;
+enum BuiltTile {
+    Meshed(Arc<LodMesh>),
+    Far(TileKey),
+}
+
+type TileResult = Result<BuiltTile, TileKey>;
 type SavedColumns = BTreeMap<(i32, i32), Arc<LodColumn>>;
 
 /// Cells a tile side.
@@ -50,6 +55,9 @@ const GRID: usize = (CELLS + 2) as usize;
 const WORDS: usize = lod_gpu::WORDS as usize;
 pub const LOD_WORDS_PER_TILE: usize = SAMPLES * WORDS;
 const MAX_LEVEL: u32 = i32::BITS - 2 - CELLS.ilog2();
+/// At 32 blocks per cell, fine scenery is left to the more detailed levels.
+const FAR_LEVEL: u32 = 5;
+const FAR_TILES_PER_FRAME: usize = 32;
 /// Blocks under the land from where distant terrain is left out.
 const UNDERGROUND: i32 = 32;
 /// Tiles asked for and not back yet, at most.
@@ -190,6 +198,53 @@ impl TileTerrain {
             .unwrap_or(1);
         Some((Self { forest, cover, description, faces, ctm, signature: hash.finish(), stone, detail_margin }, atlases))
     }
+
+    fn far_description(&self, c: &Content, dim: u32, textures: &super::textures::GameTextures) -> Vec<i32> {
+        let terrain = c.dims[dim as usize]
+            .terrain
+            .as_ref()
+            .expect("LOD terrain description");
+        let states = std::iter::once(terrain.stone)
+            .chain(terrain.sea.map(|(_, state)| state))
+            .chain(terrain.rules.iter().flat_map(|r| {
+                [r.top, r.deep_top.map(|(b, _)| b), r.ice]
+                    .into_iter()
+                    .flatten()
+            }));
+        let mut used = FxHashSet::default();
+        let mut pixels = FxHashMap::default();
+        let linear = |byte: u8| ((f32::from(byte) / 255.0).powf(2.2) * 255.0).round() as u8;
+        let mut words = self.description.clone();
+        let palette = words.len();
+        let colors = palette + 2 + c.states.len() * 2;
+        words.extend_from_slice(&[c.tint_kinds.len() as i32, colors as i32]);
+        words.resize(colors, 0);
+        for state in states.filter(|&state| used.insert(state)) {
+            let (tex, tint) = self.faces[state as usize][3];
+            let [r, g, b, a] = *pixels
+                .entry(tex)
+                .or_insert_with(|| textures.impostor_texels(tex, 1)[0]);
+            let alpha = if c.states[state as usize].layer == weft_abi::RenderLayer::Translucent { a.clamp(32, 254) } else { 255 };
+            let at = palette + 2 + state as usize * 2;
+            words[at] = i32::from_le_bytes([linear(r), linear(g), linear(b), alpha]);
+            words[at + 1] = tint as i32;
+        }
+        let color_word = |rgb: u32| {
+            let [b, g, r, _] = rgb.to_le_bytes();
+            i32::from_le_bytes([linear(r), linear(g), linear(b), 255])
+        };
+        if c.biomes.is_empty() {
+            words.extend(c.tint_kinds.iter().map(|&(_, rgb)| color_word(rgb)));
+        } else {
+            words.extend(
+                c.biomes
+                    .iter()
+                    .flat_map(|b| b.tints.iter().copied())
+                    .map(color_word),
+            );
+        }
+        words
+    }
 }
 
 /// A made tile's quads (`mesh`), how many of each part and direction, and the heights they span.
@@ -221,8 +276,8 @@ pub fn made(job: LodJob, mut words: Vec<u32>) {
         if !job.columns.is_empty() || !job.edits.is_empty() {
             let (s, o) = (1 << job.key.level, job.key.origin());
             let c = content();
-            let min_y = (c.dims[job.dim as usize].min_cube_y * 16).max(i16::MIN as i32);
-            let max_y = (c.dims[job.dim as usize].max_cube_y * 16 + 15).min(i16::MAX as i32);
+            let dim = &c.dims[job.dim as usize];
+            let heights = lod_edit_heights(dim.min_cube_y, dim.max_cube_y);
             for k in 0..SAMPLES {
                 let (i, j) = ((k as i32 % SIDE) - BORDER, (k as i32 / SIDE) - BORDER);
                 let at = o + IVec2::new(i * s + s / 2, j * s + s / 2);
@@ -249,16 +304,26 @@ pub fn made(job: LodJob, mut words: Vec<u32>) {
                     words[w] = (y as u32 & 0xFFFF) | (top << 16);
                     words[w + 1] = (words[w + 1] & 0xFFFF) | (under << 16);
                 } else if !job.edits.is_empty() {
-                    apply_surface_edits(c, &job.edits, at, min_y..=max_y, job.terrain.stone, &mut words[w..w + WORDS]);
+                    apply_surface_edits(c, &job.edits, at, heights.clone(), job.terrain.stone, &mut words[w..w + WORDS]);
                 }
             }
         }
         let snapshot = crate::generation::Snapshot::new(content(), job.dim, job.seed, u32::MAX);
         let (quads, counts, y) = mesh(snapshot, job.key, &words, &job.columns, &job.terrain);
         let mesh = Arc::new(LodMesh { key: job.key, quads, counts, y });
-        let _ = job.done.send(Ok(mesh.clone()));
+        let _ = job.done.send(Ok(BuiltTile::Meshed(mesh.clone())));
         job.cache.store(&mesh);
     });
+}
+
+fn lod_edit_heights(min_cube_y: i32, max_cube_y: i32) -> std::ops::RangeInclusive<i32> {
+    // Open-ended dimensions use i32 extrema. LOD samples only store i16 heights.
+    let min_y = min_cube_y.saturating_mul(16).max(i16::MIN as i32);
+    let max_y = max_cube_y
+        .saturating_mul(16)
+        .saturating_add(15)
+        .min(i16::MAX as i32);
+    min_y..=max_y
 }
 
 /// Apply a fill to the same column that the distant mesh samples, including columns that were
@@ -1298,6 +1363,7 @@ struct ReadyTile {
     y: (i32, i32),
     quads: usize,
     last_used: u64,
+    far: bool,
 }
 
 struct Fade {
@@ -1428,7 +1494,7 @@ impl Lod {
         let mut ordinary: Vec<_> = self
             .remembered
             .keys()
-            .filter_map(|&key| Some((key, self.ready.get(&key)?.y)))
+            .filter_map(|&key| self.ready.get(&key).filter(|t| !t.far).map(|t| (key, t.y)))
             .collect();
         if ordinary.is_empty() {
             return;
@@ -1452,6 +1518,14 @@ impl Lod {
         self.pending.len()
     }
 
+    pub(super) fn ready_for_entry(&self, dim: u32, seed: u64) -> bool {
+        Self::distance() == 0
+            || (self.dim, self.seed) == (dim, seed)
+                && (self.terrain.is_none()
+                    || self.hidden
+                    || self.wanted_at.is_some() && self.wanted.iter().all(|key| self.ready.contains_key(key)))
+    }
+
     /// Distance in blocks it reaches (`core:lod_distance` cubes), 0 when off.
     pub fn distance() -> i32 {
         let c = content();
@@ -1473,10 +1547,13 @@ impl Lod {
         textures: &super::textures::GameTextures,
         seed: u64,
         camera: &super::world_render::Camera,
-        viewport: (u32, u32),
+        frame: &weft_render::FrameInfo,
+        early: &mut weft_render::CommandList,
+        far_compute: Option<weft_render::PipelineId>,
         normal_fov: f32,
         view: i32,
         upload_budget: Duration,
+        animate: bool,
     ) {
         let cam = camera.pos;
         let c = content();
@@ -1490,6 +1567,7 @@ impl Lod {
             for (key, _) in self.ready.drain() {
                 render.remove_lod(key);
             }
+            render.far_lod.invalidate_description(gpu);
             self.pending.clear();
             self.done = unbounded();
             self.stale.clear();
@@ -1506,6 +1584,7 @@ impl Lod {
             render.lod_draw.clear();
             render.set_forest(gpu, Vec::new());
         }
+        render.far_lod.collect(gpu);
         if reach == 0 {
             self.dim = u32::MAX;
             self.terrain = None;
@@ -1547,11 +1626,13 @@ impl Lod {
         let zooming = camera.fov < normal_fov - 0.01;
         let released = self.zooming && !zooming;
         self.zooming = zooming;
+        let mut far_built = 0;
         while self.baking.is_none()
             && let Ok(result) = self.done.1.try_recv()
         {
             let key = match &result {
-                Ok(m) => m.key,
+                Ok(BuiltTile::Meshed(m)) => m.key,
+                Ok(BuiltTile::Far(key)) => *key,
                 Err(key) => *key,
             };
             self.pending.remove(&key);
@@ -1565,18 +1646,33 @@ impl Lod {
             if self.stale.contains(&key) {
                 continue;
             }
-            let Ok(m) = result else {
-                self.cache_misses.insert(key);
-                continue;
+            let tile = match result {
+                Ok(BuiltTile::Meshed(m)) => {
+                    render.upload_lod(gpu, textures, m.key, &m.quads, m.counts, m.y);
+                    ReadyTile { y: m.y, quads: m.quads.len(), last_used: self.generation, far: false }
+                }
+                Ok(BuiltTile::Far(key)) => {
+                    far_built += 1;
+                    render.remove_lod(key);
+                    render.far_lod.add(gpu, key);
+                    // The height envelope is only a priority hint. Geometry stays on the GPU.
+                    let y = land.unwrap_or(0);
+                    let quads = super::world_render::far_lod::TILE_WORDS.div_ceil(4) as usize;
+                    ReadyTile { y: (y.saturating_sub(128), y.saturating_add(128)), quads, last_used: self.generation, far: true }
+                }
+                Err(_) => {
+                    self.cache_misses.insert(key);
+                    continue;
+                }
             };
             self.cache_misses.remove(&key);
-            render.upload_lod(gpu, textures, m.key, &m.quads, m.counts, m.y);
-            self.ready
-                .insert(m.key, ReadyTile { y: m.y, quads: m.quads.len(), last_used: self.generation });
-            if upload_start.elapsed() >= upload_budget {
+            self.ready.insert(key, tile);
+            if far_built >= FAR_TILES_PER_FRAME || upload_start.elapsed() >= upload_budget {
                 break;
             }
         }
+        let viewport = (frame.width, frame.height);
+        let far_compute = far_compute.filter(|_| render.far_lod.enabled());
         let quality = config::by_name("core:lod_detail").map_or(4.0, config::get);
         let aspect = viewport.0.max(1) as f32 / viewport.1.max(1) as f32;
         let guard = super::world_render::Camera { fov: (camera.fov * 1.1).min(175.0), ..*camera };
@@ -1632,17 +1728,24 @@ impl Lod {
                 self.frontier.clear();
                 self.transitions.clear();
             }
-            self.change_frontier(next.into_iter().collect(), now);
+            if animate {
+                self.change_frontier(next.into_iter().collect(), now);
+            } else {
+                // The world preview already provides the transition into this view.
+                self.transitions.clear();
+                self.frontier = next.into_iter().collect();
+            }
             needed.extend(&self.frontier);
             for (&parent, fade) in &self.transitions {
                 needed.insert(parent);
                 needed.extend(&fade.fine);
             }
             self.trim(&needed, render);
-            self.request();
-            log::debug!(target: "load", "lod fov {:.2}, range {}, tiles {}, levels {}..{}, shown {} (finest {:?}), zoom-only resident {}",
+            self.request(far_compute.is_some());
+            log::debug!(target: "load", "lod fov {:.2}, range {}, tiles {}, levels {}..{}, shown {} (finest {:?}), zoom-only resident {}, far GPU {}",
                 camera.fov, reach, self.wanted.len(), self.wanted.iter().map(|k| k.level).min().unwrap_or(0), self.max_level,
-                self.frontier.len(), self.frontier.iter().map(|k| k.level).min(), self.zoom_only.iter().filter(|k| self.ready.contains_key(k)).count());
+                self.frontier.len(), self.frontier.iter().map(|k| k.level).min(), self.zoom_only.iter().filter(|k| self.ready.contains_key(k)).count(),
+                self.frontier.iter().filter(|key| self.ready.get(key).is_some_and(|t| t.far)).count());
         }
         if changed || !self.transitions.is_empty() || self.hidden != hidden {
             self.hidden = hidden;
@@ -1653,6 +1756,11 @@ impl Lod {
             if !hidden {
                 self.draw_frontier(now, &mut render.lod_draw);
             }
+        }
+        if let (Some(compute), Some(terrain)) = (far_compute, &self.terrain) {
+            render
+                .far_lod
+                .prepare(gpu, early, frame.slot, compute, terrain.description.len(), || terrain.far_description(c, dim, textures));
         }
     }
 
@@ -2080,7 +2188,7 @@ impl Lod {
     }
 
     /// Asks for the nearest wanted tiles not made yet, or made before columns changed.
-    fn request(&mut self) {
+    fn request(&mut self, far: bool) {
         let Some(terrain) = &self.terrain else { return };
         let columns = (self.columns_dim == self.dim).then_some(&self.columns);
         let edits = (self.edits_dim == self.dim).then_some(&self.edits);
@@ -2116,6 +2224,10 @@ impl Lod {
                     .filter(|edit| tile_meets_edit(key, edit, terrain.detail_margin))
                     .cloned()
                     .collect();
+                if far && key.level >= FAR_LEVEL && columns.is_empty() && edits.is_empty() {
+                    let _ = done.send(Ok(BuiltTile::Far(key)));
+                    return;
+                }
                 let mut hash = DefaultHasher::new();
                 column_hash.hash(&mut hash);
                 for edit in &edits {
@@ -2124,7 +2236,7 @@ impl Lod {
                 let edits_hash = if edits.is_empty() { column_hash } else { hash.finish() };
                 let mut cache = cache::Entry::new(&dir, dim, seed, key, terrain.signature, edits_hash);
                 if let Some(mesh) = cache.load(key) {
-                    let _ = done.send(Ok(Arc::new(mesh)));
+                    let _ = done.send(Ok(BuiltTile::Meshed(Arc::new(mesh))));
                 } else if probe {
                     let _ = done.send(Err(key));
                 } else {
@@ -2203,6 +2315,18 @@ mod tests {
             );
         }
         panic!("selection did not settle");
+    }
+
+    #[test]
+    fn edit_heights_fit_lod_samples_in_open_ended_dimensions() {
+        let min = i16::MIN as i32;
+        let max = i16::MAX as i32;
+        assert_eq!(lod_edit_heights(i32::MIN, i32::MAX), min..=max);
+        assert_eq!(lod_edit_heights(i32::MIN, 4), min..=79);
+        assert_eq!(lod_edit_heights(-4, i32::MAX), -64..=max);
+        assert_eq!(lod_edit_heights(-4, 4), -64..=79);
+        assert!(lod_edit_heights(2048, i32::MAX).is_empty());
+        assert!(lod_edit_heights(i32::MIN, -2049).is_empty());
     }
 
     #[test]

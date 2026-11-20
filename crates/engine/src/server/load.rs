@@ -2,6 +2,12 @@
 
 use super::*;
 
+fn restore_cave_biomes(c: &Content, dim: u32, seed: u64, pos: IVec3, cube: &mut Cube) {
+    if let (Some(terrain), Some(biomes)) = (&c.dims[dim as usize].terrain, &mut cube.biomes) {
+        terrain.backfill_cave_biomes(seed, pos, biomes);
+    }
+}
+
 impl Server {
     /// Inserts generated cubes and keeps the workers fed until `deadline`, between ticks.
     pub(super) fn load_until(&mut self, deadline: Instant) {
@@ -269,7 +275,12 @@ impl Server {
             }
             let t = Instant::now();
             let loaded = storage.and_then(|s| s.lock().load(dim, pos));
-            let (mut cube, entities) = loaded.unwrap_or_else(|| (dim::generate(content(), dim, seed, pos), Vec::new()));
+            let (mut cube, entities) = loaded
+                .map(|(mut cube, entities)| {
+                    restore_cave_biomes(content(), dim, seed, pos, &mut cube);
+                    (cube, entities)
+                })
+                .unwrap_or_else(|| (dim::generate(content(), dim, seed, pos), Vec::new()));
             dim::prepare(content(), dim, &edits, pos, &mut cube);
             let conn = dim::see_through(content(), &cube);
             shared
@@ -381,7 +392,12 @@ impl Server {
             .par_iter()
             .map(|&pos| {
                 let loaded = storage.as_ref().and_then(|s| s.lock().load(dim, pos));
-                let (mut cube, entities) = loaded.unwrap_or_else(|| (dim::generate(c, dim, seed, pos), Vec::new()));
+                let (mut cube, entities) = loaded
+                    .map(|(mut cube, entities)| {
+                        restore_cave_biomes(c, dim, seed, pos, &mut cube);
+                        (cube, entities)
+                    })
+                    .unwrap_or_else(|| (dim::generate(c, dim, seed, pos), Vec::new()));
                 dim::prepare(c, dim, edits, pos, &mut cube);
                 let conn = dim::see_through(c, &cube);
                 (pos, cube, entities, conn)
@@ -461,6 +477,7 @@ pub(super) fn send_far(
             None => {
                 n += 1;
                 let Some((mut cube, _)) = storage.and_then(|s| s.lock().load(p.dim, pos)) else { continue };
+                restore_cave_biomes(c, p.dim, dim.seed(), pos, &mut cube);
                 dim.catch_up_edits(pos, &mut cube);
                 Arc::new(cube)
             }

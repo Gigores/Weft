@@ -202,8 +202,7 @@ impl Weather {
                 self.built = Some((eye, 0.0));
             }
         }
-        // Kept small for the float, not to one picture: the stretches that show go by its whole count.
-        let scroll = |speed: f64| (ticks * speed).rem_euclid(1024.0) as f32;
+        let gust = [(-0.23 - 0.09 * (ticks * 0.027).sin()) as f32, (0.13 + 0.11 * (ticks * 0.016).sin()) as f32];
         self.gpu.clear();
         for c in &self.columns {
             let xz = DVec2::new(c.x as f64 + 0.5, c.z as f64 + 0.5);
@@ -214,28 +213,34 @@ impl Weather {
             }
             let Some(Some((_, picture))) = self.pictures.get(c.kind as usize) else { continue };
             let p = &content.game.precipitations[c.kind as usize];
+            let rain = p.name == "core:rain";
             let random = (c.seed & 255) as f64 / 255.0;
             let rel = DVec3::new(c.x as f64 + 0.5, 0.0, c.z as f64 + 0.5) - DVec3::new(cam.pos.x, 0.0, cam.pos.z);
             let dist = (rel.length() as f32 / RADIUS as f32).min(1.0);
             // Rain falls quickly, three times vanilla's speed, each column a little differently;
             // what is much slower (snow) drifts sideways as it comes down.
             let speed = p.speed as f64;
-            let (slide, drop) = if speed < 0.5 {
-                ((ticks * 0.01 * (random - 0.5)).rem_euclid(1.0) as f32, scroll((1.0 / 512.0 + random / 2048.0) * speed / 0.1))
+            let (slide, fall_rate) = if speed < 0.5 {
+                ((ticks * 0.01 * (random - 0.5)).rem_euclid(1.0) as f32, (1.0 / 512.0 + random / 2048.0) * speed / 0.1)
             } else {
-                (0.0, scroll((3.0 + random) * 3.0 / 32.0 * speed))
+                (0.0, (3.0 + random) * 3.0 / 32.0 * speed)
             };
-            let alpha = ((1.0 - dist * dist) * 0.5 + 0.5) * weather.look.falls;
+            let alpha = ((1.0 - dist * dist) * 0.5 + 0.5) * weather.look.falls * if rain { 0.34 } else { 1.0 };
             let (bottom, top) = ((c.bottom as f64 - cam.pos.y) as f32, (top_y - cam.pos.y) as f32);
             self.gpu.push(GpuWeather {
                 place: [rel.x as f32, bottom, rel.z as f32, top],
                 // A quarter of the picture across, four blocks of it up.
                 uv: [
                     ((c.seed >> 8) & 3) as f32 * 0.25 + slide,
-                    c.bottom as f32 * 0.25 - drop,
+                    // Anchor both the texture and the drop mask in world Y. Clipping the
+                    // strip to the camera's reach or to a roof must not change their phase.
+                    (-top_y * 0.25 - ticks * fall_rate).rem_euclid(1024.0) as f32,
                     (top_y - c.bottom as f64) as f32 * 0.25,
                     alpha,
                 ],
+                // The wind leans the paths in world space. Stagger the 16-block
+                // repeat per column so its seam doesn't line up across the view.
+                wind: if rain { [gust[0], gust[1], (-top_y / 16.0 + random).rem_euclid(1.0) as f32, 1.0] } else { [0.0; 4] },
                 data: [*picture, c.light, c.seed, (p.density * 255.0) as u32],
             });
         }

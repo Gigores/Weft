@@ -32,7 +32,7 @@ use weft_render::{Backend, BufferId, CommandList, FrameInfo};
 
 use crate::content::content;
 use crate::input::Input;
-use crate::net::{ClientConn, ToClient, ToServer};
+use crate::net::{self, ClientConn, ToClient, ToServer};
 use crate::physics::{self, Hit};
 use crate::ui::text::{Arg, Msg};
 use crate::world::{GameMode, Pose};
@@ -914,18 +914,33 @@ impl Client {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// The local server can start sending the spawn before its renderer is ready.
+    pub(super) fn send_join(
+        conn: &mut ClientConn,
+        name: String,
+        key: String,
+        view: i32,
+        skin: Option<&net::Skin>,
+        avatar: Option<net::AvatarData>,
+    ) {
+        conn.send(ToServer::Join { name, key });
+        conn.send(ToServer::View(view as u32));
+        if let Some(skin) = skin {
+            conn.send(ToServer::Skin(skin.clone()));
+        }
+        if let Some(avatar) = avatar {
+            conn.send(ToServer::Avatar(avatar));
+        }
+    }
+
     pub fn new(
         gpu: &mut dyn Backend,
         assets: &crate::assets::Assets,
         textures: &GameTextures,
         cache_dir: &std::path::Path,
-        mut conn: ClientConn,
-        name: &str,
-        key: &str,
+        conn: ClientConn,
         view_radius: i32,
         skin: Option<crate::net::Skin>,
-        avatar: Option<crate::net::AvatarData>,
     ) -> Result<Client, String> {
         let c = content();
         let render = WorldRenderer::new(gpu, c, textures, assets)?;
@@ -934,14 +949,6 @@ impl Client {
         let wires = wires::Wires::new(gpu, assets);
         let weather_render = weather::Weather::new(gpu, assets);
         let sky = sky::Sky::new(gpu, assets);
-        conn.send(ToServer::Join { name: name.to_string(), key: key.to_string() });
-        conn.send(ToServer::View(view_radius as u32));
-        if let Some(skin) = &skin {
-            conn.send(ToServer::Skin(skin.clone()));
-        }
-        if let Some(a) = avatar {
-            conn.send(ToServer::Avatar(a));
-        }
         let (gpu_tx, gpu_rx) = crossbeam_channel::unbounded();
         let gpu_on = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let gpu_terrain = terrain_gpu::GpuTerrain::new(gpu, assets, gpu_rx, gpu_on.clone());
@@ -1887,6 +1894,10 @@ impl Client {
                         .column_shown(glam::IVec2::new(at.x + x, at.z + z), self.seed, false)
                 })
             })
+    }
+
+    pub(crate) fn lod_ready_for_entry(&self) -> bool {
+        self.lod.ready_for_entry(self.world.dim, self.seed)
     }
 
     /// The held block used on `hit`, shown placed at once where the server will put it
@@ -3088,7 +3099,7 @@ impl Client {
             fog_color: self.fog_color(),
             params: [fog_start, fog_end, environment.daylight, crate::shaders::time()],
             light: [environment.ambient, self.brightness, ticks, environment.night_vision],
-            environment: [environment.sunlight, environment.cloud_fog_start, environment.cloud_fog_end, 0.0],
+            environment: [environment.sunlight, environment.cloud_fog_start, environment.cloud_fog_end, self.environment.rain_mist],
             sun: self.sun(),
             cloud: Default::default(),
         }
@@ -3118,7 +3129,8 @@ impl Client {
         early: &mut CommandList,
         frame: &FrameInfo,
         textures: &GameTextures,
-    ) {
+        animate_lod: bool,
+    ) -> bool {
         self.entity_render.local = self.player_id;
         for (entity, skin) in std::mem::take(&mut self.entity_render.skin_pending) {
             self.entity_render.set_skin(gpu, entity, &skin);
@@ -3135,10 +3147,13 @@ impl Client {
                 textures,
                 self.seed,
                 &lod_cam,
-                (frame.width, frame.height),
+                frame,
+                early,
+                self.gpu_terrain.far_lod_pipeline,
                 normal_fov,
                 self.view_radius,
                 self.budget.min(remaining),
+                animate_lod,
             );
         }
         let mut scene = self.scene(&cam, frame);
@@ -3195,12 +3210,24 @@ impl Client {
         let ticks = self.smooth_time();
         let weather_ticks = ticks - self.world.time as f64 + self.world.ticks as f64;
         let weather = self.weather_field(weather_ticks);
+        let environment = &self.environment.values;
+        let world_depth = (self.sky.has_atmosphere()
+            && weather.clouds.is_some()
+            && environment.cloud_opacity > 0.0
+            && environment.sky_opacity > 0.0
+            && environment.cloud_fog_end > 0.0)
+            .then(|| {
+                self.render
+                    .occlusion
+                    .capture_buffer(gpu, [frame.width, frame.height])
+            });
         scene.cloud = self.sky.draw(
             gpu,
             &mut late,
             frame,
             &cam,
             scene_buf,
+            world_depth,
             self.world.dim as usize,
             ticks,
             weather,
@@ -3210,7 +3237,7 @@ impl Client {
             &overlays,
         );
         gpu.mapped(scene_buf)[..size_of::<Scene>()].copy_from_slice(bytemuck::bytes_of(&scene));
-        self.render.draw_translucent(&mut late);
+        self.render.draw_translucent(&mut late, &cam);
         let tick = self.anim_tick();
         self.wake_render
             .draw(gpu, &mut late, frame.slot, &cam, scene_buf, tick);
@@ -3265,6 +3292,7 @@ impl Client {
         after.append(&mut hand_late);
         (self.late, self.hand_late) = (late, hand_late);
         after.push(weft_render::Cmd::Mark);
+        world_depth.is_some()
     }
 
     pub fn fog_color(&self) -> [f32; 4] {

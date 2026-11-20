@@ -606,7 +606,8 @@ impl TerrainBuilder<'_> {
         self.push(&t::RULE_EDITS, edit)
     }
     /// A biome in 3D: whole cubes at least `depth` blocks under the surface where a 3D noise of
-    /// patches about `size` blocks across is above `threshold` (-1..1). Biomes are kept per
+    /// patches about `size` blocks across is above `threshold` (-1..1). A threshold of -1
+    /// matches any cube deep enough, as a fallback after patch rules. Biomes are kept per
     /// column of each cube, so underground ones change every 16 blocks of height at most.
     pub fn cave_biome(self, biome: &str, depth: i32, size: f64, threshold: f64) -> Self {
         let name = self.q(biome);

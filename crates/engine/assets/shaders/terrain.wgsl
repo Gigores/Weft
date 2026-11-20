@@ -10,6 +10,162 @@ fn seed(i: u32) -> u32 {
     return bitcast<u32>(desc[D_SEEDS + i]);
 }
 
+// One workgroup per distant tile. Share the samples at the corners, make each
+// step once, and leave both the faces and their draw counts in device memory.
+struct FarSample {
+    y: i32,
+    land: u32,
+    water: u32,
+}
+
+var<workgroup> far_solid_count: atomic<u32>;
+var<workgroup> far_water_count: atomic<u32>;
+
+fn far_rgba(c: u32) -> vec4<u32> {
+    return (vec4(c) >> vec4(0u, 8u, 16u, 24u)) & vec4(255u);
+}
+
+fn far_pack(c: vec4<u32>) -> u32 {
+    return c.x | (c.y << 8u) | (c.z << 16u) | (c.w << 24u);
+}
+
+fn far_color(block: u32, biome: u32, palette: u32) -> u32 {
+    let entry = palette + 2u + block * 2u;
+    let color = u32(desc[entry]);
+    let tint = u32(desc[entry + 1u]);
+    if tint == 0u {
+        return color;
+    }
+    let kinds = u32(desc[palette]);
+    let colors = u32(desc[palette + 1u]);
+    let shade = far_rgba(u32(desc[colors + biome * kinds + tint - 1u]));
+    let rgba = far_rgba(color);
+    return far_pack(vec4((rgba.rgb * shade.rgb + vec3(127u)) / 255u, rgba.a));
+}
+
+fn far_corner(x: i32, z: i32, palette: u32) -> FarSample {
+    let c = column(x, z);
+    let y = clamp(c.height, -32766, 32766);
+    var top = desc[D_STONE];
+    var water = desc[D_WATER];
+    if u32(c.rule) < u32(desc[D_RULES]) {
+        let rule = u32(desc[D_RULE_OFF]) + u32(c.rule) * WORDS_RULE;
+        let bare = desc[rule + 13u] != 0 && c.height > desc[rule + 14u];
+        if !bare {
+            if desc[rule + 5u] >= 0 {
+                top = desc[rule + 5u];
+            }
+            if desc[rule + 10u] >= 0 && c.height < desc[rule + 11u] {
+                top = desc[rule + 10u];
+            }
+        }
+        if desc[rule + 12u] >= 0 {
+            water = desc[rule + 12u];
+        }
+    }
+    var surface = 0u;
+    if desc[D_HAS_SEA] != 0 && y < desc[D_SEA] {
+        surface = far_color(u32(water), u32(c.biome), palette);
+        if surface >> 24u == 255u {
+            return FarSample(clamp(desc[D_SEA], -32766, 32766), surface, 0u);
+        }
+    }
+    return FarSample(y, far_color(u32(top), u32(c.biome), palette), surface);
+}
+
+fn far_sample(i: u32) -> FarSample {
+    let at = FAR_LOD_SCRATCH + i * 3u;
+    return FarSample(bitcast<i32>(outp[at]), outp[at + 1u], outp[at + 2u]);
+}
+
+fn far_y(i: u32) -> i32 {
+    return bitcast<i32>(outp[FAR_LOD_SCRATCH + i * 3u]);
+}
+
+fn far_top(sum: i32) -> i32 {
+    return ((sum + 2) >> 2u) + 1;
+}
+
+fn far_face(at: u32, x: u32, z: u32, dir: u32, lo: i32, hi: i32, color: u32) {
+    outp[at] = x | (z << 5u) | (dir << 10u);
+    outp[at + 1u] = (u32(lo) & 65535u) | (u32(hi) << 16u);
+    outp[at + 2u] = color;
+}
+
+fn far_wall(x: u32, z: u32, dir: u32, lo: i32, hi: i32, color: u32) {
+    if lo < hi {
+        let at = atomicAdd(&far_solid_count, 1u);
+        far_face(FAR_LOD_HEADER + at * FAR_LOD_WORDS, x, z, dir, lo, hi, color);
+    }
+}
+
+@compute @workgroup_size(256)
+fn lod_far(@builtin(local_invocation_index) t: u32) {
+    let job = params.cubes * 4u;
+    let step = 1 << u32(jobs[job + 2u]);
+    let palette = u32(jobs[job + 3u]);
+    for (var k = t; k < FAR_LOD_SAMPLES; k += 256u) {
+        let x = jobs[job] + (i32(k % FAR_LOD_SIDE) - 1) * step;
+        let z = jobs[job + 1u] + (i32(k / FAR_LOD_SIDE) - 1) * step;
+        let sample = far_corner(x, z, palette);
+        let at = FAR_LOD_SCRATCH + k * 3u;
+        outp[at] = bitcast<u32>(sample.y);
+        outp[at + 1u] = sample.land;
+        outp[at + 2u] = sample.water;
+    }
+    if t == 0u {
+        atomicStore(&far_solid_count, FAR_LOD_CELLS * FAR_LOD_CELLS);
+        atomicStore(&far_water_count, 0u);
+    }
+    storageBarrier();
+    workgroupBarrier();
+    for (var k = t; k < FAR_LOD_CELLS * FAR_LOD_CELLS; k += 256u) {
+        let x = k % FAR_LOD_CELLS;
+        let z = k / FAR_LOD_CELLS;
+        let stride = FAR_LOD_SIDE;
+        let i = (z + 1u) * stride + x + 1u;
+        let a = far_sample(i);
+        let b = far_sample(i + 1u);
+        let c = far_sample(i + stride);
+        let d = far_sample(i + stride + 1u);
+        let h = far_top(a.y + b.y + c.y + d.y);
+        let color = far_pack((far_rgba(a.land) + far_rgba(b.land) + far_rgba(c.land) + far_rgba(d.land) + vec4(2u)) / 4u);
+        far_face(FAR_LOD_HEADER + k * FAR_LOD_WORDS, x, z, 3u, h, h, color);
+        // Each shared edge is owned by its higher cell. The border skirts
+        // cover the difference in sampling between neighboring LOD levels.
+        let skirt = max(-32768, h - min(step, 256));
+        let left = far_top(a.y + c.y + far_y(i - 1u) + far_y(i + stride - 1u));
+        let right = far_top(b.y + d.y + far_y(i + 2u) + far_y(i + stride + 2u));
+        let back = far_top(a.y + b.y + far_y(i - stride) + far_y(i - stride + 1u));
+        let front = far_top(c.y + d.y + far_y(i + stride * 2u) + far_y(i + stride * 2u + 1u));
+        far_wall(x, z, 0u, select(left, min(left, skirt), x == 0u), h, color);
+        far_wall(x, z, 1u, select(right, min(right, skirt), x + 1u == FAR_LOD_CELLS), h, color);
+        far_wall(x, z, 4u, select(back, min(back, skirt), z == 0u), h, color);
+        far_wall(x, z, 5u, select(front, min(front, skirt), z + 1u == FAR_LOD_CELLS), h, color);
+        let sea = clamp(desc[D_SEA], -32766, 32766) + 1;
+        if desc[D_HAS_SEA] != 0 && h < sea {
+            let count = countOneBits(select(0u, 1u, a.water != 0u) | select(0u, 2u, b.water != 0u)
+                | select(0u, 4u, c.water != 0u) | select(0u, 8u, d.water != 0u));
+            if count > 0u {
+                let at = atomicAdd(&far_water_count, 1u) + FAR_LOD_SOLID_MAX;
+                let wet = far_pack((far_rgba(a.water) + far_rgba(b.water) + far_rgba(c.water) + far_rgba(d.water)) / count);
+                far_face(FAR_LOD_HEADER + at * FAR_LOD_WORDS, x, z, 3u, sea, sea, wet);
+            }
+        }
+    }
+    workgroupBarrier();
+    if t == 0u {
+        outp[0] = atomicLoad(&far_solid_count) * 6u;
+        outp[1] = 1u;
+        outp[2] = 0u;
+        outp[3] = 0u;
+        outp[4] = atomicLoad(&far_water_count) * 6u;
+        outp[5] = 1u;
+        outp[6] = FAR_LOD_SOLID_MAX * 6u;
+        outp[7] = 0u;
+    }
+}
+
 fn fmix(h0: u32) -> u32 {
     var h = h0;
     h ^= h >> 16u;
@@ -513,7 +669,9 @@ fn generate(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_inde
     let co = u32(desc[D_CAVE_OFF]);
     for (var k = 0u; k < ncb; k++) {
         let b = co + k * WORDS_CAVE;
-        if (oy + 15 < c.height - desc[b + 1u] && perlin3(bitcast<u32>(desc[b + 4u]), (ox + i32(t % 16u)) * 16, (oy + 8) * 16, (oz + i32(t / 16u)) * 16, desc[b + 2u], desc[b + 2u], desc[b + 2u]) > desc[b + 3u]) {
+        if (oy + 15 < c.height - desc[b + 1u] &&
+            (desc[b + 3u] <= -ONE ||
+            perlin3(bitcast<u32>(desc[b + 4u]), (ox + i32(t % 16u)) * 16, (oy + 8) * 16, (oz + i32(t / 16u)) * 16, desc[b + 2u], desc[b + 2u], desc[b + 2u]) > desc[b + 3u])) {
             biome = desc[b];
             break;
         }

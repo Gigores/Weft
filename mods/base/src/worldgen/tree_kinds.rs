@@ -85,7 +85,6 @@ pub struct TreePlaceData<'a> {
     pub pos: (i32, i32, i32),
     pub rng: Rng,
     pub place: Box<dyn FnMut(i32, i32, i32, u32, bool) + 'a>,
-    pub read: Box<dyn FnMut(i32, i32, i32) -> u32 + 'a>,
     pub ground: Box<dyn FnMut(i32, i32) -> i32 + 'a>,
 }
 impl<'a> TreePlaceData<'a> {
@@ -102,11 +101,8 @@ impl<'a> TreePlaceData<'a> {
                 s.put([x, y, z], state);
             }
         });
-        let s_read = Rc::clone(&s);
-        let read = Box::new(move |x: i32, y: i32, z: i32| -> u32 { s_read.borrow().read([x, y, z]) });
-        let s_ground = Rc::clone(&s);
-        let ground = Box::new(move |x: i32, z: i32| -> i32 { s_ground.borrow().ground(x, z).height });
-        TreePlaceData { pos: (x, y, z), rng, place, read, ground }
+        let ground = Box::new(move |x: i32, z: i32| -> i32 { s.borrow().ground(x, z).height });
+        TreePlaceData { pos: (x, y, z), rng, place, ground }
     }
 }
 pub type TreePlace = fn(&mut TreePlaceData);

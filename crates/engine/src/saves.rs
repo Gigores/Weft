@@ -501,10 +501,7 @@ impl Storage {
         }
         let lod = dim_dirs
             .iter()
-            .enumerate()
-            .map(|(dim, dir)| {
-                crate::server::lod_tops::DimTops::read(&dir.join("lod.bin"), c, dim as u32, meta.seed, &mut |w| ids.runtime_id(w))
-            })
+            .map(|dir| crate::server::lod_tops::DimTops::read(&dir.join("lod.bin"), &mut |w| ids.runtime_id(w)))
             .collect();
         Storage { meta, ids, regions: FxHashMap::default(), dim_dirs, on_disk, saved, last_written: FxHashMap::default(), lod }
     }
@@ -536,6 +533,11 @@ impl Storage {
     /// Cubes of dimension `dim` that were saved.
     pub fn saved(&self, dim: u32) -> &FxHashSet<IVec3> {
         &self.saved[dim as usize]
+    }
+
+    pub fn lod_columns(&mut self, dim: u32) -> Vec<crate::server::lod_tops::LodColumn> {
+        let lod = &mut self.lod[dim as usize];
+        if lod.request(crate::content::content(), dim, self.meta.seed) { lod.columns.values().cloned().collect() } else { Vec::new() }
     }
 
     /// The cube and the serialized entities that were in it.

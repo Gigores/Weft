@@ -110,8 +110,21 @@ fn fs_clouds(in: CloudOut) -> CloudPixel {
     if hit.color.a <= 0.0 {
         discard;
     }
-    let clip = scene.view_proj * vec4(dir * hit.distance, 1.0);
-    return CloudPixel(vec4(hit.color.rgb * hit.color.a, hit.color.a), clip.z / clip.w);
+    let clip = scene.view_proj * vec4(dir * max(hit.distance, 0.001), 1.0);
+    return CloudPixel(vec4(hit.color.rgb * hit.color.a, hit.color.a), clamp(clip.z / clip.w, 0.0, 1.0));
+}
+
+@fragment
+fn fs_atmosphere(in: CloudOut) -> @location(0) vec4<f32> {
+    let dir = normalize(mat(sky[0]) * in.at);
+    let pixel = vec2<u32>(in.clip.xy);
+    let depth = world_depth[pixel.y * u32(sky[0].extra.x) + pixel.x];
+    let slope = (scene.view_proj * vec4(dir, 0.0)).w;
+    // Infinite reverse Z, with the optional translation from camera bobbing.
+    let at_origin = scene.view_proj[3];
+    let limit = (at_origin.z - depth * at_origin.w) / max(depth * slope, 1e-8);
+    let c = trace_atmosphere(sky[in.index], dir, limit, scene);
+    return vec4(c.rgb * c.a, c.a);
 }
 
 // Vanilla's sky is a disc 16 blocks above the eye fading into fog with distance.
@@ -176,12 +189,15 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         dir = mat(sky[0]) * in.at;
     }
     dir = normalize(dir);
+    let mist = scene.environment.w;
     if s.ids.y == SKY_GRADIENT {
-        return gradient(dir, s);
+        let c = gradient(dir, s);
+        return vec4(mix(c.rgb, scene.fog_color.rgb * c.a, mist), c.a);
     }
     if s.ids.y == SKY_GLOW {
         let c = glow(dir, s);
-        return vec4(c.rgb * c.a, c.a);
+        let a = c.a * (1.0 - mist);
+        return vec4(c.rgb * a, a);
     }
     let local = dir * mat(s);
     var uv = in.uv;
@@ -195,6 +211,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         albedo = textureSampleLevel(textures[s.ids.x], nearest_clamp, uv, 0.0);
     }
     let c = sky_shade(s.ids.z, SkyPixel(dir, local, uv, albedo, vec4(s.color.rgb, 1.0), scene.params.z, scene.params.w));
-    let a = c.a * s.color.a;
+    let a = c.a * s.color.a * (1.0 - mist);
     return vec4(c.rgb * a, select(a, 0.0, s.ids.w != 0u));
 }

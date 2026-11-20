@@ -1364,7 +1364,7 @@ fn engine_precipitations() -> Vec<RawEntry> {
             .set(p::SPEED, speed)
             .set(p::DENSITY, density)
     };
-    vec![e("core:rain", "core:environment/rain", 1.0, 0.1), e("core:snow", "core:environment/snow", 0.1, 0.5)]
+    vec![e("core:rain", "core:environment/rain", 1.0, 0.045), e("core:snow", "core:environment/snow", 0.1, 0.5)]
 }
 
 fn bake_precipitation(e: &Entry) -> PrecipitationDef {

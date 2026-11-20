@@ -223,6 +223,18 @@ pub mod terrain {
             CAVE_ROOF_SHIFT = 8,
             SOIL_DEPTH_SHIFT = 16,
         }
+        /// GPU-only distant terrain: one shared corner grid, and two indirect draws
+        /// followed by compact ground/wall and water records.
+        far_lod {
+            CELLS = 32,
+            SIDE = 35,
+            SAMPLES = 35 * 35,
+            HEADER = 8,
+            SOLID_MAX = 32 * 32 * 3 + 64,
+            WATER_MAX = 32 * 32,
+            WORDS = 3,
+            SCRATCH = HEADER + (SOLID_MAX + WATER_MAX) * WORDS,
+        }
         /// Expression step kinds.
         expr {
             CONST = weft_abi::expr::CONST,
@@ -612,7 +624,7 @@ gpu_struct! {
         /// dimension without sky light). For shader packs' shadows; follows the day, whatever
         /// bodies mods put in the sky.
         pub sun: [f32; 4],
-        /// x solar sky-light multiplier; yz cloud fog start/end in blocks from the camera.
+        /// x solar sky-light multiplier, yz cloud fog start/end in blocks, w local rain mist.
         pub environment: [f32; 4],
         /// The cloud layer visible this frame, with zero opacity when absent.
         pub cloud: GpuSky,
@@ -633,8 +645,11 @@ gpu_struct! {
         /// x bindless picture (`u32::MAX` none), y `sky` kind, z shader slot, w 1 if additive.
         pub ids: [u32; 4],
         /// x half size across (a body's tangent). Overlay: x tiles across, y 1 for the screen's
-        /// lower part only, z where its frame starts in the picture.
+        /// lower part only, z where its frame starts in the picture. Weather clouds: tile size,
+        /// height, base relative to the eye, and forced weather class (clear/rain/thunder).
         pub extra: [f32; 4],
+        /// Direct solar light for procedural clouds, linear RGB with a precomputed path scale in w.
+        pub cloud_sun: [f32; 4],
     }
 }
 
@@ -886,6 +901,8 @@ gpu_struct! {
         pub place: [f32; 4],
         /// x its left in the picture, y its top, z how much of the picture high, w alpha.
         pub uv: [f32; 4],
+        /// Wind slope in x/z, unscrolled height phase at the strip's top, and rain flag.
+        pub wind: [f32; 4],
         /// x texture index, y light of the column (as `GpuParticle`), z a number of its own, w how
         /// much of the picture shows (0..255).
         pub data: [u32; 4],
@@ -1056,6 +1073,7 @@ bindings! {
     sky "sky.wgsl" {
         OBJECTS "sky": "array<Sky>",
         SCENE "scene": "Scene",
+        WORLD_DEPTH "world_depth": "array<f32>",
     }
     ui "ui.wgsl" {
         QUADS "quads": "array<Quad>",

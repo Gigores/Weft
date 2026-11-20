@@ -62,9 +62,9 @@ Stars turn together on the orbit you give them, or with the day if you don't giv
 ```rust
 r.sky_clouds(&OVERWORLD, &MY_CLOUDS).texture("clouds").height(300.0).drift(0.03).color(0xFFE0E0);
 ```
-Each cloud cell is 12 blocks wide and 4 blocks high. Without `.height` the underside is at 224.33. Players can raise the visible layer in video settings. Dimensions without weather use the texture's alpha to decide which cells are filled.
+Without `.height` the cloud layer starts at 224.33. Players can raise the visible layer in video settings. Dimensions without weather use the texture's alpha to draw 12-block-wide, 4-block-high cloud cells.
 
-In a dimension with weather, a moving field picks the cloud cells and the patches of rain or thunder underneath them. Rain clouds are gray and thunderclouds are darker. The colors are visible from either side of the layer. The climate uses elapsed world ticks, so changing the hour with `/time` leaves the field in place.
+In a dimension with weather, a moving noise field forms elongated cloud sheets out of voxels with square horizontal footprints. Partly transparent bands overlap to give the sheets stepped edges and more depth in their cores. Irregular gaps separate different weather zones, and the same cloud field limits rain and thunder to the clouds above. Rain and thunderclouds have denser, darker cores. A low sun warms the thinner parts of the sheets, especially when viewed toward the sun. Distant rain is visible as a soft gray mass beneath these clouds. In open rain, the environment adds mist and the wind slants the nearby drops. The climate and falling drops use elapsed world ticks, so changing the hour with `/time` leaves their motion in place.
 
 `/weather rain` and `/weather thunder` force a preset across the dimension. `/clear` or `/weather clear` forces clear weather. `/weather vary` and `/weather default` restore local weather. Add an optional tick count to a preset to have it expire automatically.
 

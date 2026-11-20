@@ -507,6 +507,7 @@ impl Server {
         self.accept();
         self.receive_generated(c, Instant::now() + Duration::from_millis(15));
         self.handle_messages(c);
+        self.send_lod_changes();
         self.sync_players(c);
     }
 
@@ -946,11 +947,7 @@ impl Server {
     /// Every column of `dim` distant terrain shows other than the terrain says, to player `pi`.
     pub(super) fn send_lod_columns(&mut self, pi: usize, dim: u32) {
         if let Some(s) = &self.storage {
-            let cols = s.lock().lod[dim as usize]
-                .columns
-                .values()
-                .cloned()
-                .collect();
+            let cols = s.lock().lod_columns(dim);
             self.players[pi]
                 .conn
                 .send(ToClient::LodColumns { dim, all: true, cols });
@@ -960,18 +957,26 @@ impl Server {
     /// Columns whose distant top changed as cubes were saved, to the players in their dimension.
     fn send_lod_changes(&mut self) {
         let Some(s) = &self.storage else { return };
-        let changed: Vec<(u32, Vec<lod_tops::LodColumn>)> = s
-            .lock()
+        let Some(mut s) = s.try_lock() else { return };
+        let c = content();
+        let seed = self.cfg.seed;
+        let changed: Vec<_> = s
             .lod
             .iter_mut()
             .enumerate()
-            .map(|(d, t)| (d as u32, t.take_changed()))
-            .filter(|(_, c)| !c.is_empty())
+            .map(|(dim, tops)| {
+                let dim = dim as u32;
+                let all = tops.finish_rebuild(c, dim, seed);
+                let cols = if all { tops.columns.values().cloned().collect() } else { tops.take_changed() };
+                (dim, all, cols)
+            })
+            .filter(|(_, all, cols)| *all || !cols.is_empty())
             .collect();
-        for (dim, cols) in changed {
+        drop(s);
+        for (dim, all, cols) in changed {
             for p in self.players.iter_mut().filter(|p| p.joined && p.dim == dim) {
                 p.conn
-                    .send(ToClient::LodColumns { dim, all: false, cols: cols.clone() });
+                    .send(ToClient::LodColumns { dim, all, cols: cols.clone() });
             }
         }
     }
@@ -1166,11 +1171,7 @@ impl Server {
         if from != to as usize
             && let Some(s) = storage
         {
-            let cols = s.lock().lod[to as usize]
-                .columns
-                .values()
-                .cloned()
-                .collect();
+            let cols = s.lock().lod_columns(to);
             players[pi]
                 .conn
                 .send(ToClient::LodColumns { dim: to, all: true, cols });

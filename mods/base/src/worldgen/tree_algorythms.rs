@@ -386,7 +386,6 @@ pub fn grow_tree(w: World, p: [i32; 3]) {
                 w.set_block([x, y, z], state);
             }
         }),
-        read: Box::new(move |x, y, z| w.block([x, y, z])),
         ground: Box::new(move |x, z| {
             // The live world has no column-height query, so find the top solid block near the
             // sapling. Stop at the loaded edge rather than pretending air is ground.

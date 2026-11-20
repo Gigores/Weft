@@ -22,54 +22,177 @@ fn fog_amount(dist: f32, start: f32, end: f32) -> f32 {
     return (dist - start) / (end - start);
 }
 
-// Keep the lattice aligned with weather.rs, which uses the same cells for precipitation.
-fn cloud_corner(seed: u32, grid: vec2<i32>, mask: u32) -> f32 {
-    let x = bitcast<u32>(grid.x) & mask;
-    let z = bitcast<u32>(grid.y) & mask;
-    var h = seed ^ (x * 0x9e3779b1u) ^ (z * 0x85ebca77u);
-    h = (h ^ (h >> 16u)) * 0x7feb352du;
-    return f32((h ^ (h >> 15u)) >> 8u) / 16777216.0;
+fn rain_mist_amount(dist: f32, view: Scene) -> f32 {
+    return view.environment.w * fog_amount(dist, view.params.x, view.params.y);
 }
 
-fn cloud_noise(seed: u32, cell: vec2<i32>, span: i32) -> f32 {
-    let grid = vec2<i32>(floor(vec2<f32>(cell) / f32(span)));
-    let frac = vec2<f32>(cell - grid * span) / f32(span);
+fn cloud_hash(seed: u32, cell: vec2<i32>) -> f32 {
+    let v = seed ^ (bitcast<u32>(cell.x) * 0x9e3779b1u) ^ (bitcast<u32>(cell.y) * 0x85ebca77u);
+    let a = (v ^ (v >> 16u)) * 0x7feb352du;
+    let b = (a ^ (a >> 15u)) * 0x846ca68bu;
+    return f32((b ^ (b >> 16u)) >> 8u) / 16777216.0;
+}
+
+fn cloud_noise(seed: u32, origin: vec2<i32>, at: vec2<f32>, frequency: vec2<i32>) -> f32 {
+    let scaled = at * vec2<f32>(frequency);
+    let cell = floor(scaled);
+    let grid = origin * frequency + vec2<i32>(cell);
+    let frac = scaled - cell;
     let f = frac * frac * (3.0 - 2.0 * frac);
-    let mask = u32(1048576 / span - 1);
-    let a = cloud_corner(seed, grid, mask);
-    let b = cloud_corner(seed, grid + vec2(1, 0), mask);
-    let c = cloud_corner(seed, grid + vec2(0, 1), mask);
-    let d = cloud_corner(seed, grid + vec2(1, 1), mask);
+    let a = cloud_hash(seed, grid);
+    let b = cloud_hash(seed, grid + vec2(1, 0));
+    let c = cloud_hash(seed, grid + vec2(0, 1));
+    let d = cloud_hash(seed, grid + vec2(1, 1));
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-fn cloud_at(s: Sky, cell: vec2<f32>, dims: vec2<f32>) -> bool {
-    if s.ids.x == 0xffffffffu {
-        return cloud_noise(s.ids.z, vec2<i32>(cell + s.uv.zw), 8) >= 0.48;
-    }
-    let at = fract((cell + s.uv.zw + vec2(0.5)) / dims);
-    return textureSampleLevel(textures[s.ids.x], nearest_clamp, at, 0.0).a >= 0.5;
+// Match weather.rs. Each square column has one footprint and weather type.
+const CLOUD_COLUMNS: f32 = 24.0;
+
+fn cloud_warp(seed: u32, origin: vec2<i32>, at: vec2<f32>) -> vec2<f32> {
+    let warp = cloud_noise(seed ^ 0xa341316cu, origin, at, vec2(1)) - 0.5;
+    return at + vec2(0.78, 0.54) * warp;
 }
 
-fn cloud_color_at(s: Sky, cell: vec2<f32>) -> vec3<f32> {
-    if s.ids.x != 0xffffffffu || s.ids.w == 0u {
-        return s.color.rgb;
+fn cloud_climate(seed: u32, origin: vec2<i32>, at: vec2<f32>) -> f32 {
+    let parity = origin & vec2(1);
+    let climate_origin = (origin - parity) / 2;
+    let climate_at = (at + vec2<f32>(parity)) * 0.5;
+    let bend = cloud_noise(seed ^ 0xab5399d3u, climate_origin, climate_at, vec2(1)) - 0.5;
+    return cloud_noise(seed ^ 0xb73102adu, climate_origin, climate_at + vec2(0.18, -0.10) * bend, vec2(1));
+}
+
+fn cloud_field(seed: u32, origin: vec2<i32>, at: vec2<f32>) -> vec3<f32> {
+    let warped = cloud_warp(seed, origin, at);
+    let coarse = cloud_noise(seed, origin, warped, vec2(1, 2));
+    let detail = cloud_noise(seed ^ 0x3ca1ef53u, origin, warped, vec2(3, 6));
+    let partial = coarse * 0.64 + detail * 0.23;
+    if partial + 0.13 <= 0.47 {
+        return vec3(0.0);
     }
-    let seed = s.ids.z ^ 0xa341316cu;
-    let at = vec2<i32>(cell + s.uv.zw) + vec2(i32(s.extra.w), 0);
-    let amount = mix(cloud_noise(seed, at, 32), cloud_noise(seed, at + vec2(1, 0), 32), fract(s.extra.w));
-    if amount >= 0.78 {
-        return s.axes[1].xyz;
+    let edge = cloud_noise(seed ^ 0x5a528247u, origin, warped, vec2(9, 16));
+    let cover = (partial + edge * 0.13 - 0.47) * 4.7;
+    if cover <= 0.0 {
+        return vec3(0.0);
     }
-    if amount >= 0.56 {
-        return s.axes[0].xyz;
-    }
-    return s.color.rgb;
+    let weather = cloud_climate(seed, origin, at);
+    let margin = 0.051 + max(0.03 * detail + 0.07 * edge - 0.025, 0.0);
+    let gap = min(abs(weather - 0.51), abs(weather - 0.77)) - margin;
+    let kind = select(0.0, 1.0, weather >= 0.51) + select(0.0, 1.0, weather >= 0.77);
+    return vec3(cover * smoothstep(0.0, 0.045, gap), kind, detail * 0.65 + edge * 0.35);
+}
+
+fn texture_cloud_at(s: Sky, cell: vec2<f32>, dims: vec2<f32>) -> bool {
+    let at = fract((cell + s.uv.zw + vec2(0.5)) / dims);
+    return textureSampleLevel(textures[s.ids.x], nearest_clamp, at, 0.0).a >= 0.5;
 }
 
 struct CloudHit {
     color: vec4<f32>,
     distance: f32,
+    optical_distance: f32,
+}
+
+// The lattice shifts between bands so the rectangular shelves overhang each other.
+fn cloud_band_offset(band: i32) -> vec2<f32> {
+    return fract(vec2(0.375, 0.625) * f32(band - 2));
+}
+
+fn cloud_band_fill(field: vec3<f32>, band: i32) -> f32 {
+    let middle = 2.0 + 3.2 * (field.z - 0.5);
+    let thickness = 0.68 + min(field.x, 1.0) * (1.30 + field.y * 0.19);
+    return thickness - abs(f32(band) - middle);
+}
+
+// Walk each intersected band front to back, stepping exactly at voxel boundaries.
+fn cloud_volume(s: Sky, dir: vec3<f32>, near: f32, far: f32, view: Scene) -> CloudHit {
+    let origin = vec2<i32>(s.uv.zw);
+    let ray = dir.xz * CLOUD_COLUMNS / s.extra.x;
+    let step = sign(ray);
+    let delta = 1.0 / max(abs(ray), vec2(1e-12));
+    let band_height = s.extra.y / 5.0;
+    let height_at_camera = -s.extra.z / band_height;
+    let height_rate = dir.y / band_height;
+    let band_time = 1.0 / max(abs(height_rate), 1e-12);
+    let direction = select(1, -1, dir.y < 0.0);
+    let first_band = i32(clamp(floor(height_at_camera + height_rate * near), 0.0, 4.0));
+    let last_band = i32(clamp(floor(height_at_camera + height_rate * far), 0.0, 4.0));
+    let has_sun = s.cloud_sun.w > 0.0;
+    var scattered_sun = vec3(0.0);
+    var sun_from_above = 1.0;
+    if has_sun {
+        // Two polynomial forward lobes approximate the broad glow and bright rim.
+        // The view and light directions are constant along this ray.
+        let cosine = dot(dir, s.axes[2].xyz);
+        let forward = max(cosine, 0.0);
+        let square = forward * forward;
+        let fourth = square * square;
+        let eighth = fourth * fourth;
+        let narrow = eighth * eighth;
+        let back = max(-cosine, 0.0);
+        scattered_sun = s.cloud_sun.rgb * (0.14 + 0.52 * eighth + 1.02 * narrow * narrow + 0.10 * back * back);
+        sun_from_above = smoothstep(-0.06, 0.22, s.axes[2].y);
+    }
+    var light = vec3(0.0);
+    var alpha = 0.0;
+    var first = far;
+    var optical_distance = 0.0;
+    for (var band = first_band; band != last_band + direction && alpha < 0.99; band += direction) {
+        let boundary = f32(band) + select(0.0, 1.0, dir.y < 0.0);
+        let enter = (boundary - height_at_camera) * band_time * f32(direction);
+        let band_start = select(max(enter, near), near, band == first_band);
+        let band_end = select(min(enter + band_time, far), far, band == last_band);
+        let shift = cloud_band_offset(band);
+        let start = s.uv.xy * CLOUD_COLUMNS + ray * band_start - shift;
+        var cell = floor(start);
+        let offset = select(start - cell, cell + vec2(1.0) - start, ray > vec2(0.0));
+        var next = select(band_start + offset * delta, vec2(1e12), ray == vec2(0.0));
+        let shade = 0.82 + 0.050 * f32(band);
+        let sun_path = mix(f32(band) + 0.5, 4.5 - f32(band), sun_from_above) * s.cloud_sun.w;
+        var t = band_start;
+        while t < band_end && alpha < 0.99 {
+            let end = min(band_end, min(next.x, next.y));
+            let field = cloud_field(s.ids.z, origin, (cell + shift + vec2(0.5)) / CLOUD_COLUMNS);
+            if field.x > 0.0 && end > t {
+                let fill = cloud_band_fill(field, band);
+                if fill > 0.0 {
+                    let density = smoothstep(0.0, 0.8, fill) * (0.6 + 0.4 * smoothstep(0.0, 0.65, field.x));
+                    let kind = select(s.extra.w, field.y, s.ids.w != 0u);
+                    let extinction = select(0.085, select(0.145, 0.22, kind == 2.0), kind > 0.0);
+                    let absorption = (1.0 - alpha) * (1.0 - exp(-density * (end - t) * extinction));
+                    var base = s.color.rgb;
+                    if s.ids.w != 0u && field.y > 0.0 {
+                        base = select(s.axes[0].xyz, s.axes[1].xyz, field.y == 2.0);
+                    }
+                    var radiance = base * shade;
+                    if has_sun {
+                        // Approximate how far the light travels through the cloud from
+                        // the local density, band height and solar elevation. Reuse the
+                        // view sample instead of marching a second ray into the sun.
+                        let depth = density * sun_path * (1.0 + 0.30 * kind);
+                        radiance += scattered_sun * (1.0 - 0.97 * smoothstep(0.0, 1.0, depth));
+                    }
+                    first = min(first, t);
+                    optical_distance += (t + end) * 0.5 * absorption;
+                    light += radiance * absorption;
+                    alpha += absorption;
+                }
+            }
+            t = end;
+            if next.x < next.y {
+                next.x += delta.x;
+                cell.x += step.x;
+            } else {
+                next.y += delta.y;
+                cell.y += step.y;
+            }
+        }
+    }
+    let distance = optical_distance / max(alpha, 0.00001);
+    let fog = fog_amount(distance, view.environment.y, view.environment.z);
+    let haze = max(smoothstep(0.0, 1.0, fog), rain_mist_amount(distance, view));
+    let color = mix(light / max(alpha, 0.00001), view.fog_color.rgb, haze);
+    return CloudHit(vec4(color, alpha * s.color.a * (1.0 - smoothstep(0.6, 1.0, fog))), first, distance);
 }
 
 // Trace up to the first cloud surface, stopping at the fragment when testing world geometry.
@@ -80,14 +203,17 @@ fn trace_cloud(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> CloudHit {
     let high = low + s.extra.y;
     var near = 0.0;
     var far = min(reach, limit);
-    if abs(dir.y) > 0.00001 {
+    if dir.y != 0.0 {
         near = max(near, min(low / dir.y, high / dir.y));
         far = min(far, max(low / dir.y, high / dir.y));
     } else if low > 0.0 || high < 0.0 {
-        return CloudHit(vec4(0.0), 0.0);
+        return CloudHit(vec4(0.0), 0.0, 0.0);
     }
     if near >= far {
-        return CloudHit(vec4(0.0), 0.0);
+        return CloudHit(vec4(0.0), 0.0, 0.0);
+    }
+    if s.ids.x == 0xffffffffu {
+        return cloud_volume(s, dir, near, far, view);
     }
     let dims = vec2<f32>(f32(s.ids.z), f32(s.ids.w));
     let start = s.uv.xy + dir.xz * near / size;
@@ -99,11 +225,11 @@ fn trace_cloud(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> CloudHit {
     // 0: came in through a plane, 1 and 2: through a side along x or z.
     var side = 0u;
     // From inside a cloud, it isn't what is seen.
-    var within = near == 0.0 && cloud_at(s, cell, dims);
+    var within = near == 0.0 && texture_cloud_at(s, cell, dims);
     var hit = false;
     let steps = u32(ceil((far - near) / size * (abs(dir.x) + abs(dir.z)))) + 2u;
     for (var i = 0u; i < steps; i++) {
-        let filled = cloud_at(s, cell, dims);
+        let filled = texture_cloud_at(s, cell, dims);
         if filled && !within {
             hit = true;
             break;
@@ -125,7 +251,7 @@ fn trace_cloud(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> CloudHit {
         }
     }
     if !hit {
-        return CloudHit(vec4(0.0), 0.0);
+        return CloudHit(vec4(0.0), 0.0, 0.0);
     }
     // Lit from above, like blocks.
     var shade = select(0.9, 0.8, side == 1u);
@@ -133,21 +259,102 @@ fn trace_cloud(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> CloudHit {
         shade = select(1.0, 0.7, dir.y > 0.0);
     }
     let fog = fog_amount(t, view.environment.y, reach);
-    let color = mix(cloud_color_at(s, cell) * shade, view.fog_color.rgb, smoothstep(0.0, 1.0, fog));
+    let haze = max(smoothstep(0.0, 1.0, fog), rain_mist_amount(t, view));
+    let color = mix(s.color.rgb * shade, view.fog_color.rgb, haze);
     let alpha = s.color.a * (1.0 - smoothstep(0.6, 1.0, fog));
-    return CloudHit(vec4(color, alpha), t);
+    return CloudHit(vec4(color, alpha), t, t);
 }
 
-// The cloud has already been blended into the background. Tinting a fragment behind it by the
-// same cloud color and opacity gives the same result as blending the cloud after that fragment.
+// A soft mass beneath the cloud. Only the weather field moves it, with the cloud's drift.
+fn composite_rain_veil(s: Sky, dir: vec3<f32>, limit: f32, cloud: CloudHit, view: Scene) -> vec4<f32> {
+    if s.ids.w == 0u || max(s.axes[0].w, s.axes[1].w) <= 0.0 {
+        return cloud.color;
+    }
+    let top = s.extra.z + s.extra.y * 0.27;
+    let ceiling = top + 18.0;
+    let reach = min(1536.0, view.environment.z);
+    var near = 36.0;
+    var far = min(limit, reach);
+    if dir.y > 0.0 {
+        far = min(far, ceiling / dir.y);
+    } else if dir.y < 0.0 {
+        near = max(near, ceiling / dir.y);
+    } else if ceiling < 0.0 {
+        return cloud.color;
+    }
+    if near >= far {
+        return cloud.color;
+    }
+    let origin = vec2<i32>(s.uv.zw);
+    let ray = dir.xz / s.extra.x;
+    var light = vec3(0.0);
+    var alpha = 0.0;
+    var front_alpha = 0.0;
+    // Fixed bin boundaries keep samples from jumping when a ray meets the ground
+    // or moves from one side of the cloud base to the other.
+    for (var bin = floor(near / 36.0) * 36.0; bin < far && alpha < 0.88; bin += 36.0) {
+        let start = max(bin, near);
+        let end = min(bin + 36.0, far);
+        let t = (start + end) * 0.5;
+        let at = s.uv.xy + ray * t;
+        // Extruding the fine cloud pattern to the ground turns each small
+        // variation into a stripe. Keep only the broad cloud footprint here.
+        let coarse = cloud_noise(s.ids.z, origin, cloud_warp(s.ids.z, origin, at), vec2(1, 2));
+        if coarse <= 0.48 {
+            continue;
+        }
+        let climate = cloud_climate(s.ids.z, origin, at);
+        let storm = climate >= 0.77;
+        let rain_band = smoothstep(0.57, 0.63, climate) * (1.0 - smoothstep(0.66, 0.72, climate));
+        let storm_band = smoothstep(0.83, 0.90, climate);
+        let wetness = select(rain_band, storm_band, storm);
+        let preset = select(s.axes[0], s.axes[1], storm);
+        if wetness <= 0.0 || preset.w <= 0.0 {
+            continue;
+        }
+        let attach = smoothstep(-18.0, 28.0, top - dir.y * t);
+        let range = smoothstep(36.0, 105.0, t) * (1.0 - smoothstep(reach * 0.55, reach, t));
+        let density = smoothstep(0.48, 0.74, coarse) * wetness * attach * range * preset.w * s.color.a;
+        let extinction = density * select(0.0075, 0.012, storm);
+        let absorption = (1.0 - alpha) * (1.0 - exp(-extinction * (end - start)));
+        // Place the cloud at its opacity-weighted distance along the ray.
+        // Split the one rain bin crossing that distance without resampling the field.
+        var front_absorption = 0.0;
+        if cloud.optical_distance >= end {
+            front_absorption = absorption;
+        } else if cloud.optical_distance > start {
+            front_absorption = (1.0 - alpha) * (1.0 - exp(-extinction * (cloud.optical_distance - start)));
+        }
+        let luma = vec3(0.30, 0.59, 0.11);
+        let color = mix(vec3(dot(preset.rgb, luma) * 0.55), mix(vec3(dot(view.fog_color.rgb, luma)), view.fog_color.rgb, 0.28), 0.58);
+        light += mix(color, view.fog_color.rgb, rain_mist_amount(t, view)) * mix(absorption, front_absorption, cloud.color.a);
+        alpha += absorption;
+        front_alpha += front_absorption;
+    }
+    light += cloud.color.rgb * cloud.color.a * (1.0 - front_alpha);
+    let opacity = cloud.color.a + (1.0 - cloud.color.a) * alpha;
+    return vec4(light / max(opacity, 0.00001), opacity);
+}
+
+fn trace_atmosphere(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> vec4<f32> {
+    // Once local mist is fully present, everything beyond its end already
+    // resolves to the same fog color as the background.
+    let visible_limit = select(limit, min(limit, view.params.y), view.environment.w >= 1.0);
+    let cloud = trace_cloud(s, dir, visible_limit, view);
+    if s.ids.x != 0xffffffffu {
+        return cloud.color;
+    }
+    return composite_rain_veil(s, dir, visible_limit, cloud, view);
+}
+
+// Tint translucent fragments by the part of the atmosphere between them and the camera.
 fn through_cloud(c: vec4<f32>, rel: vec3<f32>, view: Scene) -> vec4<f32> {
     let s = view.cloud;
-    let low = s.extra.z;
-    if s.color.a <= 0.0 || max(0.0, rel.y) < low || min(0.0, rel.y) > low + s.extra.y {
+    if s.color.a <= 0.0 {
         return c;
     }
     let dist = length(rel);
-    let cloud = trace_cloud(s, rel / max(dist, 0.000001), dist, view).color;
+    let cloud = trace_atmosphere(s, rel / max(dist, 0.000001), dist, view);
     return vec4(mix(c.rgb, cloud.rgb, cloud.a), c.a);
 }
 

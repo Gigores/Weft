@@ -60,6 +60,7 @@ options:
   --size <WxH>         window size
   --screen <name>      open this screen at start
   --renderer <name>    vulkan or wgpu
+  --legacy-lod         use the previous distant-terrain path for comparison
   --no-vsync           frames as fast as they come
   --gpu-debug          the graphics API's validation
   --dev                engine assets from the source tree
