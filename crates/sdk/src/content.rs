@@ -166,15 +166,15 @@ impl<K: kind::Kind> Handle<K> {
 }
 
 impl Block {
-    /// Its ore (a feature named like it), for `Registry::edit`: `r.edit(base::IRON_ORE.ore()).exposed(0.5)`.
+    /// Its ore (a feature named like it), for `Registry::edit`: `r.edit(base_api::blocks::IRON_ORE.ore()).exposed(0.5)`.
     pub fn ore(&self) -> &'static Feature {
         Feature::generated(self.name().to_string())
     }
-    /// Its liquid, for `Registry::edit`: `r.edit(base::WATER.liquid()).fog(0x204020, -8.0, 12.0)`.
+    /// Its liquid, for `Registry::edit`: `r.edit(base_api::blocks::WATER.liquid()).fog(0x204020, -8.0, 12.0)`.
     pub fn liquid(&self) -> &'static Liquid {
         Liquid::generated(self.name().to_string())
     }
-    /// What it drops, for `Registry::edit`: `r.edit(base::GRAVEL.loot()).pool(..)`.
+    /// What it drops, for `Registry::edit`: `r.edit(base_api::blocks::GRAVEL.loot()).pool(..)`.
     pub fn loot(&self) -> &'static LootTable {
         LootTable::generated(self.name().to_string())
     }
@@ -182,7 +182,7 @@ impl Block {
 
 impl Dimension {
     /// Its object `object` of the sky, for `Registry::edit` and `remove`:
-    /// `r.remove(OVERWORLD.sky(&base::STARS))`.
+    /// `r.remove(OVERWORLD.sky(&base_api::sky_objects::STARS))`.
     pub fn sky(&self, object: &SkyObject) -> &'static SkyObject {
         SkyObject::generated(format!("{}/{}", self.name(), object.name()))
     }
@@ -201,7 +201,7 @@ impl Template {
 }
 
 impl EntityKind {
-    /// What it drops, for `Registry::edit`: `r.edit(base::ZOMBIE.loot()).pool(..)`.
+    /// What it drops, for `Registry::edit`: `r.edit(base_api::entities::ZOMBIE.loot()).pool(..)`.
     pub fn loot(&self) -> &'static LootTable {
         LootTable::generated(self.name().to_string())
     }
@@ -1124,7 +1124,7 @@ impl Registry {
     }
 
     /// Changes only what the builder sets of something registered already, another mod's or
-    /// this one's; the rest stays. Blocks (`r.edit(&base::CACTUS).light(5)`: on every state,
+    /// this one's; the rest stays. Blocks (`r.edit(&base_api::blocks::CACTUS).light(5)`: on every state,
     /// `state_where` on some), items, biomes, dimensions, menus, ores (`IRON_ORE.ore()`), liquids
     /// (`WATER.liquid()`), terrains (`OVERWORLD.terrain()`), loot tables (`ZOMBIE.loot()`), entity
     /// kinds (`r.edit(&PLAYER).attach(&MANA)`) and the rest by their handles.
@@ -1142,7 +1142,7 @@ impl Registry {
     }
 
     /// Registers `handle` from scratch over what other mods registered as it, nothing of theirs
-    /// staying: `r.replace(&base::TORCH).texture("blue_torch")`. Of several mods replacing one
+    /// staying: `r.replace(&base_api::blocks::TORCH).texture("blue_torch")`. Of several mods replacing one
     /// thing, the last in load order wins. A block's item is replaced too (`.no_item()` leaves
     /// theirs), its loot table only with `.drops*`, its block entity only with `.entity`.
     pub fn replace<K: kind::Builds>(&mut self, handle: &'static Handle<K>) -> K::Builder<'_> {
@@ -2060,7 +2060,7 @@ impl<'a> BlockBuilder<'a> {
     }
 
     /// Changes the states `key` picks (`prop=value,..`: those with every value it names), any
-    /// mod's properties: `r.edit(&base::FURNACE).state_where("lit=true", |s| s.light(15))`. On
+    /// mod's properties: `r.edit(&base_api::blocks::FURNACE).state_where("lit=true", |s| s.light(15))`. On
     /// top of `.states(..)`.
     pub fn state_where(mut self, key: &str, f: impl for<'s> FnOnce(State<'s>) -> State<'s> + 'static) -> Self {
         self.keyed.push((key.to_string(), Box::new(f)));

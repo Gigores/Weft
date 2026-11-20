@@ -5,7 +5,7 @@ use weft_sdk::*;
 static HARVEST_LEVEL: Component<u32> = Component::named(abi::comp::HARVEST_LEVEL);
 
 pub fn register(r: &mut Registry) {
-    r.hud_element(&base_api::TARGET_INFO, hud_anchor::TOP_CENTER, 0, |ui| {
+    r.hud_element(&base_api::hud::TARGET_INFO, hud_anchor::TOP_CENTER, 0, |ui| {
         let Some(target) = ui.view().target() else { return };
         let name = if target.state != 0 {
             block_info(target.state).map(|b| (format!("block:{}", b.name), b.owner.to_string(), b.item))
@@ -40,7 +40,7 @@ pub fn register(r: &mut Registry) {
                     }
                 });
             }
-            ui.screen_parts(base_api::TARGET_INFO.name(), "details");
+            ui.screen_parts(base_api::hud::TARGET_INFO.name(), "details");
         });
     })
     .rebuild_when(|c| {

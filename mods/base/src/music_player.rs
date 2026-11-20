@@ -3,8 +3,8 @@ use std::sync::Mutex;
 use weft_sdk::client::{MusicSource, MusicState};
 use weft_sdk::*;
 
-static PLAYER: Block = Block::named("music_player");
-static MENU: Menu = Menu::named("music_player");
+use base_api::blocks::MUSIC_PLAYER as PLAYER;
+use base_api::menus::MUSIC_PLAYER as MENU;
 static OPEN: Channel<MusicSource> = Channel::named("open_music_player");
 static SOURCE: Mutex<Option<MusicSource>> = Mutex::new(None);
 

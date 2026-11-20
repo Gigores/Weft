@@ -3,14 +3,8 @@ use weft_sdk::{
     *,
 };
 
-static WHEEL_SMALL: Block = Block::named("wheel_small");
-static WHEEL: Block = Block::named("wheel");
-static WHEEL_LARGE: Block = Block::named("wheel_large");
-static PLANKS: Block = Block::named("oak_planks");
-static STRIPE: Block = Block::named("blue_wool");
-static GLASS: Block = Block::named("glass");
-static IRON: Block = Block::named("iron_block");
-static HELM: Block = Block::named("helm");
+use base_api::blocks::{GLASS, HELM, IRON_BLOCK as IRON, OAK_PLANKS as PLANKS, WHEEL, WHEEL_LARGE, WHEEL_SMALL};
+static STRIPE: Block = Block::named("base:blue_wool");
 static AIR: Block = Block::named("core:air");
 
 pub fn register(r: &mut Registry) {
@@ -46,7 +40,7 @@ pub fn register(r: &mut Registry) {
                 }
                 s
             });
-        r.shaped(&base_api::CRAFTING, block.name(), 1, recipe, &[('w', "#wool/*"), ('i', "#ingots/iron")]);
+        r.shaped(&base_api::recipes::CRAFTING, block.name(), 1, recipe, &[('w', "#wool/*"), ('i', "#ingots/iron")]);
     }
     r.command("spawncar", "[at:pos]", spawn_car);
 }

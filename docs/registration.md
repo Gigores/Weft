@@ -194,7 +194,7 @@ A separate world. `r.dimension(&DIM)`.
 Tags (`abi::comp::dimension`): `NO_SKY_LIGHT`, `PLAYER_SPAWN` (`.player_spawn`), `NO_BLOCK_UPDATES`, `BARE`.
 
 ```rust
-r.edit(&base_api::OVERWORLD).gravity(28.0).push(&comps::dimension::WEATHERS, ACID_RAIN.name().into());
+r.edit(&base_api::dimensions::OVERWORLD).gravity(28.0).push(&comps::dimension::WEATHERS, ACID_RAIN.name().into());
 ```
 
 ## Terrain
@@ -358,7 +358,7 @@ A kind of recipe and how the recipe viewer shows it. `r.recipe_kind(&KIND)`.
 | `LAYOUT` | callback | each recipe's own layout (`.layout`) |
 
 ```rust
-r.edit(&base_api::SMELTING).info_line("recipe.mymod.smelting.info", &["time"]);
+r.edit(&base_api::recipes::SMELTING).info_line("recipe.mymod.smelting.info", &["time"]);
 ```
 
 ## Loot table
@@ -544,7 +544,7 @@ r.phase(&CRITS, &phase::MULTIPLY);
 A slot things are worn in. `r.equipment_slot(&S, covers, background)` registers it. Its components are `COVERS` (`[str]` bones), `BACKGROUND` (`str`) and `PRIORITIES` (`[SlotPriority]` for quick transfers).
 
 ```rust
-r.edit(&base_api::CHEST).push(&comps::equipment_slot::COVERS, "leftWing".to_string());
+r.edit(&base_api::slots::CHEST).push(&comps::equipment_slot::COVERS, "leftWing".to_string());
 ```
 
 ## Creative tab
@@ -577,7 +577,7 @@ r.edit(&FOOD).anchor(hud_anchor::TOP_RIGHT).order(2);
 ```
 
 ## Screen part
-Something added to a place of a screen, named `<mod>:<screen>/<area>`, `/2`... `r.screen_part(&screens::TITLE, "buttons", 0, |ui| ..)`. Menus: a menu's own `corner` (top right inside its panel) and `side` (beside it), `r.screen_part(&base::CHEST_MENU, "side", ..)` for any mod's menu, and `screens::MENUS` `corner` and `side` for every menu (base's sort and put away icons are in its `corner`; sorting is `c.client().menu_sort(None)`). `comps::screen_part`: `SCREEN`, `AREA` (`str`), `ORDER` (`i32`), `CALL` (callback).
+Something added to a place of a screen, named `<mod>:<screen>/<area>`, `/2`... `r.screen_part(&screens::TITLE, "buttons", 0, |ui| ..)`. Menus: a menu's own `corner` (top right inside its panel) and `side` (beside it), `r.screen_part(&base_api::menus::CHEST, "side", ..)` for any mod's menu, and `screens::MENUS` `corner` and `side` for every menu (base's sort and put away icons are in its `corner`; sorting is `c.client().menu_sort(None)`). `comps::screen_part`: `SCREEN`, `AREA` (`str`), `ORDER` (`i32`), `CALL` (callback).
 
 ```rust
 static PAUSE_BUTTONS: ScreenPart = ScreenPart::named("base:pause/buttons");
@@ -595,7 +595,7 @@ r.edit(&word_sets::GIZMOS).words(&["mymod:pipes"]);
 What a component is for things that hold their own value: `r.entity_component(&C, default, flags)` (entities), `r.stack_component(&C, flags)` (stacks), `r.instance_component(&C, default, flags)` (both), `r.storage(&S, slots)` (an extra inventory). Named like the component, `C.declaration()`. `comps::component`: `SCHEMA` (`str`), `DEFAULT` (`[u8]`), `SLOTS` (`u32`); tags per flag, `component.save`, `sync_owner`, `sync_watchers`, `sync_menu`, `keep_on_respawn`, `carried`, `server_only`, `no_save`, and `component.stack`.
 
 ```rust
-r.edit(base_api::HUNGER.declaration()).untag("component.keep_on_respawn");
+r.edit(base_api::components::HUNGER.declaration()).untag("component.keep_on_respawn");
 ```
 
 ## Bone motion

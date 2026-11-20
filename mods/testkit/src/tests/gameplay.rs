@@ -9,7 +9,7 @@ fn item(name: &str) -> u32 {
     Item::lookup(name).unwrap_or(u32::MAX)
 }
 
-use base_api::HUNGER;
+use base_api::components::HUNGER;
 
 /// Sprint and sneak held, toggled (Shift + right click on the binding in Controls) and sprint from
 /// a double tap of forward, its second binding.
@@ -365,7 +365,7 @@ pub async fn advancements(t: T) -> R {
     fn made(t: &T) -> u64 {
         t.c()
             .view()
-            .component(&base_api::ADVANCEMENTS)
+            .component(&base_api::components::ADVANCEMENTS)
             .map_or(0, |a| a.done)
     }
     t.flat().await?;
@@ -427,7 +427,7 @@ pub async fn advancements(t: T) -> R {
 fn bed_spawn(t: &T) -> Option<[i32; 3]> {
     t.c()
         .view()
-        .component(&base_api::BED_SPAWN)
+        .component(&base_api::components::BED_SPAWN)
         .filter(|s| s.set != 0)
         .map(|s| s.bed)
 }

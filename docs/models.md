@@ -194,7 +194,7 @@ The callback reads components marked `abi::stack_flags::VISUAL` (`r.stack_compon
 A second model can sit on a bone of the first, with its own texture and clips, like a tail:
 ```rust
 r.bone_model(&PLAYER, "tailmod:tail", "body");                                  // on every player
-r.item(&TAIL).wearable_model(&base_api::CHEST, "tailmod:tail", "body");           // on who wears it
+r.item(&TAIL).wearable_model(&base_api::slots::CHEST, "tailmod:tail", "body");           // on who wears it
 ```
 Draw it in the pixels of the model it goes on, with the same origin (`player_template.geo.json` in the example mod is good to draw on top of). What plays on the wearer plays on it: its own `walk` plays with theirs, and when someone's `walk` names a bone `tail` that is in your model, it moves. Nobody knowing of the other two mods is needed for that.
 

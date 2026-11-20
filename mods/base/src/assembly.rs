@@ -1,10 +1,7 @@
 use weft_sdk::{abi::assembly_result as result, *};
 
-static TOOL: Item = Item::named("assembly_tool");
-static GRAB_TOOL: Item = Item::named("grab_tool");
-static HELM: Block = Block::named("helm");
-static GUIDE: Block = Block::named("linear_guide");
-static GUIDE_RAIL: Block = Block::named("guide_rail");
+use base_api::blocks::{GUIDE_RAIL, HELM, LINEAR_GUIDE as GUIDE};
+use base_api::items::{ASSEMBLY_TOOL as TOOL, GRAB_TOOL};
 
 pub fn use_controller(w: World, player: u64, p: BlockPos, powered: bool) -> bool {
     let stack = w.inventory(player).get(w.selected_slot(player));
@@ -97,8 +94,14 @@ pub fn register(r: &mut Registry) {
         .hardness(3.5)
         .mined_by("pickaxe", tool_tier::HAND)
         .tab(&crate::tabs::REDSTONE);
-    r.shaped(&base_api::CRAFTING, "linear_guide", 1, &["ipi", "iri"], &[('i', "#ingots/iron"), ('p', "piston"), ('r', "redstone")]);
-    r.shaped(&base_api::CRAFTING, "guide_rail", 6, &["iii", "sss", "iii"], &[('i', "#ingots/iron"), ('s', "#stick")]);
+    r.shaped(
+        &base_api::recipes::CRAFTING,
+        "linear_guide",
+        1,
+        &["ipi", "iri"],
+        &[('i', "#ingots/iron"), ('p', "piston"), ('r', "redstone")],
+    );
+    r.shaped(&base_api::recipes::CRAFTING, "guide_rail", 6, &["iii", "sss", "iii"], &[('i', "#ingots/iron"), ('s', "#stick")]);
 
     r.set("#materials/wood", &DENSITY, 0.55);
     r.set("#logs", &DENSITY, 0.62);

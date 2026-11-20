@@ -23,7 +23,7 @@ Slots, held items and dropped items use the same resolved geometry, texture laye
 ## Using an item
 
 - `two_handed()`, `one_handed_action(action)`, `use_priority(n)`: [what it does in the hands](models.md#items-in-the-hand)
-- `on_use`: what using it does. Before it runs anyone can say no to `actions::USE_ITEM`, and after it the same action's event tells every mod (testmod heals with base's food through it). `base_api::eat` is the base game's eating: `.set(&FOOD, ..).use_ticks(32).on_use(base_api::eat)`
+- `on_use`: what using it does. Before it runs anyone can say no to `actions::USE_ITEM`, and after it the same action's event tells every mod (testmod heals with base's food through it). `base_api::components::eat` is the base game's eating: `.set(&FOOD, ..).use_ticks(32).on_use(base_api::components::eat)`
 - `use_until_released()` and `on_release(|u| ..)`: held as long as the button is, and letting go does something, `u.held_ticks()` saying after how long. Base's bow is that: `.use_until_released().on_release(shoot_bow)`, the draw's strength from the ticks. While it is held, `w.entity(id)` says what is being used and for how long (`using`, `using_ticks`): base's bow narrows the view by a step on the `fov` attribute that reads them, and its `use` clip (arms, the string, the nocked arrow) plays by the seconds held. `on_release` also hears an item with `use_ticks` let go too early. Anything finer reads the keys themselves, see Client side
 
 ## Stacks with their own data

@@ -1771,7 +1771,7 @@ impl Registry {
     /// Adds to place `area` of a screen or HUD element without replacing it: a main menu button is
     /// `r.screen_part(&screens::TITLE, "buttons", 0, |ui| ..)`. Lower `order` comes first. The
     /// engine's places: `TITLE` `buttons` and `side`, `PAUSE` `buttons`, `SETTINGS` `buttons`, and
-    /// beside menus: any menu's own `side` (`r.screen_part(&base::CHEST, "side", ..)`, another
+    /// beside menus: any menu's own `side` (`r.screen_part(&base_api::menus::CHEST, "side", ..)`, another
     /// mod's menu too) and `MENUS` `side` beside every one (a sort button). Named
     /// `<mod>:<screen>/<area>` (`base:pause/buttons`, the next `/2`..), other mods edit it by that.
     pub fn screen_part<K: crate::kind::Kind>(

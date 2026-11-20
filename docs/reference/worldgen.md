@@ -41,7 +41,7 @@ Two-noise tunnels plus large caverns. Between `lava_from` and `lava_to` some lay
 
 ## Dimension
 
-- <a id="Dimension-sky"></a>`.sky(object: &SkyObject) -> &'static SkyObject`: Its object `object` of the sky, for `Registry::edit` and `remove`: `r.remove(OVERWORLD.sky(&base::STARS))`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L186)
+- <a id="Dimension-sky"></a>`.sky(object: &SkyObject) -> &'static SkyObject`: Its object `object` of the sky, for `Registry::edit` and `remove`: `r.remove(OVERWORLD.sky(&base_api::sky_objects::STARS))`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L186)
 - <a id="Dimension-terrain"></a>`.terrain() -> &'static Terrain`: Its terrain, for `Registry::edit`: `r.edit(OVERWORLD.terrain()).rule_before(..)`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L190)
 - <a id="Dimension-generation"></a>`.generation(seed: u64, stage: u32) -> crate::Generation<'_>`: Inspect the deterministic result before `stage` (use `abi::stage::POST_PROCESS` for terrain, structures and vegetation), without loading the live world. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/terrain.rs#L624)
 - <a id="Dimension-column"></a>`.column(seed: u64, x: i32, z: i32) -> Column`: Height and biome of column (`x`, `z`) for `seed`, generated or not: from the terrain or the dimension's `column`. A dimension with neither gives height `i32::MIN`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/terrain.rs#L629)

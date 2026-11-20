@@ -12,7 +12,7 @@
 //! r.modify(&attribute::MOVEMENT_SPEED, &phase::ADD, |m| m.value += 0.1);
 //! // Loot tables any mod can change:
 //! r.loot(&OAK_LEAVES).pool(Pool::new().when(Cond::chance(0.05)).item("sapling"));
-//! r.edit(base::ZOMBIE.loot()).pool(Pool::new().item("mymod:brain"));
+//! r.edit(base_api::entities::ZOMBIE.loot()).pool(Pool::new().item("mymod:brain"));
 //! ```
 
 use crate::abi::BlockPos;

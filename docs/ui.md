@@ -137,7 +137,7 @@ still use bindings. `view.target()` identifies the block or entity under the cro
 For a block it gives its `state`, `pos` and `body` (0 for the world); for an entity, its `entity`
 id. Nothing targeted gives `None`.
 
-Base's target information panel accepts `r.screen_part(&base_api::TARGET_INFO, "details", order,
+Base's target information panel accepts `r.screen_part(&base_api::hud::TARGET_INFO, "details", order,
 |ui| ..)`. The same text, item, progress and icon widgets work there as on a screen.
 Read entity components shared with `SYNC_WATCHERS`, or use your mod's existing channels for
 server data the client doesn't have. A HUD element exposes its own extension areas with

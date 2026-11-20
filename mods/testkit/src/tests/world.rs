@@ -545,7 +545,7 @@ pub async fn crater_saved(t: T) -> R {
     Ok(())
 }
 
-use base_api::OVERWORLD;
+use base_api::dimensions::OVERWORLD;
 
 /// Testmod edits Mars as from outside: a biome tried before its dust, with its own surface
 /// and boulders, and a rock needle from a feature written in testmod.

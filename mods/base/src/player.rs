@@ -5,12 +5,14 @@ use weft_sdk::*;
 
 use crate::items::{ARMOR, ARMOR_PIECE, ARMOR_TOUGHNESS, FOOD};
 
-pub use base_api::{FEET, HEAD, HUNGER, Hunger, LEGS};
+pub use base_api::{
+    components::{HUNGER, Hunger},
+    slots,
+};
 
 /// Every 4 seconds a player with a full belly heals and a starving one hurts, like vanilla's.
 const PULSE_TICKS: u32 = 80;
-pub static INVENTORY: Menu = Menu::named("inventory");
-pub static CRAFTING: Menu = Menu::named("crafting_table");
+pub use base_api::menus::{CRAFTING, INVENTORY};
 static HUD_HEALTH: HudElement = HudElement::named("health");
 static HUD_ARMOR: HudElement = HudElement::named("armor");
 static HUNGRY: Condition = Condition::named("hungry");
@@ -24,8 +26,7 @@ static ALWAYS_EATABLE: Tag = Tag::named("can_always_eat");
 
 const MAX_AIR: f32 = 300.0;
 
-/// Head to feet.
-pub const EQUIPMENT: [&EquipmentSlot; 4] = [&HEAD, &base_api::CHEST, &LEGS, &FEET];
+pub use base_api::slots::EQUIPMENT;
 
 pub fn register(r: &mut Registry) {
     r.attribute(&ARMOR, 0.0, 0.0, 30.0);
@@ -34,10 +35,10 @@ pub fn register(r: &mut Registry) {
         .group("hotbar", Slots::row(9).hotbar())
         .group("main", Slots::grid(9, 3));
     for (slot, covers, piece) in [
-        (&HEAD, worn::HEAD, "helmet"),
-        (&base_api::CHEST, worn::CHEST, "chestplate"),
-        (&LEGS, worn::LEGS, "leggings"),
-        (&FEET, worn::FEET, "boots"),
+        (&slots::HEAD, worn::HEAD, "helmet"),
+        (&slots::CHEST, worn::CHEST, "chestplate"),
+        (&slots::LEGS, worn::LEGS, "leggings"),
+        (&slots::FEET, worn::FEET, "boots"),
     ] {
         r.equipment_slot(slot, covers, &format!("slot_{piece}"));
     }

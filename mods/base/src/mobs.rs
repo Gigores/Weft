@@ -3,20 +3,12 @@
 use weft_sdk::ai;
 use weft_sdk::*;
 
-pub static ZOMBIE: EntityKind = EntityKind::named("zombie");
-pub static SPIDER: EntityKind = EntityKind::named("spider");
-pub static PIG: EntityKind = EntityKind::named("pig");
-pub static SKELETON: EntityKind = EntityKind::named("skeleton");
-pub static SHEEP: EntityKind = EntityKind::named("sheep");
-pub static CHICKEN: EntityKind = EntityKind::named("chicken");
-pub static ARROW: EntityKind = EntityKind::named("arrow");
-pub static BOW: Item = Item::named("bow");
-static ARROW_ITEM: Item = Item::named("arrow");
-static EGG: Item = Item::named("egg");
+use base_api::entities::*;
+use base_api::items::{ARROW as ARROW_ITEM, BOW, EGG};
 /// Ticks of whatever a mob counts: a skeleton's reload, a chicken's next egg.
 static FUSE: Component<u32> = Component::named("fuse");
 
-pub static COW: EntityKind = EntityKind::named("cow");
+use base_api::entities::COW;
 
 pub fn register(r: &mut Registry) {
     // The engine's player kind, drawn as the same humanoid as the zombie.

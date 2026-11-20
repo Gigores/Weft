@@ -3,29 +3,8 @@
 
 use weft_sdk::*;
 
-pub static REDSTONE: Block = Block::named("redstone");
-pub static REDSTONE_ORE: Block = Block::named("redstone_ore");
-pub static REDSTONE_BLOCK: Block = Block::named("redstone_block");
-pub static REDSTONE_TORCH: Block = Block::named("redstone_torch");
-pub static REPEATER: Block = Block::named("repeater");
-pub static COMPARATOR: Block = Block::named("comparator");
-pub static LEVER: Block = Block::named("lever");
-pub static BUTTON: Block = Block::named("stone_button");
-pub static LAMP: Block = Block::named("redstone_lamp");
-pub static PISTON: Block = Block::named("piston");
-pub static STICKY_PISTON: Block = Block::named("sticky_piston");
-pub static PISTON_HEAD: Block = Block::named("piston_head");
-pub static STICKY_PISTON_HEAD: Block = Block::named("sticky_piston_head");
-pub static OBSERVER: Block = Block::named("observer");
-pub static DISPENSER: Block = Block::named("dispenser");
-pub static DISPENSER_MENU: Menu = Menu::named("dispenser");
-pub static SLIME_BLOCK: Block = Block::named("slime_block");
-pub static ANCHOR: Block = Block::named("anchor");
-pub static FLOATER: Block = Block::named("floater");
-pub static THRUSTER: Block = Block::named("thruster");
-pub static ROTOR: Block = Block::named("rotor");
-pub static ASSEMBLER: Block = Block::named("assembler");
-pub static GOLDEN_LAMP: Block = Block::named("golden_lamp");
+pub use base_api::blocks::*;
+pub use base_api::menus::DISPENSER as DISPENSER_MENU;
 
 const BUTTON_TICKS: u32 = 20;
 
@@ -496,7 +475,7 @@ pub fn register(r: &mut Registry) {
         .group("dispenser", Slots::chest(1).holder())
         .default_screen();
 
-    const C: &RecipeKind = &base_api::CRAFTING;
+    const C: &RecipeKind = &base_api::recipes::CRAFTING;
     r.shaped(C, "redstone_block", 1, &["rrr", "rrr", "rrr"], &[('r', "redstone")]);
     r.shaped(C, "redstone", 9, &["b"], &[('b', "redstone_block")]);
     r.shaped(C, "redstone_torch", 1, &["r", "s"], &[('r', "redstone"), ('s', "#stick")]);

@@ -334,7 +334,7 @@ impl Client {
             bob: (glam::Vec3::ZERO, pose.roll, 0.0),
         };
         if effects || m.has(cf::BOB) {
-            let bob = self.bobbed(cam).bob;
+            let bob = self.bobbed(cam, self.camera_bob).bob;
             cam.bob = (bob.0, bob.1 + pose.roll, bob.2);
         }
         let cams = &mut self.cameras;

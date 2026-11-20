@@ -59,7 +59,7 @@ pub fn register(r: &mut Registry) {
     r.stack_component(&DISPLAY_PHASE, abi::stack_flags::VISUAL);
     r.storage(&DISPLAY_PARTS, 1).stack(abi::stack_flags::VISUAL);
     r.item(&DISPLAY_TOKEN)
-        .wearable(&base_api::HEAD, 0.5, "base:armor/iron_1")
+        .wearable(&base_api::slots::HEAD, 0.5, "base:armor/iron_1")
         .condition(|s, look| {
             DISPLAY_LOOK_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             match DISPLAY_PHASE.on_stack(s).unwrap_or(0) {
@@ -446,7 +446,10 @@ fn outpost(r: &mut Registry) {
 }
 
 fn environment_controls(r: &mut Registry) {
-    let suns = [base_api::OVERWORLD.sky(&base_api::SUN), base_api::FLATLANDS.sky(&base_api::SUN)];
+    let suns = [
+        base_api::dimensions::OVERWORLD.sky(&base_api::sky_objects::SUN),
+        base_api::dimensions::FLATLANDS.sky(&base_api::sky_objects::SUN),
+    ];
     r.command("eclipse", "<state:word(on,off)> [entity:int]", move |cmd| {
         let (w, player) = (cmd.world(), cmd.player());
         let entity = cmd.int("entity").map_or(player, |id| id as u64);

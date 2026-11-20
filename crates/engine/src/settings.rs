@@ -115,6 +115,9 @@ pub fn fov() -> f32 {
 pub fn fov_effects() -> f32 {
     number("core:fov_effects") as f32
 }
+pub fn camera_bob() -> bool {
+    number("core:camera_bob") != 0.0
+}
 pub fn sensitivity() -> f32 {
     number("core:sensitivity") as f32
 }

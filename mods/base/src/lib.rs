@@ -25,21 +25,21 @@ mod worldgen;
 
 use weft_sdk::*;
 
-pub use base_api::{CLOUDS, FLATLANDS, MOON, OVERWORLD, STARS, SUN, tabs};
+pub use base_api::{dimensions::*, sky_objects::*, tabs};
 
 declare_mod!(deps: [], init: init);
 
 fn init(r: &mut Registry) {
-    base_api::editor_methods(r);
+    base_api::components::editor_methods(r);
     // Vanilla's creative tabs; blocks and items join them with `.tab(..)`.
     for (tab, icon) in [
         (&tabs::BUILDING, &Item::named("bricks")),
         (&tabs::COLORED, &Item::named("red_stained_glass")),
         (&tabs::NATURAL, &Item::named("grass")),
         (&tabs::FUNCTIONAL, &Item::named("crafting_table")),
-        (&tabs::TOOLS, &Item::named("iron_pickaxe")),
-        (&tabs::COMBAT, &Item::named("iron_sword")),
-        (&tabs::FOOD, &Item::named("apple")),
+        (&tabs::TOOLS, &items::IRON_PICKAXE),
+        (&tabs::COMBAT, &items::IRON_SWORD),
+        (&tabs::FOOD, &items::APPLE),
         (&tabs::INGREDIENTS, &items::IRON_INGOT),
         (&tabs::REDSTONE, &Item::named("redstone")),
     ] {

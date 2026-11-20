@@ -99,7 +99,7 @@ An entity effect being registered: drawn by `shaders/entity_effect/<its name>.wg
 
 ## EntityKind
 
-- <a id="EntityKind-loot"></a>`.loot() -> &'static LootTable`: What it drops, for `Registry::edit`: `r.edit(base::ZOMBIE.loot()).pool(..)`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L205)
+- <a id="EntityKind-loot"></a>`.loot() -> &'static LootTable`: What it drops, for `Registry::edit`: `r.edit(base_api::entities::ZOMBIE.loot()).pool(..)`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L205)
 
 ## EntityModify
 

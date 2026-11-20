@@ -174,7 +174,7 @@ The compiler checks that a component fits the kind: `comps::ore::VEINS` goes on 
 static GLOWSTONE: Block = Block::named("base:glowstone");
 
 r.edit(&GLOWSTONE).light(10);                                   // on every state, the rest stays
-r.edit(&base_api::OVERWORLD).push(&comps::dimension::WEATHERS, ACID_RAIN.name().into());
+r.edit(&base_api::dimensions::OVERWORLD).push(&comps::dimension::WEATHERS, ACID_RAIN.name().into());
 r.remove(&Recipe::named("base:crafting/torch"));
 r.edit_pattern::<kind::Block>("#logs").hardness(3.0);
 ```
@@ -189,7 +189,7 @@ Properties are named values on content. Things like fuel, food, durability, etc 
 This is done so any mod reads and writes them without depending on whoever added a certain block.
 
 ```rust
-// Declared where it's used, or taken from the mod that reads it (`base_api::FUEL`, see below)
+// Declared where it's used, or taken from the mod that reads it (`base_api::components::FUEL`, see below)
 static FUEL: Component<u32> = Component::named("fuel");
 static HOT: Tag = Tag::named("hot");
 
@@ -241,7 +241,7 @@ weft_sdk = { path = "../../crates/sdk" }
 base_api = { path = "../../mods/base/api" }
 ```
 ```rust
-r.on_event(&base_api::SMELTED, |b| for s in b.iter() { /* s.furnace, s.input, s.output */ });
+r.on_event(&base_api::events::SMELTED, |b| for s in b.iter() { /* s.furnace, s.input, s.output */ });
 ```
 The mod itself uses the same crate, so there's one declaration of everything, and other mods depend on types only, never on the mod's code. The engine still compares the layouts at load. Without depending on it, `r.has_mod("othermod")` tells whether it is loaded (all mods are known before any registers), to add what goes with it only then. A batch has the world too: `b.world()` in `r.on_event(&actions::USE_BLOCK, |b| ..)`, and each `BlockChange` the player, position, state and item.
 
@@ -314,6 +314,6 @@ You can contact me on Discord: `@vortex_so`
 
 The editor emits ordinary builder calls with their own parameters. SDK methods appear from their source signatures. Mods can register extension methods with `r.editor_method(editor::Method { .. })`. `editor::parameter` derives a parameter's schema and initial Rust literal from a typed value. Its component name lets ready examples fill the same form from registered data. The method's `import` names its public extension trait.
 
-Food uses the shared `base_api` crate, through `use base_api::{Food, FoodItem}` and `.food(Food { hunger: 4, saturation: 2.4 })`. This sets the food component and its eating behavior on the new item. Generated snippets include the trait import. Add `base_api` to your mod's dependencies, as in `examples/examplemod`.
+Food uses the shared `base_api` crate, through `use base_api::components::{Food, FoodItem}` and `.food(Food { hunger: 4, saturation: 2.4 })`. This sets the food component and its eating behavior on the new item. Generated snippets include the trait import. Add `base_api` to your mod's dependencies, as in `examples/examplemod`.
 
 Logic gates use `.logic_gate(Gate::new().inputs(&[Side::Left, Side::Right]).outputs(&[Side::Front]).delay(1), GateLogic::And)`. The editor exposes each input and output face, the delay and the operation. Custom logic uses the existing `.signal_gate(gate, |g| ..)` callback API.

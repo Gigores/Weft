@@ -116,7 +116,7 @@ fn blocks(_r: &mut Registry) {
 /// Gray tooltip with `item.examplemod.<name>.tooltip`, for more tooltip options check `mods/base/assets/lang/en_us.lang`
 fn items(r: &mut Registry) {
     // Food configures the new item's component and eating callback.
-    // use base_api::{Food, FoodItem};
+    // use base_api::components::{Food, FoodItem};
     // static SNACK: Item = Item::named("snack");
     // r.item(&SNACK).food(Food { hunger: 3, saturation: 1.8 });
     r.item(&EXAMPLE_ITEM).tab(&INGREDIENTS).tag("gems/example");

@@ -3,7 +3,7 @@
 
 use weft_sdk::*;
 
-pub use base_api::{CRAFTING, SMELTING};
+pub use base_api::recipes::{CRAFTING, SMELTING};
 const C: &RecipeKind = &CRAFTING;
 const S: &RecipeKind = &SMELTING;
 

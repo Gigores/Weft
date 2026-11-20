@@ -664,6 +664,8 @@ pub struct Client {
     pub fov: f32,
     /// Share of the widening by sprinting and flying that shows (`core:fov_effects`).
     pub fov_effects: f32,
+    /// The view bobs walking (`core:camera_bob`); off, only the hand does.
+    pub camera_bob: bool,
     /// Brightness setting, 0 moody .. 1 bright.
     pub brightness: f32,
     pub entities: FxHashMap<u64, ClientEntity>,
@@ -1027,6 +1029,7 @@ impl Client {
             rest: 0.0,
             fov: 70.0,
             fov_effects: 1.0,
+            camera_bob: true,
             brightness: 0.5,
             entities: FxHashMap::default(),
             showing_blocks: FxHashMap::default(),
@@ -2923,10 +2926,23 @@ impl Client {
         (!dry).then_some(liquid)
     }
 
-    /// The camera with view bobbing, for drawing (aiming uses the steady one).
-    fn bobbed(&self, mut cam: Camera) -> Camera {
+    /// With the view not bobbing walking (`core:camera_bob` off) where it would, the bob the hand
+    /// is drawn with all the same: the camera's, plus walking's.
+    fn hand_bob(&self) -> Option<(Vec3, f32, f32)> {
+        let bobs = self.camera_has(crate::tag_bits::camera::EFFECTS) || self.camera_has(crate::tag_bits::camera::BOB);
+        if self.camera_bob || !bobs {
+            return None;
+        }
+        let shown = self.render_camera();
+        let (with, without) = (self.bobbed(shown, true).bob, self.bobbed(shown, false).bob);
+        Some((shown.bob.0 + with.0 - without.0, shown.bob.1 + with.1 - without.1, shown.bob.2 + with.2 - without.2))
+    }
+
+    /// The camera with view bobbing, for drawing (aiming uses the steady one); `walking`: with the
+    /// bob of walking, not only a hurt's jolt and an action's kick.
+    fn bobbed(&self, mut cam: Camera, walking: bool) -> Camera {
         use std::f32::consts::PI;
-        let (f, g) = (-self.walk_dist * PI, self.bob);
+        let (f, g) = (-self.walk_dist * PI, if walking { self.bob } else { 0.0 });
         // Vanilla's bobHurt: a jolt to the side when hit, and falling over when dead.
         let hit = (self.me.hurt / HURT_FLASH).clamp(0.0, 1.0);
         let jolt = (hit.powi(4) * PI).sin() * 14.0;
@@ -3186,6 +3202,7 @@ impl Client {
         let hand = (alive && self.camera_has(crate::tag_bits::camera::HAND) && !self.hide_gui).then(|| entity_render::Hand {
             lowered: 1.0 - self.hand_height,
             lag: (self.player.pitch - self.hand_view.0, angle_diff(self.player.yaw, self.hand_view.1)),
+            bob: self.hand_bob(),
             body: self.first_person_model,
         });
         let me = (alive && (self.camera_has(crate::tag_bits::camera::BODY) || hand.is_some())).then_some(&self.me);

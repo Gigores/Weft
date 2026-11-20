@@ -1,0 +1,26 @@
+use weft_sdk::Item;
+
+pub static STICK: Item = Item::named("base:stick");
+pub static COAL: Item = Item::named("base:coal");
+pub static IRON_INGOT: Item = Item::named("base:iron_ingot");
+pub static GOLD_INGOT: Item = Item::named("base:gold_ingot");
+pub static DIAMOND: Item = Item::named("base:diamond");
+pub static WHEAT_SEEDS: Item = Item::named("base:wheat_seeds");
+pub static WHEAT: Item = Item::named("base:wheat");
+pub static BUCKET: Item = Item::named("base:bucket");
+pub static FLINT: Item = Item::named("base:flint");
+pub static CLAY_BALL: Item = Item::named("base:clay_ball");
+pub static SNOWBERRY: Item = Item::named("base:snowberry");
+pub static RASPBERRY: Item = Item::named("base:raspberry");
+pub static DRYADS_SADDLE: Item = Item::named("base:dryads_saddle");
+pub static TOADSTOOL: Item = Item::named("base:toadstool");
+pub static SHIELD: Item = Item::named("base:shield");
+pub static BED: Item = Item::named("base:bed");
+pub static APPLE: Item = Item::named("base:apple");
+pub static IRON_PICKAXE: Item = Item::named("base:iron_pickaxe");
+pub static IRON_SWORD: Item = Item::named("base:iron_sword");
+pub static BOW: Item = Item::named("base:bow");
+pub static ARROW: Item = Item::named("base:arrow");
+pub static EGG: Item = Item::named("base:egg");
+pub static ASSEMBLY_TOOL: Item = Item::named("base:assembly_tool");
+pub static GRAB_TOOL: Item = Item::named("base:grab_tool");

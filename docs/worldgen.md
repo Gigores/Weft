@@ -59,7 +59,7 @@ r.ore(&TIN_ORE).y(-64, 90).per_cube(5).vein_size(8).replaces("#stone_ore_replace
 - `exposed(0.5)`: leaves out that share of what would touch a cave, as vanilla's gold and diamonds
 - `biome("#cave")`: only in these biomes, underground ones included; names and tags like anywhere else, `!` leaving some out
 
-An ore is named like its block, so `r.edit(base::IRON_ORE.ore()).per_cube(10)` changes base's iron: what you set replaces its own (`replaces` too: a block in `#stone_ore_replaceables` is in every ore's way), and `r.remove(base::IRON_ORE.ore())` takes it out of the world.
+An ore is named like its block, so `r.edit(base_api::blocks::IRON_ORE.ore()).per_cube(10)` changes base's iron: what you set replaces its own (`replaces` too: a block in `#stone_ore_replaceables` is in every ore's way), and `r.remove(base_api::blocks::IRON_ORE.ore())` takes it out of the world.
 
 ## Structures
 A structure is a template, a fixed shape of blocks, that stands on the ground now and then. You draw a template in layers from the bottom up: each layer is a list of rows along z, and each character in a row is one block along x. A key says which block a character means, a space leaves whatever is already there, and `air` clears it. `fill(block, from, to)` adds a box instead. Its blocks are checked when the game loads, so a typo is an error then, and the same template serves a structure, a piece of a plan, a moving body (`.body(&TEMPLATE)` on an entity) and code (`w.place_template`).

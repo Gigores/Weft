@@ -4,10 +4,10 @@
 
 use weft_sdk::*;
 
-pub use base_api::WOODCUTTING;
+pub use base_api::blocks::WOODCUTTER;
+pub use base_api::recipes::WOODCUTTING;
 
-pub static WOODCUTTER: Block = Block::named("woodcutter");
-static MENU: Menu = Menu::named("woodcutter");
+pub use base_api::menus::WOODCUTTER as MENU;
 
 pub fn register(r: &mut Registry) {
     r.block(&WOODCUTTER)

@@ -41,7 +41,7 @@ Daylight and the light on blocks come from the day of the dimension (`day_length
 ## Changing what is there
 An object of a dimension is `DIM.sky(&OBJECT)`, and it is edited and removed like anything else registered. An edit changes only the fields you set and the object stays the same type, so this example makes the moon bigger, while its texture, phases and orbit stay the same:
 ```rust
-use base_api::{MOON, OVERWORLD, STARS, SUN};
+use base_api::{dimensions::OVERWORLD, sky_objects::{MOON, STARS, SUN}};
 r.edit(OVERWORLD.sky(&MOON)).size(40.0);
 r.edit(OVERWORLD.sky(&SUN)).texture("mymod:blue_sun").glow(0x80C0FF);
 r.remove(OVERWORLD.sky(&STARS));

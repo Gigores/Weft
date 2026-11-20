@@ -1,23 +1,13 @@
-use base_api::FoodItem as _;
+use base_api::components::FoodItem as _;
 use weft_sdk::*;
 
-pub static STICK: Item = Item::named("stick");
-pub static COAL: Item = Item::named("coal");
-pub static IRON_INGOT: Item = Item::named("iron_ingot");
-pub static GOLD_INGOT: Item = Item::named("gold_ingot");
-pub static DIAMOND: Item = Item::named("diamond");
-pub static WHEAT_SEEDS: Item = Item::named("wheat_seeds");
-pub static WHEAT: Item = Item::named("wheat");
-pub static BUCKET: Item = Item::named("bucket");
-pub static FLINT: Item = Item::named("flint");
-pub static CLAY_BALL: Item = Item::named("clay_ball");
-pub static SNOWBERRY: Item = Item::named("snowberry");
-pub static RASPBERRY: Item = Item::named("raspberry");
-pub static DRYADS_SADDLE: Item = Item::named("dryads_saddle");
-pub static TOADSTOOL: Item = Item::named("toadstool");
-pub static SHIELD: Item = Item::named("shield");
+pub use base_api::items::*;
 
-pub use base_api::{ARMOR, ARMOR_PIECE, ARMOR_TOUGHNESS, FLAMMABLE, FOOD, FUEL, Food};
+pub use base_api::{
+    attributes::{ARMOR, ARMOR_TOUGHNESS},
+    components::{FLAMMABLE, FOOD, FUEL, Food},
+    tags::ARMOR_PIECE,
+};
 /// Tags of armor pieces, head to feet; `<tag>/<material>` picks the recipe (see recipes.rs).
 pub const ARMOR_SLOTS: [&str; 4] = ["armor_head", "armor_chest", "armor_legs", "armor_feet"];
 
@@ -122,7 +112,7 @@ pub fn register(r: &mut Registry) {
     r.item(&TOADSTOOL)
         .set(&FOOD, Food { hunger: 1, saturation: 1.2 })
         .use_ticks(16)
-        .on_use(base_api::eat)
+        .on_use(base_api::components::eat)
         .gives_effect(&crate::effects::NAUSEA, 1, 20.0)
         .gives_effect(&crate::effects::POISON, 1, 30.0)
         .tag("mushrooms")
@@ -130,14 +120,14 @@ pub fn register(r: &mut Registry) {
     r.item(&SNOWBERRY)
         .set(&FOOD, Food { hunger: 0, saturation: 1.2 })
         .use_ticks(16)
-        .on_use(base_api::eat)
+        .on_use(base_api::components::eat)
         .gives_effect(&crate::effects::NAUSEA, 1, 20.0)
         .gives_effect(&crate::effects::POISON, 1, 30.0)
         .tab(&crate::tabs::FOOD);
     r.item(&RASPBERRY)
         .set(&FOOD, Food { hunger: 1, saturation: 1.2 })
         .use_ticks(16)
-        .on_use(base_api::eat)
+        .on_use(base_api::components::eat)
         .tab(&crate::tabs::FOOD);
     r.item(&DRYADS_SADDLE)
         .tag("mushrooms")

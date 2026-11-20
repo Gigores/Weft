@@ -2336,6 +2336,7 @@ fn update_game(r: &mut Running, dt: f64, frame_start: Instant) {
         }
         g.client.fov = crate::settings::fov();
         g.client.fov_effects = crate::settings::fov_effects();
+        g.client.camera_bob = crate::settings::camera_bob();
         g.client.brightness = crate::settings::brightness();
         g.client.first_person_model = crate::settings::first_person_model();
         g.client

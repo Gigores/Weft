@@ -2,7 +2,7 @@
 
 use weft_sdk::*;
 
-pub static OAK_DOOR: Block = Block::named("oak_door");
+pub use base_api::blocks::OAK_DOOR;
 
 pub fn register(r: &mut Registry) {
     r.block(&OAK_DOOR)
@@ -48,5 +48,5 @@ pub fn register(r: &mut Registry) {
             e.world().prop_set(e.pos(), "open", open);
         })
         .tab(&crate::tabs::REDSTONE);
-    r.shaped(&base_api::CRAFTING, "oak_door", 3, &["pp", "pp", "pp"], &[('p', "oak_planks")]);
+    r.shaped(&base_api::recipes::CRAFTING, "oak_door", 3, &["pp", "pp", "pp"], &[('p', "oak_planks")]);
 }

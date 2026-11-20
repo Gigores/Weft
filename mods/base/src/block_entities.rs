@@ -5,9 +5,12 @@ use weft_sdk::*;
 use crate::blocks::{CHEST, FURNACE};
 use crate::items::FUEL;
 
-pub use base_api::{SMELT_TIME, SMELTED, SMELTING_STATE as SMELTING, Smelted, Smelting};
-pub static FURNACE_MENU: Menu = Menu::named("furnace");
-pub static CHEST_MENU: Menu = Menu::named("chest");
+pub use base_api::{
+    chains::SMELT_TIME,
+    components::{SMELTING_STATE as SMELTING, Smelting},
+    events::{SMELTED, Smelted},
+    menus::{CHEST as CHEST_MENU, FURNACE as FURNACE_MENU},
+};
 
 pub fn register(r: &mut Registry) {
     r.entity_component(

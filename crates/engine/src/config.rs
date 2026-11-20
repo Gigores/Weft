@@ -437,6 +437,8 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:fov", ck::FLOAT, 70.0, 30.0, 110.0, 1.0),
         // How much sprinting, flying and speed widen the view, as vanilla's FOV effects.
         number("core:fov_effects", ck::FLOAT, 1.0, 0.0, 1.0, 0.0),
+        // Off, the view doesn't bob walking; the hand and what it holds still do.
+        number("core:camera_bob", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:sensitivity", ck::FLOAT, 1.0, 0.01, 3.0, 0.01),
         number("core:brightness", ck::FLOAT, 0.5, 0.0, 1.0, 0.0),
         number("core:debug_groups", ck::INT, u32::MAX as f64, 0.0, u32::MAX as f64, 1.0),
@@ -498,7 +500,7 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
             ],
         ),
         ("core:controls", &["sensitivity", "invert_y", "touch_controls", "auto_jump"]),
-        ("core:accessibility", &["fov_effects"]),
+        ("core:accessibility", &["fov_effects", "camera_bob"]),
         ("core:profile", &["skin_model", "first_person_model", "show_avatars"]),
         ("core:chat_settings", &["chat_width", "chat_height", "chat_height_closed", "chat_opacity", "chat_visibility"]),
     ];

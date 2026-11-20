@@ -41,6 +41,8 @@ pub struct Hand {
     pub lowered: f32,
     /// Radians the hand lags behind a turning camera: pitch, yaw.
     pub lag: (f32, f32),
+    /// The bob to draw it with when the camera's own leaves walking out (`core:camera_bob` off).
+    pub bob: Option<(Vec3, f32, f32)>,
     /// The body shows too, not only what the clips bring up.
     pub body: bool,
 }
@@ -1584,7 +1586,8 @@ impl EntityRenderer {
             });
         }
         if let Some(own) = own_hand {
-            self.draw_own_hand(gpu, list, frame, cam, scene, own, own_first, own_items, &hand_items, boxes.len(), buf, glow);
+            let hand_bob = hand.as_ref().and_then(|h| h.bob);
+            self.draw_own_hand(gpu, list, frame, cam, hand_bob, scene, own, own_first, own_items, &hand_items, boxes.len(), buf, glow);
         }
         self.instances = instances;
     }
@@ -1662,6 +1665,7 @@ impl EntityRenderer {
         list: &mut CommandList,
         frame: &FrameInfo,
         cam: &Camera,
+        bob: Option<(Vec3, f32, f32)>,
         scene: &Scene,
         (i, own, count, arms_up): (usize, [Instance; MAX_LAYERS], usize, u32),
         own_first: usize,
@@ -1673,8 +1677,9 @@ impl EntityRenderer {
     ) {
         let aspect = frame.width as f32 / frame.height.max(1) as f32;
         let item_buf = self.item_buf.map(|b| b.0);
-        let hand_cam = Camera { fov: 70.0, ..*cam };
-        let hv = Scene { view_proj: (hand_cam.proj(aspect) * cam.view()).to_cols_array_2d(), ..*scene };
+        // The hand bobs walking even where the view doesn't (`Hand::bob`).
+        let hand_cam = Camera { fov: 70.0, bob: bob.unwrap_or(cam.bob), ..*cam };
+        let hv = Scene { view_proj: (hand_cam.proj(aspect) * hand_cam.view()).to_cols_array_2d(), ..*scene };
         let hb = self.hand_views[frame.slot];
         gpu.mapped(hb)[..size_of::<Scene>()].copy_from_slice(bytemuck::bytes_of(&hv));
         self.models.begin_batch();

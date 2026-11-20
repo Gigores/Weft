@@ -56,7 +56,7 @@ static GENERATOR_MENU: Menu = Menu::named("generator");
 static FURNACE_MENU: Menu = Menu::named("electric_furnace");
 static BATTERY_MENU: Menu = Menu::named("battery");
 static TANK_MENU: Menu = Menu::named("tank");
-use base_api::SMELTING as SMELTING_RECIPES;
+use base_api::recipes::SMELTING as SMELTING_RECIPES;
 static VOID: Dimension = Dimension::named("void");
 pub static MARS: Dimension = Dimension::named("mars");
 static MARS_SUN: SkyObject = SkyObject::named("mars_sun");
@@ -92,7 +92,7 @@ value! {
 static BURNER: Component<Burner> = Component::named("testmod:burner");
 static WORK: Component<Work> = Component::named("testmod:work");
 /// The common fuel value; the base game sets it, this mod only reads it.
-use base_api::FUEL;
+use base_api::components::FUEL;
 static FOOD_HEAL: Component<f32> = Component::named("testmod:food_heal");
 
 const PER_TICK: i64 = 40;
@@ -312,7 +312,7 @@ fn init(r: &mut Registry) {
         .screen(|ui| machine_screen(ui, |_| {}));
 
     // The base game's kinds, by name: no code dependency on it.
-    use base_api::CRAFTING;
+    use base_api::recipes::CRAFTING;
     recipe_showcase(r);
     r.shaped(&CRAFTING, "generator", 1, &["iii", "ifi", "iii"], &[('i', "#ingots/iron"), ('f', "#furnaces")]);
     r.shaped(&CRAFTING, "electric_furnace", 1, &["iii", "iFi", "ici"], &[('i', "#ingots/iron"), ('F', "#furnaces"), ('c', "#cables")]);
@@ -427,9 +427,9 @@ fn init(r: &mut Registry) {
     // Deep under Mars, where its glow crystals grow.
     r.biome(&CRYSTAL_CAVES).tag("cave").tag("dark");
     r.item(&APPLE)
-        .set(&base_api::FOOD, base_api::Food { hunger: 4, saturation: 2.4 })
+        .set(&base_api::components::FOOD, base_api::components::Food { hunger: 4, saturation: 2.4 })
         .use_ticks(32)
-        .on_use(base_api::eat)
+        .on_use(base_api::components::eat)
         .set(&FOOD_HEAL, 2.0)
         .tab(&BASE_TOOLS);
     // The hottest, driest part of Mars.
@@ -829,7 +829,7 @@ fn tick_furnaces(b: &mut SystemBatch<Work>) {
 }
 
 /// Another mod's blocks, found by name the first time they are used.
-static STONE: Block = Block::named("base:stone");
+use base_api::blocks::STONE;
 static GRASS: Block = Block::named("base:grass");
 static DIRT: Block = Block::named("base:dirt");
 static CHEST: Block = Block::named("base:chest");
