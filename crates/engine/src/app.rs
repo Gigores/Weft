@@ -301,8 +301,8 @@ pub(crate) struct Running {
     entering: Option<Entering>,
     /// The save being opened, then its server streaming the spawn while the preview grows.
     opening_world: Option<OpeningWorld>,
-    /// When the world around the player was first loaded, the HUD coming in from then.
-    seen_since: Option<Instant>,
+    /// When the player entered the world and the HUD started fading in.
+    hud_since: Option<Instant>,
     /// The HUD's quads among the cached ones.
     hud_quads: std::ops::Range<usize>,
     reload_requested: bool,
@@ -581,7 +581,7 @@ impl App {
             preview_shot: None,
             entering: None,
             opening_world: None,
-            seen_since: None,
+            hud_since: None,
             hud_quads: 0..0,
             reload_requested: false,
             packs_pending: false,
@@ -2746,9 +2746,9 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
     r.ui.quads.clear();
     r.ui.quads.extend_from_slice(&r.ui_cached);
     crate::ui::render::animate(&mut r.ui.quads, &r.ui_animated);
-    // The HUD comes in once the world is there, not before it.
+    // The HUD fades in once the server has let the player in.
     let shown = r
-        .seen_since
+        .hud_since
         .map_or(0.0, |t| (t.elapsed().as_secs_f32() / HUD_FADE).min(1.0));
     if shown < 1.0 && !r.hud.editing() {
         for q in
@@ -3095,14 +3095,12 @@ fn save_screenshot(r: &mut Running) {
 /// animation has finished. Controls wait for the server's welcome.
 fn enter_world(r: &mut Running) {
     let Some(g) = &mut r.game else {
-        r.seen_since = None;
+        r.hud_since = None;
         return;
     };
     let now = Instant::now();
-    if r.seen_since.is_none() && g.client.near_shown(NEAR) {
-        r.seen_since = Some(now);
-    }
     if g.client.joined {
+        r.hud_since.get_or_insert(now);
         if g.client.preparing_since.take().is_some() {
             r.entering = None;
             r.screens.clear();
@@ -3112,7 +3110,7 @@ fn enter_world(r: &mut Running) {
         return;
     }
     let Some(preparing) = g.client.preparing_since else { return };
-    let near = r.seen_since.is_some();
+    let near = g.client.near_shown(NEAR);
     let lod = g.client.lod_ready_for_entry();
     let scene_ready = near && lod || now - preparing >= ENTER_LOAD_LIMIT;
     match &mut r.entering {

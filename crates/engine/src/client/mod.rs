@@ -1942,11 +1942,15 @@ impl Client {
     /// anyway).
     pub fn near_shown(&self, reach: i32) -> bool {
         let at = crate::world::cube_of(self.player.pos.floor().as_ivec3());
+        let view = crate::world::View::around(at, self.view_radius, 0);
         self.has_world()
             && (-reach..=reach).all(|x| {
                 (-reach..=reach).all(|z| {
-                    self.world
-                        .column_shown(glam::IVec2::new(at.x + x, at.z + z), self.seed, false)
+                    let column = at + IVec3::new(x, 0, z);
+                    !view.column(column)
+                        || self
+                            .world
+                            .column_shown(glam::IVec2::new(column.x, column.z), self.seed, false)
                 })
             })
     }
