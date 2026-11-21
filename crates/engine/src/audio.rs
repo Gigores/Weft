@@ -12,7 +12,8 @@ use std::{
 use glam::{DVec3, Quat};
 use kira::effect::filter::{FilterBuilder, FilterHandle};
 use kira::effect::reverb::{ReverbBuilder, ReverbHandle};
-use kira::sound::static_sound::StaticSoundData;
+use kira::sound::PlaybackState;
+use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::track::{SendTrackBuilder, SendTrackHandle, SpatialTrackBuilder, SpatialTrackHandle, TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Mix, Tween};
@@ -94,6 +95,8 @@ pub struct Listener {
 pub struct Audio {
     mgr: AudioManager<DefaultBackend>,
     listener: kira::listener::ListenerHandle,
+    listener_position: Option<(u32, DVec3)>,
+    voices: Vec<SpatialVoice>,
     reverb: SendTrackHandle,
     reverb_shape: ReverbHandle,
     environment: TrackHandle,
@@ -116,6 +119,16 @@ pub struct Audio {
     active: bool,
     /// Each category's volume setting id, then the master volume's, looked up once.
     volume_ids: Option<Vec<Option<u32>>>,
+}
+
+struct SpatialVoice {
+    pos: DVec3,
+    track: SpatialTrackHandle,
+    sound: StaticSoundHandle,
+}
+
+fn audio_position(source: DVec3, listener: DVec3) -> glam::Vec3 {
+    (source - listener).as_vec3()
 }
 
 pub(crate) struct LocalMusic {
@@ -229,15 +242,15 @@ impl LocalMusic {
         self.failed = Some(source);
     }
 
-    pub fn update(&mut self, source: Option<(DVec3, SourceFilter)>) -> bool {
+    pub fn update(&mut self, source: Option<(DVec3, SourceFilter)>, listener: DVec3) -> bool {
         let Some(playback) = &mut self.playing else { return false };
         if let Some(error) = playback.sound.pop_error() {
             log::warn!("local music {}: {error}", playback.name);
             self.failed = Some(playback.source);
-        } else if let Some((position, filter)) = source.filter(|_| playback.sound.state() != kira::sound::PlaybackState::Stopped) {
+        } else if let Some((position, filter)) = source.filter(|_| playback.sound.state() != PlaybackState::Stopped) {
             playback
                 .track
-                .set_position(position.as_vec3(), Tween::default());
+                .set_position(audio_position(position, listener), Tween::default());
             if filter != playback.source_filter {
                 playback.filter.set_cutoff(f64::from(filter.cutoff), QUICK);
                 playback.track.set_volume(db(f64::from(filter.gain)), QUICK);
@@ -337,6 +350,8 @@ impl Audio {
             Ok(Audio {
                 mgr,
                 listener,
+                listener_position: None,
+                voices: Vec::new(),
                 reverb,
                 reverb_shape,
                 environment,
@@ -462,6 +477,23 @@ impl Audio {
                 log::debug!("environment reverb: {e:?}");
             }
         }
+        let next_position = l.map(|l| (l.dim, l.pos));
+        if self.listener_position.map(|(dim, _)| dim) != next_position.map(|(dim, _)| dim) {
+            self.voices.clear();
+        }
+        let moved = self.listener_position != next_position;
+        self.listener_position = next_position;
+        self.voices.retain_mut(|voice| {
+            if voice.sound.state() == PlaybackState::Stopped {
+                return false;
+            }
+            if moved && let Some((_, position)) = next_position {
+                voice
+                    .track
+                    .set_position(audio_position(voice.pos, position), Tween::default());
+            }
+            true
+        });
         let Some(l) = l else {
             if let Some(m) = &mut self.music {
                 m.stop(Tween { duration: Duration::from_secs(2), ..Default::default() });
@@ -470,8 +502,7 @@ impl Audio {
             return;
         };
         let orientation = Quat::from_rotation_y(l.yaw) * Quat::from_rotation_x(l.pitch);
-        self.listener
-            .set_position(l.pos.as_vec3(), Tween::default());
+        // Kira's listener stays at zero. Subtract in f64 before mixing nearby positions in f32.
         self.listener.set_orientation(orientation, Tween::default());
         if self.active && !local_playing {
             self.music(assets, l);
@@ -484,6 +515,7 @@ impl Audio {
         folder: &Path,
         source: MusicSource,
         pos: DVec3,
+        listener: DVec3,
         source_filter: SourceFilter,
         name: &str,
     ) -> bool {
@@ -504,7 +536,7 @@ impl Audio {
                 .sound_capacity(1);
             let filter = builder.add_effect(FilterBuilder::new().cutoff(f64::from(source_filter.cutoff)));
             let mut track = self.groups[crate::registry::MUSIC_CATEGORY as usize]
-                .add_spatial_sub_track(&self.listener, pos.as_vec3(), builder)
+                .add_spatial_sub_track(&self.listener, audio_position(pos, listener), builder)
                 .map_err(|err| format!("{err:?}"))?;
             let sound = track
                 .play(data.volume(db(f64::from(local.volume))))
@@ -536,7 +568,7 @@ impl Audio {
         if self
             .music
             .as_ref()
-            .is_some_and(|m| m.state() != kira::sound::PlaybackState::Stopped)
+            .is_some_and(|m| m.state() != PlaybackState::Stopped)
             || Instant::now() < self.next_music
         {
             return;
@@ -631,9 +663,11 @@ impl Audio {
         let volume = (p.volume * def.volume).max(0.0);
         let data = data.playback_rate(pitch as f64);
         let g = (def.category as usize).min(self.groups.len().saturating_sub(1));
+        let voices = &mut self.voices;
         let group = &mut self.groups[g];
         let played = match p.pos {
             Some(pos) => {
+                let Some((_, listener)) = self.listener_position else { return };
                 // Heard up to `range` blocks (further for loud ones).
                 let reach = def.reach(volume);
                 let near = f64::from(def.full_within).min(reach - 0.5);
@@ -647,20 +681,21 @@ impl Audio {
                         .distances((near.max(0.0) as f32, reach.max(1.5) as f32))
                         .attenuation_function(curve)
                         .sub_track_capacity(0)
-                        .sound_capacity(1)
-                        .persist_until_sounds_finish(true);
+                        .sound_capacity(1);
                     if arrival.cutoff < 20_000.0 {
                         b = b.with_effect(FilterBuilder::new().cutoff(f64::from(arrival.cutoff)));
                     }
                     group
-                        .add_spatial_sub_track(&self.listener, arrival.pos.as_vec3(), b)
+                        .add_spatial_sub_track(&self.listener, audio_position(arrival.pos, listener), b)
                         .map_err(|e| format!("{e:?}"))
                         .and_then(|mut t| {
                             let delay = Duration::from_secs_f64(delay).saturating_sub(started.elapsed());
                             let data = data
                                 .volume(db(f64::from(volume * arrival.gain)))
                                 .start_time(delay);
-                            t.play(data).map(|_| ()).map_err(|e| e.to_string())
+                            let sound = t.play(data).map_err(|e| e.to_string())?;
+                            voices.push(SpatialVoice { pos: arrival.pos, track: t, sound });
+                            Ok(())
                         })
                 };
                 if let Some((&direct, echoes)) = paths.split_first() {

@@ -55,7 +55,7 @@ impl Dim {
         }
         let (eye, look) = self.grab_eye(c, player)?;
         let reach = self.block_reach(0, c, player);
-        let hit = self.ray(0, c, eye, look, reach, 0)?;
+        let hit = self.ray(0, c, eye, look, reach, 0, &[])?;
         let root = self.entities.follows(self.entities.get(hit.frame)?);
         let space = self.bodies.get(&root.id)?;
         if root.removed || root.motion == Motion::Parked || root.grab.is_some() || space.signals.on_the_way {

@@ -22,7 +22,7 @@ impl Dim {
         }
         let mut best: Option<abi::RayHit> = None;
         if flags & (abi::ray::BLOCKS | abi::ray::LIQUIDS) != 0 {
-            if let Some(h) = self.ray(space_id, c, from, dir, max, flags) {
+            if let Some(h) = self.ray(space_id, c, from, dir, max, flags, skip) {
                 let point = from + dir * h.dist;
                 // On a body's block, where in that body's blocks.
                 let on = match self.entities.get(h.frame).filter(|_| h.frame != 0) {

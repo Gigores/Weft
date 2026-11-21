@@ -350,12 +350,21 @@ impl Dim {
         let e = self.entities.get(id)?;
         let eye = e.pos + DVec3::Y * e.eye(c);
         let place = self.space_pose(space_id);
-        self.ray(space_id, c, place.to_local(eye), place.vector_to_local(crate::physics::look_dir(e.yaw, e.pitch)), max, flags)
+        self.ray(space_id, c, place.to_local(eye), place.vector_to_local(crate::physics::look_dir(e.yaw, e.pitch)), max, flags, &[])
     }
 
     /// The first block along a ray from `from` (in this dimension's frame: a body's blocks when
     /// asked from them), bodies included when asked from the world; `flags` as `physics::pick`'s.
-    pub fn ray(&self, space_id: u64, c: &Content, from: DVec3, dir: DVec3, max: f64, flags: u32) -> Option<crate::physics::Hit> {
+    pub fn ray(
+        &self,
+        space_id: u64,
+        c: &Content,
+        from: DVec3,
+        dir: DVec3,
+        max: f64,
+        flags: u32,
+        skip: &[u64],
+    ) -> Option<crate::physics::Hit> {
         // Asked from a body's blocks, it looks along those.
         if space_id != 0 {
             return crate::physics::pick(c, self.space(space_id), &[], from, dir, max, flags)
@@ -364,6 +373,7 @@ impl Dim {
         let structures: Vec<(u64, crate::physics::Transform, &dyn crate::physics::Blocks)> = self
             .bodies
             .iter()
+            .filter(|(sid, _)| !skip.contains(sid))
             .filter_map(|(&sid, s)| {
                 self.entities
                     .get(sid)

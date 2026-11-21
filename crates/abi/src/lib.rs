@@ -4695,6 +4695,8 @@ pub struct Host {
     /// that way, slime and all, as a piston moves it. 0 if it can't.
     pub push_blocks: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos, dir: u32) -> u32,
     pub world_has_space: unsafe extern "C" fn(world: *mut WorldCtx, frame: u64) -> u32,
+    /// Transforms a point or direction from this view into a loaded space. Frame 0 is the world.
+    pub world_transform: unsafe extern "C" fn(world: *mut WorldCtx, frame: u64, value: Vec3, vector: u32, out: *mut Vec3) -> u32,
     pub body_move_to: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, pos: *const Vec3, ticks: u32),
     pub body_dynamics: unsafe extern "C" fn(world: *mut WorldCtx, body: u64) -> u32,
     pub body_force: unsafe extern "C" fn(world: *mut WorldCtx, body: u64, at: *const Vec3, force: *const Vec3) -> u32,

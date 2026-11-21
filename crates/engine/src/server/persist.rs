@@ -384,7 +384,39 @@ pub fn read(c: &Content, data: &[u8], now: u64) -> Vec<Saved> {
             }
         }
     }
+    center_saved_falls(c, &mut out);
     out
+}
+
+// Older falls stored the placement offset in the body instead of its pose.
+fn center_saved_falls(c: &Content, saved: &mut [Saved]) {
+    let mut offsets = rustc_hash::FxHashMap::default();
+    for (entity, _, _, space) in saved.iter_mut() {
+        if entity.kind == c.game.falling_kind
+            && let Some(space) = space
+            && let [(cell, part)] = space.blocks.as_mut_slice()
+            && *cell == IVec3::ZERO
+            && part.offset != IVec3::ZERO
+        {
+            offsets.insert(entity.id, part.offset);
+            entity.pos += entity.body_place().vector_to_world(part.shift());
+            part.offset = IVec3::ZERO;
+        }
+    }
+    if offsets.is_empty() {
+        return;
+    }
+    for (entity, _, _, _) in saved {
+        if entity.anchor == Some(IVec3::ZERO) && entity.frame.and_then(|id| offsets.get(&id)) == Some(&entity.anchor_offset) {
+            entity.anchor_offset = IVec3::ZERO;
+        }
+        if let Some(stuck) = &mut entity.stuck
+            && let StuckIn::Block { body, .. } = stuck.into
+            && let Some(offset) = offsets.get(&body)
+        {
+            stuck.at -= offset.as_dvec3() / f64::from(crate::world::placement::UNIT);
+        }
+    }
 }
 
 fn read_one(c: &Content, r: &mut R, now: u64, extended: bool) -> Option<Option<Saved>> {

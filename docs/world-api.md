@@ -28,6 +28,20 @@ if let Some(deck) = w.in_space(body_id) {
 
 Mods that used `on_body` can switch to `in_space`. Rebuild binary mods when upgrading to this host ABI.
 
+Use `point_in` to translate a point and `vector_in` to rotate a direction into another space.
+For example, a drill can raycast from its front face along its local facing.
+
+```rust
+fn drill_hit(w: World, pos: BlockPos, facing: Dir) -> Option<weft_sdk::abi::RayHit> {
+    let dir = facing.offset();
+    let [x, y, z] = [f64::from(dir.x), f64::from(dir.y), f64::from(dir.z)];
+    let from = w.point_in(0, block_center(pos).offset(x * 0.50001, y * 0.50001, z * 0.50001))?;
+    let dir = w.vector_in(0, [x, y, z])?;
+    let hit = w.in_space(0)?.raycast(from, dir, 2.0, Ray::blocks().skip(w.frame().unwrap_or(0)))?;
+    (hit.body == 0).then_some(hit)
+}
+```
+
 ## Seeds
 
 The world's seed (`seed`, and `seed_at(pos)`, `seed_of_cube(pos)` for a number that belongs to a place: what a chest holds when first opened, a villager's trades)

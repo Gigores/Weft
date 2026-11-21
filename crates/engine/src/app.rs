@@ -473,18 +473,25 @@ impl App {
             cache: Some(&self.opts.cache_dir),
         };
         // The chosen renderer, and the others if it can't start on this machine.
-        let chosen = crate::settings::renderer();
+        let mut chosen = crate::settings::renderer();
+        if chosen == "vulkan" && self.opts.renderer.is_none() && !self.opts.automated && crate::diag::vulkan_startup_faulted() {
+            log::warn!("Vulkan crashed during startup on a previous run; trying wgpu first");
+            chosen = "wgpu".into();
+        }
         let mut order: Vec<_> = self.renderers.iter().collect();
         order.sort_by_key(|r| r.0 != chosen);
         let mut failed = Vec::new();
         let mut gpu = None;
         for &(name, factory) in order {
+            crate::diag::renderer_starting(name == "vulkan" && !self.opts.automated);
+            log::info!("starting renderer {name}");
             match factory(&desc) {
                 Ok(g) => {
                     gpu = Some((g, name));
                     break;
                 }
                 Err(e) => {
+                    crate::diag::renderer_starting(false);
                     log::warn!("renderer {name}: {e}");
                     failed.push(format!("{name}: {e}"));
                 }
@@ -2197,7 +2204,9 @@ fn frame(r: &mut Running, opts: &Options, now: Instant) -> bool {
     let capture_now = r.shot_pending;
     let t3 = Instant::now();
     r.prof[3] = t3.duration_since(t2).as_secs_f32() * 1000.0;
-    r.gpu.end_frame(&r.list);
+    if r.gpu.end_frame(&r.list) {
+        crate::diag::renderer_started();
+    }
     r.prof[4] = t3.elapsed().as_secs_f32() * 1000.0;
     report_frame(r, dt);
     if capture_now {
@@ -2442,7 +2451,7 @@ fn play_sounds(r: &mut Running) {
                 .source()
                 .and_then(|source| cl.music_source_position(source))
                 .map(|pos| (pos, cl.source_filter(pos, listener.pos)));
-            music_ended = cl.local_music.update(source);
+            music_ended = cl.local_music.update(source, listener.pos);
         }
         let local_playing = r
             .game

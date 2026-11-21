@@ -144,7 +144,7 @@ pub struct Lifted {
     pub from: IVec3,
     pub local: IVec3,
     pub to: IVec3,
-    pub part: Option<u32>,
+    pub part: Option<Part>,
     pub only: Option<Part>,
 }
 
@@ -160,8 +160,6 @@ pub enum Liveness {
 pub struct Landing {
     body: u64,
     ticks: u8,
-    /// A block in the body that turns into another a tick in: (where, into).
-    turns: Option<(IVec3, u32)>,
 }
 
 pub(super) struct Transfer {
@@ -232,7 +230,7 @@ impl Dim {
                     l.only.is_some_and(|v| v != *part) || (live == Liveness::Assembly && c.states[part.state as usize].liquid.is_some())
                 });
             let Some(main) = moving.first_mut() else { continue };
-            let state = l.part.unwrap_or(main.state);
+            let state = l.part.map_or(main.state, |part| part.state);
             if state != main.state {
                 let first = c.block_of(main.state).first_state;
                 wet.push(Part { state: first + ((main.state - first) & !(state - first)), ..*main });
@@ -245,6 +243,7 @@ impl Dim {
                 continue;
             }
             for part in moving {
+                let local = l.part.unwrap_or(part);
                 if let Some(id) = c
                     .game
                     .block_entities
@@ -255,14 +254,14 @@ impl Dim {
                     })
                 {
                     self.entities.unanchor((space_id, l.from), id);
-                    anchors.push((l.local, id));
+                    anchors.push((l.local, local.offset, id));
                 }
                 let site = crate::wire::Site::of(c, l.from, part, whole, &original);
                 let signal = self.space(space_id).signals.carry_out(site);
                 if !signal.is_empty() {
-                    arriving.insert(crate::wire::Site { cell: l.local, ..site }, signal);
+                    arriving.insert(crate::wire::Site { cell: l.local, offset: local.offset, ..site }, signal);
                 }
-                blocks.push((l.local, part));
+                blocks.push((l.local, local));
             }
             if moved.insert(l.from, l.local).is_none() {
                 carried.push(Carried { local: l.local, to: l.to, state });
@@ -293,11 +292,10 @@ impl Dim {
             e.set_body_pose(place);
         }
         self.reparent_mounts(space_id, body, abi::Turn::NONE, |at| moved.get(&at).copied());
-        for (local, id) in anchors {
-            let offset = self
-                .entities
-                .get(id)
-                .map_or(IVec3::ZERO, |e| e.anchor_offset);
+        for (local, offset, id) in anchors {
+            if let Some(e) = self.entities.get_mut(id) {
+                e.anchor_offset = offset;
+            }
             let shift = offset.as_dvec3() / f64::from(crate::world::placement::UNIT);
             self.entities
                 .attach(id, body, local, place.to_world(local.as_dvec3() + shift + DVec3::splat(0.5)));
@@ -392,17 +390,17 @@ impl Dim {
         let mut going = Vec::new();
         for mut plan in plans {
             plan.lifted
-                .sort_unstable_by_key(|l| (l.from.to_array(), l.part));
+                .sort_unstable_by_key(|l| (l.from.to_array(), l.part.map(|p| (p.state, p.offset.to_array()))));
             plan.lifted.dedup_by(|duplicate, first| {
                 if duplicate.from != first.from || duplicate.only != first.only {
                     return false;
                 }
                 if let (Some(a), Some(b)) = (first.part, duplicate.part) {
-                    if c.states[a as usize].signal.kind == abi::signal_kind::WIRE {
-                        first.part = Some(
-                            c.block_of(a)
-                                .with_sides(a, crate::wire::mask(c, a) | crate::wire::mask(c, b)),
-                        );
+                    if c.states[a.state as usize].signal.kind == abi::signal_kind::WIRE {
+                        let state = c
+                            .block_of(a.state)
+                            .with_sides(a.state, crate::wire::mask(c, a.state) | crate::wire::mask(c, b.state));
+                        first.part = Some(Part { state, ..a });
                     }
                 }
                 true
@@ -1298,22 +1296,14 @@ impl Dim {
                 Carried { local, to, state }
             })
             .collect();
-        self.put_down(space_id, c, id, blocks, Vec::new(), None);
+        self.put_down(space_id, c, id, blocks, Vec::new());
     }
 
     /// Puts what a body carried where it is going: there for circuits now, and for clients when
     /// they see the body there. It stays until then and a little more, not moving. What found
     /// its place taken drops as it would broken. `also`: other cells that changed with it, and
     /// what they were.
-    pub fn put_down(
-        &mut self,
-        space_id: u64,
-        c: &'static Content,
-        body: u64,
-        blocks: Vec<Carried>,
-        also: Vec<(IVec3, u32)>,
-        turns: Option<(IVec3, u32)>,
-    ) {
+    pub fn put_down(&mut self, space_id: u64, c: &'static Content, body: u64, blocks: Vec<Carried>, also: Vec<(IVec3, u32)>) {
         if !self.active_space(body) || !self.active_space(space_id) {
             return;
         }
@@ -1426,7 +1416,7 @@ impl Dim {
         );
         destination
             .landings
-            .push(Landing { body, ticks: REST_TICKS + LINGER_TICKS, turns });
+            .push(Landing { body, ticks: REST_TICKS + LINGER_TICKS });
     }
 
     /// Goes where it was going, if that is free: otherwise it breaks there, what it holds with it.
@@ -1509,15 +1499,7 @@ impl Dim {
                     self.bodies.remove(&landing.body);
                 }
                 LINGER_TICKS => self.show_landed(space_id, c, landing.body),
-                _ => {
-                    if let Some((at, state)) = landing
-                        .turns
-                        .take()
-                        .filter(|_| self.has_space(landing.body))
-                    {
-                        self.carry_block(landing.body, c, at, state);
-                    }
-                }
+                _ => {}
             }
             landing.ticks != 0
         });

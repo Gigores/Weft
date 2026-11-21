@@ -518,8 +518,9 @@ pub unsafe extern "C" fn client_music(c: *mut abi::ClientCtx, source: abi::Music
         }
         music::PLAY => {
             let ok = if let (Some(pos), Some(audio)) = (cl.music_source_position(source), r.audio.as_mut()) {
-                let filter = cl.source_filter(pos, cl.render_camera().pos);
-                audio.start_local(&mut cl.local_music, &folder, source, pos, filter, unsafe { track.as_str() })
+                let listener = cl.render_camera().pos;
+                let filter = cl.source_filter(pos, listener);
+                audio.start_local(&mut cl.local_music, &folder, source, pos, listener, filter, unsafe { track.as_str() })
             } else {
                 cl.local_music.fail(source);
                 false
