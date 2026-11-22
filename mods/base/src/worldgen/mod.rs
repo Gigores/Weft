@@ -211,6 +211,7 @@ pub fn register(r: &mut Registry) {
         .tag("ocean");
     r.biome(&BEACH)
         .surface("sand", "sand", 3)
+        .set(&SHORT_DRYGRASS_COVER, 0.2)
         .set(&TREES, 0.1)
         .set(&TREE_KINDS, TreeKinds::from([("base:palm", 1)]))
         .tag("beach");

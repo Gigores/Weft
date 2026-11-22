@@ -16,7 +16,7 @@ pub(super) fn plant_at(seed: u64, surface: BlockPos, biome: u32, ground: u32) ->
 }
 
 fn soil_plant(seed: u64, x: i32, z: i32, b: u32, h: u64, roll: f64) -> u32 {
-    if roll < FLOWER_COVER.on_biome(b).unwrap_or(0.012) as f64 {
+    if roll < FLOWER_COVER.on_biome(b).unwrap_or(0.0) as f64 {
         FLOWERS
             .on_biome(b)
             .map_or_else(|| [DANDELION.id(), ROSE.id()][(h >> 32) as usize % 2], |l| l.pick(h >> 32).unwrap_or(0))
@@ -29,6 +29,10 @@ fn soil_plant(seed: u64, x: i32, z: i32, b: u32, h: u64, roll: f64) -> u32 {
         if wave < 0 { BLUEGRASS.id() } else { 0 }
     } else if roll < SHORT_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64 {
         SHORT_GRASS.id()
+    } else if roll < SHORT_DRYGRASS_COVER.on_biome(b).unwrap_or(0.0) as f64 {
+        SHORT_DRYGRASS.id()
+    } else if roll < DRYGRASS_COVER.on_biome(b).unwrap_or(0.0) as f64 {
+        DRYGRASS.id()
     } else if roll < TALL_GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64 {
         TALL_TALL_GRASS.id()
     } else if roll < GRASS_COVER.on_biome(b).unwrap_or(0.05) as f64 {
@@ -95,7 +99,7 @@ pub fn decorate(g: &mut Gen) {
                     g.set(x, y - 1, z, COARSE_DIRT.id());
                 }
             }
-            if PLANT_SOIL.on_block(below) {
+            if GENERAL_SOIL.on_block(below) {
                 let plant = soil_plant(seed, wx, wz, b, h, roll);
                 if TALL_TALL_GRASS.is(plant) {
                     place_tall_grass(g, x, y, z);
