@@ -3335,7 +3335,7 @@ impl Client {
             })
             .collect();
         self.render
-            .draw(gpu, list, early, frame, &cam, scene_buf, &frames, &lights, &dry);
+            .draw(gpu, list, early, frame, &cam, scene_buf, &self.lod, &frames, &lights, &dry);
         let lit: Vec<u32> = frames
             .iter()
             .map(|(id, _)| {

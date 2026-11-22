@@ -10,6 +10,10 @@ fn cloud_brick_index(cell: vec2<i32>, band: i32, side: i32) -> u32 {
     return u32(5 * side * side + (band * count + p.y) * count + p.x);
 }
 
+fn cloud_packed_cell(view: Scene, cell: vec2<i32>, band: i32) -> u32 {
+    return cloud_cells[cloud_cache_index(cell, band, i32(view.atmosphere_cache.x))];
+}
+
 fn cloud_cache_value(view: Scene, cell: vec2<i32>, band: i32) -> u32 {
     let side = i32(view.atmosphere_cache.x);
     let relative = cell - view.cloud_cache.xy;
@@ -19,7 +23,7 @@ fn cloud_cache_value(view: Scene, cell: vec2<i32>, band: i32) -> u32 {
     if cloud_cells[cloud_brick_index(cell, band, side)] == 0u {
         return CLOUD_EMPTY_BRICK;
     }
-    return cloud_cells[cloud_cache_index(cell, band, side)];
+    return cloud_packed_cell(view, cell, band);
 }
 
 const RAIN_STRIDE: u32 = 8u;
@@ -42,6 +46,10 @@ fn rain_at_cell(cell: u32, range: f32) -> vec4<f32> {
     if distance <= bounds.x {
         return vec4(0.0);
     }
+    if range >= bounds.y {
+        let packed = rain_depth[offset + RAIN_SLICES];
+        return vec4(unpack2x16float(packed.x), unpack2x16float(packed.y));
+    }
     let layer = min(u32(distance / RAIN_SLICE), RAIN_SLICES - 1u);
     let start = max(bounds.x, f32(layer) * RAIN_SLICE);
     let end = min(bounds.y, f32(layer + 1u) * RAIN_SLICE);
@@ -61,6 +69,17 @@ fn rain_at(view: Scene, pixel: vec2<f32>, range: f32) -> vec4<f32> {
     return mat4x4(rain_at_cell(i.x, range), rain_at_cell(i.y, range), rain_at_cell(i.z, range), rain_at_cell(i.w, range)) * taps.weight;
 }
 
+fn rain_composite_color(s: Sky, dir: vec3<f32>, rain: vec4<f32>, view: Scene) -> vec3<f32> {
+    if (view.atmosphere_cache.w & ATMOSPHERE_FLAGS_RAIN_MEDIA) == 0u {
+        return rain.rgb;
+    }
+    var rainbow = vec3(0.0);
+    if rain.z > 0.0 {
+        rainbow = rainbow_radiance(s, dir);
+    }
+    return vec3(rain.x) + view.fog_color.rgb * rain.y + rainbow * rain.z;
+}
+
 fn resolve_rain(s: Sky, dir: vec3<f32>, limit: f32, cloud: CloudHit, view: Scene, pixel: vec2<f32>) -> vec4<f32> {
     if view.atmosphere_cache.y == 0u {
         let color = composite_rain_veil(s, dir, limit, cloud, view);
@@ -73,13 +92,18 @@ fn resolve_rain(s: Sky, dir: vec3<f32>, limit: f32, cloud: CloudHit, view: Scene
     }
     if cloud.color.a >= CLOUD_OPAQUE {
         let rain = rain_at(view, pixel, front);
-        return rain + vec4(cloud.color.rgb * cloud.color.a, cloud.color.a) * (1.0 - rain.a);
+        return vec4(rain_composite_color(s, dir, rain, view), rain.a)
+            + vec4(cloud.color.rgb * cloud.color.a, cloud.color.a) * (1.0 - rain.a);
     }
     let rain = rain_at(view, pixel, limit);
+    if all(rain == vec4(0.0)) {
+        return vec4(cloud.color.rgb * cloud.color.a, cloud.color.a);
+    }
     if cloud.color.a <= 0.0 {
-        return rain;
+        return vec4(rain_composite_color(s, dir, rain, view), rain.a);
     }
     let before_cloud = rain_at(view, pixel, front);
-    let color = mix(rain.rgb, before_cloud.rgb, cloud.color.a) + cloud.color.rgb * cloud.color.a * (1.0 - before_cloud.a);
+    let visible_rain = mix(rain, before_cloud, cloud.color.a);
+    let color = rain_composite_color(s, dir, visible_rain, view) + cloud.color.rgb * cloud.color.a * (1.0 - before_cloud.a);
     return vec4(color, cloud.color.a + (1.0 - cloud.color.a) * rain.a);
 }

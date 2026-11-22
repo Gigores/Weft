@@ -4,6 +4,7 @@ var<private> AO: array<f32, 4> = array<f32, 4>(0.42, 0.62, 0.8, 1.0);
 const WORLD_LIQUID: u32 = 1u;
 const COVER_WALL: u32 = 2u;
 const LOD_DIR_SHIFT: u32 = 2u;
+const LOD_TINTED: u32 = 1u;
 const LOD_BOX: u32 = 32u;
 const LOD_CUTOUT: u32 = 64u;
 const LOD_LEAVES: u32 = 128u;
@@ -408,8 +409,56 @@ fn lod_uv(dir: u32, p: vec3<f32>) -> vec2<f32> {
     return vec2(p.x, -p.y);
 }
 
+struct LodOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) layer: u32,
+    @location(2) color: vec3<f32>,
+    @location(3) @interpolate(flat) light: vec4<f32>,
+    @location(4) dist: f32,
+    @location(5) @interpolate(flat) layer2: u32,
+    @location(6) @interpolate(flat) blend: f32,
+    @location(7) @interpolate(flat) pattern_layer: u32,
+    @location(8) pos: vec3<f32>,
+    @location(9) @interpolate(flat) size: f32,
+    @location(10) @interpolate(flat) lod_fade: f32,
+    @location(11) rel: vec3<f32>,
+    @location(12) @interpolate(flat) flags: u32,
+}
+
+// Terrain has no block shader, clipping volume or emission. A grass wall uses its own pattern.
+fn lod_input(v: LodOut) -> VOut {
+    var out: VOut;
+    out.clip = v.clip;
+    out.uv = v.uv;
+    out.layer = v.layer;
+    out.layer2 = v.layer2;
+    out.blend = v.blend;
+    out.color = v.color;
+    out.light = v.light;
+    out.dist = v.dist;
+    out.pos = v.pos;
+    out.size = v.size;
+    out.lod_fade = v.lod_fade;
+    out.rel = v.rel;
+    out.flags = v.flags;
+    out.glow = 0xffffffffu;
+    return out;
+}
+
+fn lod_tile_covered(data: u32) -> bool {
+    return ((data >> LOD_DRAW_COVERED_SHIFT) & 1u) != 0u;
+}
+
 @vertex
-fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> LodOut {
+    let origin = origins[ii];
+    let data = u32(origin.w);
+    var out: LodOut;
+    if lod_tile_covered(data) {
+        out.clip = vec4(0.0, 0.0, -1.0, 1.0);
+        return out;
+    }
     let f = vi / 4u;
     let w0 = records[f * 4u];
     let w1 = records[f * 4u + 1u];
@@ -426,7 +475,6 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
     if a.x + a.z < a.y + a.w {
         c = (c + 1u) % 4u;
     }
-    let data = u32(origins[ii].w);
     let scale = exp2(f32((data >> LOD_DRAW_SCALE_SHIFT) & LOD_DRAW_SCALE_MASK));
     let corner = CORNERS[dir * 4u + c];
     var shape = lod_corner(w0, w2, w3, corner);
@@ -437,8 +485,7 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
         shape = vec3(mix(edge.x, edge.y, u), shape.y, mix(edge.z, edge.w, u));
     }
     let local = (lod_pos(w0, w2) + shape) * vec3(scale, 1.0, scale) - vec3(0.0, 0.125, 0.0);
-    let pos = finish(local, vec4<i32>(origins[ii].xyz, 0));
-    var out: VOut;
+    let pos = finish(local, vec4<i32>(origin.xyz, 0));
     out.clip = scene.view_proj * pos;
     // Reverse-Z: a fallback wall sharing a plane with loaded geometry stays behind it.
     out.clip.z -= abs(out.clip.z) * 0.00001;
@@ -446,7 +493,7 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
     out.dist = length(pos.xyz);
     out.rel = pos.xyz;
     out.flags = (dir << LOD_DIR_SHIFT) | select(0u, LOD_BOX, partial) | select(0u, LOD_CUTOUT, partial && covered);
-    let o = origins[ii] + g.cam_cube;
+    let o = origin + g.cam_cube;
     let world = vec3<f32>(o.xyz * 16) + local + vec3(0.0, 0.125, 0.0);
     out.uv = lod_uv(dir, world);
     // A wall lies on the line between two columns: it is of the one its box stands in, a little
@@ -463,8 +510,6 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
     out.layer = fr.a;
     out.layer2 = fr.b;
     out.blend = fr.blend;
-    out.glow = 0xffffffffu;
-    out.slot = 0u;
     out.light = lod_light(w0, w2, w3);
     if partial && covered && kind == LOD_FACE_FILLED_LEAVES {
         out.flags |= LOD_LEAVES;
@@ -482,13 +527,15 @@ fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
                 | (((w3 >> LOD_FACE_LIGHT_B_SHIFT) & LOD_FACE_PATTERN_HIGH_MASK) << 14u);
             let pattern = texture_frame(pattern_id);
             out.flags |= COVER_WALL | (u32(pattern.size) << COVER_SIZE_SHIFT);
-            out.glow = pattern.a;
+            out.pattern_layer = pattern.a;
             out.light = vec4(out.light.x, 0.0, 0.0, 0.0);
         }
     } else if kind != 0u {
         tint = unpack_rgb(biomes[(w1 >> FACE_BIOME_SHIFT) * g.extra.z + kind - 1u]);
     }
-    out.tint = tint;
+    if any(tint != vec3(1.0)) {
+        out.flags |= LOD_TINTED;
+    }
     out.color = tint * shade;
     return out;
 }
@@ -625,7 +672,8 @@ fn fs_forest(in: VOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_lod(in: VOut) -> @location(0) vec4<f32> {
+fn fs_lod(v: LodOut) -> @location(0) vec4<f32> {
+    let in = lod_input(v);
     let du = dpdx(in.uv);
     let dv = dpdy(in.uv);
     if !lod_fade_visible(in.lod_fade, in.clip.xy) {
@@ -651,11 +699,11 @@ fn fs_lod(in: VOut) -> @location(0) vec4<f32> {
         return vec4(shade(in, albedo).rgb, 1.0);
     }
     let cover = smoothstep(0.1, 0.6, albedo.a);
-    let tinted = any(in.tint != vec3(1.0));
+    let tinted = (in.flags & LOD_TINTED) != 0u;
     albedo = vec4(mix(select(albedo.rgb, vec3(1.0), tinted), albedo.rgb, cover), 1.0);
     if (in.flags & COVER_WALL) != 0u {
         let leaf_uv = nearest_uv(f32(in.flags >> COVER_SIZE_SHIFT), uv, du, dv);
-        let plant = textureSampleGrad(textures[in.glow], linear_mipped, leaf_uv, du, dv);
+        let plant = textureSampleGrad(textures[v.pattern_layer], linear_mipped, leaf_uv, du, dv);
         let leaf = dot(plant.rgb, vec3(0.2126, 0.7152, 0.0722));
         albedo = vec4(albedo.rgb * mix(0.75, 1.25 + 0.35 * leaf, plant.a), 1.0);
     }
@@ -665,7 +713,8 @@ fn fs_lod(in: VOut) -> @location(0) vec4<f32> {
 // A see-through surface far off (a sea), as a near liquid's top is drawn: its picture's own
 // alpha over the ground under it.
 @fragment
-fn fs_lod_surface(in: VOut) -> @location(0) vec4<f32> {
+fn fs_lod_surface(v: LodOut) -> @location(0) vec4<f32> {
+    let in = lod_input(v);
     let du = dpdx(in.uv);
     let dv = dpdy(in.uv);
     if !lod_fade_visible(in.lod_fade, in.clip.xy) {

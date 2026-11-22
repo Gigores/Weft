@@ -176,7 +176,7 @@ var<workgroup> occupied_cloud_brick: atomic<u32>;
 var<workgroup> keep_cloud_brick: u32;
 
 @compute @workgroup_size(8, 8)
-fn cache_cloud_density(
+fn cache_cloud_cells(
     @builtin(workgroup_id) brick: vec3<u32>,
     @builtin(local_invocation_id) lane: vec3<u32>,
     @builtin(local_invocation_index) index: u32,
@@ -269,8 +269,21 @@ fn rain_cover_boundary(dir: vec3<f32>, a: f32, b: f32, exposed_end: bool) -> f32
     return select(low, high, exposed_end);
 }
 
+// A sample also feeds its neighboring pixels during bilinear reconstruction.
+fn rain_sample_can_light_bow(s: Sky, dir: vec3<f32>, size: vec2<u32>) -> bool {
+    let sun = s.axes[2].xyz;
+    if s.cloud_sun.w <= 0.0 || sun.y <= 0.0 {
+        return false;
+    }
+    let axes = mat(sky[0]);
+    let reach = f32(RAIN_STRIDE) * 2.0 / vec2<f32>(size);
+    let margin = (reach.x * length(axes[0]) + reach.y * length(axes[1])) / max(length(axes[2]), 1e-6) + 1e-5;
+    let cosine = -dot(dir, sun);
+    return cosine + margin > RAINBOW_COS_MIN && cosine - margin < RAINBOW_COS_MAX;
+}
+
 @compute @workgroup_size(8, 8)
-fn cache_rain_depth(@builtin(global_invocation_id) id: vec3<u32>) {
+fn cache_rain_media(@builtin(global_invocation_id) id: vec3<u32>) {
     let size = scene.atmosphere_extent.xy;
     let grid = (size + (RAIN_STRIDE - 1u)) / RAIN_STRIDE;
     if any(id.xy >= grid) {
@@ -292,7 +305,7 @@ fn cache_rain_depth(@builtin(global_invocation_id) id: vec3<u32>) {
     } else if ceiling < 0.0 {
         leave = 0.0;
     }
-    let rainbow = rainbow_radiance(s, dir);
+    let may_show_rainbow = rain_sample_can_light_bow(s, dir, size);
     let offset = (id.y * grid.x + id.x) * (RAIN_SLICES + 1u);
     var rain = vec4(0.0);
     var first_wet = leave;
@@ -320,7 +333,7 @@ fn cache_rain_depth(@builtin(global_invocation_id) id: vec3<u32>) {
                         b = rain_cover_boundary(dir, middle, b, false);
                     }
                 }
-                let medium = rain_medium(s, dir, (a + b) * 0.5, reach, rainbow, scene);
+                let medium = rain_coefficients(s, dir, (a + b) * 0.5, reach, may_show_rainbow, scene);
                 if medium.a <= 0.0 || b <= a {
                     continue;
                 }

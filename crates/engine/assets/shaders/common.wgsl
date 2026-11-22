@@ -251,8 +251,9 @@ fn accumulate_cloud(
 }
 
 // Walk each intersected band front to back, stepping exactly at voxel boundaries.
-fn trace_cloud_bands(
+fn trace_cloud_bands_impl(
     a: ptr<function, CloudAccumulation>, s: Sky, dir: vec3<f32>, near: f32, far: f32, view: Scene, sun: CloudLighting,
+    entirely_cached: bool,
 ) {
     let lod = view.cloud_lod.xy;
     let origin = vec2<i32>(s.uv.zw);
@@ -281,8 +282,14 @@ fn trace_cloud_bands(
         var t = band_start;
         while t < band_end && (*a).alpha < CLOUD_OPAQUE {
             let world_cell = origin * i32(CLOUD_COLUMNS) + vec2<i32>(cell);
-            let cached = cloud_cache_value(view, world_cell, band);
-            if cached == CLOUD_EMPTY_BRICK {
+            var cached: u32;
+            // Resident rays can read the packed voxel in one fetch.
+            if entirely_cached {
+                cached = cloud_packed_cell(view, world_cell, band);
+            } else {
+                cached = cloud_cache_value(view, world_cell, band);
+            }
+            if !entirely_cached && cached == CLOUD_EMPTY_BRICK {
                 let inner = world_cell & vec2(CLOUD_BRICK - 1);
                 let remaining = select(inner, vec2(CLOUD_BRICK - 1) - inner, ray > vec2(0.0));
                 let boundary = next + vec2<f32>(remaining) * delta;
@@ -296,7 +303,7 @@ fn trace_cloud_bands(
             }
             let end = min(band_end, min(next.x, next.y));
             var sample_density: vec2<f32>;
-            if cached == CLOUD_UNCACHED {
+            if !entirely_cached && cached == CLOUD_UNCACHED {
                 sample_density = cloud_cell_density(s.ids.z, origin, cell, band);
             } else {
                 sample_density = unpack2x16float(cached);
@@ -317,6 +324,25 @@ fn trace_cloud_bands(
                 cell.y += step.y;
             }
         }
+    }
+}
+
+fn trace_cloud_bands(
+    a: ptr<function, CloudAccumulation>, s: Sky, dir: vec3<f32>, near: f32, far: f32, view: Scene, sun: CloudLighting,
+) {
+    // The projected segment is monotone on both cache axes. Allow for the
+    // sub-cell band shift and rounding at the DDA's brick boundaries.
+    let camera = vec2<f32>(vec2<i32>(s.uv.zw) * i32(CLOUD_COLUMNS) - view.cloud_cache.xy) + s.uv.xy * CLOUD_COLUMNS;
+    let ray = dir.xz * CLOUD_COLUMNS / s.extra.x;
+    let start = camera + ray * near;
+    let end = camera + ray * far;
+    let cache_end = f32(view.atmosphere_cache.x);
+    // Older shader packs may leave stale cells in bricks marked empty.
+    let dense = (view.atmosphere_cache.w & ATMOSPHERE_FLAGS_DENSE_CLOUD_CELLS) != 0u;
+    if HAS_CLOUD_CACHE && dense && all(min(start, end) >= vec2(1.01)) && all(max(start, end) < vec2(cache_end - 0.01)) {
+        trace_cloud_bands_impl(a, s, dir, near, far, view, sun, true);
+    } else {
+        trace_cloud_bands_impl(a, s, dir, near, far, view, sun, false);
     }
 }
 
@@ -431,6 +457,9 @@ fn trace_cloud(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> CloudHit {
     return CloudHit(vec4(color, alpha), t, t);
 }
 
+const RAINBOW_COS_MIN: f32 = 0.58;
+const RAINBOW_COS_MAX: f32 = 0.82;
+
 // A square ring on a grid perpendicular to the direction opposite the sun.
 // The grid follows the sun in world space, so camera rotation doesn't move the pixels.
 fn rainbow_radiance(s: Sky, dir: vec3<f32>) -> vec3<f32> {
@@ -440,7 +469,7 @@ fn rainbow_radiance(s: Sky, dir: vec3<f32>) -> vec3<f32> {
     }
     let cosine = -dot(dir, sun);
     // Reject directions beyond the far corners or inside the nearest edges.
-    if cosine <= 0.58 || cosine >= 0.82 {
+    if cosine <= RAINBOW_COS_MIN || cosine >= RAINBOW_COS_MAX {
         return vec3(0.0);
     }
     let vertical = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), sun.y > 0.999);
@@ -474,7 +503,7 @@ fn rain_sunlight(s: Sky, origin: vec2<i32>, at: vec2<f32>, height: f32) -> f32 {
     return 1.0 - smoothstep(0.06, 0.67, shadow);
 }
 
-fn rain_medium(s: Sky, dir: vec3<f32>, t: f32, reach: f32, rainbow: vec3<f32>, view: Scene) -> vec4<f32> {
+fn rain_coefficients(s: Sky, dir: vec3<f32>, t: f32, reach: f32, may_show_rainbow: bool, view: Scene) -> vec4<f32> {
     let rel = dir * t;
     if !rain_exposed(view, rel) {
         return vec4(0.0);
@@ -506,12 +535,20 @@ fn rain_medium(s: Sky, dir: vec3<f32>, t: f32, reach: f32, rainbow: vec3<f32>, v
     let density = coverage * wetness * attach * range * preset.w * s.color.a;
     let extinction = density * select(0.0075, 0.012, storm);
     let luma = vec3(0.30, 0.59, 0.11);
-    let fog = view.fog_color.rgb;
-    var color = mix(vec3(dot(preset.rgb, luma) * 0.55), mix(vec3(dot(fog, luma)), fog, 0.28), 0.58);
-    if extinction > 0.0 && max(max(rainbow.r, rainbow.g), rainbow.b) > 0.002 {
-        color += rainbow * rain_sunlight(s, origin, at, dir.y * t);
+    let mist = rain_mist_amount(t, view);
+    let gray = mix(dot(preset.rgb, luma) * 0.55, dot(view.fog_color.rgb, luma) * 0.72, 0.58);
+    var sunlight = 0.0;
+    if extinction > 0.0 && may_show_rainbow {
+        sunlight = rain_sunlight(s, origin, at, rel.y);
     }
-    return vec4(mix(color, fog, rain_mist_amount(t, view)), extinction);
+    // Grayscale, fog color and rainbow weights share the existing four-half cache record.
+    return vec4(gray * (1.0 - mist), mix(0.28 * 0.58, 1.0, mist), sunlight * (1.0 - mist), extinction);
+}
+
+fn rain_medium(s: Sky, dir: vec3<f32>, t: f32, reach: f32, rainbow: vec3<f32>, view: Scene) -> vec4<f32> {
+    let coefficients = rain_coefficients(s, dir, t, reach, max(max(rainbow.r, rainbow.g), rainbow.b) > 0.002, view);
+    let color = vec3(coefficients.x) + view.fog_color.rgb * coefficients.y + rainbow * coefficients.z;
+    return vec4(color, coefficients.a);
 }
 
 fn rain_ceiling(s: Sky) -> f32 {

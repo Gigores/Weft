@@ -1921,6 +1921,66 @@ impl Lod {
         self.ground.map(|g| g.1).filter(|&h| h != i32::MIN)
     }
 
+    /// Every possible ground-mask lookup for this tile, including the neighbor across a wall,
+    /// resolves to a shown cube. Partial coverage is still tested per pixel.
+    pub(super) fn ground_covered(&self, key: TileKey, heights: (i32, i32), spill: i32, camera: IVec3) -> bool {
+        let center = IVec2::new(camera.x, camera.z);
+        if self.mask.is_empty() || self.center != center || heights.0 < i32::from(i16::MIN) || heights.1 > i32::from(i16::MAX) {
+            return false;
+        }
+        let origin = key.origin().as_i64vec2();
+        let lo = origin - i64::from(spill);
+        let hi = origin + i64::from(key.size()) + i64::from(spill);
+        let magnitude = lo
+            .abs()
+            .max(hi.abs())
+            .max_element()
+            .max(i64::from(heights.0).abs())
+            .max(i64::from(heights.1).abs());
+        // Packed box edges, the quarter-block wall offset, and interpolation in world-space f32.
+        let margin = 2 * i64::from(key.scale()) + (magnitude as f64 * 4.0 * f64::from(f32::EPSILON)).ceil() as i64;
+        if magnitude + margin + i64::from(lod_face::DETAIL_PAD) > i64::from(i32::MAX) {
+            return false;
+        }
+        let first = ((lo - margin) >> 4u32).as_ivec2();
+        let last = ((hi + margin) >> 4u32).as_ivec2();
+        if (first - center)
+            .abs()
+            .max((last - center).abs())
+            .max_element()
+            > self.half
+        {
+            return false;
+        }
+        let width = 2 * self.half + 1;
+        let header = 2 * (width as usize * width as usize).div_ceil(32);
+        let base_y = self.mask[header] as i32;
+        let stride = self.mask[header + 1] as usize;
+        let bottom = ((i64::from(heights.0) - margin) >> 4) as i32 - base_y;
+        let top = ((i64::from(heights.1) + margin) >> 4) as i32 - base_y;
+        if bottom < 0 || top < bottom || top as usize / 32 >= stride {
+            return false;
+        }
+        for z in first.y..=last.y {
+            for x in first.x..=last.x {
+                let i = (z.rem_euclid(width) * width + x.rem_euclid(width)) as usize;
+                if self.mask[i / 32] & (1 << (i % 32)) == 0 {
+                    return false;
+                }
+                let column = header + 2 + i * stride;
+                for word in bottom / 32..=top / 32 {
+                    let from = (bottom - word * 32).max(0);
+                    let to = (top - word * 32).min(31);
+                    let needed = (u32::MAX << from) & (u32::MAX >> (31 - to));
+                    if self.mask[column + word as usize] & needed != needed {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// Keeps the mask of columns shown by cubes current: columns that changed, and the ones
     /// coming into the window when the camera moved to another column. A bit per column for
     /// its ground (seen through what is clear), then a bit per column for its top (a sea's
@@ -2315,6 +2375,33 @@ mod tests {
             );
         }
         panic!("selection did not settle");
+    }
+
+    #[test]
+    fn tile_coverage_requires_every_ground_column_and_cube_in_the_height_span() {
+        let mut lod = Lod::new(unbounded().0, PathBuf::new(), None);
+        let key = TileKey { level: 0, x: -1, z: 0 };
+        let camera = IVec3::new(-1, 16, 0);
+        lod.center = IVec2::new(camera.x, camera.z);
+        lod.half = 4;
+        let width = 2 * lod.half + 1;
+        let columns = (width * width) as usize;
+        let header = 2 * columns.div_ceil(32);
+        lod.mask = vec![u32::MAX; header + 2 + columns * 2];
+        lod.mask[header..header + 2].copy_from_slice(&[(-16i32) as u32, 2]);
+        let covered = |lod: &Lod| lod.ground_covered(key, (238, 273), 0, camera);
+        assert!(covered(&lod));
+        assert!(!lod.ground_covered(key, (238, 273), 0, camera + IVec3::X));
+        // The negative-X neighbor can be sampled by a wall. Its span crosses two Y words.
+        let column = ((-1i32).rem_euclid(width) * width + (-3i32).rem_euclid(width)) as usize;
+        let at = header + 2 + column * 2;
+        for (index, bit) in [(column / 32, column % 32), (at, 31), (at + 1, 0)] {
+            lod.mask[index] &= !(1 << bit);
+            assert!(!covered(&lod));
+            lod.mask[index] |= 1 << bit;
+        }
+        lod.mask[at + 1] &= !(1 << 2);
+        assert!(covered(&lod));
     }
 
     #[test]

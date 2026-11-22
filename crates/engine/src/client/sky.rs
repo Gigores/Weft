@@ -115,7 +115,9 @@ struct Picture {
 #[derive(Default)]
 struct AtmosphereCache {
     fill_clouds: Option<PipelineId>,
+    dense_cloud_cells: bool,
     fill_rain: Option<PipelineId>,
+    rain_media: bool,
     density: Option<(BufferId, u64)>,
     rain: Option<(BufferId, u64)>,
     cover: RainCover,
@@ -131,7 +133,7 @@ pub(super) struct AtmosphereFrame {
     pub cover_origin: [f32; 4],
 }
 
-const CLOUD_CACHE_LIMIT: u32 = if cfg!(target_os = "android") { 256 } else { 512 };
+const CLOUD_CACHE_LIMIT: u32 = if cfg!(target_os = "android") { 256 } else { 1024 };
 const CLOUD_BRICK: u32 = 8;
 const RAIN_STRIDE: u32 = 8;
 const RAIN_SLICES: u64 = 16;
@@ -255,12 +257,14 @@ impl AtmosphereCache {
         };
 
         if let Some(fill) = self.fill_clouds.filter(|_| s.ids[0] == u32::MAX) {
+            if self.dense_cloud_cells {
+                out.cache[3] |= crate::gpu_layout::atmosphere_flags::DENSE_CLOUD_CELLS;
+            }
             // Include the furthest detailed cells when possible, plus one tile for alignment.
             let cell_width = s.extra[0] / crate::weather::CLOUD_COLUMNS as f32;
             let radius = (detailed_range / cell_width).ceil() as u32 + CLOUD_BRICK;
-            let side = (2 * radius)
-                .next_power_of_two()
-                .clamp(128, CLOUD_CACHE_LIMIT);
+            let limit = if self.dense_cloud_cells { CLOUD_CACHE_LIMIT } else { CLOUD_CACHE_LIMIT.min(512) };
+            let side = (2 * radius).next_power_of_two().clamp(128, limit);
             let brick_count = side / CLOUD_BRICK;
             let size = 5 * (side * side + brick_count * brick_count);
             let density = atmosphere_buffer(&mut self.density, gpu, u64::from(size) * 4, "cloud density");
@@ -295,6 +299,9 @@ impl AtmosphereCache {
             let bytes = u64::from(rain_grid[0]) * u64::from(rain_grid[1]) * (RAIN_SLICES + 1) * 8;
             let rain = atmosphere_buffer(&mut self.rain, gpu, bytes, "rain depth samples");
             out.cache[1] = rain_grid[0];
+            if self.rain_media {
+                out.cache[3] |= crate::gpu_layout::atmosphere_flags::RAIN_MEDIA;
+            }
             out.rain = Some(rain);
             commands.pipeline(fill);
             commands.bind(bind::sky::OBJECTS, objects);
@@ -475,9 +482,13 @@ impl Sky {
                         .flatten()
                 };
                 let cache = if atmosphere.is_some() {
+                    let dense = optional("cache_cloud_cells", "cloud density cache");
+                    let media = optional("cache_rain_media", "rain depth cache");
                     AtmosphereCache {
-                        fill_clouds: optional("cache_cloud_density", "cloud density cache"),
-                        fill_rain: optional("cache_rain_depth", "rain depth cache"),
+                        fill_clouds: dense.or_else(|| optional("cache_cloud_density", "cloud density cache")),
+                        dense_cloud_cells: dense.is_some(),
+                        fill_rain: media.or_else(|| optional("cache_rain_depth", "rain depth cache")),
+                        rain_media: media.is_some(),
                         ..Default::default()
                     }
                 } else {

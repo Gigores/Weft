@@ -17,6 +17,10 @@ macro_rules! shared {
 }
 
 shared! {
+    atmosphere_flags {
+        RAIN_MEDIA = 1,
+        DENSE_CLOUD_CELLS = 2,
+    }
     rain_cover {
         CELL = 4,
         CUBES = 16,
@@ -114,6 +118,7 @@ shared! {
     lod_draw {
         SCALE_SHIFT = 16,
         SCALE_MASK = 31,
+        COVERED_SHIFT = 21,
         FADE_MASK = 65535,
         /// Largest tile stored in block units before horizontal scaling is needed.
         PACKED_LEVEL = 5,
@@ -222,6 +227,9 @@ pub mod terrain {
             SIDE = 32 + 2 * 2,
             SAMPLES = 36 * 36,
             WORDS = 4,
+            GROUP_SIDE = 8,
+            /// Full signed floor height and interpolated cave ground between dispatches.
+            SCRATCH_WORDS = 2,
             CAVE_REACH = 48,
             CAVE_DEPTH_MASK = 127,
             CAVE_OPEN_FLOOR = 128,
@@ -1176,11 +1184,14 @@ pub fn prelude(shader: &str, common: &str) -> String {
     }
     s.push_str(common);
     s.push('\n');
-    if matches!(shader, "sky.wgsl" | "world.wgsl") {
+    let has_cloud_cache = matches!(shader, "sky.wgsl" | "world.wgsl");
+    s.push_str(&format!("const HAS_CLOUD_CACHE: bool = {has_cloud_cache};\n"));
+    if has_cloud_cache {
         s.push_str(include_str!("../assets/shaders/atmosphere-cache.wgsl"));
     } else {
         s.push_str(
-            "fn cloud_cache_value(view: Scene, cell: vec2<i32>, band: i32) -> u32 { return 0xffffffffu; }
+            "fn cloud_packed_cell(view: Scene, cell: vec2<i32>, band: i32) -> u32 { return 0xffffffffu; }
+             fn cloud_cache_value(view: Scene, cell: vec2<i32>, band: i32) -> u32 { return 0xffffffffu; }
              fn rain_exposed(view: Scene, rel: vec3<f32>) -> bool { return true; }\n",
         );
     }

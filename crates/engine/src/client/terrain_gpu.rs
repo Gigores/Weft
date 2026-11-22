@@ -179,6 +179,7 @@ impl Readback {
 pub struct GpuTerrain {
     pipeline: Option<PipelineId>,
     lod_pipeline: Option<PipelineId>,
+    lod_openings: Option<PipelineId>,
     pub far_lod_pipeline: Option<PipelineId>,
     rx: Receiver<Job>,
     queue: VecDeque<Job>,
@@ -196,7 +197,16 @@ pub struct GpuTerrain {
 
 /// The terrain's pipelines: label and entry point.
 const PIPELINES: [(&str, &str); 2] = [("terrain", "generate"), ("terrain lod", "lod")];
+const LOD_OPENINGS: (&str, &str) = ("terrain lod openings", "lod_openings");
 const FAR_LOD_PIPELINE: (&str, &str) = ("far terrain lod", "lod_far");
+
+fn split_lod(shader: &weft_render::Shader) -> bool {
+    shader
+        .module
+        .entry_points
+        .iter()
+        .any(|e| e.name == LOD_OPENINGS.1)
+}
 
 fn far_lod_enabled() -> bool {
     !crate::app::api::launch_options().contains_key("legacy-lod")
@@ -213,6 +223,7 @@ impl GpuTerrain {
             Ok(s) => {
                 for (label, entry) in PIPELINES
                     .into_iter()
+                    .chain(split_lod(&s).then_some(LOD_OPENINGS))
                     .chain(far_lod_enabled().then_some(FAR_LOD_PIPELINE))
                 {
                     gpu.precompile(&ComputeDesc { label, shader: &s, entry });
@@ -229,26 +240,40 @@ impl GpuTerrain {
 
     pub fn new(gpu: &mut dyn Backend, assets: &crate::assets::Assets, rx: Receiver<Job>, on: Arc<AtomicBool>) -> GpuTerrain {
         let pipelines = Self::shader(assets).and_then(|s| {
-            let [terrain, lod] = PIPELINES.map(|(label, entry)| {
+            let mut create = |(label, entry)| {
                 gpu.create_compute(&ComputeDesc { label, shader: &s, entry })
                     .map_err(|e| e.0)
-            });
-            let (terrain, lod) = (terrain?, lod?);
+            };
+            let terrain = create(PIPELINES[0])?;
+            let lod = match create(PIPELINES[1]) {
+                Ok(lod) => lod,
+                Err(e) => {
+                    gpu.destroy_pipeline(terrain);
+                    return Err(e);
+                }
+            };
+            let openings = match split_lod(&s).then(|| create(LOD_OPENINGS)).transpose() {
+                Ok(p) => p,
+                Err(e) => {
+                    gpu.destroy_pipeline(lod);
+                    gpu.destroy_pipeline(terrain);
+                    return Err(e);
+                }
+            };
             let far = far_lod_enabled()
                 .then(|| {
-                    let (label, entry) = FAR_LOD_PIPELINE;
-                    gpu.create_compute(&ComputeDesc { label, shader: &s, entry })
-                        .map_err(|e| log::warn!("far LOD compute: {e}"))
+                    create(FAR_LOD_PIPELINE)
+                        .inspect_err(|e| log::warn!("far LOD compute: {e}"))
                         .ok()
                 })
                 .flatten();
-            Ok((terrain, lod, far, s.hash))
+            Ok((terrain, lod, openings, far, s.hash))
         });
-        let (pipeline, lod_pipeline, far_lod_pipeline, lod_shader) = match pipelines {
-            Ok((p, l, far, hash)) => (Some(p), Some(l), far, Some(hash)),
+        let (pipeline, lod_pipeline, lod_openings, far_lod_pipeline, lod_shader) = match pipelines {
+            Ok((p, l, openings, far, hash)) => (Some(p), Some(l), openings, far, Some(hash)),
             Err(e) => {
                 log::error!("terrain on the GPU unavailable, generating on the CPU: {e}");
-                (None, None, None, None)
+                (None, None, None, None, None)
             }
         };
         on.store(pipeline.is_some() && enabled(), Ordering::Relaxed);
@@ -256,6 +281,7 @@ impl GpuTerrain {
         GpuTerrain {
             pipeline,
             lod_pipeline,
+            lod_openings,
             far_lod_pipeline,
             rx,
             queue: VecDeque::new(),
@@ -282,7 +308,7 @@ impl GpuTerrain {
                 gpu.destroy_buffer(b);
             }
         }
-        for p in [self.pipeline.take(), self.lod_pipeline.take(), self.far_lod_pipeline.take()]
+        for p in [self.pipeline.take(), self.lod_pipeline.take(), self.lod_openings.take(), self.far_lod_pipeline.take()]
             .into_iter()
             .flatten()
         {
@@ -304,7 +330,8 @@ impl GpuTerrain {
     /// Distant terrain tiles: what came back goes to the workers to mesh, the next ones go up.
     fn tiles(&mut self, gpu: &mut dyn Backend, list: &mut CommandList, slot: usize) {
         use super::lod::LOD_WORDS_PER_TILE;
-        let Some(pipeline) = self.lod_pipeline else { return };
+        use layout::lod;
+        let Some(surface) = self.lod_pipeline else { return };
         let s = &mut self.slots[slot];
         if !s.lod_flight.is_empty() {
             let (out, _) = s.lod_out.unwrap();
@@ -339,14 +366,25 @@ impl GpuTerrain {
         }
         let jobs_buf = sized(gpu, &mut s.lod_jobs, LOD_BATCH * JOB_WORDS * 4, usage::STORAGE | usage::HOST, "terrain lod jobs");
         gpu.mapped(jobs_buf)[..jobs.len() * 4].copy_from_slice(bytemuck::cast_slice(&jobs));
-        let out = sized(gpu, &mut s.lod_out, LOD_BATCH * LOD_WORDS_PER_TILE * 4, usage::STORAGE | usage::READBACK, "terrain lod out");
-        list.push(Cmd::SetPipeline(pipeline));
-        list.bind(binding::DESC, desc);
-        list.bind(binding::JOBS, jobs_buf);
-        list.bind(binding::OUT, out);
-        list.push_constants(&[batch.len() as u32]);
-        list.push(Cmd::Dispatch { x: batch.len() as u32, y: 1, z: 1 });
-        list.push(Cmd::Barrier);
+        let openings = self
+            .lod_openings
+            .filter(|_| words[d::HAS_CAVES as usize] != 0 && batch.iter().any(|j| 1u32 << j.key.level <= lod::CAVE_REACH));
+        let scratch = if openings.is_some() { (lod::SAMPLES * lod::SCRATCH_WORDS) as usize } else { 0 };
+        let tile_words = LOD_WORDS_PER_TILE + scratch;
+        let out = sized(gpu, &mut s.lod_out, LOD_BATCH * tile_words * 4, usage::STORAGE | usage::READBACK, "terrain lod out");
+        let groups = lod::SIDE.div_ceil(lod::GROUP_SIDE);
+        let tiles = batch.len() as u32;
+        // Resource packs with the original single-pass kernel dispatch one workgroup per tile.
+        let (x, y, z) = if self.lod_openings.is_some() { (groups, groups, tiles) } else { (tiles, 1, 1) };
+        for pipeline in std::iter::once(surface).chain(openings) {
+            list.push(Cmd::SetPipeline(pipeline));
+            list.bind(binding::DESC, desc);
+            list.bind(binding::JOBS, jobs_buf);
+            list.bind(binding::OUT, out);
+            list.push_constants(&tiles);
+            list.push(Cmd::Dispatch { x, y, z });
+            list.push(Cmd::Barrier);
+        }
         s.lod_flight = batch;
     }
 

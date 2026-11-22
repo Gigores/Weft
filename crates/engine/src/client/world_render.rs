@@ -307,6 +307,7 @@ pub struct WorldRenderer {
     quad_pipes: [PipelineId; 4],
     /// Distant terrain: what is opaque, then see-through surfaces (seas).
     lod_pipes: [PipelineId; 3],
+    lod_coverage_flag: bool,
     pub(super) far_lod: far_lod::FarLod,
     forest_textures: Vec<(TextureId, u32)>,
     /// Distant terrain tiles (`lod`): their quads (in `faces`, four words like a face), count
@@ -391,6 +392,15 @@ pub fn world_shader(assets: &crate::assets::Assets) -> Result<(Shader, crate::sh
     Ok((s, slots.pop().unwrap_or_default()))
 }
 
+/// Older packs receive their original packed draw word on both startup and reload.
+fn uses_lod_coverage_flag(shader: &Shader) -> bool {
+    shader
+        .module
+        .functions
+        .iter()
+        .any(|(_, f)| f.name.as_deref() == Some("lod_tile_covered"))
+}
+
 /// Block shader slot per texture id: a block's `shader` goes with its textures.
 fn shader_table(gpu: &mut dyn Backend, c: &Content, textures: &GameTextures, slots: &crate::shaders::Slots) -> BufferId {
     let mut table = vec![0u32; textures.count().max(1)];
@@ -459,6 +469,7 @@ impl WorldRenderer {
             face_pipes,
             quad_pipes,
             lod_pipes,
+            lod_coverage_flag: uses_lod_coverage_flag(&shader),
             far_lod,
             forest_textures: Vec::new(),
             lod: FxHashMap::default(),
@@ -608,6 +619,7 @@ impl WorldRenderer {
                 self.face_pipes = f;
                 self.quad_pipes = q;
                 self.lod_pipes = l;
+                self.lod_coverage_flag = uses_lod_coverage_flag(&shader);
                 self.far_lod.reload(gpu, &shader);
                 gpu.destroy_buffer(self.tex_shader);
                 self.tex_shader = shader_table(gpu, crate::content::content(), textures, &slots);
@@ -999,6 +1011,7 @@ impl WorldRenderer {
         frame: &FrameInfo,
         cam: &Camera,
         scene: BufferId,
+        terrain: &super::lod::Lod,
         frames: &[(u64, crate::physics::Transform)],
         lights: &FxHashMap<MeshKey, u32>,
         dry: &[(crate::physics::Transform, &[(IVec3, IVec3)])],
@@ -1163,6 +1176,7 @@ impl WorldRenderer {
             let near_cubes = [0, 2]
                 .iter()
                 .all(|&k| bounds[k] < masked[1] && bounds[k + 3] > masked[0]);
+            let covered = near_cubes && self.lod_coverage_flag && terrain.ground_covered(key, (y0, y1), spill, cam_cube);
             // A block of margin: the tiles are drawn a little lower than their records say.
             let extent = half + Vec3::ONE + Vec3::new(spill as f32, 0.0, spill as f32);
             let seen = seen_sides(center - extent, center + extent);
@@ -1172,6 +1186,10 @@ impl WorldRenderer {
             use super::lod::{ALWAYS, BESIDE_CUBES, FOREST, PLANTS, SURFACE};
             let mut draw = |layer: u8, s: u32, len: u32| {
                 self.lod_drawn += len as u64;
+                let mut origin = origin;
+                if layer == 0 && covered {
+                    origin[3] |= 1 << crate::gpu_layout::lod_draw::COVERED_SHIFT;
+                }
                 let args =
                     DrawIndexedArgs { indices: len * 6, instances: 1, first_index: 0, vertex_offset: (s * 4) as i32, first_instance: 0 };
                 lod.push(((3, layer, a.page, args, origin, center), bounds));
