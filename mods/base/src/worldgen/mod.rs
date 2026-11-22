@@ -137,6 +137,7 @@ pub fn register(r: &mut Registry) {
         .set(&COARSE_DIRT_COVER, 0.4)
         // .set_text(&FLOWERS, "base:rose base:dandelion base:fern base:fern")
         // .set(&FLOWER_COVER, 0.02)
+        .set(&FLOWER_COVER, 0.02)
         .set(&TREE_KINDS, TreeKinds::from([("base:oak", 4), ("base:birch", 1)]));
     r.biome(&BIRCH_FOREST)
         .temperature(..0.1)
