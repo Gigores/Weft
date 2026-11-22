@@ -458,7 +458,8 @@ pub trait Backend: Send {
     fn prepare_uploads(&mut self);
     /// `None` when the surface cannot be drawn to right now (minimized).
     fn begin_frame(&mut self) -> Option<FrameInfo>;
-    fn end_frame(&mut self, cmds: &CommandList);
+    /// Submits the frame. Returns whether it was presented.
+    fn end_frame(&mut self, cmds: &CommandList) -> bool;
     /// The next `end_frame` copies the surface image back to the CPU.
     fn request_capture(&mut self);
     /// Stalls until the requested capture is ready. Debug and screenshots only.

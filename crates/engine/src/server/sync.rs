@@ -10,7 +10,7 @@ impl Server {
 
         let mut unsent = 0u64;
         for pi in 0..self.players.len() {
-            if !self.players[pi].joined {
+            if !self.players[pi].streams_world() {
                 continue;
             }
             let view = self.view(&self.players[pi]);
@@ -21,8 +21,13 @@ impl Server {
             let d = p.dim as usize;
             send_far(c, p, dim, storage.as_ref(), full, *tick);
             send_block_changes(p, dim);
-            send_mining(p, &mining_now[d], *tick);
             send_clock(p, dim, *tick, *tick_rate);
+            if !p.joined {
+                p.first_sync = false;
+                unsent += send_cubes(p, dim, &c.dims[d], view, full, &settled[d]);
+                continue;
+            }
+            send_mining(p, &mining_now[d], *tick);
             let viewer = dim
                 .entity(p.entity)
                 .map_or((DVec3::ZERO, GameMode::SURVIVAL), |e| (e.pos, e.mode));

@@ -486,6 +486,30 @@ fn current_mod() -> Option<String> {
 
 static CRASH_DIR: OnceLock<PathBuf> = OnceLock::new();
 
+pub(crate) fn vulkan_startup_faulted() -> bool {
+    #[cfg(windows)]
+    return native::fault_marker().is_some_and(|p| p.is_file());
+    #[cfg(not(windows))]
+    false
+}
+
+pub(crate) fn renderer_starting(vulkan: bool) {
+    #[cfg(windows)]
+    native::VULKAN_STARTING.store(vulkan, Ordering::Relaxed);
+    #[cfg(not(windows))]
+    let _ = vulkan;
+}
+
+pub(crate) fn renderer_started() {
+    #[cfg(windows)]
+    if native::VULKAN_STARTING.load(Ordering::Relaxed)
+        && native::VULKAN_STARTING.swap(false, Ordering::Relaxed)
+        && let Some(path) = native::fault_marker()
+    {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Panics and (on Windows) native faults write `crash-reports/crash-<time>.txt` naming the mod
 /// that was running, with a backtrace and the last log lines.
 pub fn install_crash_handler(run_dir: &std::path::Path) {
@@ -552,7 +576,19 @@ fn write_report(what: &str) {
 
 #[cfg(windows)]
 mod native {
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    pub(super) static VULKAN_STARTING: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn fault_marker() -> Option<PathBuf> {
+        Some(
+            super::CRASH_DIR
+                .get()?
+                .parent()?
+                .join("vulkan-startup-fault"),
+        )
+    }
 
     #[repr(C)]
     struct ExceptionPointers {
@@ -584,6 +620,12 @@ mod native {
                 0xC000_00FD => "stack overflow",
                 _ => "native exception",
             };
+            if code == 0xC000_0005
+                && VULKAN_STARTING.load(Ordering::Relaxed)
+                && let Some(path) = fault_marker()
+            {
+                let _ = std::fs::write(path, b"Vulkan access violation before the first frame\n");
+            }
             super::write_report(&format!("{name} (code {code:#010x})"));
         }
         // Let Windows end the process as it would have.

@@ -9,6 +9,8 @@ use glam::Vec2;
 use rustc_hash::{FxHashMap, FxHashSet};
 use winit::keyboard::KeyCode;
 
+pub(crate) const PLACEMENT_MODE: &str = "core:placement_mode";
+
 /// The hotbar slot actions, first to ninth.
 pub const HOTBAR: [&str; 9] = [
     "core:hotbar1",
@@ -97,6 +99,7 @@ pub const ENGINE_KEYS: &[(&str, &str, u32)] = {
         ("core:uses", "KeyU", 0),
         ("core:attack", "mouse0", HANDS),
         ("core:use", "mouse1", HANDS),
+        (PLACEMENT_MODE, "KeyG", HANDS),
         ("core:pick", "mouse2", HANDS),
         ("core:hotbar_next", "wheel_down", HANDS),
         ("core:hotbar_prev", "wheel_up", HANDS),
@@ -242,6 +245,7 @@ pub struct Bind {
     /// frame, and a double tap's first press (a tap's press while it may still count).
     on: [bool; SLOTS],
     fired: [bool; SLOTS],
+    pressed_by_action: bool,
     tapped: [Option<Instant>; SLOTS],
 }
 
@@ -255,6 +259,7 @@ impl Bind {
             while_held: Vec::new(),
             on: [false; SLOTS],
             fired: [false; SLOTS],
+            pressed_by_action: false,
             tapped: [None; SLOTS],
         }
     }
@@ -384,6 +389,13 @@ impl Input {
         self.read(action, true, false) != 0.0
     }
 
+    /// A one-shot control such as a touch button can fire its action without a keyboard bind.
+    pub(crate) fn press_action(&mut self, action: &str) {
+        if let Some(&i) = self.lookup.get(action) {
+            self.binds[i].pressed_by_action = true;
+        }
+    }
+
     pub fn pressed_raw(&self, action: &str) -> bool {
         self.read(action, true, true) != 0.0
     }
@@ -421,7 +433,7 @@ impl Input {
         let b = &self.binds[i];
         let keys = if pressed { &self.pressed } else { &self.held };
         let mut seen = [None; SLOTS];
-        let mut amount = 0.0;
+        let mut amount = if pressed && b.pressed_by_action { 1.0 } else { 0.0 };
         for (s, binding) in b.keys.iter().enumerate() {
             let Some(binding) = binding else { continue };
             if excluded(binding.chord.key) {
@@ -631,6 +643,7 @@ impl Input {
     pub fn end_frame(&mut self) {
         for b in &mut self.binds {
             b.fired = [false; SLOTS];
+            b.pressed_by_action = false;
         }
         self.pressed.clear();
         self.released.clear();
@@ -1028,7 +1041,7 @@ mod key_tests {
     fn a_tap_is_a_key_alone_and_held_with_another_a_modifier() {
         let mut i = input("core:debug", "tap F3");
         i.register("core:show_cubes", Binding::parse_slots("F3+KeyG").unwrap(), 0);
-        i.register("core:swap_hands", Binding::parse_slots("KeyG").unwrap(), 0);
+        i.register(PLACEMENT_MODE, Binding::parse_slots("KeyG").unwrap(), 0);
         i.key_down(Key::Code(KeyCode::F3));
         assert!(!i.pressed("core:debug"), "not on the way down");
         i.key_up(Key::Code(KeyCode::F3));
@@ -1036,10 +1049,19 @@ mod key_tests {
         i.end_frame();
         i.key_down(Key::Code(KeyCode::F3));
         i.key_down(Key::Code(KeyCode::KeyG));
-        assert!(i.pressed("core:show_cubes") && !i.pressed("core:swap_hands"), "F3+G over G");
+        assert!(i.pressed("core:show_cubes") && !i.pressed(PLACEMENT_MODE), "F3+G over G");
         i.key_up(Key::Code(KeyCode::KeyG));
         i.key_up(Key::Code(KeyCode::F3));
         assert!(!i.pressed("core:debug"), "a modifier this time");
+    }
+
+    #[test]
+    fn a_touch_action_pulses_even_when_its_key_is_unbound() {
+        let mut i = input(PLACEMENT_MODE, "none");
+        i.press_action(PLACEMENT_MODE);
+        assert!(i.pressed(PLACEMENT_MODE) && !i.held(PLACEMENT_MODE));
+        i.end_frame();
+        assert!(!i.pressed(PLACEMENT_MODE));
     }
 
     #[test]

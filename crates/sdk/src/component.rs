@@ -875,6 +875,8 @@ pub static DAMAGE: Component<u32> = Component::named(abi::comp::WEAR);
 pub static LOOT_ROLLS: Component<u32> = Component::named(abi::comp::LOOT_ROLLS);
 pub static HARDNESS: Component<f32> = Component::named(abi::comp::HARDNESS);
 pub static DENSITY: Component<f32> = Component::named(abi::comp::block::DENSITY);
+/// Fraction of reflected sound absorbed by the block, from 0 to 1. Solid blocks default to 0.18.
+pub static SOUND_ABSORPTION: Component<f32> = Component::named(abi::comp::block::SOUND_ABSORPTION);
 pub static THRUST: Component<f32> = Component::named(abi::comp::block::THRUST);
 pub static FRICTION: Component<f32> = Component::named(abi::comp::FRICTION);
 pub static DRAG: Component<f32> = Component::named(abi::comp::DRAG);

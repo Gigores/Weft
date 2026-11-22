@@ -252,7 +252,7 @@ struct Moving {
     retracting: bool,
     /// The head in the body and what it turns into on the way: the short one while it is inside
     /// the piston, or its rod would stick out of the back.
-    head_turns: Option<(IVec3, u32)>,
+    head_turns: Option<(IVec3, Part, u32)>,
 }
 
 /// The blocks signals look at. What isn't there yet holds things as they are, in the world; a
@@ -1960,15 +1960,17 @@ impl Dim {
         space_id: u64,
         c: &Content,
         base: Site,
-        free: Option<IVec3>,
         start: IVec3,
         step: IVec3,
+        contacts: Option<Vec<Placed>>,
     ) -> Option<(Vec<Placed>, Vec<Placed>)> {
         let space = self.space(space_id);
         let mut moved = Vec::new();
         let mut broken = Vec::new();
-        let mut todo = Vec::new();
-        let collect = |origin: IVec3, area: Aabb, todo: &mut Vec<Placed>| -> Option<()> {
+        let pulling = contacts.is_some();
+        let mut todo = contacts.unwrap_or_default();
+        let axis = step.as_dvec3().abs().max_position();
+        let collect = |origin: IVec3, area: Aabb, aligned: bool, todo: &mut Vec<Placed>| -> Option<()> {
             let lo = area.min.floor().as_ivec3();
             let hi = area.max.ceil().as_ivec3();
             for x in lo.x..hi.x {
@@ -1981,7 +1983,16 @@ impl Dim {
                         }
                         for part in space.layout(at).parts(space.get(at)?) {
                             let owner = part.owner(at);
-                            if Some(owner.0) == free || (owner.0 == base.cell && owner.1.offset == base.offset) {
+                            if owner.0 == base.cell && owner.1.offset == base.offset {
+                                continue;
+                            }
+                            // Recessed blocks like chests still stick when their placement is flush.
+                            if aligned
+                                && (owner.0[axis] != origin[axis]
+                                    || owner.1.offset[axis] != base.offset[axis]
+                                    || !c.solid(owner.1.state)
+                                    || !self.movable(c, owner.1.state))
+                            {
                                 continue;
                             }
                             let shift = delta.as_dvec3();
@@ -1996,7 +2007,7 @@ impl Dim {
             Some(())
         };
         let shift = base.part(AIR).shift();
-        collect(start, Aabb { min: shift, max: shift + DVec3::ONE }, &mut todo)?;
+        collect(start, Aabb { min: shift, max: shift + DVec3::ONE }, pulling, &mut todo)?;
         while let Some((p, part)) = todo.pop() {
             if moved.contains(&(p, part)) || broken.contains(&(p, part)) {
                 continue;
@@ -2018,7 +2029,7 @@ impl Dim {
             }
             moved.push((p, part));
             for patch in part.bounds(c) {
-                collect(p, patch.swept(step.as_dvec3()), &mut todo)?;
+                collect(p, patch.swept(step.as_dvec3()), false, &mut todo)?;
                 if info.flags & bf::STICKY != 0 {
                     for dir in 0..6 {
                         let axis = dir / 2;
@@ -2062,7 +2073,7 @@ impl Dim {
     /// body over a piston's time, then put down: for a mod's own movers. False if it can't go.
     pub fn push_blocks(&mut self, space_id: u64, c: &'static Content, from: IVec3, dir: u8) -> bool {
         let Some(&step) = DIRS.get(dir as usize) else { return false };
-        let Some((moved, broken)) = self.gather_move(space_id, c, (from - step).into(), None, from, step) else { return false };
+        let Some((moved, broken)) = self.gather_move(space_id, c, (from - step).into(), from, step, None) else { return false };
         if moved.is_empty() {
             return false;
         }
@@ -2080,7 +2091,7 @@ impl Dim {
                 from: p,
                 local: p - from,
                 to: p,
-                part: Some(part),
+                part: Some(Part { state: part, ..source }),
                 only: Some(source),
             }));
         let (id, _) =
@@ -2110,7 +2121,7 @@ impl Dim {
             riding: Vec::new(),
         };
         if extend {
-            (plan.moved, plan.broken) = self.gather_move(space_id, c, site, None, head, step)?;
+            (plan.moved, plan.broken) = self.gather_move(space_id, c, site, head, step, None)?;
         } else {
             // A sticky one brings back what is against its head, if it can; if not it comes back
             // without it. So it does when the power is gone before what it pushed has got there:
@@ -2124,12 +2135,9 @@ impl Dim {
                 .get(&site)
                 .is_some_and(|d| self.time > d.pushed_at + MOVE_TICKS as u64);
             if s.flags as u32 & abi::signal_flags::STICKY != 0 && held_on {
-                let beyond = head + step;
-                let here = self.block_at(space_id, c, beyond)?.1;
-                if here != AIR && c.solid(here) && self.movable(c, here) {
-                    if let Some((moved, broken)) = self.gather_move(space_id, c, site, Some(head), beyond, -step) {
-                        (plan.moved, plan.broken) = (moved, broken);
-                    }
+                let contacts = self.piston_contacts(space_id, c, site, state, dir);
+                if let Some((moved, broken)) = self.gather_move(space_id, c, site, head + step, -step, Some(contacts)) {
+                    (plan.moved, plan.broken) = (moved, broken);
                 }
             }
         }
@@ -2144,6 +2152,37 @@ impl Dim {
         Some(plan)
     }
 
+    fn piston_contacts(&self, space_id: u64, c: &Content, site: Site, state: u32, dir: u8) -> Vec<Placed> {
+        let space = self.space(space_id);
+        let part = site.part(state);
+        let axis = usize::from(dir) / 2;
+        let sign = f64::from(DIRS[dir as usize][axis]);
+        let face = |b: Aabb| if sign > 0.0 { b.max[axis] } else { b.min[axis] };
+        let front = part
+            .bounds(c)
+            .map(|b| sign * face(b))
+            .fold(f64::NEG_INFINITY, f64::max);
+        let mut contacts = Vec::new();
+        for patch in part.bounds(c).filter(|&b| sign * face(b) == front) {
+            crate::world::placement::face_contacts(
+                c,
+                site.cell,
+                patch,
+                dir as usize,
+                face(patch),
+                &|at| Some((space.get(at)?, space.layout(at))),
+                |at, other, _| {
+                    let owner = other.owner(at);
+                    if c.solid(other.state) && self.movable(c, other.state) && !contacts.contains(&owner) {
+                        contacts.push(owner);
+                    }
+                    false
+                },
+            );
+        }
+        contacts
+    }
+
     /// `moved` with what stands on it, as cells of a new body around `center`.
     pub(super) fn with_riders(&self, space_id: u64, c: &Content, center: IVec3, moved: Vec<IVec3>) -> Vec<Lifted> {
         let (riding, _) = self.who_rides(space_id, c, &moved, None, IVec3::ZERO);
@@ -2154,7 +2193,7 @@ impl Dim {
                 from: p,
                 local: p - center,
                 to: p,
-                part: Some(state),
+                part: Some(Part { state, ..source }),
                 only: Some(source),
             }))
             .collect()
@@ -2296,11 +2335,13 @@ impl Dim {
         if let Some(h) = h {
             if plan.extend {
                 // From inside the piston, out of its short base.
-                also.push((IVec3::ZERO, site.part(short(h))));
-                head_turns = Some((IVec3::ZERO, h));
+                let part = site.part(short(h));
+                also.push((IVec3::ZERO, part));
+                head_turns = Some((IVec3::ZERO, part, h));
             } else {
-                also.push((head - plan.p, site.part(h)));
-                head_turns = Some((head - plan.p, short(h)));
+                let part = site.part(h);
+                also.push((head - plan.p, part));
+                head_turns = Some((head - plan.p, part, short(h)));
             }
         }
         self.replace_placed(space_id, c, plan.p, site.part(state), with_level(&info, state, 1));
@@ -2339,7 +2380,7 @@ impl Dim {
                 from: p,
                 local: p - plan.p,
                 to: p + plan.step,
-                part: Some(part),
+                part: Some(Part { state: part, ..source }),
                 only: Some(source),
             }));
         let (body, blocks) =
@@ -2375,20 +2416,18 @@ impl Dim {
                     .is_none_or(|e| !matches!(e.motion, Motion::To { .. }))
             });
         space.signals.moving = going;
-        for mut m in done {
-            // Clients show this a tick and a half later, a quarter of the way out: past that a
-            // long rod no longer shows behind the piston.
-            if !m.retracting
-                && self.has_space(m.body)
-                && let Some((at, state)) = m.head_turns.take()
-            {
-                self.carry_block(m.body, c, at, state);
-            }
+        for m in done {
             self.land_piston(space_id, c, m);
         }
     }
 
     fn land_piston(&mut self, space_id: u64, c: &'static Content, m: Moving) {
+        // The client is still interpolating the head. Switch lengths while its rod is in the base.
+        if self.has_space(m.body)
+            && let Some((at, part, state)) = m.head_turns
+        {
+            self.replace_placed(m.body, c, at, part, state);
+        }
         let base = self.signal_view(space_id).state(m.piston);
         let out = base.is_some_and(|s| c.states[s as usize].signal.kind == sk::PISTON && c.states[s as usize].signal.level > 0);
         self.space_mut(space_id).signals.reserved.remove(&m.head);
@@ -2407,7 +2446,7 @@ impl Dim {
             .dirty_devices
             .insert(m.piston.into());
         self.space_mut(space_id).signals.give_another_go();
-        self.put_down(space_id, c, m.body, m.blocks, also, m.head_turns);
+        self.put_down(space_id, c, m.body, m.blocks, also);
     }
 
     /// All that is on its way gets there now: before a save, or before the blocks around it go

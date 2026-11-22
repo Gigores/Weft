@@ -54,16 +54,21 @@ impl Client {
                     _ => None,
                 };
             }
-            ToClient::Welcome { player, dim, pos, seed, look, selected, flying } => {
-                self.player.flying = flying;
-                self.player_id = player;
+            ToClient::PrepareJoin { dim, pos, seed, look } => {
+                self.preparing_since = Some(Instant::now());
                 (self.player.yaw, self.player.pitch) = (look[0], look[1]);
-                self.selected = selected as usize;
-                self.joined = true;
                 self.player.pos = pos;
                 self.player.prev = pos;
                 self.seed = seed;
                 self.reset_terrain(dim, fwd);
+            }
+            ToClient::Welcome { player, vel, selected, flying } => {
+                self.player_id = player;
+                self.player.vel = vel;
+                self.player.flying = flying;
+                self.selected = selected as usize;
+                self.tick_accum = 0.0;
+                self.joined = true;
             }
             ToClient::Cube { dim, frame, pos, cube, edit } if dim == self.world.dim => {
                 if frame == 0 {
@@ -239,7 +244,12 @@ impl Client {
             }
             ToClient::BreakRefused { frame, pos } => {
                 self.refused_break = Some((frame, pos));
-                self.breaking = None;
+                if self
+                    .breaking
+                    .is_some_and(|(f, p, _)| (f, p) == (frame, pos))
+                {
+                    self.breaking = None;
+                }
             }
             ToClient::Using(ticks) => {
                 self.using = ticks.map(|(t, _)| (0.0, t as f32));
@@ -325,6 +335,12 @@ impl Client {
                     list.into_iter()
                         .map(|(sound, pos, volume, pitch)| crate::audio::Play { sound, pos, volume, pitch }),
                 );
+            }
+            ToClient::Lightning(strike) if strike.dim == self.world.dim => {
+                let late = (self.world.ticks.saturating_sub(strike.tick) as f64 / self.tick_rate) as f32;
+                let listener = self.render_camera().pos;
+                self.lightning
+                    .receive(strike, late, listener, &mut self.soundscape);
             }
             ToClient::Particles(list) => {
                 for b in &list {

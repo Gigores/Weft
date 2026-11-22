@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use glam::{IVec2, IVec3};
+use glam::{DVec3, IVec2, IVec3};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -173,6 +173,53 @@ impl crate::physics::Cells for SeenCells<'_> {
     }
     fn layout(&self, p: IVec3) -> &CellLayout {
         self.world.layout(p)
+    }
+}
+
+pub(super) struct LiquidSampler<'a> {
+    pub world: &'a ClientWorld,
+    pub entities: &'a FxHashMap<u64, super::ClientEntity>,
+    pub tick: f64,
+}
+
+impl LiquidSampler<'_> {
+    pub fn observation(&self, point: DVec3) -> Option<(u16, bool)> {
+        let cells = SeenCells { world: self.world, air_if_missing: false };
+        let liquid = crate::physics::liquid_at(content(), &cells, point)?;
+        let dry = self
+            .entities
+            .values()
+            .filter(|e| !e.dry_boxes.is_empty())
+            .any(|e| crate::physics::inside_dry_volume((e.place_at(self.tick), &e.dry_boxes), point));
+        Some((liquid, dry))
+    }
+
+    pub fn at(&self, point: DVec3) -> Option<u16> {
+        let (liquid, dry) = self.observation(point)?;
+        (!dry).then_some(liquid)
+    }
+
+    pub fn at_source(&self, point: DVec3, listener: DVec3) -> Option<u16> {
+        if let Some((liquid, dry)) = self.observation(point) {
+            return (!dry).then_some(liquid);
+        }
+        let cell = point.floor();
+        let state = self.world.block_or_air(cell.as_ivec3())?;
+        let local = point - cell;
+        if !content().states[state as usize]
+            .collision
+            .iter()
+            .any(|bounds| (0..3).all(|axis| (f64::from(bounds[axis])..f64::from(bounds[axis + 3])).contains(&local[axis])))
+        {
+            return None;
+        }
+        // A solid emitter radiates into the medium outside its cell toward the listener.
+        let dir = (listener - point).normalize_or_zero();
+        let exit = (0..3)
+            .filter(|&axis| dir[axis].abs() > 1e-8)
+            .map(|axis| ((if dir[axis] > 0.0 { 1.0 } else { 0.0 }) - local[axis]) / dir[axis])
+            .reduce(f64::min)?;
+        self.at(point + dir * (exit + 0.001))
     }
 }
 

@@ -14,6 +14,7 @@ pub(crate) mod extend;
 pub mod forced;
 mod guard;
 pub mod holder;
+mod lightning;
 mod liquid;
 mod load;
 pub mod lod_tops;
@@ -129,6 +130,7 @@ pub struct Player {
     to_send_far: Vec<IVec3>,
     known: FxHashSet<u64>,
     joined: bool,
+    arrival: Option<player_file::Arrival>,
     sent_cracks: Vec<crate::net::Crack>,
     /// The tick rate its client has.
     sent_rate: u32,
@@ -161,6 +163,12 @@ pub struct Player {
     /// Walking speed and jump multipliers the client has (attributes).
     /// The view distance the client has (`ToServer::View`).
     view_radius: i32,
+}
+
+impl Player {
+    fn streams_world(&self) -> bool {
+        self.joined || self.arrival.is_some()
+    }
 }
 
 pub struct Generated {
@@ -507,6 +515,7 @@ impl Server {
         self.accept();
         self.receive_generated(c, Instant::now() + Duration::from_millis(15));
         self.handle_messages(c);
+        self.finish_joins(c);
         self.send_lod_changes();
         self.sync_players(c);
     }
@@ -543,6 +552,7 @@ impl Server {
                 to_send_far: Vec::new(),
                 known: FxHashSet::default(),
                 joined: false,
+                arrival: None,
                 sent_rate: 0,
                 glow_sent: false,
                 sent_cracks: Vec::new(),
@@ -616,6 +626,7 @@ impl Server {
                 .par_iter_mut()
                 .flat_map(|d| d.regions.par_iter_mut())
                 .for_each(|r| r.tick(c));
+            self.tick_lightning(c);
         }
         lap(2, &self.shared);
         if let Some((left, all, start)) = &mut self.sprint {
@@ -648,6 +659,7 @@ impl Server {
                 menu::tick(m, r, c, p.entity);
             }
         }
+        self.finish_joins(c);
         self.request_generation(c);
         lap(3, &self.shared);
         self.sync_players(c);
@@ -974,7 +986,11 @@ impl Server {
             .collect();
         drop(s);
         for (dim, all, cols) in changed {
-            for p in self.players.iter_mut().filter(|p| p.joined && p.dim == dim) {
+            for p in self
+                .players
+                .iter_mut()
+                .filter(|p| p.streams_world() && p.dim == dim)
+            {
                 p.conn
                     .send(ToClient::LodColumns { dim, all, cols: cols.clone() });
             }
@@ -1444,7 +1460,10 @@ impl Server {
     /// What a player sees (the client generates it).
     fn full_view(&self, p: &Player) -> View {
         let dim = &self.dims[p.dim as usize];
-        let pos = dim.entity(p.entity).map_or(DVec3::ZERO, |e| e.pos);
+        let pos = p
+            .arrival
+            .as_ref()
+            .map_or_else(|| dim.entity(p.entity).map_or(DVec3::ZERO, |e| e.pos), |arrival| arrival.data.entity.pos);
         let center = (pos.floor().as_ivec3()) >> 4;
         let r = p.view_radius;
         View::around(center, r, dim.air_below(center, View::air_probe(r)))

@@ -41,7 +41,7 @@ impl Seat {
         match exit {
             Exit::Nearest(reach) => (self.desc.exit, self.desc.exit_at) = (abi::seat_exit::NEAREST, Vec3::new(reach, 0.0, 0.0)),
             Exit::Offset(at) => (self.desc.exit, self.desc.exit_at) = (abi::seat_exit::OFFSET, at),
-            Exit::Stay => self.desc.exit = abi::seat_exit::STAY,
+            Exit::Stay { max_rise } => (self.desc.exit, self.desc.exit_at) = (abi::seat_exit::STAY, Vec3::new(0.0, max_rise, 0.0)),
             Exit::Call(f) => {
                 self.desc.exit = abi::seat_exit::CALL;
                 self.exit = Some(f);
@@ -58,8 +58,8 @@ pub enum Exit {
     Nearest(f64),
     /// At this offset from the mount, in its frame (a gondola's door).
     Offset(Vec3),
-    /// Right where it sat, in the air if need be (a parachute's job then).
-    Stay,
+    /// On the deck at the seat, or right where the rider sat if no deck is in reach.
+    Stay { max_rise: f64 },
     /// Yours: `|w, mount, rider, nearest| ..` gives the place, `nearest` the engine's pick.
     Call(ExitFn),
 }
@@ -71,8 +71,14 @@ impl Exit {
     pub fn offset(at: impl Into<Vec3>) -> Exit {
         Exit::Offset(at.into())
     }
+    /// Get off on the deck at the seat, looking up by at most half a block.
     pub fn stay() -> Exit {
-        Exit::Stay
+        Self::stay_on_deck(abi::seat_exit::DEFAULT_STAY_RISE)
+    }
+    /// Get off on a block-built deck at the seat, with a custom upward search distance in blocks.
+    /// If no deck is in reach, get off where the rider sat.
+    pub fn stay_on_deck(max_rise: f64) -> Exit {
+        Exit::Stay { max_rise }
     }
     pub fn call(f: impl Fn(&World, u64, u64, Vec3) -> Vec3 + Send + Sync + 'static) -> Exit {
         Exit::Call(std::sync::Arc::new(f))

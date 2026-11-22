@@ -118,17 +118,20 @@ fn set(m: &mut OpenMenu, dim: &mut Dim, player: u64, slot: u32, stack: ItemStack
                 *s = stack;
             }
         }
-        Owner::Trash => {
-            let comp = crate::content::content().game.fields.trash;
-            let bytes: Box<[u8]> = [stack.item, stack.count, stack.data]
-                .into_iter()
-                .flat_map(u32::to_le_bytes)
-                .collect();
-            dim.entities.comps.insert((player, comp), bytes);
-        }
+        Owner::Trash => set_trash(dim, crate::content::content(), player, stack),
         Owner::Player => dim.entities.set_slot(player, r.index, stack),
         Owner::On(inv) => holder::set(dim, crate::content::content(), inv, r.index, stack),
     }
+}
+
+fn set_trash(dim: &mut Dim, c: &Content, player: u64, stack: ItemStack) {
+    let bytes: Box<[u8]> = [stack.item, stack.count, stack.data]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    dim.entities
+        .comps
+        .insert((player, c.game.fields.trash), bytes);
 }
 
 /// What `player` last put in its trash.
@@ -389,7 +392,7 @@ fn liquid_click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u6
 
 /// `button` 2..=10 over a slot: number key 1..9, swaps it with that hotbar slot (vanilla).
 pub const HOTBAR_SWAP: u8 = 2;
-/// Double click: gathers matching items from every slot onto the cursor, up to a full stack.
+/// Double click: gathers matching items up to a full stack, or acts as a left click.
 pub const GATHER: u8 = 11;
 /// Middle click in creative: a full stack of what is in the slot onto an empty cursor.
 pub const CLONE: u8 = 12;
@@ -507,10 +510,55 @@ pub const OFF_HAND_SWAP: u8 = 18;
 /// opened on, else the player's main inventory.
 pub const SORT: u8 = 16;
 
+fn gather(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64) -> bool {
+    let want = m.cursor;
+    if want.is_empty() {
+        return false;
+    }
+    let max = c.max_stack(&want);
+    // Partial stacks first, so full ones stay put when they are not needed.
+    for full in [false, true] {
+        for i in 0..m.slots.len() as u32 {
+            if m.cursor.count >= max {
+                return m.cursor.count != want.count;
+            }
+            let r = &m.slots[i as usize];
+            if r.flags & sf::OUTPUT != 0 || r.owner == Owner::Trash || !takeable(r) {
+                continue;
+            }
+            let s = get(m, dim, player, i);
+            if s.is_empty() || !s.stacks_with(&want) || (s.count >= max) != full {
+                continue;
+            }
+            let n = s.count.min(max - m.cursor.count);
+            m.cursor.count += n;
+            set(m, dim, player, i, ItemStack { count: s.count - n, ..s });
+            changed(m, dim, c, player, i);
+        }
+    }
+    m.cursor.count != want.count
+}
+
+fn pickup_count(button: u8, count: u32) -> u32 {
+    if button == 1 { count.div_ceil(2) } else { count }
+}
+
 /// `button`: 0 left, 1 right, or `HOTBAR_SWAP + n`, `GATHER`, `CLONE`, `THROW`, `THROW_ALL`,
 /// `PICK_SAME`, `SORT`, `WHEEL_UP`, `WHEEL_DOWN`. `slot == u32::MAX` means outside the window
 /// (drop the cursor).
 pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, slot: u32, button: u8, shift: bool) {
+    let button = if button == GATHER {
+        let Some(r) = m.slots.get(slot as usize) else { return };
+        if !shift && r.flags & sf::OUTPUT == 0 && r.owner != Owner::Trash && takeable(r) {
+            let clicked = get(m, dim, player, slot);
+            if (clicked.is_empty() || clicked.stacks_with(&m.cursor)) && gather(m, dim, c, player) {
+                return;
+            }
+        }
+        0
+    } else {
+        button
+    };
     if button == SORT {
         sort(m, dim, c, player, slot);
         return;
@@ -584,75 +632,15 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
         }
         return;
     }
-    if button == GATHER {
-        let want = m.cursor;
-        if want.is_empty() {
-            return;
-        }
-        let max = c.max_stack(&want);
-        // Partial stacks first, like vanilla, so full ones stay put when they are not needed.
-        for full in [false, true] {
-            for i in 0..m.slots.len() as u32 {
-                if m.cursor.count >= max {
-                    break;
-                }
-                let s = get(m, dim, player, i);
-                if m.slots[i as usize].flags & sf::OUTPUT != 0
-                    || m.slots[i as usize].owner == Owner::Trash
-                    || !takeable(&m.slots[i as usize])
-                    || s.is_empty()
-                    || s.item != want.item
-                    || s.data != want.data
-                    || (s.count >= max) != full
-                {
-                    continue;
-                }
-                let n = s.count.min(max - m.cursor.count);
-                m.cursor.count += n;
-                set(m, dim, player, i, if n == s.count { ItemStack::EMPTY } else { ItemStack { count: s.count - n, ..s } });
-                changed(m, dim, c, player, i);
-            }
-        }
-        return;
-    }
-    // Into the trash, whole, what was there gone (Terraria's).
-    let trash_at = m
-        .slots
-        .iter()
-        .position(|s| s.owner == Owner::Trash)
-        .map(|i| i as u32);
-    let into_trash = |m: &mut OpenMenu, dim: &mut Dim, stack: ItemStack| match trash_at {
-        Some(t) => set(m, dim, player, t, stack),
-        None => {
-            let bytes: Box<[u8]> = [stack.item, stack.count, stack.data]
-                .into_iter()
-                .flat_map(u32::to_le_bytes)
-                .collect();
-            dim.entities
-                .comps
-                .insert((player, c.game.fields.trash), bytes);
-        }
-    };
     if button == TO_TRASH {
         let Some(r) = m.slots.get(slot as usize).copied() else { return };
         let cur = get(m, dim, player, slot);
         if cur.is_empty() || r.owner == Owner::Trash || !takeable(&r) || r.flags & sf::OUTPUT != 0 {
             return;
         }
-        into_trash(m, dim, cur);
+        set_trash(dim, c, player, cur);
         set(m, dim, player, slot, ItemStack::EMPTY);
         changed(m, dim, c, player, slot);
-        return;
-    }
-    if m.slots
-        .get(slot as usize)
-        .is_some_and(|s| s.owner == Owner::Trash)
-        && button <= 1
-        && !shift
-        && !m.cursor.is_empty()
-    {
-        let s = std::mem::replace(&mut m.cursor, ItemStack::EMPTY);
-        into_trash(m, dim, s);
         return;
     }
     if button == THROW || button == THROW_ALL || button == PICK_SAME {
@@ -742,14 +730,22 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
                 changed(m, dim, c, player, slot);
             }
             return;
-        } else if m.cursor.is_empty() {
-            m.cursor = cur;
-        } else if m.cursor.item == cur.item && m.cursor.data == cur.data && m.cursor.count + cur.count <= max(&cur) {
-            m.cursor.count += cur.count;
+        }
+        let n = if r.owner == Owner::Temp {
+            cur.count
+        } else if button == 1 && !m.cursor.is_empty() {
+            1
+        } else {
+            pickup_count(button, cur.count)
+        };
+        if m.cursor.is_empty() {
+            m.cursor = ItemStack { count: n, ..cur };
+        } else if m.cursor.stacks_with(&cur) && n <= max(&cur).saturating_sub(m.cursor.count) {
+            m.cursor.count += n;
         } else {
             return;
         }
-        set(m, dim, player, slot, ItemStack::EMPTY);
+        set(m, dim, player, slot, ItemStack { count: cur.count - n, ..cur });
         took(m, dim, c, player, slot, 1);
         changed(m, dim, c, player, slot);
         return;
@@ -767,45 +763,33 @@ pub fn click(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, 
     }
     let mut cursor = m.cursor;
     let mut slot_stack = cur;
-    let same = !cursor.is_empty() && !slot_stack.is_empty() && cursor.item == slot_stack.item && cursor.data == slot_stack.data;
+    let same = cursor.stacks_with(&slot_stack);
+    if r.owner == Owner::Trash && !cursor.is_empty() && !same {
+        slot_stack = ItemStack::EMPTY;
+    }
     let room = cap(c, &r, &cursor);
     // An input slot only takes: anything that would hand items back is refused.
     if !takeable(&r) && !slot_stack.is_empty() && (cursor.is_empty() || !same) {
         return;
     }
-    match (button, cursor.is_empty(), slot_stack.is_empty()) {
-        (_, true, true) => return,
-        (0, true, false) => {
-            cursor = slot_stack;
-            slot_stack = ItemStack::EMPTY;
+    match (cursor.is_empty(), slot_stack.is_empty()) {
+        (true, true) => return,
+        (true, false) => {
+            let n = pickup_count(button, slot_stack.count);
+            cursor = ItemStack { count: n, ..slot_stack };
+            slot_stack.count -= n;
         }
-        (_, true, false) => {
-            let half = slot_stack.count.div_ceil(2);
-            cursor = ItemStack { count: half, ..slot_stack };
-            slot_stack.count -= half;
-        }
-        (0, false, true) => {
-            let n = cursor.count.min(room);
-            slot_stack = ItemStack { count: n, ..cursor };
-            cursor.count -= n;
-        }
-        (_, false, true) => {
-            slot_stack = ItemStack { count: 1, ..cursor };
-            cursor.count -= 1;
-        }
-        (0, false, false) if same => {
+        (false, empty) if empty || same => {
             let n = room.saturating_sub(slot_stack.count).min(cursor.count);
-            slot_stack.count += n;
+            let n = if button == 1 { n.min(1) } else { n };
+            if n == 0 {
+                return;
+            }
+            slot_stack = ItemStack { count: slot_stack.count + n, ..cursor };
             cursor.count -= n;
         }
-        (_, false, false) if same => {
-            if slot_stack.count < room {
-                slot_stack.count += 1;
-                cursor.count -= 1;
-            }
-        }
-        (_, false, false) if cursor.count <= room => std::mem::swap(&mut cursor, &mut slot_stack),
-        (_, false, false) => return,
+        (false, false) if cursor.count <= room => std::mem::swap(&mut cursor, &mut slot_stack),
+        _ => return,
     }
     if cursor.count == 0 {
         cursor = ItemStack::EMPTY;

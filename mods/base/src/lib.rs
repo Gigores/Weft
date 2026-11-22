@@ -92,6 +92,7 @@ fn init(r: &mut Registry) {
             .glow(0xFFE633);
         r.sky_body(dim, &MOON)
             .texture("moon_phases")
+            .blend_add()
             .frames(4, 2)
             .size(23.0)
             .phase(0.5);

@@ -233,6 +233,7 @@ pub static HOST: Host = Host {
     body_fall,
     push_blocks,
     world_has_space,
+    world_transform,
     body_move_to,
     body_dynamics,
     body_force,
@@ -673,6 +674,24 @@ unsafe extern "C" fn body_to_blocks(w: *mut abi::WorldCtx, entity: u64) {
 
 unsafe extern "C" fn world_has_space(w: *mut abi::WorldCtx, frame: u64) -> u32 {
     unsafe { dim(w).active_space(frame) as u32 }
+}
+
+unsafe extern "C" fn world_transform(w: *mut abi::WorldCtx, frame: u64, value: abi::Vec3, vector: u32, out: *mut abi::Vec3) -> u32 {
+    let d = unsafe { dim(w) };
+    let from = unsafe { space_id(w) };
+    if !d.active_space(from) || !d.active_space(frame) {
+        return 0;
+    }
+    let result = if from == frame {
+        value
+    } else {
+        let transform = d.space_pose(from).relative_to(d.space_pose(frame));
+        let v = crate::world::dvec(value);
+        let v = if vector != 0 { transform.vector_to_world(v) } else { transform.to_world(v) };
+        v.to_array().into()
+    };
+    unsafe { *out = result };
+    1
 }
 
 unsafe extern "C" fn push_blocks(w: *mut abi::WorldCtx, pos: *const abi::BlockPos, dir: u32) -> u32 {

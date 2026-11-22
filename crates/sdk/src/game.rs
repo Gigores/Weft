@@ -2454,7 +2454,7 @@ impl Ray {
         self.flags |= abi::ray::SOLID;
         self
     }
-    /// It goes through `id` (the one looking, the shooter).
+    /// It goes through entity `id`, including its blocks when raycasting from the world.
     pub fn skip(mut self, id: u64) -> Ray {
         self.skip = id;
         self

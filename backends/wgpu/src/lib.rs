@@ -1014,8 +1014,8 @@ impl Backend for WgpuBackend {
         Some(FrameInfo { width: self.config.width, height: self.config.height, slot: self.slot })
     }
 
-    fn end_frame(&mut self, list: &CommandList) {
-        let Some(surface) = self.current.take() else { return };
+    fn end_frame(&mut self, list: &CommandList) -> bool {
+        let Some(surface) = self.current.take() else { return false };
         self.frame_no += 1;
         let slot = self.slot;
         for b in self.buffers.items.iter_mut().flatten() {
@@ -1295,6 +1295,7 @@ impl Backend for WgpuBackend {
             self.groups.retain(|_, g| g.1 + KEEP_GROUPS > now);
         }
         self.slot = (slot + 1) % FRAMES;
+        true
     }
 
     fn request_capture(&mut self) {

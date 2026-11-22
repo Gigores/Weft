@@ -5,8 +5,10 @@ use crate::content::Content;
 pub(crate) const CLOUD_CELL: f64 = 320.0;
 pub(crate) const CLOUD_HEIGHT: f32 = 75.0;
 // Square cloud columns per noise cell along each axis. Keep in sync with common.wgsl.
-const CLOUD_COLUMNS: f64 = 24.0;
+pub(crate) const CLOUD_COLUMNS: f64 = 24.0;
 pub(crate) const AUTOMATIC: u32 = u32::MAX;
+pub(crate) const LIGHTNING_RANGE: f64 = 4608.0;
+pub(crate) const THUNDER_RANGE: f64 = 3072.0;
 
 /// A sampleable layer shared by simulation and rendering. Its drift follows elapsed world ticks,
 /// so setting the time of day does not move the weather.
@@ -106,6 +108,22 @@ impl CloudField {
         }
         0
     }
+
+    /// Choose a filled voxel in the moving storm, at the same lattice used to draw it.
+    pub(crate) fn discharge(self, xz: DVec2, forced: bool) -> Option<DVec3> {
+        let at = self.coords(xz);
+        let origin = at.floor();
+        for band in [2, 1, 3, 0, 4] {
+            let center = cloud_cell_center(at - origin, band);
+            let column = cloud_sample(self.seed, origin.as_ivec2(), center.as_vec2());
+            if (forced || column.kind == 2) && column.fills_band(band) {
+                let world = (origin + center) * CLOUD_CELL - DVec2::new(self.drift, 0.0);
+                let y = self.height + (f64::from(band) + 0.5) * f64::from(CLOUD_HEIGHT) / 5.0;
+                return Some(DVec3::new(world.x, y, world.y));
+            }
+        }
+        None
+    }
 }
 
 #[derive(Default)]
@@ -124,10 +142,13 @@ impl CloudColumn {
 }
 
 fn cloud_column(seed: u32, origin: IVec2, at: DVec2, band: i32) -> CloudColumn {
+    cloud_sample(seed, origin, cloud_cell_center(at, band).as_vec2())
+}
+
+fn cloud_cell_center(at: DVec2, band: i32) -> DVec2 {
     let shift = DVec2::new(0.375, 0.625) * f64::from(band - 2);
     let shift = shift - shift.floor();
-    let center = ((at * CLOUD_COLUMNS - shift).floor() + shift + DVec2::splat(0.5)) / CLOUD_COLUMNS;
-    cloud_sample(seed, origin, center.as_vec2())
+    ((at * CLOUD_COLUMNS - shift).floor() + shift + DVec2::splat(0.5)) / CLOUD_COLUMNS
 }
 
 fn cloud_hash(seed: u32, cell: IVec2) -> f32 {

@@ -52,15 +52,6 @@ impl Dim {
     }
 
     pub(super) fn mount_helm(&mut self, c: &'static Content, rider: u64, mount: u64, at: IVec3, face: u8) -> bool {
-        let Some(r) = self.entities.get(rider) else { return false };
-        let Some(seat) = c.game.helm_seats().first() else { return false };
-        let dims = r.dims(c);
-        let feet = at.as_dvec3() + crate::physics::Transform::FEET + seat.pos;
-        let area = crate::physics::Aabb::around(feet, dims.half_width, dims.height);
-        let Some(space) = self.bodies.get(&mount) else { return false };
-        if crate::physics::collides(c, space.as_ref(), area) {
-            return false;
-        }
         self.mount_in(c, rider, mount, Some(0), Some((at, face)))
     }
 
@@ -196,7 +187,7 @@ impl Dim {
                 let place = m.body_place();
                 let dims = m.dims(c);
                 let body = crate::physics::Body::of(mount, k, place, (dims.half_width, dims.height), place, Some(&**built));
-                body.and_then(|b| b.deck_height(c, sat, r.dims(c).half_width))
+                body.and_then(|b| b.deck_height(c, sat, r.dims(c).half_width, s.exit_at.y))
                     .map_or(sat, |y| sat.with_y(y))
             }
             abi::seat_exit::CALL => {

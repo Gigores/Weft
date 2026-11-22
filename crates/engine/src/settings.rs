@@ -99,6 +99,9 @@ pub fn view_distance() -> i32 {
 pub fn vsync() -> bool {
     number("core:vsync") != 0.0
 }
+pub fn fps_limit() -> u32 {
+    number("core:fps_limit") as u32
+}
 /// The chosen renderer's name (`core:renderer`).
 pub fn renderer() -> String {
     let id = id("core:renderer");

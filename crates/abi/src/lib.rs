@@ -720,6 +720,8 @@ pub mod comp {
         pub const RANGE: &str = "sound.range";
         pub const FULL_WITHIN: &str = "sound.full_within";
         pub const FALLOFF: &str = "sound.falloff";
+        /// Minimum gain through cover, still subject to the obstruction's low-pass filter (`f32`, 0).
+        pub const THROUGH_WALLS: &str = "sound.through_walls";
         pub const CATEGORY: &str = "sound.category";
     }
 
@@ -1243,6 +1245,8 @@ pub mod comp {
     pub mod block {
         /// Mass per full block relative to a block of water (`f32`).
         pub const DENSITY: &str = "density";
+        /// Fraction of a sound's amplitude lost at a reflection (`f32`, 0..1).
+        pub const SOUND_ABSORPTION: &str = "sound_absorption";
         /// The force a block puts on its body when fully powered.
         pub const THRUST: &str = "thrust";
         pub const GUIDE_RAIL: &str = "guide_rail";
@@ -1254,6 +1258,8 @@ pub mod comp {
         pub const ON_CARRIED: &str = "block.on_carried";
         pub const ON_GROW: &str = "block.on_grow";
         pub const PLACEMENT: &str = "block.placement";
+        /// The block's origin always snaps to its space's grid when placed by a player.
+        pub const GRID_PLACEMENT: &str = "block.grid_placement";
         pub const MERGE: &str = "block.merge";
         pub const ON_SIGNAL: &str = "block.on_signal";
         pub const SIGNAL_GATE: &str = "block.signal_gate";
@@ -1271,6 +1277,13 @@ pub mod comp {
         pub const MODEL: &str = "block.model";
         /// Item sprite from this face (u8, FACE_DIRS); 255 draws the model.
         pub const ITEM_FACE: &str = "block.item_face";
+        pub const RANDOM_OFFSET: &str = "block.random_offset";
+        pub const RANDOM_HEIGHT_SCALE: &str = "block.random_height_scale";
+        pub const RANDOM_WIDTH_SCALE: &str = "block.random_width_scale";
+        pub const RANDOM_SCALE: &str = "block.random_scale";
+        pub const RANDOM_YAW: &str = "block.random_yaw";
+        pub const RANDOM_PITCH: &str = "block.random_pitch";
+        pub const RANDOM_ROLL: &str = "block.random_roll";
         pub const TEXTURES: &str = "block.textures";
         pub const TURNS: &str = "block.turns";
         pub const TURN: &str = "block.turn";
@@ -2765,7 +2778,8 @@ crate::data! {
         pub steers: bool,
         /// `seat_exit`: where a rider of this seat gets off.
         pub exit: u32,
-        /// `seat_exit::OFFSET`: from the mount, turned with it. `NEAREST`: x is how far to look.
+        /// `OFFSET`: offset from the mount in its frame. `NEAREST`: search radius in x.
+        /// `STAY`: maximum rise to the deck in y.
         pub exit_at: Vec3,
     }
 }
@@ -2776,8 +2790,11 @@ pub mod seat_exit {
     pub const NEAREST: u32 = 0;
     /// At `exit_at` from the mount, turned with it (a gondola's door).
     pub const OFFSET: u32 = 1;
-    /// Right where it sat, in the air if that is where it was.
+    /// On the deck at the seat, at most `exit_at.y` blocks up. Without a deck in reach,
+    /// the rider gets off where it sat.
     pub const STAY: u32 = 2;
+    /// Upward deck search distance for the default stay exit, in blocks.
+    pub const DEFAULT_STAY_RISE: f64 = 0.5;
     /// The kind's `comp::entity::DISMOUNT` decides.
     pub const CALL: u32 = 3;
 }
@@ -4678,6 +4695,8 @@ pub struct Host {
     /// that way, slime and all, as a piston moves it. 0 if it can't.
     pub push_blocks: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos, dir: u32) -> u32,
     pub world_has_space: unsafe extern "C" fn(world: *mut WorldCtx, frame: u64) -> u32,
+    /// Transforms a point or direction from this view into a loaded space. Frame 0 is the world.
+    pub world_transform: unsafe extern "C" fn(world: *mut WorldCtx, frame: u64, value: Vec3, vector: u32, out: *mut Vec3) -> u32,
     pub body_move_to: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, pos: *const Vec3, ticks: u32),
     pub body_dynamics: unsafe extern "C" fn(world: *mut WorldCtx, body: u64) -> u32,
     pub body_force: unsafe extern "C" fn(world: *mut WorldCtx, body: u64, at: *const Vec3, force: *const Vec3) -> u32,

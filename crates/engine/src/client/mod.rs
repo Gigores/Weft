@@ -1,9 +1,11 @@
+mod acoustics;
 pub mod camera;
 pub mod ctm;
 pub mod entity_render;
 pub mod environment;
 pub mod gizmo;
 pub mod glow;
+mod lightning;
 pub mod lod;
 pub mod looks;
 pub mod mesher;
@@ -597,6 +599,10 @@ pub struct Client {
     pub entity_render: EntityRenderer,
     pub player: LocalPlayer,
     pub joined: bool,
+    /// The world is available before the player can act. Kept through the welcome
+    /// so the app can hand off the loading screen on that frame.
+    pub(crate) preparing_since: Option<Instant>,
+    ready_sent: bool,
     pub player_id: u64,
     /// The local player as an entity: what the server says of it (health, actions, look) and
     /// what its own animation works out, brought up to date each frame (`sync_me`).
@@ -633,6 +639,7 @@ pub struct Client {
     pub disconnected: Option<String>,
     /// Seconds until holding a button repeats its action. A new press never waits.
     break_delay: f32,
+    last_break: Option<(u64, IVec3, crate::world::placement::Part)>,
     melee_recovery: f32,
     use_delay: f32,
     /// Each action as the server last heard of it (`send_keys`).
@@ -682,6 +689,8 @@ pub struct Client {
     pub cameras: camera::Cameras,
     /// F1: no hand and no block outline.
     pub hide_gui: bool,
+    pub(crate) by_face_placement: bool,
+    placement_preview: Option<(u64, IVec3, crate::world::placement::Part)>,
     /// Show your own body in first person instead of just the hand.
     pub first_person_model: bool,
     /// Arm swing progress 0..1 while swinging.
@@ -745,6 +754,7 @@ pub struct Client {
     hit_dust: f32,
     /// Sounds to play this frame (from the server and from here).
     pub sounds: Vec<crate::audio::Play>,
+    soundscape: acoustics::Soundscape,
     rng: weft_noise::Rng,
     pub dead: bool,
     /// A server override and the weather at the camera.
@@ -755,8 +765,7 @@ pub struct Client {
     look: weft_abi::WeatherLook,
     pub environment: environment::Environment,
     frame_dt: f32,
-    /// Seconds left of a lightning's flash.
-    lightning: f32,
+    lightning: lightning::LightningEffects,
     /// Holding the use button on an item that takes time: ticks held, ticks in all.
     using: Option<(f32, f32)>,
     /// Who else is mining what, and how far along.
@@ -994,6 +1003,8 @@ impl Client {
                 moves: physics::Moves::default(),
             },
             joined: false,
+            preparing_since: None,
+            ready_sent: false,
             player_id: 0,
             sprint_stopped: false,
             me: ClientEntity::new(content().game.player_kind, DVec3::ZERO, 0.0, 0.0),
@@ -1016,6 +1027,7 @@ impl Client {
             selected: 0,
             disconnected: None,
             break_delay: 0.0,
+            last_break: None,
             melee_recovery: 0.0,
             use_delay: 0.0,
             keys_down: Vec::new(),
@@ -1052,6 +1064,7 @@ impl Client {
             hand_late: CommandList::default(),
             hit_dust: 0.0,
             sounds: Vec::new(),
+            soundscape: acoustics::Soundscape::default(),
             rng: weft_noise::Rng(0x9E37_79B9_7F4A_7C15),
             drag: None,
             sweep: Vec::new(),
@@ -1063,6 +1076,8 @@ impl Client {
             mode: GameMode::SURVIVAL,
             cameras: camera::Cameras::default(),
             hide_gui: false,
+            by_face_placement: false,
+            placement_preview: None,
             first_person_model: true,
             hand_swing: None,
             hand_swing_off: false,
@@ -1091,7 +1106,7 @@ impl Client {
             weather_id: 0,
             look: Default::default(),
             environment: Default::default(),
-            lightning: 0.0,
+            lightning: lightning::LightningEffects::default(),
             using: None,
             others_mining: Vec::new(),
             told_mining: None,
@@ -1122,6 +1137,18 @@ impl Client {
 
     pub fn leave(&mut self) {
         self.conn.send(ToServer::Leave);
+    }
+
+    fn has_world(&self) -> bool {
+        self.joined || self.preparing_since.is_some()
+    }
+
+    pub(crate) fn ready_to_join(&mut self) {
+        if !self.ready_sent {
+            self.conn.send(ToServer::Ready);
+            self.ready_sent = true;
+            log::debug!(target: "load", "client ready to enter the prepared world");
+        }
     }
 
     /// The player's health, full until the server has said.
@@ -1187,6 +1214,9 @@ impl Client {
         self.meshes.clear();
         self.landings.clear();
         self.weather_override = None;
+        self.lightning.clear();
+        self.sounds.clear();
+        self.soundscape = acoustics::Soundscape::default();
         self.world.dim = dim;
         self.terrain_resets += 1;
         self.terrain_view = (IVec3::MAX, 0);
@@ -1240,7 +1270,10 @@ impl Client {
         input.muted = if m.has(crate::tag_bits::camera::DETACHED) { k::MOVEMENT | k::RIDING } else { 0 }
             | if m.has(crate::tag_bits::camera::NO_INTERACT) { k::HANDS } else { 0 };
         let input = &*input;
+        let was_joined = self.joined;
         self.take_messages(dt);
+        // The frame that receives the welcome may include time spent loading.
+        let dt = if !was_joined && self.joined { 0.0 } else { dt };
         self.read_look(input);
         self.read_controls(input);
         self.fly_speed(input);
@@ -1249,6 +1282,7 @@ impl Client {
         let moved = self.animate_player(input, dt);
         self.frame_dt = dt as f32;
         self.weather_effects(dt as f32);
+        self.lightning.advance();
         // Night vision comes and goes over about half a second, not at once.
         let night = self
             .attribute(crate::registry::attr::NIGHT_VISION)
@@ -1750,6 +1784,7 @@ impl Client {
     }
 
     fn act(&mut self, input: &Input, dt: f64, look: DVec3) {
+        self.placement_preview = None;
         self.break_delay -= dt as f32;
         self.melee_recovery -= dt as f32 * self.tick_rate as f32;
         self.use_delay -= dt as f32;
@@ -1770,6 +1805,9 @@ impl Client {
             self.breaking = None;
             return;
         }
+        if self.pressed_without_helm(input, crate::input::PLACEMENT_MODE) {
+            self.by_face_placement = !self.by_face_placement;
+        }
         if grab_tool {
             self.breaking = None;
             if self.pressed_without_helm(input, "core:attack") {
@@ -1777,6 +1815,14 @@ impl Client {
                 self.conn.send(ToServer::GrabBody);
             }
             return;
+        }
+        if !self.hide_gui {
+            self.placement_preview = self.target.and_then(|hit| {
+                let at = self.hit_point(&hit, hit.block);
+                let (p, part) = self.placement_target(&hit, at, look.as_vec3().to_array(), input.held("core:sneak"))?;
+                self.can_preview_placement(hit.frame, p, part)
+                    .then_some((hit.frame, p, part))
+            });
         }
         self.attack(input, dt, &mut send_look);
         self.use_held(input, dt, look, &mut send_look);
@@ -1822,14 +1868,18 @@ impl Client {
                 let speed = self.attribute(a::MINING_SPEED)
                     * if self.eye_liquid().is_some() { self.attribute(a::SUBMERGED_MINING_SPEED) } else { 1.0 }
                     * if self.player.on_ground { 1.0 } else { self.attribute(a::AIRBORNE_MINING_SPEED) };
-                let rate = c.mining_rate(hit.state, &self.held(), speed, self.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK));
+                let creative = self.mode.has(crate::tag_bits::game_mode::INSTANT_BREAK);
+                let rate = c.mining_rate(hit.state, &self.held(), speed, creative);
+                let target = (hit.frame, hit.origin, hit.part());
                 let done = match self.breaking {
                     Some((f, p, v)) if (f, p) == (hit.frame, hit.origin) && self.breaking_part == hit.part() => v,
                     _ => 0.0,
                 };
                 self.breaking_part = hit.part();
                 let progress = if rate >= 1.0 { 1.0 } else { done + dt as f32 * self.tick_rate as f32 * rate };
-                if progress >= 1.0 && (self.pressed_without_helm(input, "core:attack") || self.break_delay <= 0.0) {
+                let waiting = self.break_delay > 0.0
+                    && (self.last_break == Some(target) || (creative && !self.pressed_without_helm(input, "core:attack")));
+                if progress >= 1.0 && !waiting {
                     send_look.send(&mut self.conn);
                     let at = self.hit_point(&hit, hit.origin);
                     self.conn
@@ -1845,7 +1895,9 @@ impl Client {
                         space.replace_part(hit.origin, hit.state, after);
                     }
                     self.breaking = None;
+                    self.last_break = Some(target);
                     self.break_delay = 0.25;
+                    self.swing_arm();
                 } else if rate < 1.0 {
                     self.breaking = Some((hit.frame, hit.origin, progress.min(1.0)));
                 } else {
@@ -1867,6 +1919,9 @@ impl Client {
         let mining = self.breaking.map(|(f, p, _)| (f, p, self.breaking_part));
         if mining != self.told_mining {
             self.told_mining = mining;
+            if mining.is_some() {
+                send_look.send(&mut self.conn);
+            }
             self.conn.send(match mining {
                 Some((frame, pos, part)) => ToServer::StartBreak { pos, part, frame },
                 None => ToServer::StopBreak,
@@ -1887,11 +1942,15 @@ impl Client {
     /// anyway).
     pub fn near_shown(&self, reach: i32) -> bool {
         let at = crate::world::cube_of(self.player.pos.floor().as_ivec3());
-        self.joined
+        let view = crate::world::View::around(at, self.view_radius, 0);
+        self.has_world()
             && (-reach..=reach).all(|x| {
                 (-reach..=reach).all(|z| {
-                    self.world
-                        .column_shown(glam::IVec2::new(at.x + x, at.z + z), self.seed, false)
+                    let column = at + IVec3::new(x, 0, z);
+                    !view.column(column)
+                        || self
+                            .world
+                            .column_shown(glam::IVec2::new(column.x, column.z), self.seed, false)
                 })
             })
     }
@@ -1900,13 +1959,7 @@ impl Client {
         self.lod.ready_for_entry(self.world.dim, self.seed)
     }
 
-    /// The held block used on `hit`, shown placed at once where the server will put it
-    /// (`Dim::place_clicked`, `Dim::place`), as vanilla's client does: placing doesn't wait for the
-    /// server, nor does the player fall into the cell meanwhile. Only what is sure here: a block
-    /// alone in its cell, in one cell, held up by nothing, into air or what it replaces, not into
-    /// the player. The server sends the cell back as it is either way. Where it went.
-    fn predict_place(&mut self, hit: &Hit, at: [f32; 3], look: [f32; 3], sneak: bool) -> Option<IVec3> {
-        use crate::content::{AIR, Then, When};
+    fn placement_target(&self, hit: &Hit, at: [f32; 3], look: [f32; 3], sneak: bool) -> Option<(IVec3, crate::world::placement::Part)> {
         let c = content();
         let held = self.held();
         let state = c
@@ -1931,8 +1984,69 @@ impl Client {
             .vector_to_local(glam::Vec3::from_array(look).as_dvec3())
             .as_vec3()
             .to_array();
-        let (p, part, _) =
-            physics::placement(c, state, hit.block, hit.part().in_cell(hit.block - hit.origin), hit.face, at, look, replacing)?;
+        let (p, part, _) = physics::placement(
+            c,
+            state,
+            hit.block,
+            hit.part().in_cell(hit.block - hit.origin),
+            hit.face,
+            at,
+            look,
+            replacing,
+            self.by_face_placement,
+        )?;
+        Some((p, part))
+    }
+
+    fn can_preview_placement(&self, frame: u64, p: IVec3, part: crate::world::placement::Part) -> bool {
+        use crate::content::{Then, When};
+        let c = content();
+        let Some(space) = self.space(frame) else { return false };
+        let st = &c.states[part.state as usize];
+        let def = c.block_of(part.state);
+        if !std::iter::once(IVec3::ZERO)
+            .chain(part.footprint(c).iter().copied())
+            .all(|d| {
+                space.block_or_air(p + d).is_some_and(|main| {
+                    space.layout(p + d).parts(main).all(|other| {
+                        c.may_share(part.state, other.state)
+                            || !part.in_cell(d).overlaps(other, c)
+                            || (def.cb.merge.is_some()
+                                && other.owner(p + d).0 == p
+                                && other.offset == part.in_cell(d).offset
+                                && c.states[other.state as usize].block == st.block)
+                            || (c.states[other.state as usize].flags & bf::REPLACEABLE != 0
+                                && c.states[other.state as usize].block != st.block)
+                    })
+                })
+            })
+        {
+            return false;
+        }
+        let ask = crate::conditions::Ask {
+            pos: p.as_dvec3() + DVec3::splat(0.5),
+            state: part.state,
+            placement: Some((p, part)),
+            own_frame: true,
+            ..Default::default()
+        };
+        frame != 0
+            || !st.rules.iter().any(|r| {
+                matches!(r.when, When::Neighbor(_))
+                    && matches!(r.then, Then::Break | Then::Shed(_))
+                    && r.cond
+                        .is_none_or(|id| crate::conditions::on_client(Some(self), id, &ask))
+            })
+    }
+
+    /// Predict only a simple replacement. The server always sends back the real cell.
+    fn predict_place(&mut self, hit: &Hit, at: [f32; 3], look: [f32; 3], sneak: bool) -> Option<IVec3> {
+        use crate::content::{AIR, Then, When};
+        let c = content();
+        let (p, part) = self.placement_target(hit, at, look, sneak)?;
+        let space = self.space(hit.frame)?;
+        let replaceable = |s: u32| c.states[s as usize].flags & bf::REPLACEABLE != 0;
+        let transform = self.frame_place(hit.frame);
         if part.offset != IVec3::ZERO || !space.layout(p).covers.is_empty() || !space.layout(p).offsets.is_empty() {
             return None;
         }
@@ -1993,6 +2107,7 @@ impl Client {
                     look,
                     hit: at,
                     sneak,
+                    by_face: self.by_face_placement,
                     frame: hit.frame,
                     placed,
                 });
@@ -2263,7 +2378,7 @@ impl Client {
         {
             self.render.upload_tints(gpu, col, &tints);
         }
-        if self.joined && self.terrain_view != (center, self.view_radius) {
+        if self.has_world() && self.terrain_view != (center, self.view_radius) {
             self.terrain_view = (center, self.view_radius);
             let _ = self
                 .terrain
@@ -2597,6 +2712,8 @@ impl Client {
                 cutoff: self.environment.values.lowpass,
                 reverb: self.environment.values.reverb,
                 volume: self.environment.values.volume,
+                feedback: if self.soundscape.reverb > 0.005 { self.soundscape.feedback } else { 0.85 },
+                damping: if self.soundscape.reverb > 0.005 { self.soundscape.damping } else { 0.60 },
             },
             dim: self.world.dim,
             holds: c
@@ -2609,6 +2726,30 @@ impl Client {
                 })
                 .collect(),
         }
+    }
+
+    pub(crate) fn play_audio(
+        &mut self,
+        audio: &mut crate::audio::Audio,
+        assets: &crate::assets::Assets,
+        listener: DVec3,
+        other: impl IntoIterator<Item = crate::audio::Play>,
+    ) {
+        let liquids = world::LiquidSampler { world: &self.world, entities: &self.entities, tick: self.anim_tick() };
+        self.soundscape
+            .play(liquids, listener, audio, assets, self.sounds.drain(..).chain(other));
+    }
+
+    pub(crate) fn source_filter(&self, source: DVec3, listener: DVec3) -> crate::audio::SourceFilter {
+        let liquids = self.liquid_sampler();
+        liquids
+            .at_source(source, listener)
+            .map_or_else(Default::default, |liquid| crate::audio::SourceFilter::from_liquid(liquid, liquids.at(listener)))
+    }
+
+    pub(crate) fn discard_audio(&mut self) {
+        self.sounds.clear();
+        self.soundscape.discard_pending();
     }
 
     /// No sky light at the camera: a cave, or under a roof.
@@ -2928,16 +3069,11 @@ impl Client {
     }
 
     fn visible_liquid(&self, point: DVec3) -> Option<u16> {
-        let c = content();
-        let cells = world::SeenCells { world: &self.world, air_if_missing: false };
-        let liquid = physics::liquid_at(c, &cells, point)?;
-        let tick = self.anim_tick();
-        let dry = self
-            .entities
-            .values()
-            .filter(|e| !e.dry_boxes.is_empty())
-            .any(|e| physics::inside_dry_volume((e.place_at(tick), &e.dry_boxes), point));
-        (!dry).then_some(liquid)
+        self.liquid_sampler().at(point)
+    }
+
+    fn liquid_sampler(&self) -> world::LiquidSampler<'_> {
+        world::LiquidSampler { world: &self.world, entities: &self.entities, tick: self.anim_tick() }
     }
 
     /// With the view not bobbing walking (`core:camera_bob` off) where it would, the bob the hand
@@ -3028,12 +3164,10 @@ impl Client {
 
     /// Simulation daylight used by conditions and prediction, independent of perception overrides.
     pub fn daylight(&self) -> f32 {
-        let day = content().dims[self.world.dim as usize].daylight(self.world.time) * (1.0 - self.look.darkness);
-        if self.lightning > 0.0 { (day + 0.5).min(1.0) } else { day }
+        content().dims[self.world.dim as usize].daylight(self.world.time) * (1.0 - self.look.darkness)
     }
 
-    /// The weather's look going over to the current one's, its sound now and then, and a
-    /// lightning's flash (`weather` draws the precipitation).
+    /// Blend the weather at the camera and play its ambient sound.
     fn weather_effects(&mut self, dt: f32) {
         self.weather_id = self.weather_at(self.camera().pos);
         let weather = &content().game.weathers[self.weather_id as usize];
@@ -3047,10 +3181,6 @@ impl Client {
         go(&mut l.cloud_gray, to.cloud_gray);
         go(&mut l.cloud_dark, to.cloud_dark);
         go(&mut l.darkness, to.darkness);
-        self.lightning = (self.lightning - dt).max(0.0);
-        if weather.lightning() && self.chance() < dt / 12.0 {
-            self.lightning = 0.15;
-        }
         if let Some(sound) = weather
             .sound
             .filter(|_| self.look.falls > 0.5 && !self.enclosed())
@@ -3086,14 +3216,25 @@ impl Client {
     fn scene(&self, cam: &Camera, frame: &FrameInfo) -> Scene {
         let environment = &self.environment.values;
         let (fog_start, fog_end) = (environment.fog_start, environment.fog_end);
+        let (lightning_start, lightning_end) = self.lightning.lights(cam.pos);
         let aspect = frame.width as f32 / frame.height.max(1) as f32;
         let view = cam.view();
         let inv = view.inverse();
         // Animated textures follow the game's ticks: between two from the server the client
         // counts on for a second at most, so they stop with the game.
         let ticks = (self.smooth_time() % (1 << 20) as f64) as f32;
+        let cloud_detail = content()
+            .game
+            .catalog
+            .ids(ek::CONFIG)
+            .get("core:cloud_impostor_distance")
+            .map_or(2048.0, |&id| crate::config::get(id) as f32);
+        let projection = cam.proj(aspect);
+        // Keep voxel detail when a higher resolution or a zoom makes it visible farther away.
+        let relative_pixel_scale = (frame.height as f32 / 900.0).clamp(0.5, 2.0) * projection.y_axis.y.abs() * 35.0_f32.to_radians().tan();
+        let cloud_lod = (cloud_detail * relative_pixel_scale).max(256.0);
         Scene {
-            view_proj: (cam.proj(aspect) * view).to_cols_array_2d(),
+            view_proj: (projection * view).to_cols_array_2d(),
             right: inv.transform_vector3(Vec3::X).extend(0.0).to_array(),
             up: inv.transform_vector3(Vec3::Y).extend(0.0).to_array(),
             fog_color: self.fog_color(),
@@ -3102,6 +3243,13 @@ impl Client {
             environment: [environment.sunlight, environment.cloud_fog_start, environment.cloud_fog_end, self.environment.rain_mist],
             sun: self.sun(),
             cloud: Default::default(),
+            atmosphere_extent: [0; 4],
+            cloud_lod: [cloud_lod, cloud_lod * 1.35, 0.0, 0.0],
+            cloud_cache: [0; 4],
+            atmosphere_cache: [0; 4],
+            rain_cover: [0.0; 4],
+            lightning_start,
+            lightning_end,
         }
     }
 
@@ -3136,7 +3284,7 @@ impl Client {
             self.entity_render.set_skin(gpu, entity, &skin);
         }
         let cam = self.render_camera();
-        if self.joined {
+        if self.has_world() {
             let remaining = (self.budget * 2).saturating_sub(std::time::Duration::from_secs_f64(self.spent));
             let normal_fov = self.base_camera_fov() * self.player.zoom.max(1.0);
             let lod_cam = Camera { fov: self.cameras.lod_fov, ..cam };
@@ -3221,27 +3369,38 @@ impl Client {
                     .occlusion
                     .capture_buffer(gpu, [frame.width, frame.height])
             });
-        scene.cloud = self.sky.draw(
+        let (cloud, atmosphere) = self.sky.draw(
             gpu,
             &mut late,
             frame,
             &cam,
             scene_buf,
             world_depth,
-            self.world.dim as usize,
+            &self.world,
             ticks,
             weather,
+            self.render.occlusion.has_pyramid(),
+            scene.cloud_lod[1].min(environment.cloud_fog_end),
             self.camera().pos.y,
             &self.environment.values,
+            &self.lightning,
             &self.environment.sky,
             &overlays,
         );
+        scene.cloud = cloud;
+        if let Some(ref atmosphere) = atmosphere {
+            scene.atmosphere_extent = [frame.width, frame.height, 0, 0];
+            scene.atmosphere_cache = atmosphere.cache;
+            scene.cloud_cache = atmosphere.cloud_origin;
+            scene.rain_cover = atmosphere.cover_origin;
+        }
         gpu.mapped(scene_buf)[..size_of::<Scene>()].copy_from_slice(bytemuck::bytes_of(&scene));
-        self.render.draw_translucent(&mut late, &cam);
+        self.render
+            .draw_translucent(&mut late, &cam, atmosphere.as_ref());
         let tick = self.anim_tick();
         self.wake_render
             .draw(gpu, &mut late, frame.slot, &cam, scene_buf, tick);
-        let alive = !self.dead && !self.mode.has(crate::tag_bits::game_mode::NO_INTERACT);
+        let alive = self.joined && !self.dead && !self.mode.has(crate::tag_bits::game_mode::NO_INTERACT);
         let hand = (alive && self.camera_has(crate::tag_bits::camera::HAND) && !self.hide_gui).then(|| entity_render::Hand {
             lowered: 1.0 - self.hand_height,
             lag: (self.player.pitch - self.hand_view.0, angle_diff(self.player.yaw, self.hand_view.1)),
@@ -3279,6 +3438,9 @@ impl Client {
             self.target
                 .filter(|_| !self.hide_gui)
                 .map(|h| (h, self.frame_place(h.frame))),
+            self.placement_preview
+                .filter(|(frame, _, _)| self.target.is_some_and(|hit| hit.frame == *frame))
+                .map(|(_, p, part)| (p, part)),
             &cracks,
             &self.gizmo_lines,
             &self.gizmo_fills,
@@ -3293,6 +3455,10 @@ impl Client {
         (self.late, self.hand_late) = (late, hand_late);
         after.push(weft_render::Cmd::Mark);
         world_depth.is_some()
+    }
+
+    pub(crate) fn sample_atmosphere(&mut self, list: &mut CommandList) {
+        self.sky.sample_atmosphere(list);
     }
 
     pub fn fog_color(&self) -> [f32; 4] {

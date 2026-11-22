@@ -1357,8 +1357,12 @@ impl WorldRenderer {
     }
 
     /// The translucent part of the last `draw`, after everything that may stand behind it.
-    pub fn draw_translucent(&self, list: &mut CommandList, camera: &Camera) {
-        if let Some((_, origins, _, _, _, _, _)) = self.buffers {
+    pub(super) fn draw_translucent(&self, list: &mut CommandList, camera: &Camera, atmosphere: Option<&super::sky::AtmosphereFrame>) {
+        if let Some((_, origins, _, _, _, _, dry)) = self.buffers {
+            // The shader needs a valid descriptor even when the grid stride is zero.
+            list.bind(crate::gpu_layout::bind::world::CLOUD_CELLS, atmosphere.and_then(|a| a.density).unwrap_or(dry));
+            list.bind(crate::gpu_layout::bind::world::RAIN_DEPTH, atmosphere.and_then(|a| a.rain).unwrap_or(dry));
+            list.bind(crate::gpu_layout::bind::world::RAIN_COVER, atmosphere.and_then(|a| a.cover).unwrap_or(dry));
             let cam_cube = crate::world::cube_of(camera.pos.floor().as_ivec3());
             self.far_lod
                 .draw(list, &self.lod_draw, cam_cube, true, |list, pipe, records| self.bind_run(list, pipe, records, origins));
@@ -1780,6 +1784,10 @@ impl Occlusion {
 
     fn depths(&self) -> Option<BufferId> {
         self.depths.map(|d| d.0)
+    }
+
+    pub fn has_pyramid(&self) -> bool {
+        self.on && self.pipes.is_some()
     }
 
     fn cull_pipe(&self) -> Option<PipelineId> {

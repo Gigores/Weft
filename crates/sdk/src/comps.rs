@@ -131,6 +131,7 @@ pub mod sound {
     pub static RANGE: Component<f32, Sound> = Component::named(s::RANGE);
     pub static FULL_WITHIN: Component<f32, Sound> = Component::named(s::FULL_WITHIN);
     pub static FALLOFF: Component<i32, Sound> = Component::named(s::FALLOFF);
+    pub static THROUGH_WALLS: Component<f32, Sound> = Component::named(s::THROUGH_WALLS);
     pub static CATEGORY: Component<Text, Sound> = Component::named(s::CATEGORY);
 }
 
@@ -569,6 +570,13 @@ pub mod block {
     pub static LAYER: Component<u32, Block> = Component::named(b::LAYER);
     pub static MODEL: Component<u32, Block> = Component::named(b::MODEL);
     pub static ITEM_FACE: Component<u8, Block> = Component::named(b::ITEM_FACE);
+    pub static RANDOM_OFFSET: Component<f32, Block> = Component::named(b::RANDOM_OFFSET);
+    pub static RANDOM_HEIGHT_SCALE: Component<[f32; 2], Block> = Component::named(b::RANDOM_HEIGHT_SCALE);
+    pub static RANDOM_WIDTH_SCALE: Component<[f32; 2], Block> = Component::named(b::RANDOM_WIDTH_SCALE);
+    pub static RANDOM_SCALE: Component<[f32; 2], Block> = Component::named(b::RANDOM_SCALE);
+    pub static RANDOM_YAW: Component<[f32; 2], Block> = Component::named(b::RANDOM_YAW);
+    pub static RANDOM_PITCH: Component<[f32; 2], Block> = Component::named(b::RANDOM_PITCH);
+    pub static RANDOM_ROLL: Component<[f32; 2], Block> = Component::named(b::RANDOM_ROLL);
     pub static TEXTURES: Component<[String; 6], Block> = Component::named(b::TEXTURES);
     pub static TURNS: Component<[u8; 6], Block> = Component::named(b::TURNS);
     pub static TURN: Component<u8, Block> = Component::named(b::TURN);

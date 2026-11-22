@@ -1288,6 +1288,7 @@ impl EntityRenderer {
         scene: &Scene,
         scene_buf: BufferId,
         target: Option<(Hit, Transform)>,
+        placement: Option<(IVec3, crate::world::placement::Part)>,
         breaking: &[Crack],
         gizmo_lines: &[super::gizmo::Line],
         gizmo_fills: &[super::gizmo::Fill],
@@ -1527,11 +1528,14 @@ impl EntityRenderer {
             .draw(gpu, list, frame, super::models::Batch::World, self.model_pipe, vb);
 
         if let Some((hit, place)) = target {
-            let root = Mat4::from_rotation_translation(
-                place.rotation().as_quat(),
-                rel(place.to_world(hit.origin.as_dvec3() + hit.offset.as_dvec3() / f64::from(crate::world::placement::UNIT))),
-            );
-            outline_boxes(&mut boxes, c.states[hit.state as usize].outlined(), root);
+            let origin = hit.origin.as_dvec3() + hit.part().shift();
+            let root = Mat4::from_rotation_translation(place.rotation().as_quat(), rel(place.to_world(origin)));
+            let selection = (c.states[hit.state as usize].outlined(), Vec3::ZERO);
+            let preview = placement.map(|(pos, part)| {
+                let offset = pos.as_dvec3() + part.shift() - origin;
+                (c.states[part.state as usize].outlined(), offset.as_vec3())
+            });
+            outline_boxes(&mut boxes, std::iter::once(selection).chain(preview), root);
         }
         gizmo_line_boxes(&mut boxes, gizmo_lines, cam.pos);
         let overlay_start = boxes.len();
@@ -2051,25 +2055,57 @@ fn embedded_root(projectile: &weft_abi::EmbeddedProjectile, attached: Mat4) -> O
     Some(attached * Mat4::from_rotation_translation(Quat::from_rotation_arc(-Vec3::Z, direction), Vec3::from_array(projectile.position)))
 }
 
-/// The selection outline at `o`: twelve thin dark boxes along the edges of each selection box.
-fn outline_boxes(out: &mut Vec<GpuBox>, selection: &[[f32; 6]], root: Mat4) {
-    for sel in selection {
-        let (mn, mx) = (Vec3::new(sel[0], sel[1], sel[2]), Vec3::new(sel[3], sel[4], sel[5]));
-        let t = 0.006;
-        let (a, b) = (mn - Vec3::splat(t), mx + Vec3::splat(t));
-        for axis in 0..3 {
-            for corner in 0..4 {
-                let mut lo = a;
-                let mut size = Vec3::splat(t * 2.0);
-                size[axis] = b[axis] - a[axis];
+/// Collect both outlines in the same frame so a shared edge produces one solid.
+fn outline_boxes<'a>(out: &mut Vec<GpuBox>, shapes: impl IntoIterator<Item = (&'a [[f32; 6]], Vec3)>, root: Mat4) {
+    const HALF_WIDTH: f32 = 0.006;
+    const EPS: f32 = 1e-5;
+    let mut edges: Vec<(usize, Vec3, f32)> = Vec::new();
+    for (shape, offset) in shapes {
+        for sel in shape {
+            let min = offset + Vec3::new(sel[0], sel[1], sel[2]);
+            let max = offset + Vec3::new(sel[3], sel[4], sel[5]);
+            for axis in 0..3 {
                 let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
-                lo[u] = if corner & 1 == 0 { a[u] } else { b[u] - t * 2.0 };
-                lo[v] = if corner & 2 == 0 { a[v] } else { b[v] - t * 2.0 };
-                let m = root * Mat4::from_translation(lo) * Mat4::from_scale(size);
-                out.push(GpuBox { rows: rows(m), color: [0.02, 0.02, 0.02, 0.0], ids: [0, box_mode::SOLID, 0, 0], ..Default::default() });
+                for corner in 0..4 {
+                    let mut start = min;
+                    let mut end = max[axis];
+                    start[u] = if corner & 1 == 0 { min[u] } else { max[u] };
+                    start[v] = if corner & 2 == 0 { min[v] } else { max[v] };
+                    edges.retain(|&(other_axis, other_start, other_end)| {
+                        if axis != other_axis
+                            || (start[u] - other_start[u]).abs() > EPS
+                            || (start[v] - other_start[v]).abs() > EPS
+                            || start[axis] > other_end + EPS
+                            || other_start[axis] > end + EPS
+                        {
+                            return true;
+                        }
+                        start[axis] = start[axis].min(other_start[axis]);
+                        end = end.max(other_end);
+                        false
+                    });
+                    edges.push((axis, start, end));
+                }
             }
         }
     }
+    for (axis, start, end) in edges {
+        let lo = start - Vec3::splat(HALF_WIDTH);
+        let mut size = Vec3::splat(2.0 * HALF_WIDTH);
+        size[axis] += end - start[axis];
+        let m = root * Mat4::from_translation(lo) * Mat4::from_scale(size);
+        out.push(GpuBox { rows: rows(m), color: [0.02, 0.02, 0.02, 0.0], ids: [0, box_mode::SOLID, 0, 0], ..Default::default() });
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn adjacent_block_outlines_share_the_seam() {
+    let cube = [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]];
+    let mut boxes = Vec::new();
+    outline_boxes(&mut boxes, [(cube.as_slice(), Vec3::ZERO), (cube.as_slice(), Vec3::X)], Mat4::IDENTITY);
+    // Twelve outer segments, plus the four edges around their shared face.
+    assert_eq!(boxes.len(), 16);
 }
 
 /// Gizmo lines: thin boxes like the outline, a little thicker so they read from afar.

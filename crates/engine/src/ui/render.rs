@@ -1075,13 +1075,13 @@ impl UiRenderer {
         gpu: &mut dyn Backend,
         assets: &Assets,
         ui: &Ui,
+        hovered: Option<super::NodeId>,
         look: &Look,
         scale: f32,
         at: glam::Vec2,
         game: Option<(&Content, &GameTextures)>,
     ) {
-        let Some(tip) = ui
-            .hovered
+        let Some(tip) = hovered
             .and_then(|h| ui.nodes.get(h))
             .and_then(|n| n.tooltip.as_ref())
         else {

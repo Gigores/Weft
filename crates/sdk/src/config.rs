@@ -99,6 +99,8 @@ pub mod settings {
     /// Native cloud fog distance in blocks; environment sources can override it. Zero hides clouds.
     pub static CLOUD_DISTANCE: Config<i32> = Config::named("core:cloud_distance");
     pub static VSYNC: Config<bool> = Config::named("core:vsync");
+    /// Maximum rendered frames per second. Zero means unlimited.
+    pub static FPS_LIMIT: Config<u32> = Config::named("core:fps_limit");
     pub static FOV: Config<f32> = Config::named("core:fov");
     pub static SENSITIVITY: Config<f32> = Config::named("core:sensitivity");
     pub static BRIGHTNESS: Config<f32> = Config::named("core:brightness");

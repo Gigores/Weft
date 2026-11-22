@@ -9,6 +9,7 @@ use crate::content::{AIR, Content};
 use crate::net::codec::Wire;
 use crate::physics::Transform;
 use crate::world::DIRS;
+use crate::world::placement::Part;
 
 pub const BOUNDS: &str = "core:assembly_bounds";
 
@@ -245,10 +246,16 @@ impl Dim {
                 riders
                     .into_iter()
                     .filter(|((p, _), _)| bounds.is_none_or(|b| b.contains(*p)))
-                    .map(|((p, source), state)| Lifted { from: p, local: p - center, to: p, part: Some(state), only: Some(source) }),
+                    .map(|((p, source), state)| Lifted {
+                        from: p,
+                        local: p - center,
+                        to: p,
+                        part: Some(Part { state, ..source }),
+                        only: Some(source),
+                    }),
             )
             .collect();
-        out.sort_unstable_by_key(|l| (l.from.to_array(), l.part));
+        out.sort_unstable_by_key(|l| (l.from.to_array(), l.part.map(|p| (p.state, p.offset.to_array()))));
         out
     }
 

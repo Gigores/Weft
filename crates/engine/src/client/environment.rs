@@ -151,10 +151,13 @@ impl Client {
         }
     }
 
-    pub fn update_environment(&mut self, textures: &GameTextures, dt: f32) {
+    pub fn update_environment(&mut self, textures: &GameTextures, dt: f32, audio: bool) {
         let c = content();
         let d = &c.dims[self.world.dim as usize];
         let cam = self.render_camera();
+        if audio {
+            self.soundscape.refresh(&self.world, cam.pos);
+        }
         let body = self.smooth_pos() + DVec3::Y * self.player.eye;
         let mut env = std::mem::take(&mut self.environment);
         self.environment.values = env.values;
@@ -198,6 +201,7 @@ impl Client {
             cloud_fog_end: cloud_distance,
             lowpass: 20_000.0,
             volume: 1.0,
+            reverb: self.soundscape.reverb,
             night_vision: self.night_vision,
             ..Default::default()
         };
@@ -206,8 +210,7 @@ impl Client {
 
         let mut weather = Layer::new("core:weather".into());
         weather.priority = -900;
-        weather.values.daylight =
-            if self.lightning > 0.0 { (day * (1.0 - self.look.darkness) + 0.5).min(1.0) } else { day * (1.0 - self.look.darkness) };
+        weather.values.daylight = day * (1.0 - self.look.darkness);
         weather.values.sky_gray = self.look.sky_gray;
         weather.values.fog_gray = self.look.fog_gray;
         weather.values.sky_cover = self.look.sky_cover;
@@ -244,13 +247,6 @@ impl Client {
         let weather_layers = env.layers(c, abi::entry_kind::WEATHER as usize, self.weather_id as u32);
         self.environment_layers(&mut env, &weather_layers, "weather-data", 0, cam.pos);
 
-        let mut cave = Layer::new("core:enclosed".into());
-        cave.priority = -800;
-        cave.values.reverb = 10.0f32.powf(-9.0 / 20.0);
-        if crate::world::light::enclosed(d, self.world.light(cam.pos.floor().as_ivec3())) {
-            env.contribute("enclosed".into(), cave, 1.0);
-        }
-
         for (point, observer) in [(cam.pos, abi::environment::observer::CAMERA), (body, abi::environment::observer::BODY)] {
             let block = self
                 .world
@@ -266,13 +262,28 @@ impl Client {
             for layer in block_layers.iter().filter(|l| l.observer == observer) {
                 self.environment_source(&mut env, format!("block/{observer}/{block}/{}", layer.name), layer.clone(), 0, point);
             }
-            if let Some(liquid) = self.visible_liquid(point) {
+            if let Some((liquid, dry)) = self.liquid_sampler().observation(point) {
+                if dry && observer != abi::environment::observer::CAMERA {
+                    continue;
+                }
                 for layer in c.liquids[liquid as usize]
                     .environment
                     .iter()
                     .filter(|l| l.observer == observer)
                 {
-                    let layer = self.environment_material(layer.clone(), point, Some(c.liquids[liquid as usize].first_state));
+                    let mut layer = self.environment_material(layer.clone(), point, Some(c.liquids[liquid as usize].first_state));
+                    if dry {
+                        // The camera can see the liquid outside a dry hull.
+                        layer.values = Values {
+                            fog_color: layer.values.fog_color,
+                            fog_start: layer.values.fog_start,
+                            fog_end: layer.values.fog_end,
+                            ..Values::unset()
+                        };
+                        layer.sky.clear();
+                        layer.post.clear();
+                        layer.replace_post = false;
+                    }
                     self.environment_source(&mut env, format!("liquid/{observer}/{liquid}/{}", layer.name), layer, 0, point);
                 }
             }

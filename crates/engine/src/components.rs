@@ -30,6 +30,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     (abi::comp::WEAR, "u32"),
     (abi::comp::HARDNESS, "f32"),
     (abi::comp::block::DENSITY, "f32"),
+    (abi::comp::block::SOUND_ABSORPTION, "f32"),
     (abi::comp::block::THRUST, "f32"),
     (abi::comp::block::GUIDE_RAIL, ""),
     (abi::comp::FRICTION, "f32"),

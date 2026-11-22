@@ -337,6 +337,19 @@ pub type Crack = (u64, IVec3, Part, f32);
 
 wire_struct! {
     #[derive(Clone, Copy, Debug)]
+    pub struct Lightning {
+        pub dim: u32,
+        pub tick: u64,
+        pub origin: DVec3,
+        pub end: DVec3,
+        pub ground: bool,
+        pub seed: u64,
+        pub strength: f32,
+    }
+}
+
+wire_struct! {
+    #[derive(Clone, Copy, Debug)]
     pub struct Move {
         pub id: u64,
         pub pos: DVec3,
@@ -358,8 +371,10 @@ pub const MAX_MESSAGE: usize = 64 << 20;
 messages! {
     #[derive(Clone)]
     pub enum ToClient: ClientTag, to_server = false; {
-        /// `look` (yaw, pitch), `selected` and `flying` as it left them.
-        Welcome { player: u64, dim: u32, pos: DVec3, seed: u64, look: [f32; 2], selected: u32, flying: bool },
+        /// Where to stream and draw the world while the player is still absent.
+        PrepareJoin { dim: u32, pos: DVec3, seed: u64, look: [f32; 2] },
+        /// The player has entered the prepared world and can now act.
+        Welcome { player: u64, vel: DVec3, selected: u32, flying: bool },
         /// `edit`: sent again because blocks in it changed (shown whole, at once), not loading.
         /// `frame`: the body it is a cube of, in that body's coordinates; 0 for the world.
         Cube { dim: u32, frame: u64, pos: IVec3, cube: Arc<Cube>, edit: bool },
@@ -471,6 +486,7 @@ messages! {
         ControllerEdit { controller: u64, face: u8, data: Vec<u8> },
         HelmProfile { mount: u64, controller: u64, data: Vec<u8> },
         BodyGrab(Option<u64>),
+        Lightning(Lightning),
     }
 }
 
@@ -479,6 +495,8 @@ messages! {
     pub enum ToServer: ServerTag, to_server = true; {
         /// `key`: the player's public key, their identity across sessions and addresses.
         Join { name: String, key: String },
+        /// The scene is ready and controls can be given to the player.
+        Ready,
         /// `frame`: the body it rides and its position relative to that body as the client shows it
         /// (the client shows bodies behind the server; only the relative position agrees).
         /// `jumped`: it jumped since the last one.
@@ -507,7 +525,7 @@ messages! {
         /// placed against the clicked face. `frame` like `Break`'s; `look` in world space.
         /// `hit`: where on the block, from its corner. `placed`: the cell the client already
         /// shows the held block in, sent back as it really is whatever happens.
-        Use { pos: IVec3, part: Part, face: u8, look: [f32; 3], hit: [f32; 3], sneak: bool, frame: u64, placed: Option<IVec3> },
+        Use { pos: IVec3, part: Part, face: u8, look: [f32; 3], hit: [f32; 3], sneak: bool, by_face: bool, frame: u64, placed: Option<IVec3> },
         UseItem,
         Select(u32),
         Attack(u64),
@@ -578,6 +596,10 @@ impl<S: Message, R> Conn<S, R> {
 
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    pub(crate) fn close(&mut self) {
+        self.closed = true;
     }
 }
 

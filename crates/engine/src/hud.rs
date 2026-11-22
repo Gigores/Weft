@@ -26,6 +26,7 @@ enum Part {
     HeldName,
     HelmKeys,
     Crosshair,
+    PlacementMode,
     PlayerList,
     Chat,
     /// Text in `PLACES[i]`.
@@ -44,6 +45,7 @@ enum Part {
 pub const TAG_CROSSHAIR: u32 = 2;
 /// A status effect's icon in its frame (`data` the effect), fading its last ten seconds.
 pub const TAG_EFFECT: u32 = 3;
+const TAG_EDIT_GRID: u32 = 4;
 
 /// The status effects the local player has now, beneficial ones first: effect, level, ticks left
 /// (`u64::MAX` for good).
@@ -154,9 +156,7 @@ impl Placement {
 #[derive(Clone, Default, PartialEq)]
 pub struct Edit {
     pub selected: Option<String>,
-    pub labels: bool,
-    /// The F3 panels are there to place, F3 or not.
-    pub debug: bool,
+    pub grid: bool,
 }
 
 /// When a line of the F3 overlay shows.
@@ -180,7 +180,7 @@ impl LineState {
     /// Its name on the debug options screen.
     pub fn key(self) -> &'static str {
         match self {
-            LineState::WithF3 => "hud.options.with_f3",
+            LineState::WithF3 => "hud.options.with_debug",
             LineState::Always => "hud.options.always",
             LineState::Never => "hud.options.never",
         }
@@ -262,6 +262,7 @@ pub struct Hud {
     revisions: Vec<u64>,
     key: Option<(bool, usize, [u32; 3], bool, bool, u32, u8, (i32, i32), (u32, u32, u8, bool), u64, (bool, [i32; 2], u64))>,
     helm_held: u64,
+    by_face_placement: bool,
     /// Player overrides from `config/hud.txt` by element name.
     layout: rustc_hash::FxHashMap<String, Placement>,
     file: std::path::PathBuf,
@@ -317,10 +318,12 @@ impl Hud {
         }
     }
 
+    pub(crate) fn element_node(&self, name: &str) -> Option<crate::ui::NodeId> {
+        self.ui.find(&format!("hud:{name}"))
+    }
+
     pub fn element_rect(&self, name: &str) -> Option<Rect> {
-        self.ui
-            .find(&format!("hud:{name}"))
-            .map(|n| self.ui.nodes[n].rect)
+        self.element_node(name).map(|n| self.ui.nodes[n].rect)
     }
 
     /// The smallest element under a point, so one lying inside another can be reached.
@@ -365,33 +368,42 @@ impl Hud {
     /// Returns true if the tree was rebuilt.
     /// `chat_open`: the chat screen shows the messages itself.
     /// `groups`: bit per `DEBUG_GROUPS` entry shown with the debug overlay.
-    pub fn update(&mut self, client: &Client, debug: bool, groups: u32, chat_open: bool, lang: &Lang, input: &crate::input::Input) -> bool {
+    pub fn update(
+        &mut self,
+        client: Option<&Client>,
+        debug: bool,
+        groups: u32,
+        chat_open: bool,
+        lang: &Lang,
+        input: &crate::input::Input,
+    ) -> bool {
         let huds = &content().game.huds;
         self.revisions.resize(huds.len(), 0);
-        let mut view = modui::ClientView::new(Some(client));
-        for (h, previous) in huds.iter().zip(&mut self.revisions) {
-            if let Some((owner, cb)) = h.rebuild {
-                let mut args = weft_abi::UiRevisionArgs { client: view.raw(), revision: 0 };
-                crate::host::invoke(owner, cb, &mut args);
-                if *previous != args.revision {
-                    *previous = args.revision;
-                    self.key = None;
+        if client.is_some() {
+            let mut view = modui::ClientView::new(client);
+            for (h, previous) in huds.iter().zip(&mut self.revisions) {
+                if let Some((owner, cb)) = h.rebuild {
+                    let mut args = weft_abi::UiRevisionArgs { client: view.raw(), revision: 0 };
+                    crate::host::invoke(owner, cb, &mut args);
+                    if *previous != args.revision {
+                        *previous = args.revision;
+                        self.key = None;
+                    }
                 }
             }
         }
         let now = std::time::Instant::now();
-        let chat_visible = if chat_open {
-            0
-        } else {
+        let chat_client = client.filter(|_| !chat_open);
+        let chat_visible = chat_client.map_or(0, |client| {
             client
                 .chat
                 .iter()
                 .filter(|(s, t)| s.alpha(now.duration_since(*t).as_secs_f32()) > 0.0)
                 .count()
-        };
+        });
         // The held item's name shows for two seconds after a change, fading for the last half.
-        let (held, since) = client.held_name;
-        let blocked = client.blocked_hand_slot(client.selected);
+        let (held, since) = client.map_or((ItemStack::default(), now), |cl| cl.held_name);
+        let blocked = client.is_some_and(|cl| cl.blocked_hand_slot(cl.selected));
         let fade = if blocked {
             16
         } else if held.is_empty() {
@@ -403,18 +415,17 @@ impl Hud {
         // name's. Rounded up: step 0 has to mean gone, or the last rebuild leaves it there faint.
         let up = |place: Option<usize>| -> Vec<(&crate::net::Shown, f32)> {
             client
-                .shown
-                .iter()
+                .into_iter()
+                .flat_map(|cl| &cl.shown)
                 .filter(|(s, _)| place.map_or(s.at.is_some(), |p| s.place as usize == p && s.at.is_none()))
                 .map(|(s, t)| (s, s.alpha(now.duration_since(*t).as_secs_f32())))
                 .filter(|(_, alpha)| *alpha > 0.0)
                 .collect()
         };
         let shown_steps = client
-            .chat
-            .iter()
-            .chain(&client.shown)
-            .fold(client.shown_changes as u64, |h, (s, t)| {
+            .into_iter()
+            .flat_map(|cl| cl.chat.iter().chain(&cl.shown))
+            .fold(client.map_or(0, |cl| cl.shown_changes as u64), |h, (s, t)| {
                 h.wrapping_mul(17)
                     .wrapping_add((s.alpha(now.duration_since(*t).as_secs_f32()) * 16.0).ceil() as u64)
             });
@@ -424,7 +435,8 @@ impl Hud {
         let list_shown = input.captured && input.held("core:player_list");
         let chat = crate::settings::chat_look();
         // Which status effects show, at what level, in the same number as the texts.
-        let shown_steps = shown_effects(client).iter().fold(shown_steps, |h, f| {
+        let effects = client.map_or_else(Vec::new, shown_effects);
+        let shown_steps = effects.iter().fold(shown_steps, |h, f| {
             h.wrapping_mul(31)
                 .wrapping_add((f.0 as u64) << 8 | f.1 as u64)
         });
@@ -435,21 +447,23 @@ impl Hud {
             chat_visible,
             [chat.width as u32, chat.closed_height as u32, chat.dim as u32],
             list_shown,
-            client.dead,
+            client.is_some_and(|cl| cl.dead),
             groups,
-            client.mode.0 as u8,
+            client.map_or(0, |cl| cl.mode.0 as u8),
             size,
             (held.item, held.data, fade, blocked),
             shown_steps,
             (touch, knob.round().as_ivec2().to_array(), crate::touch::generation()),
         );
-        let pilot = client.active_helm_pilot();
+        let pilot = client.and_then(Client::active_helm_pilot);
         let helm_held = pilot.map_or(0, |p| p.held);
-        if self.key == Some(key) && self.helm_held == helm_held {
+        let by_face = client.is_some_and(|cl| cl.by_face_placement);
+        if self.key == Some(key) && self.helm_held == helm_held && self.by_face_placement == by_face {
             return false;
         }
         self.key = Some(key);
         self.helm_held = helm_held;
+        self.by_face_placement = by_face;
         let c = content();
         use weft_abi::hud_anchor as a;
         let mods_debug = mod_debug_groups();
@@ -457,11 +471,10 @@ impl Hud {
         let editing = edit.is_some();
         // Lines by their state: F3 panels show with F3 and their group on, or in the editor.
         let lines = debug_lines();
-        let debug_on = edit.as_ref().is_some_and(|e| e.debug);
         let line_shown = |id: &str, group: Option<usize>| match lines.get(id).copied().unwrap_or_default() {
             LineState::Always => true,
             LineState::Never => false,
-            LineState::WithF3 => debug_on || (debug && group.is_none_or(|g| groups & (1 << g) != 0)),
+            LineState::WithF3 => debug && (editing || group.is_none_or(|g| groups & (1 << g) != 0)),
         };
         let shown = |part: Part| match part {
             Part::DebugGroup(i) => DEBUG_GROUPS[i]
@@ -479,6 +492,7 @@ impl Hud {
             ("core:helm_keys".into(), a::TOP_RIGHT.into(), 1, Part::HelmKeys),
             ("core:held_name".into(), a::ABOVE_HOTBAR.into(), 0, Part::HeldName),
             ("core:crosshair".into(), CENTER.into(), 0, Part::Crosshair),
+            ("core:placement_mode".into(), a::UNDER_CROSSHAIR.into(), 0, Part::PlacementMode),
             ("core:player_list".into(), CENTER.into(), 2, Part::PlayerList),
             ("core:chat".into(), CHAT.into(), 0, Part::Chat),
             ("core:debug.help".into(), a::DEBUG_LEFT.into(), i32::MAX, Part::DebugHelp),
@@ -548,7 +562,7 @@ impl Hud {
             v
         };
         let draw = |ui: &mut Ui, part: Part, align: Align| match part {
-            Part::Mod(owner, cb) => modui::build(ui, lang, Some(input), owner, cb, Some(client)),
+            Part::Mod(owner, cb) => modui::build(ui, lang, Some(input), owner, cb, client),
             Part::HeldName if fade > 0 => {
                 let id = ui.text(stack_name(lang, Some(input), held), "label");
                 if let Kind::Text(t) = &mut ui.nodes[id].kind {
@@ -590,7 +604,7 @@ impl Hud {
                 });
             }
             Part::HelmKeys => {}
-            Part::Hotbar if client.mode.has(crate::tag_bits::game_mode::NO_HUD) => {}
+            Part::Hotbar if !editing && client.is_some_and(|cl| cl.mode.has(crate::tag_bits::game_mode::NO_HUD)) => {}
             Part::Hotbar => {
                 ui.container(Style::row().gap(0.0), |ui| {
                     for i in 0..content().game.player_layout.hotbar as u64 {
@@ -599,12 +613,15 @@ impl Hud {
                 });
             }
             Part::Crosshair => drop(ui.add(Kind::Custom { tag: TAG_CROSSHAIR, data: 0 }, Style::default().size(9.0, 9.0))),
+            Part::PlacementMode if by_face || editing => {
+                ui.text(text::plain(lang.get("hud.placement.gridless")), "label");
+            }
+            Part::PlacementMode => {}
             Part::Effects => {
                 // Beneficial ones in a row, harmful ones in the row under it, as vanilla's.
-                let all = shown_effects(client);
                 ui.container(Style::default().gap(1.0).align(align), |ui| {
                     for harmful in [false, true] {
-                        let row: Vec<_> = all
+                        let row: Vec<_> = effects
                             .iter()
                             .filter(|f| {
                                 (content().game.entity_effects[f.0 as usize].kind == crate::registry::effect_kind::HARMFUL) == harmful
@@ -625,15 +642,19 @@ impl Hud {
                 let mut style = Style::default().pad(4.0).gap(1.0);
                 style.at = Some([0.0, 12.0 - ui.size.y / 2.0, 0.5, 0.0]);
                 ui.panel("panel", style, |ui| {
-                    for name in client.players.iter() {
+                    for name in client.into_iter().flat_map(|cl| &cl.players) {
                         ui.text(text::rich(&text::escape(name), lang, None), "label");
                     }
                 });
             }
             Part::PlayerList => {}
-            Part::Chat if chat_visible > 0 => crate::game_screens::chat_lines(ui, client, lang, input, false),
-            Part::Chat if editing => drop(ui.text(text::rich(lang.get("hud.edit.sample_chat"), lang, None), "chat")),
-            Part::Chat => {}
+            Part::Chat => {
+                if let Some(cl) = chat_client.filter(|_| chat_visible > 0) {
+                    crate::game_screens::chat_lines(ui, cl, lang, input, false);
+                } else if editing {
+                    ui.text(text::rich(lang.get("hud.edit.sample_chat"), lang, None), "chat");
+                }
+            }
             Part::Place(i) => {
                 let lines = up(Some(i));
                 for (s, alpha) in &lines {
@@ -650,13 +671,24 @@ impl Hud {
             }
             Part::DebugGroup(i) => debug_group(ui, i, align, &|id| line_shown(id, Some(i))),
             Part::DebugMod(i) => debug_mod_panel(ui, mods_debug[i].0, mods_debug[i].2, align, &|ui, (o, cb)| {
-                modui::build(ui, lang, Some(input), o, cb, Some(client))
+                if client.is_some() {
+                    modui::build(ui, lang, Some(input), o, cb, client);
+                }
             }),
             Part::DebugHelp => debug_help(ui, groups, align, &mods_debug),
             Part::Touch(i) => {
                 let b = &touch_buttons[i];
                 ui.panel("touch_button", Style::default().size(b.size, b.size).center(), |ui| {
-                    match crate::touch::label(input, &b.action) {
+                    let placement = b.action == crate::input::PLACEMENT_MODE;
+                    let label = if placement {
+                        crate::touch::Label::Text(
+                            lang.get(if by_face { "hud.placement.gridless" } else { "hud.placement.grid" })
+                                .into(),
+                        )
+                    } else {
+                        crate::touch::label(input, &b.action)
+                    };
+                    match label {
                         crate::touch::Label::Icon(icon) => {
                             let side = (b.size * 0.6).round();
                             ui.add(
@@ -670,7 +702,7 @@ impl Hud {
                             let fit = (b.size * 0.8 / (6.0 * name.chars().count().max(1) as f32)).min(b.size * 0.5 / 8.0);
                             if let Some(t) = ui.text_mut(t) {
                                 t.wrap = false;
-                                t.scale = fit.floor().max(1.0);
+                                t.scale = if placement { fit.min(fit.floor().max(1.0)) } else { fit.floor().max(1.0) };
                             }
                         }
                     }
@@ -688,7 +720,6 @@ impl Hud {
             }
         };
         let selected = edit.as_ref().and_then(|e| e.selected.clone());
-        let labels = edit.as_ref().is_some_and(|e| e.labels);
         // An element's own node, which carries its place: empty ones leave no gap in the flow,
         // and in the editor have a size to take hold of.
         let emit = |ui: &mut Ui, e: &Placed, style: Style, align: Align| {
@@ -714,12 +745,8 @@ impl Hud {
                     .at_from([1.0, 0.0], 0.0, 0.0, [0.5, 0.5]);
                 ui.add(Kind::Container { class: Some("touch_handle".into()) }, handle);
             }
-            if labels {
-                let t = ui.text(element_title(lang, &e.name), "debug");
-                ui.nodes[t].style.at = Some([0.0, -1.0, 0.0, 1.0]);
-                if let Some(t) = ui.text_mut(t) {
-                    t.wrap = false;
-                }
+            if editing {
+                ui.nodes[id].tooltip = Some(element_title(lang, &e.name));
             }
             ui.close();
             ui.set_id(id, &format!("hud:{}", e.name));
@@ -731,6 +758,14 @@ impl Hud {
         let ui = &mut self.ui;
         ui.clear();
         ui.root_style(Style::default().stretch());
+        if edit.as_ref().is_some_and(|e| e.grid) {
+            ui.add(
+                Kind::Custom { tag: TAG_EDIT_GRID, data: 0 },
+                Style::default()
+                    .size(window.x, window.y)
+                    .at(0.0, 0.0, [0.0, 0.0]),
+            );
+        }
         // The elements of an anchor stacked in a column of `style`, from the bottom when `upwards`.
         let stack = |ui: &mut Ui, anchors: &[&str], upwards: bool, style: Style, align: Align| {
             ui.container(style.gap(1.0).align(align), |ui| {
@@ -1051,16 +1086,18 @@ const POSITION: &[DebugLine] = &[
 
 const WORLD: &[DebugLine] = &[
     ("hud.debug.world", |c| {
-        let Some(cl) = c.client.as_ref() else { return vec![] };
-        vec![Arg::Int(cl.world.len() as i64), Arg::Int(cl.pending_meshes() as i64)]
+        c.client
+            .as_ref()
+            .map_or_else(|| vec![Arg::Int(0); 2], |cl| vec![Arg::Int(cl.world.len() as i64), Arg::Int(cl.pending_meshes() as i64)])
     }),
     ("hud.debug.draws", |c| {
-        let Some(cl) = c.client.as_ref() else { return vec![] };
-        vec![Arg::Int(cl.render.drawn as i64), Arg::Int((cl.render.faces_drawn / 1000) as i64)]
+        c.client.as_ref().map_or_else(
+            || vec![Arg::Int(0); 2],
+            |cl| vec![Arg::Int(cl.render.drawn as i64), Arg::Int((cl.render.faces_drawn / 1000) as i64)],
+        )
     }),
     ("hud.debug.lod", |c| {
-        let Some(cl) = c.client.as_ref() else { return vec![] };
-        let (shown, made, quads, pending) = cl.lod_stats();
+        let (shown, made, quads, pending) = c.client.as_ref().map_or((0, 0, 0, 0), |cl| cl.lod_stats());
         vec![Arg::Int(shown as i64), Arg::Int(made as i64), Arg::Int((quads / 1000) as i64), Arg::Int(pending as i64)]
     }),
     ("hud.debug.entities", |c| {
@@ -1124,6 +1161,18 @@ pub fn draw_custom(
 ) {
     match tag {
         TAG_CROSSHAIR => loaded(ren, look, "crosshair", r, scale),
+        TAG_EDIT_GRID => {
+            let step = crate::hud_editor::GRID * scale;
+            let line = |i: u32| if i % 4 == 0 { 0xB4D4FF16 } else { 0xB4D4FF09 };
+            for i in 1..(r.w / step).ceil() as u32 {
+                ren.rect(Rect { x: r.x + i as f32 * step, y: r.y, w: 1.0, h: r.h }, line(i));
+            }
+            for i in 1..(r.h / step).ceil() as u32 {
+                ren.rect(Rect { x: r.x, y: r.y + i as f32 * step, w: r.w, h: 1.0 }, line(i));
+            }
+            ren.rect(Rect { x: r.x + (r.w / 2.0).floor(), y: r.y, w: 1.0, h: r.h }, 0xB4D4FF33);
+            ren.rect(Rect { x: r.x, y: r.y + (r.h / 2.0).floor(), w: r.w, h: 1.0 }, 0xB4D4FF33);
+        }
         TAG_EFFECT => {
             loaded(ren, look, "effect", r, scale);
             let left = client
@@ -1143,9 +1192,9 @@ pub fn draw_custom(
             }
         }
         TAG_HOTBAR => {
-            let Some(client) = client else { return };
-            let selected = client.selected as u64 == data;
+            let selected = client.is_some_and(|cl| cl.selected as u64 == data);
             slot_background(ren, look, "hotbar", r, selected, scale);
+            let Some(client) = client else { return };
             let stack = client
                 .inventory
                 .get(data as usize)

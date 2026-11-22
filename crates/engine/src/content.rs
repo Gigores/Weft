@@ -13,6 +13,29 @@ use crate::registry::entries_of;
 
 pub const AIR: u32 = 0;
 
+#[derive(Clone, Copy, PartialEq)]
+pub struct RandomTransform {
+    pub offset: f32,
+    pub height_scale: [f32; 2],
+    pub width_scale: [f32; 2],
+    pub scale: [f32; 2],
+    pub yaw: [f32; 2],
+    pub pitch: [f32; 2],
+    pub roll: [f32; 2],
+}
+
+impl RandomTransform {
+    pub const NONE: RandomTransform = RandomTransform {
+        offset: 0.0,
+        height_scale: [1.0; 2],
+        width_scale: [1.0; 2],
+        scale: [1.0; 2],
+        yaw: [0.0; 2],
+        pitch: [0.0; 2],
+        roll: [0.0; 2],
+    };
+}
+
 #[derive(Clone)]
 pub struct ModelBox {
     pub min: [f32; 3],
@@ -134,6 +157,7 @@ pub struct StateInfo {
     pub level: u8,
     pub model: BlockModel,
     pub item_face: Option<u8>,
+    pub random_transform: RandomTransform,
     /// Texture ids (`Content::textures`) per face.
     pub textures: [u32; 6],
     pub boxes: Vec<ModelBox>,
@@ -151,6 +175,7 @@ pub struct StateInfo {
     pub hardness: f32,
     pub friction: f32,
     pub drag: f32,
+    pub sound_absorption: f32,
     /// Has the `conductor` tag (part of energy networks).
     pub conductor: bool,
     /// Liquid id (`Content::liquids`) for liquid blocks.
@@ -301,6 +326,7 @@ pub struct BlockCallbacks {
 }
 
 pub struct BlockDef {
+    pub grid_placement: bool,
     pub name: String,
     pub owner: ModId,
     pub first_state: u32,
@@ -706,6 +732,7 @@ pub struct LiquidDef {
     pub rises: bool,
     pub temperature: u32,
     pub environment: Vec<abi::environment::EnvironmentLayer>,
+    pub(crate) source_filter: crate::audio::SourceFilter,
 }
 
 impl LiquidDef {
@@ -2808,6 +2835,9 @@ fn flatten_components(states: &mut [StateInfo], components: &Components, ids: &I
         s.hardness = f32_of(st, abi::comp::HARDNESS).unwrap_or(s.hardness);
         s.friction = f32_of(st, abi::comp::FRICTION).unwrap_or(s.friction);
         s.drag = f32_of(st, abi::comp::DRAG).unwrap_or(s.drag);
+        if let Some(value) = f32_of(st, abi::comp::block::SOUND_ABSORPTION).filter(|v| v.is_finite()) {
+            s.sound_absorption = value.clamp(0.0, 1.0);
+        }
         if let Some(l) = get(st, abi::comp::LIGHT) {
             s.light = [l[0], l[1], l[2]];
         }
@@ -3918,6 +3948,22 @@ fn resolve_effects(
     }
 }
 
+fn liquid_source_filter(layers: &[abi::environment::EnvironmentLayer]) -> crate::audio::SourceFilter {
+    use abi::environment::{EnvironmentValues, observer};
+    let default = crate::audio::SourceFilter::default();
+    let mut values = EnvironmentValues { lowpass: default.cutoff, volume: default.gain, ..Default::default() };
+    // Source events have a position but no observer or entity to evaluate conditions for.
+    let mut material: Vec<_> = layers
+        .iter()
+        .filter(|layer| layer.observer == observer::CAMERA && layer.radius <= 0.0 && layer.when.is_empty())
+        .collect();
+    material.sort_by(|a, b| (a.priority, &a.name).cmp(&(b.priority, &b.name)));
+    for layer in material {
+        values.mix(&layer.values, layer.blend, 1.0);
+    }
+    crate::audio::SourceFilter { cutoff: values.lowpass.clamp(20.0, default.cutoff), gain: values.volume.max(0.0) }
+}
+
 /// Liquids by name, folded already (`freeze`); reactions in load order.
 fn freeze_liquids(
     folded: crate::entries::Folded,
@@ -3963,6 +4009,7 @@ fn freeze_liquids(
             });
             let mut environment = vec![base];
             environment.extend(e.or::<Vec<abi::environment::EnvironmentLayer>>(abi::environment::COMPONENT, Vec::new()));
+            let source_filter = liquid_source_filter(&environment);
             Some(LiquidDef {
                 name: e.name.clone(),
                 first_state: def.first_state,
@@ -3973,6 +4020,7 @@ fn freeze_liquids(
                 rises: e.or(l::DENSITY, 1000) < 0,
                 temperature: e.or(l::HEAT, 300),
                 environment,
+                source_filter,
             })
         },
     );

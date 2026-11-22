@@ -80,6 +80,8 @@ pub enum Request {
     Sound(crate::audio::Play),
     Rebind(String, crate::input::Slots),
     ResetBinds,
+    ResetHudLayout,
+    SetDebug(bool),
     StartWorld(WorldMeta),
     /// Into a world from its picture in the list, `picture` (a GUI texture) growing from `from`
     /// (GUI pixels) to the whole window first.
@@ -106,8 +108,7 @@ struct Entering {
     from: crate::ui::Rect,
     started: Instant,
     expanded: bool,
-    joined: Option<Instant>,
-    /// When the picture filled the window and the world took over.
+    /// When the prepared view started to replace the picture.
     shown: Option<Instant>,
 }
 
@@ -300,8 +301,8 @@ pub(crate) struct Running {
     entering: Option<Entering>,
     /// The save being opened, then its server streaming the spawn while the preview grows.
     opening_world: Option<OpeningWorld>,
-    /// When the world around the player was first loaded, the HUD coming in from then.
-    seen_since: Option<Instant>,
+    /// When the player entered the world and the HUD started fading in.
+    hud_since: Option<Instant>,
     /// The HUD's quads among the cached ones.
     hud_quads: std::ops::Range<usize>,
     reload_requested: bool,
@@ -395,6 +396,7 @@ pub(crate) fn engine_assets(dev: bool) -> PathBuf {
 #[derive(Default, PartialEq)]
 struct Applied {
     vsync: bool,
+    frame_interval: Option<Duration>,
     view: i32,
     language: String,
     gui_scale: u32,
@@ -471,18 +473,25 @@ impl App {
             cache: Some(&self.opts.cache_dir),
         };
         // The chosen renderer, and the others if it can't start on this machine.
-        let chosen = crate::settings::renderer();
+        let mut chosen = crate::settings::renderer();
+        if chosen == "vulkan" && self.opts.renderer.is_none() && !self.opts.automated && crate::diag::vulkan_startup_faulted() {
+            log::warn!("Vulkan crashed during startup on a previous run; trying wgpu first");
+            chosen = "wgpu".into();
+        }
         let mut order: Vec<_> = self.renderers.iter().collect();
         order.sort_by_key(|r| r.0 != chosen);
         let mut failed = Vec::new();
         let mut gpu = None;
         for &(name, factory) in order {
+            crate::diag::renderer_starting(name == "vulkan" && !self.opts.automated);
+            log::info!("starting renderer {name}");
             match factory(&desc) {
                 Ok(g) => {
                     gpu = Some((g, name));
                     break;
                 }
                 Err(e) => {
+                    crate::diag::renderer_starting(false);
                     log::warn!("renderer {name}: {e}");
                     failed.push(format!("{name}: {e}"));
                 }
@@ -579,7 +588,7 @@ impl App {
             preview_shot: None,
             entering: None,
             opening_world: None,
-            seen_since: None,
+            hud_since: None,
             hud_quads: 0..0,
             reload_requested: false,
             packs_pending: false,
@@ -658,6 +667,7 @@ impl Running {
             settings: &self.settings,
             languages: &self.languages,
             in_game: self.game.is_some(),
+            debug: self.debug,
             remote: self.game.as_ref().is_some_and(|g| g.server.is_none()),
             mods: self.mods.len(),
             client: self.game.as_ref().map(|g| &g.client),
@@ -694,6 +704,14 @@ impl Running {
     fn rebuild_all(&mut self) {
         self.rebuild_screens(|_| true);
         self.hud.invalidate();
+    }
+
+    fn set_debug(&mut self, on: bool) {
+        if self.debug != on {
+            self.debug = on;
+            self.hud.invalidate();
+            self.rebuild_screens(|ui| ui.find("hud_tools").is_some());
+        }
     }
 
     fn rebuild_music_screens(&mut self) {
@@ -838,7 +856,7 @@ impl Running {
         if self.gpu.compiling() && self.entering.is_none() {
             log::info!("waiting for shaders to compile");
             self.screens.clear();
-            self.open(Box::new(screens::Compiling));
+            self.open(Box::new(screens::LoadingWorld::Compiling));
         }
         let run_dir = self.settings.run_dir.clone();
         let (send, opened) = crossbeam_channel::bounded(1);
@@ -897,7 +915,7 @@ impl Running {
                 self.quads_dirty = true;
                 if self.entering.is_none() {
                     self.screens.clear();
-                    self.set_capture(true);
+                    self.open(Box::new(screens::LoadingWorld::Streaming));
                 }
             }
             Err(e) => self.world_open_failed(e),
@@ -1020,6 +1038,11 @@ impl Running {
                     }
                 }
                 Request::Rebuild => self.rebuild_all(),
+                Request::ResetHudLayout => {
+                    self.hud.reset_all();
+                    crate::touch::reset_sizes();
+                }
+                Request::SetDebug(on) => self.set_debug(on),
                 Request::Sound(play) => self.ui_sounds.push(play),
                 Request::ModCall(owner, cb, data) => {
                     let mut v = self.frame_view();
@@ -1069,8 +1092,7 @@ impl Running {
                     let missing = world.missing_mods(content());
                     if self.entering.is_some() || self.game.is_some() || self.opening_world.is_some() {
                     } else if missing.is_empty() {
-                        self.entering =
-                            Some(Entering { picture, from, started: Instant::now(), expanded: false, joined: None, shown: None });
+                        self.entering = Some(Entering { picture, from, started: Instant::now(), expanded: false, shown: None });
                         self.start_world(world);
                     } else {
                         self.open(Box::new(saves::MissingMods { world, missing }));
@@ -1112,7 +1134,7 @@ impl Running {
                                 self.game = Some(Game { client, server: None });
                                 self.screens.clear();
                                 self.hud.invalidate();
-                                self.set_capture(true);
+                                self.open(Box::new(screens::LoadingWorld::Streaming));
                             }
                             Err(e) => log::error!("{e}"),
                         }
@@ -1206,6 +1228,21 @@ impl Running {
             use crate::server::menu::{
                 CLONE, GATHER, HOTBAR_SWAP, OFF_HAND_SWAP, PICK_SAME, THROW, THROW_ALL, TO_TRASH, WHEEL_DOWN, WHEEL_UP,
             };
+            // A release and a new press can both land between two frames.
+            if g.client
+                .drag
+                .as_ref()
+                .is_some_and(|(button, _)| !self.input.held_button(*button) || self.input.pressed_button(*button))
+            {
+                let (button, slots) = g.client.drag.take().unwrap();
+                if slots.len() == 1 {
+                    g.client
+                        .send(net::ToServer::Click { slot: slots[0], button, shift: false });
+                } else {
+                    g.client.send(net::ToServer::Drag { slots, button });
+                }
+                self.quads_dirty = true;
+            }
             let typing = ui
                 .focused
                 .is_some_and(|f| matches!(ui.nodes[f].kind, Kind::Input { .. }));
@@ -1235,14 +1272,13 @@ impl Running {
                         g.client.sweep.extend(slot);
                     }
                     match slot {
-                        // Double click: the rest of the stack just picked up joins it (the
-                        // server knows what is on the cursor even before we do).
+                        // The server tries to gather or applies a normal click with its cursor state.
                         Some(s) if double && !shift => {
                             g.client
                                 .send(net::ToServer::Click { slot: s, button: GATHER, shift: false });
                             g.client.last_click = None;
                         }
-                        Some(s) if holding && !shift && g.client.drag.is_none() => {
+                        Some(s) if holding && !shift && self.input.held_button(button) && g.client.drag.is_none() => {
                             g.client.drag = Some((button, vec![s]));
                             self.quads_dirty = true;
                         }
@@ -1308,21 +1344,10 @@ impl Running {
                 }
             }
             if let Some((button, slots)) = &mut g.client.drag {
-                if self.input.held_button(*button) {
-                    // A right-button drag leaves one more each time it comes back onto a slot.
-                    let again = |s: &u32| if *button == 1 { slots.last() != Some(s) } else { !slots.contains(s) };
-                    if let Some(s) = slot.filter(again) {
-                        slots.push(s);
-                        self.quads_dirty = true;
-                    }
-                } else {
-                    let (button, slots) = g.client.drag.take().unwrap();
-                    if slots.len() == 1 {
-                        g.client
-                            .send(net::ToServer::Click { slot: slots[0], button, shift: false });
-                    } else {
-                        g.client.send(net::ToServer::Drag { slots, button });
-                    }
+                // A right-button drag leaves one more each time it comes back onto a slot.
+                let again = |s: &u32| if *button == 1 { slots.last() != Some(s) } else { !slots.contains(s) };
+                if let Some(s) = slot.filter(again) {
+                    slots.push(s);
                     self.quads_dirty = true;
                 }
             }
@@ -1609,6 +1634,9 @@ impl Running {
     /// `client_entity_frame`, the local player's too; finished deaths go after their last call.
     fn entity_ticks(&mut self, dt: f32) {
         let Some(g) = &self.game else { return };
+        if !g.client.joined {
+            return;
+        }
         let c = content();
         let mine = g.client.me.args(g.client.player_id, dt);
         let all: Vec<abi::ClientEntityArgs> = g
@@ -1639,8 +1667,10 @@ impl Running {
     /// command or a test.
     fn apply_settings(&mut self) {
         use crate::settings as s;
+        let fps_limit = s::fps_limit();
         let mut now = Applied {
             vsync: s::vsync(),
+            frame_interval: (fps_limit > 0).then(|| Duration::from_secs_f64(1.0 / f64::from(fps_limit))),
             view: s::view_distance(),
             language: s::language(),
             gui_scale: s::gui_scale(),
@@ -2033,9 +2063,17 @@ impl ApplicationHandler for App {
                 r.input.cursor = Vec2::new(position.x as f32, position.y as f32);
             }
             WindowEvent::RedrawRequested => {
+                let now = Instant::now();
+                if r.applied
+                    .frame_interval
+                    .is_some_and(|interval| now < r.last + interval)
+                    && !r.quit
+                {
+                    return;
+                }
                 let aim = r.aim();
                 r.touches.tick(&mut r.input, aim);
-                if frame(r, &self.opts) || r.quit {
+                if frame(r, &self.opts, now) || r.quit {
                     r.leave_world_silent();
                     el.exit();
                 }
@@ -2044,8 +2082,16 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         if let Some(r) = &self.run {
+            if let Some(interval) = r.applied.frame_interval {
+                let next = r.last + interval;
+                if next > Instant::now() && !r.quit {
+                    el.set_control_flow(ControlFlow::WaitUntil(next));
+                    return;
+                }
+            }
+            el.set_control_flow(ControlFlow::Poll);
             r.window.request_redraw();
         }
     }
@@ -2068,15 +2114,14 @@ struct UiCallbacks {
 }
 
 /// One frame. Returns true when the app should quit.
-fn frame(r: &mut Running, opts: &Options) -> bool {
+fn frame(r: &mut Running, opts: &Options, now: Instant) -> bool {
     r.retired = None;
-    let now = Instant::now();
     let dt = (now - r.last).as_secs_f64();
     r.last = now;
     let scale = r.gui_scale();
     start_frame(r, opts, dt);
     let mut requests = Vec::new();
-    let opening = r.opening_world.is_some() || r.entering.as_ref().is_some_and(|e| e.shown.is_none());
+    let opening = r.opening_world.is_some() || r.entering.is_some();
     if !opening && !screen_keys_first(r, &mut requests) && r.input.pressed_key(Key::Code(KeyCode::Escape)) {
         escape(r, &mut requests);
     }
@@ -2113,13 +2158,16 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
     r.entity_ticks(dt as f32);
     r.client_packets();
     if let Some(g) = &mut r.game {
-        g.client.update_environment(&r.textures, dt as f32);
+        g.client
+            .update_environment(&r.textures, dt as f32, r.audio.is_some());
     }
     play_sounds(r);
-    client_events(r);
-    world_keys(r);
     handle_disconnect(r);
     enter_world(r);
+    client_events(r);
+    if r.game.as_ref().is_some_and(|g| g.client.joined) {
+        world_keys(r);
+    }
     end_input(r);
     refresh_hud(r);
     r.poll_bindings();
@@ -2156,7 +2204,9 @@ fn frame(r: &mut Running, opts: &Options) -> bool {
     let capture_now = r.shot_pending;
     let t3 = Instant::now();
     r.prof[3] = t3.duration_since(t2).as_secs_f32() * 1000.0;
-    r.gpu.end_frame(&r.list);
+    if r.gpu.end_frame(&r.list) {
+        crate::diag::renderer_started();
+    }
     r.prof[4] = t3.elapsed().as_secs_f32() * 1000.0;
     report_frame(r, dt);
     if capture_now {
@@ -2257,8 +2307,7 @@ fn debug_keys(r: &mut Running) {
         crate::settings::set("advanced_tooltips", (!crate::settings::advanced_tooltips()) as u8 as f64);
     }
     if r.input.pressed("core:debug") {
-        r.debug = !r.debug;
-        r.hud.invalidate();
+        r.set_debug(!r.debug);
     }
     // Through the command, so permissions still apply.
     if r.input.pressed("core:cycle_game_mode")
@@ -2284,8 +2333,7 @@ fn debug_keys(r: &mut Running) {
     for i in 0..groups.min(9) {
         if r.input.pressed(&format!("core:debug_group{}", i + 1)) {
             crate::settings::set("debug_groups", (crate::settings::debug_groups() ^ (1 << i)) as f64);
-            r.debug = true;
-            r.hud.invalidate();
+            r.set_debug(true);
         }
     }
 }
@@ -2379,7 +2427,7 @@ fn update_game(r: &mut Running, dt: f64, frame_start: Instant) {
             .set_show_avatars(crate::settings::show_avatars());
         g.client.render.occlusion.on = crate::settings::occlusion_culling();
         let t = Instant::now();
-        if world_input {
+        if world_input && g.client.joined {
             g.client.update(&mut *r.gpu, &r.textures, &mut r.input, dt);
         } else {
             g.client
@@ -2393,27 +2441,37 @@ fn update_game(r: &mut Running, dt: f64, frame_start: Instant) {
 fn play_sounds(r: &mut Running) {
     let mut music_ended = false;
     if let Some(a) = &mut r.audio {
-        if let Some(g) = &mut r.game {
+        let listener = r.game.as_ref().map(|g| g.client.listener());
+        if let Some(g) = &mut r.game
+            && let Some(listener) = &listener
+        {
             let cl = &mut g.client;
-            let pos = cl
+            let source = cl
                 .local_music
                 .source()
-                .and_then(|source| cl.music_source_position(source));
-            music_ended = cl.local_music.update(pos);
+                .and_then(|source| cl.music_source_position(source))
+                .map(|pos| (pos, cl.source_filter(pos, listener.pos)));
+            music_ended = cl.local_music.update(source, listener.pos);
         }
-        let listener = r.game.as_ref().map(|g| g.client.listener());
         let local_playing = r
             .game
             .as_ref()
             .is_some_and(|g| g.client.local_music.source().is_some());
         a.update(&r.assets, listener.as_ref(), local_playing);
-        if let Some(g) = &mut r.game {
-            for p in g.client.sounds.drain(..) {
+        if let Some(g) = &mut r.game
+            && let Some(listener) = listener
+        {
+            g.client
+                .play_audio(a, &r.assets, listener.pos, r.ui_sounds.drain(..));
+        } else {
+            for p in r.ui_sounds.drain(..) {
                 a.play(&r.assets, p);
             }
         }
-        for p in r.ui_sounds.drain(..) {
-            a.play(&r.assets, p);
+    } else {
+        r.ui_sounds.clear();
+        if let Some(g) = &mut r.game {
+            g.client.discard_audio();
         }
     }
     if music_ended {
@@ -2543,22 +2601,20 @@ fn end_input(r: &mut Running) {
 }
 
 fn refresh_hud(r: &mut Running) {
-    if let Some(g) = &r.game {
-        let chat_open = r.screens.last().is_some_and(|(s, _)| s.shows_chat());
-        if r.hud.editing()
-            && !r
-                .screens
-                .last()
-                .is_some_and(|(s, _)| s.name() == "core:hud_editor")
-        {
-            r.hud.set_edit(None);
-        }
+    let top = r.screens.last().map(|(s, _)| s.as_ref());
+    if !top.is_some_and(|s| s.name() == "core:hud_editor") {
+        r.hud.set_edit(None);
+    }
+    if r.game.is_some() || r.hud.editing() {
+        let chat_open = top.is_some_and(Screen::shows_chat);
         r.hud.knob = r.touches.knob();
         if r.hud
-            .update(&g.client, r.debug, crate::settings::debug_groups(), chat_open, &r.lang, &r.input)
+            .update(r.game.as_ref().map(|g| &g.client), r.debug, crate::settings::debug_groups(), chat_open, &r.lang, &r.input)
         {
             r.quads_dirty = true;
         }
+    }
+    if let Some(g) = &r.game {
         let mut h = g.client.selected as u64;
         for s in g.client.inventory.iter().chain(
             g.client
@@ -2597,7 +2653,7 @@ fn layout_uis(r: &mut Running, scale: f32) -> f32 {
     let screen_size = Vec2::new(gui_size.x, visible_height(r).map_or(gui_size.y, |h| (h / scale).min(gui_size.y)));
     {
         let mut uis: Vec<(&mut Ui, Vec2)> = Vec::new();
-        if r.game.is_some() {
+        if r.game.is_some() || r.hud.editing() {
             uis.push((&mut r.hud.ui, gui_size));
         }
         uis.extend(r.screens.iter_mut().map(|(_, u)| (u, screen_size)));
@@ -2642,7 +2698,7 @@ fn build_ui_quads(r: &mut Running, scale: f32, drag: Option<&DragPreview>) {
         .as_ref()
         .is_some_and(|g| g.client.camera_has(crate::tag_bits::camera::HUD))
         || !r.screens.is_empty();
-    let with_hud = r.game.is_some() && hud && !hud_hidden() && !(r.hud_off && r.screens.is_empty());
+    let with_hud = r.hud.editing() || (r.game.is_some() && hud && !hud_hidden() && !(r.hud_off && r.screens.is_empty()));
     if with_hud {
         layers.push(&r.hud.ui);
     }
@@ -2699,11 +2755,11 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
     r.ui.quads.clear();
     r.ui.quads.extend_from_slice(&r.ui_cached);
     crate::ui::render::animate(&mut r.ui.quads, &r.ui_animated);
-    // The HUD comes in once the world is there, not before it.
+    // The HUD fades in once the server has let the player in.
     let shown = r
-        .seen_since
+        .hud_since
         .map_or(0.0, |t| (t.elapsed().as_secs_f32() / HUD_FADE).min(1.0));
-    if shown < 1.0 {
+    if shown < 1.0 && !r.hud.editing() {
         for q in
             r.ui.quads
                 .get_mut(r.hud_quads.clone())
@@ -2759,9 +2815,17 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
         let game = crate::content::try_content().map(|c| (c, &r.textures));
         r.ui.append(&mut *r.gpu, &r.assets, &o, &r.look, scale, game, &mut |_, _, _, _, _, _| {});
     }
-    if let Some((_, ui)) = r.screens.last() {
+    if let Some((screen, ui)) = r.screens.last() {
         let game = crate::content::try_content().map(|c| (c, &r.textures));
-        r.ui.tooltip(&mut *r.gpu, &r.assets, ui, &r.look, scale, r.input.cursor, game);
+        let cursor = r.input.cursor / scale;
+        let (source, hovered) = match (screen.as_ref() as &dyn std::any::Any).downcast_ref::<crate::hud_editor::HudEditor>() {
+            Some(editor) => match editor.element_tooltip(cursor, ui, &r.hud) {
+                Some(node) => (&r.hud.ui, Some(node)),
+                None => (ui, ui.hit(cursor)),
+            },
+            None => (ui, ui.hovered),
+        };
+        r.ui.tooltip(&mut *r.gpu, &r.assets, source, hovered, &r.look, scale, r.input.cursor, game);
     }
     if let Some(cursor) = r
         .game
@@ -2914,6 +2978,7 @@ fn record_passes(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
             .render
             .occlusion
             .take_depth(&mut *r.gpu, &mut r.list, r.depth.0, [r.depth.1, r.depth.2], atmosphere);
+        g.client.sample_atmosphere(&mut r.list);
     }
     if !after.cmds.is_empty() {
         r.list
@@ -3035,32 +3100,47 @@ fn save_screenshot(r: &mut Running) {
     }
 }
 
-/// Reveal the world after the first view is ready, with a deadline for slow or unusual spawns.
+/// Reveal the prepared scene, then ask the server to spawn the player once the
+/// animation has finished. Controls wait for the server's welcome.
 fn enter_world(r: &mut Running) {
-    if r.game.is_none() {
-        r.seen_since = None;
-    } else if r.seen_since.is_none() && r.game.as_ref().is_some_and(|g| g.client.near_shown(NEAR)) {
-        r.seen_since = Some(Instant::now());
-    }
-    let Some(e) = &mut r.entering else { return };
-    if let Some(shown) = e.shown {
-        if shown.elapsed().as_secs_f32() >= ENTER_FADE {
+    let Some(g) = &mut r.game else {
+        r.hud_since = None;
+        return;
+    };
+    let now = Instant::now();
+    if g.client.joined {
+        r.hud_since.get_or_insert(now);
+        if g.client.preparing_since.take().is_some() {
             r.entering = None;
-        }
-    } else if e.expanded
-        && let Some(g) = r.game.as_ref().filter(|g| g.client.joined)
-    {
-        let now = Instant::now();
-        let joined = *e.joined.get_or_insert(now);
-        let near = r.seen_since.is_some();
-        let lod = g.client.lod_ready_for_entry();
-        if (near && lod) || now - joined >= ENTER_LOAD_LIMIT {
-            log::debug!(target: "load", "revealing world after {:.3} s (near ready: {near}, LOD ready: {lod})", e.started.elapsed().as_secs_f64());
-            e.shown = Some(now);
             r.screens.clear();
             r.quads_dirty = true;
             r.set_capture(true);
         }
+        return;
+    }
+    let Some(preparing) = g.client.preparing_since else { return };
+    let near = g.client.near_shown(NEAR);
+    let lod = g.client.lod_ready_for_entry();
+    let scene_ready = near && lod || now - preparing >= ENTER_LOAD_LIMIT;
+    match &mut r.entering {
+        Some(e) => {
+            if let Some(shown) = e.shown {
+                if (now - shown).as_secs_f32() >= ENTER_FADE {
+                    g.client.ready_to_join();
+                }
+            } else if e.expanded && scene_ready {
+                log::debug!(
+                    target: "load",
+                    "revealing world after {:.3} s (near ready: {near}, LOD ready: {lod})",
+                    (now - e.started).as_secs_f64()
+                );
+                e.shown = Some(now);
+                r.screens.clear();
+                r.quads_dirty = true;
+            }
+        }
+        None if scene_ready => g.client.ready_to_join(),
+        None => {}
     }
 }
 

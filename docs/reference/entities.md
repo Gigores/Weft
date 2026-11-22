@@ -122,8 +122,9 @@ Where a rider gets off.
 
 - <a id="Exit-nearest"></a>`.nearest(reach: f64) -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L68)
 - <a id="Exit-offset"></a>`.offset(at: impl Into<Vec3>) -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L71)
-- <a id="Exit-stay"></a>`.stay() -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L74)
-- <a id="Exit-call"></a>`.call(f: impl Fn(&World, u64, u64, Vec3) -> Vec3 + Send + Sync + 'static) -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L77)
+- <a id="Exit-stay"></a>`.stay() -> Exit`: Get off on the deck at the seat, looking up by at most half a block. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L75)
+- <a id="Exit-stay_on_deck"></a>`.stay_on_deck(max_rise: f64) -> Exit`: Get off on a block-built deck at the seat, with a custom upward search distance in blocks. If no deck is in reach, get off where the rider sat. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L80)
+- <a id="Exit-call"></a>`.call(f: impl Fn(&World, u64, u64, Vec3) -> Vec3 + Send + Sync + 'static) -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L83)
 
 ## GameModeBuilder
 
@@ -221,10 +222,10 @@ How a projectile flies (`EntityBuilder::projectile`): vanilla's arrow unless sai
 
 What riders of a kind may do, each a test of the world, the mount and the rider, so it can hang on anything (only on the ground, only by day, only its owner). A rule not given lets it.
 
-- <a id="RiderRules-new"></a>`.new() -> RiderRules` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L182)
-- <a id="RiderRules-hits"></a>`.hits(f: impl Fn(&World, u64, u64) -> bool + Send + Sync + 'static)`: Whether a rider may hit (`|w, mount, rider| ..`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L186)
-- <a id="RiderRules-builds"></a>`.builds(f: impl Fn(&World, u64, u64) -> bool + Send + Sync + 'static)`: Whether a rider may place and break blocks. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L191)
-- <a id="RiderRules-hurt_reaches_riders"></a>`.hurt_reaches_riders(share: f32)`: Share of what hurts the mount that hurts each rider too (a blast under a boat), 0 for none. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L197)
+- <a id="RiderRules-new"></a>`.new() -> RiderRules` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L188)
+- <a id="RiderRules-hits"></a>`.hits(f: impl Fn(&World, u64, u64) -> bool + Send + Sync + 'static)`: Whether a rider may hit (`|w, mount, rider| ..`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L192)
+- <a id="RiderRules-builds"></a>`.builds(f: impl Fn(&World, u64, u64) -> bool + Send + Sync + 'static)`: Whether a rider may place and break blocks. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L197)
+- <a id="RiderRules-hurt_reaches_riders"></a>`.hurt_reaches_riders(share: f32)`: Share of what hurts the mount that hurts each rider too (a blast under a boat), 0 for none. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L203)
 
 ## Seat
 
@@ -272,8 +273,8 @@ Where a natural spawn stands (`SpawnBuilder::place`).
 
 How a player's keys move a mount: called on that player's client each tick with its keys and the mount as it is, giving what the mount does. `steer::*` are the usual ones; `and` puts two together (a walk with a jump).
 
-- <a id="Steering-new"></a>`.new(f: impl Fn(&Keys, &EntityState) -> Steer + Send + Sync + 'static) -> Steering`: Yours from scratch. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L89)
-- <a id="Steering-and"></a>`.and(other: Steering) -> Steering`: Both: the first's movement and facing unless it gives none, the higher jump, flying if either flies. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L94)
+- <a id="Steering-new"></a>`.new(f: impl Fn(&Keys, &EntityState) -> Steer + Send + Sync + 'static) -> Steering`: Yours from scratch. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L95)
+- <a id="Steering-and"></a>`.and(other: Steering) -> Steering`: Both: the first's movement and facing unless it gives none, the higher jump, flying if either flies. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L100)
 
 ## Trigger
 

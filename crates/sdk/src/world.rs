@@ -52,6 +52,21 @@ impl World {
         (unsafe { (host().world_has_space)(self.raw(), frame) } != 0).then(|| World { raw: abi::WorldCtx { frame, ..self.raw } })
     }
 
+    /// Converts a point in this view to another loaded space. Frame 0 is the dimension's world.
+    pub fn point_in(&self, frame: u64, point: impl Into<Vec3>) -> Option<Vec3> {
+        self.transform_in(frame, point.into(), false)
+    }
+
+    /// Rotates a direction in this view into another loaded space, without translating it.
+    pub fn vector_in(&self, frame: u64, vector: impl Into<Vec3>) -> Option<Vec3> {
+        self.transform_in(frame, vector.into(), true)
+    }
+
+    fn transform_in(&self, frame: u64, value: Vec3, vector: bool) -> Option<Vec3> {
+        let mut out = Vec3::ZERO;
+        (unsafe { (host().world_transform)(self.raw(), frame, value, u32::from(vector), &mut out) } != 0).then_some(out)
+    }
+
     /// Takes `cells` out of the world into a new moving body, whose block (0, 0, 0) is at
     /// `center` and which they keep their places around. Chests and the like go along with
     /// what is in them, and it stands there till told otherwise: `entity_modify(id).velocity(..)` for a speed,

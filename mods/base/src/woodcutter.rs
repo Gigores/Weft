@@ -61,7 +61,7 @@ pub fn register(r: &mut Registry) {
         .opens(&MENU)
         .tab(&crate::tabs::FUNCTIONAL);
     r.menu(&MENU)
-        .group("input", Slots::single())
+        .group("input", Slots::single().priority(1, ""))
         .group("results", Slots::grid(3, 2).output())
         .player_inventory()
         .recipes(&WOODCUTTING)

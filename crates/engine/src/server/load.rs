@@ -149,7 +149,7 @@ impl Server {
         *self.shared.views.write() = self
             .players
             .iter()
-            .filter(|p| p.joined)
+            .filter(|p| p.streams_world())
             .map(|p| (p.dim, self.view(p)))
             .collect();
         let mut wanted: Vec<(i32, u32, IVec3)> = Vec::new();
@@ -157,7 +157,7 @@ impl Server {
         let edited: Vec<Vec<IVec3>> = self.dims.iter_mut().map(|d| d.take_edited()).collect();
         for pi in 0..self.players.len() {
             let p = &self.players[pi];
-            if !p.joined {
+            if !p.streams_world() {
                 continue;
             }
             let view = self.view(p);
@@ -302,7 +302,7 @@ impl Server {
             let views: Vec<(View, i32, i32)> = self
                 .players
                 .iter()
-                .filter(|p| p.joined && p.dim as usize == di)
+                .filter(|p| p.streams_world() && p.dim as usize == di)
                 .map(|p| {
                     let view = self.view(p);
                     let (lo, hi) = view.loaded_y(def);
@@ -360,7 +360,7 @@ impl Server {
         let views: Vec<View> = self
             .players
             .iter()
-            .filter(|p| p.joined && p.dim == dim)
+            .filter(|p| p.streams_world() && p.dim == dim)
             .map(|p| self.view(p))
             .collect();
         let def = &c.dims[dim as usize];
@@ -418,7 +418,11 @@ impl Server {
         self.dims[dim as usize].area_fill(c, fill, &whole);
         if let Some(e) = self.dims[dim as usize].edits.last() {
             let spec = e.spec(c);
-            for p in self.players.iter_mut().filter(|p| p.joined && p.dim == dim) {
+            for p in self
+                .players
+                .iter_mut()
+                .filter(|p| p.streams_world() && p.dim == dim)
+            {
                 p.conn
                     .send(ToClient::Edits { dim, specs: vec![spec.clone()], all: false });
             }

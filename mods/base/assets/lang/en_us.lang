@@ -413,7 +413,9 @@ item.base.glass_bottle = Glass Bottle
 death.base.magic = {0} was killed by magic
 death.base.wither = {0} withered away
 storage.base.sort = Sort
-storage.base.deposit = Put away nearby
+storage.base.deposit = Put away nearby in storage with matching items
+storage.base.deposit_no_storage = No storage nearby
+storage.base.deposit_no_match = No nearby storage with matching items and room
 storage.base.trash = Trash
     Hotkey: {key:core:trash}
 item.base.bush_stem = Bush Stem

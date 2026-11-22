@@ -89,6 +89,7 @@ pub(crate) fn freeze(
     let mut out = Blocks {
         states: vec![air()],
         block_defs: vec![BlockDef {
+            grid_placement: false,
             name: "core:air".into(),
             owner: crate::registry::ENGINE,
             first_state: 0,
@@ -252,7 +253,19 @@ pub(crate) fn freeze(
             signal_gate: e.callback(b::SIGNAL_GATE),
         };
         let sneak_use = e.or(b::SNEAK_USE, abi::sneak_use::EMPTY_HANDS);
-        let def = BlockDef { name: e.name, owner: e.owner, first_state: first, states: count, props, cb, opens: None, sneak_use, sides };
+        let grid_placement = e.has(b::GRID_PLACEMENT) || e.has("plantable");
+        let def = BlockDef {
+            name: e.name,
+            owner: e.owner,
+            first_state: first,
+            states: count,
+            props,
+            cb,
+            opens: None,
+            sneak_use,
+            sides,
+            grid_placement,
+        };
         // A piece's properties are of the state it is in.
         for (state, raw) in pieces {
             let to = |text: &str| def.changed_text(state as u32, text);
@@ -397,7 +410,7 @@ fn full_key(props: &[Prop], s: u32) -> String {
 }
 
 /// What only a block as a whole has: its states leave it out.
-const BLOCK_ONLY: [&str; 16] = [
+const BLOCK_ONLY: [&str; 17] = [
     b::PROPS,
     b::ON_USE,
     b::ON_NEIGHBOR,
@@ -405,6 +418,7 @@ const BLOCK_ONLY: [&str; 16] = [
     b::ON_CARRIED,
     b::ON_GROW,
     b::PLACEMENT,
+    b::GRID_PLACEMENT,
     b::MERGE,
     b::ON_SIGNAL,
     b::SIGNAL_GATE,
@@ -854,6 +868,15 @@ fn bake_state(
         level: 0,
         model,
         item_face,
+        random_transform: crate::content::RandomTransform {
+            offset: s.or(b::RANDOM_OFFSET, 0.0),
+            height_scale: s.or(b::RANDOM_HEIGHT_SCALE, [1.0; 2]),
+            width_scale: s.or(b::RANDOM_WIDTH_SCALE, [1.0; 2]),
+            scale: s.or(b::RANDOM_SCALE, [1.0; 2]),
+            yaw: s.or(b::RANDOM_YAW, [0.0f32; 2]),
+            pitch: s.or(b::RANDOM_PITCH, [0.0f32; 2]),
+            roll: s.or(b::RANDOM_ROLL, [0.0f32; 2]),
+        },
         signal: Signal {
             kind: signal.kind,
             inputs: turn.faces(signal.inputs as u8),
@@ -874,6 +897,7 @@ fn bake_state(
         selection,
         outline,
         hardness: 1.0,
+        sound_absorption: 0.18,
         friction: 0.6,
         drag: 1.0,
         conductor: false,
@@ -936,12 +960,14 @@ fn air() -> StateInfo {
         level: 0,
         model: BlockModel::None,
         item_face: None,
+        random_transform: crate::content::RandomTransform::NONE,
         textures: [0; 6],
         boxes: Vec::new(),
         collision: Vec::new(),
         selection: Vec::new(),
         outline: Vec::new(),
         hardness: -1.0,
+        sound_absorption: 1.0,
         friction: 0.6,
         drag: 1.0,
         conductor: false,

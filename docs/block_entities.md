@@ -54,6 +54,10 @@ Slots come in named groups. The block entity's inventory holds all of its `holde
 
 Quick transfers use the highest priority whose item reference matches, or zero if none match. They fill existing stacks and then empty slots at that priority before trying the next one. In the furnace above, coal goes to the fuel slot first. A storage group can prefer food and still accept other items.
 
+Left-click takes or places the whole stack if it fits. Right-click takes half with an empty
+cursor or places one with a held stack. The trash follows these amounts and replaces an
+incompatible stack. A click on a crafting result takes one recipe batch.
+
 The sort button packs each enabled group separately, respecting its slot limit. Grids, rows, columns and chests allow sorting by default. Single slots, crafting grids, inputs, outputs, tanks and trash disable it in their presets. Use `allow_sorting` after a preset to override its choice.
 
 Its state is a component, a `value!` struct of plain numbers like any other. Slots hold items and liquids, so anything else it keeps (heat, progress) goes into a component like this one:

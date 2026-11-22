@@ -391,7 +391,7 @@ impl DimSet {
         }
     }
 
-    fn weather_field(&self, c: &Content, tick: u64) -> crate::weather::WeatherField {
+    pub(super) fn weather_field(&self, c: &Content, tick: u64) -> crate::weather::WeatherField {
         crate::weather::WeatherField::new(c, self.id, self.seed, tick as f64, self.weather)
     }
 

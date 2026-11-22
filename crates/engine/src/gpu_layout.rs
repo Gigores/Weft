@@ -17,6 +17,10 @@ macro_rules! shared {
 }
 
 shared! {
+    rain_cover {
+        CELL = 4,
+        CUBES = 16,
+    }
     /// Block face record, four words. Word 0: x, y, z in the cube (4 bits each), direction,
     /// corner AO (2 bits per corner), tint kind. Word 1: texture, biome. Words 2 and 3: corner
     /// light, 16 bits per corner.
@@ -157,6 +161,7 @@ shared! {
         GLOW = 4,
         OVERLAY = 5,
         CLOUDS = 6,
+        LIGHTNING = 7,
     }
 }
 
@@ -628,6 +633,20 @@ gpu_struct! {
         pub environment: [f32; 4],
         /// The cloud layer visible this frame, with zero opacity when absent.
         pub cloud: GpuSky,
+        /// Width and height of the current depth copy. Zero if using the texture cloud path.
+        pub atmosphere_extent: [u32; 4],
+        /// Start and end of the fade from voxel clouds to their projected footprint.
+        pub cloud_lod: [f32; 4],
+        /// Current and previous origins of the world-space cloud cache, in voxel columns.
+        pub cloud_cache: [i32; 4],
+        /// Cloud cache side, rain cache row width, and whether the depth pyramid is available.
+        pub atmosphere_cache: [u32; 4],
+        /// Camera position relative to the cover map's horizontal origin, then an enabled flag.
+        pub rain_cover: [f32; 4],
+        /// Lightning origins relative to the camera, with flash strength in w.
+        pub lightning_start: [[f32; 4]; 3],
+        /// Channel ends relative to the camera, with w set for ground strikes.
+        pub lightning_end: [[f32; 4]; 3],
     }
 }
 
@@ -1017,6 +1036,9 @@ bindings! {
         SOLID "solid": "array<u32>",
         BODY_ROTATIONS "body_rotations": "array<vec4<f32>>",
         DRY_VOLUMES "dry_volumes": "array<DryVolume>",
+        CLOUD_CELLS "cloud_cells": "array<u32>",
+        RAIN_DEPTH "rain_depth": "array<vec2<u32>>",
+        RAIN_COVER "rain_cover": "array<i32>",
     }
     // `item_boxes`: item models in their own space, kept between frames
     // (`EntityRenderer::item_model`); an item instance is a box in `boxes` whose rows place
@@ -1074,6 +1096,11 @@ bindings! {
         OBJECTS "sky": "array<Sky>",
         SCENE "scene": "Scene",
         WORLD_DEPTH "world_depth": "array<f32>",
+        CLOUD_CELLS "cloud_cells": "array<u32>",
+        CLOUD_CELLS_OUT "cloud_cells_out": "array<u32>",
+        RAIN_DEPTH "rain_depth": "array<vec2<u32>>",
+        RAIN_DEPTH_OUT "rain_depth_out": "array<vec2<u32>>",
+        RAIN_COVER "rain_cover": "array<i32>",
     }
     ui "ui.wgsl" {
         QUADS "quads": "array<Quad>",
@@ -1137,13 +1164,26 @@ pub fn prelude(shader: &str, common: &str) -> String {
     s.push_str(&records());
     s.push_str(&structs());
     for (i, (name, ty)) in bindings(shader).iter().enumerate() {
-        s.push_str(&format!("@group(1) @binding({i}) var<storage, read> {name}: {ty};\n"));
+        let access = if matches!(*name, "atmosphere_out" | "cloud_cells_out" | "rain_depth_out" | "atmosphere_history_out") {
+            "read_write"
+        } else {
+            "read"
+        };
+        s.push_str(&format!("@group(1) @binding({i}) var<storage, {access}> {name}: {ty};\n"));
     }
     if shader == "world.wgsl" {
         s.push_str(SOLID_AT);
     }
     s.push_str(common);
     s.push('\n');
+    if matches!(shader, "sky.wgsl" | "world.wgsl") {
+        s.push_str(include_str!("../assets/shaders/atmosphere-cache.wgsl"));
+    } else {
+        s.push_str(
+            "fn cloud_cache_value(view: Scene, cell: vec2<i32>, band: i32) -> u32 { return 0xffffffffu; }
+             fn rain_exposed(view: Scene, rel: vec3<f32>) -> bool { return true; }\n",
+        );
+    }
     s
 }
 

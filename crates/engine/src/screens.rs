@@ -18,6 +18,7 @@ pub struct BuildCx<'a> {
     pub settings: &'a Settings,
     pub languages: &'a [(String, String)],
     pub in_game: bool,
+    pub debug: bool,
     /// Joined someone else's world (their synced settings apply).
     pub remote: bool,
     pub mods: usize,
@@ -615,15 +616,13 @@ fn settings_links(cx: &BuildCx) -> Vec<(&'static str, &'static str)> {
         ("settings.resource_packs", "core:resource_packs"),
         ("settings.shader_packs", "core:shader_packs"),
         ("settings.mods", "core:mod_settings"),
+        ("settings.hud", "core:hud_editor"),
     ];
-    if cx.in_game {
-        v.push(("settings.hud", "core:hud_editor"));
-        if cx
-            .client
-            .is_some_and(|cl| cl.permission >= weft_abi::permission::ADMIN)
-        {
-            v.push(("world.rules", "core:world_rules"));
-        }
+    if cx
+        .client
+        .is_some_and(|cl| cl.permission >= weft_abi::permission::ADMIN)
+    {
+        v.push(("world.rules", "core:world_rules"));
     }
     v
 }
@@ -644,6 +643,12 @@ fn config_row(ui: &mut Ui, cx: &BuildCx, id: u32, d: &crate::config::ConfigDef, 
             .chain(
                 small
                     .then(|| (d.min as i64..=d.max as i64).map(|n| n.to_string()))
+                    .into_iter()
+                    .flatten(),
+            )
+            .chain(
+                (d.kind == ck::INT && !small)
+                    .then(|| [d.show(d.min), d.show(d.max)])
                     .into_iter()
                     .flatten(),
             )
@@ -1104,12 +1109,6 @@ impl Screen for Controls {
             ui.set_id(list, "controls");
             ui.container(Style::row().gap(6.0), |ui| {
                 button(ui, cx, "controls.reset", &[], 120.0, |c| c.requests.push(Request::ResetBinds));
-                if crate::settings::touch_controls() {
-                    button(ui, cx, "touch.title", &[], 120.0, |c| {
-                        c.requests
-                            .push(Request::Screen("core:touch_buttons".into()))
-                    });
-                }
                 back_button(ui, cx, "menu.done", &[], 120.0, |c| c.requests.push(Request::Close));
             });
         });
@@ -1154,20 +1153,30 @@ pub struct Message {
     pub args: Vec<Arg>,
 }
 
-/// While shaders compile ahead (`Backend::precompile`) and a world waits for them: once, on a
-/// phone's first start, which it says so nobody takes it for every time.
-pub struct Compiling;
+/// Loading without a saved preview, including a cold shader compilation.
+pub enum LoadingWorld {
+    Compiling,
+    Streaming,
+}
 
-impl Screen for Compiling {
+impl Screen for LoadingWorld {
     fn name(&self) -> &str {
-        "core:compiling"
+        match self {
+            Self::Compiling => "core:compiling",
+            Self::Streaming => "core:loading_world",
+        }
     }
 
     fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
         ui.root_style(Style::default().stretch());
-        ui.panel("background", Style::default().grow().center().pad(12.0).gap(10.0), |ui| {
-            label(ui, cx, "world.compiling", &[], "title");
-            label(ui, cx, "world.compiling.once", &[], "label");
+        ui.panel("background", Style::default().grow().center().pad(12.0).gap(10.0), |ui| match self {
+            Self::Compiling => {
+                label(ui, cx, "world.compiling", &[], "title");
+                label(ui, cx, "world.compiling.once", &[], "label");
+            }
+            Self::Streaming => {
+                label(ui, cx, "world.loading", &[], "title");
+            }
         });
     }
 

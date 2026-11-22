@@ -900,13 +900,8 @@ impl Dim {
         self.write_cell(space_id, c, p, state, None, false)
     }
 
-    /// `set` for a block coming or going with what it has, so nothing of that is made or broken.
-    pub(super) fn carry_block(&mut self, space_id: u64, c: &'static Content, p: IVec3, state: u32) -> Option<u32> {
-        self.write_cell(space_id, c, p, state, None, true)
-    }
-
     /// The cell at `p` holds `state` and `extras`; `None`: what else is in the cell stays with the
-    /// same block, a property changing, and goes with another block. `carried`: as `carry_block`.
+    /// same block, a property changing, and goes with another block. A carried block keeps its block entity.
     pub(super) fn write_cell(
         &mut self,
         space_id: u64,
@@ -1463,17 +1458,12 @@ impl Dim {
         else {
             return 0;
         };
-        let block = super::structure::Lifted { from: p, local: IVec3::ZERO, to: p, part: None, only: Some(part) };
-        self.lift(
-            space_id,
-            c,
-            c.game.falling_kind,
-            p.as_dvec3() + DVec3::new(0.5, 0.0, 0.5),
-            [block],
-            &[],
-            super::structure::Liveness::Free,
-        )
-        .0
+        let block =
+            super::structure::Lifted { from: p, local: IVec3::ZERO, to: p, part: Some(Part::aligned(part.state)), only: Some(part) };
+        // The falling entity's collision box is centered on its block, including gridless placements.
+        let at = p.as_dvec3() + crate::physics::Transform::FEET + part.shift();
+        self.lift(space_id, c, c.game.falling_kind, at, [block], &[], super::structure::Liveness::Free)
+            .0
     }
 
     /// Body `id` falls under its weight from now on and lands as blocks (`land_falling`).
@@ -1542,7 +1532,7 @@ impl Dim {
             if down.is_empty() {
                 self.entities.remove(id, UNTOLD);
             } else {
-                self.put_down(space_id, c, id, down, Vec::new(), None);
+                self.put_down(space_id, c, id, down, Vec::new());
             }
             for (p, state, entity) in broke {
                 self.broke_landing(space_id, c, p, state, entity);
@@ -3654,13 +3644,14 @@ impl Dim {
         hit: [f32; 3],
         player: u64,
         item: u32,
+        by_face: bool,
     ) -> Option<(IVec3, Part)> {
         let space = self.space(space_id);
         let replacing = space
             .layout(clicked)
             .parts(space.get(clicked)?)
             .all(|part| c.states[part.state as usize].flags & bf::REPLACEABLE != 0);
-        let (p, placed, hit) = crate::physics::placement(c, state, clicked, surface, face, hit, look, replacing)?;
+        let (p, placed, hit) = crate::physics::placement(c, state, clicked, surface, face, hit, look, replacing, by_face)?;
         self.place(space_id, c, p, face, placed, look, hit, player, item)
             .then_some((p, placed))
     }

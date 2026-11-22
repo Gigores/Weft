@@ -245,6 +245,19 @@ pub async fn slot_limit(t: T) -> R {
     t.frames(4).await?;
     t.check_eq(t.c().menu_slot(0).count, 16, "the input slot holds 16");
     t.check_eq(t.c().menu_slot(29).count, 16, "the rest stays in the hotbar");
+
+    t.secs(0.35).await?;
+    t.op(&format!("put {} {} {} 1 iron_ingot 5", p[0], p[1], p[2]))
+        .await?;
+    t.until("ingots in the output", Duration::from_secs(5), |t| t.c().menu_slot(1).count == 5)
+        .await?;
+    for (button, count) in [(1, 3), (1, 4), (0, 5)] {
+        t.click_ui("slot:1", button);
+        t.until("ingots on the cursor", Duration::from_secs(5), |t| t.c().cursor_stack().count == count)
+            .await
+            .map_err(|e| format!("{e}, expected {count}, cursor: {}, output: {}", t.c().cursor_stack().count, t.c().menu_slot(1).count))?;
+        t.check_eq(t.c().menu_slot(1).count, 5 - count, "remaining ingots in the output");
+    }
     t.c().menu_close();
     t.no_screen().await
 }
@@ -1416,6 +1429,50 @@ pub async fn block_shapes(t: T) -> R {
     Ok(())
 }
 
+/// A cactus can anchor a fractional building block, but stays centered in either mode.
+pub async fn placement_mode(t: T) -> R {
+    t.flat().await?;
+    t.op("mode creative").await?;
+    t.c().set_flying(true);
+    let origin = add(t.feet(), [0, 1, -3]);
+    let aim_at_cactus = async |p: [i32; 3]| -> R {
+        let [x, y, z] = p.map(f64::from);
+        t.set(add(p, [0, -1, 0]), "base:sand").await?;
+        t.set(add(p, [1, -1, 0]), "base:sand").await?;
+        t.set(p, "base:cactus").await?;
+        t.c().teleport([x + 3.2, y - 0.6, z + 0.5]);
+        t.secs(0.35).await?;
+        aim(&t, [x + 15.0 / 16.0, y + 0.5, z + 0.5]);
+        t.frames(4).await?;
+        Ok(())
+    };
+    t.op("put me 0 base:gold_block 8").await?;
+    t.c().select_slot(0);
+    aim_at_cactus(origin).await?;
+    t.press("core:use");
+    t.secs(0.35).await?;
+    t.check_eq(t.op(&format!("parts {}", at(origin))).await?, "base:cactus".to_string(), "grid mode leaves the cactus cell alone");
+    t.check_eq(t.block(add(origin, [1, 0, 0])).await?, "base:gold_block".to_string(), "grid mode places in the adjacent cell");
+
+    t.press("core:placement_mode");
+    t.frames(2).await?;
+    let free = add(origin, [0, 0, 3]);
+    aim_at_cactus(free).await?;
+    t.press("core:use");
+    t.secs(0.35).await?;
+    let parts = t.op(&format!("parts {}", at(free))).await?;
+    t.check(parts.contains("base:cactus") && parts.contains("base:gold_block"), format!("by-face mode follows the inset edge: {parts}"));
+
+    t.op("put me 0 base:cactus 8").await?;
+    let planted = add(origin, [0, 0, 6]);
+    aim_at_cactus(planted).await?;
+    t.press("core:use");
+    t.secs(0.35).await?;
+    t.check_eq(t.op(&format!("parts {}", at(planted))).await?, "base:cactus".to_string(), "the second cactus has no fractional overlap");
+    t.check_eq(t.block(add(planted, [1, 0, 0])).await?, "base:cactus".to_string(), "the cactus uses the adjacent cell in by-face mode");
+    Ok(())
+}
+
 /// Clicking interior faces creates persistent instances at the physical surface.
 pub async fn surface_placement(t: T) -> R {
     t.flat().await?;
@@ -1424,6 +1481,8 @@ pub async fn surface_placement(t: T) -> R {
     let cell = [f[0], (f[1] + 15).div_euclid(16) * 16 - 1, f[2] - 3];
     let point = |x, y, z| [f64::from(cell[0]) + x, f64::from(cell[1]) + y, f64::from(cell[2]) + z];
     t.c().set_flying(true);
+    t.press("core:placement_mode");
+    t.frames(2).await?;
     t.c().teleport(point(0.5, 0.0, 3.2));
     t.set(cell, "base:oak_planks_vertical_slab[facing=south]")
         .await?;

@@ -32,10 +32,22 @@ r.entity(&SPIRIT).environment(
 Liquid `.fog(rgb, start, end)`, `.overlay(texture, opacity)` and `.no_overlay()` are presets
 of this same mechanism. Start and end are explicit block distances. Water's low-pass filter is
 an independent environment contribution; heat never selects an audio filter.
+Positioned sounds also use the liquid at their source. A liquid's unconditional camera
+layers with no radius supply its source cutoff and gain when the listener is in another
+medium. The listener's environment supplies the filter when both are in the same liquid.
+Below the surface, a camera in a dry moving hull can still pick up the surrounding liquid's
+fog and screen overlay. The hull's air still determines immersion and acoustics at both
+ends of a sound path.
 `EntityEffectBuilder::screen(&SHADER)` is likewise a post-shader preset. Native dimension,
-weather, cave reverb, inside-block and fire appearances all contribute to the same result.
+weather, room reverb, inside-block and fire appearances all contribute to the same result.
 Acoustics apply to every sound category, including music and UI sounds. Leaving the world
 resets the filter, reverb send and environment volume gain to neutral values.
+
+The client estimates room reverb from nearby solid surfaces and uses the same surfaces for
+early, directional reflections of world sound events. Position determines path length, delay
+and attenuation. Blocks can set `SOUND_ABSORPTION` between 0 and 1. Sound events can set
+`comps::sound::THROUGH_WALLS` to retain a fraction of their gain through a wall's
+low-pass filter.
 
 ## Control from code
 
@@ -149,7 +161,6 @@ Native preset priorities are below the default mod priority of zero:
 | Preset | Priority |
 | --- | ---: |
 | Weather | -900 |
-| Cave reverb | -800 |
 | Liquid defaults | -700 |
 | Liquid fog / overlay convenience | -699 / -698 |
 | Inside block | -600 |

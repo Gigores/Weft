@@ -5,6 +5,7 @@
 //! corners.
 
 use crate::gpu_layout::{face, quad};
+use glam::{Affine3A, EulerRot, Quat, Vec3};
 use weft_abi::{BlockModel, RenderLayer, block_flags as bf};
 
 use crate::content::Content;
@@ -242,6 +243,11 @@ fn draw_block(
         // nor in others like it next to it: the brightest around goes for all.
         let dark_inside = info.flags & bf::OPAQUE != 0;
         let l = if dark_inside { light16(brightest_around(n, x, y, z)) } else { l };
+        let random_transform = if part.offset == glam::IVec3::ZERO {
+            random_transform_at(&info.random_transform, n.origin[0] + x, n.origin[2] + z)
+        } else {
+            None
+        };
         for bx in boxes {
             let center = std::array::from_fn(|a| (bx.min[a] + bx.max[a]) * 0.5);
             let center = if bx.tilt.degrees == 0.0 { center } else { tilted(center, &bx.tilt) };
@@ -264,6 +270,7 @@ fn draw_block(
                 }
                 let fl = if at_edge && !dark_inside { light16(nl) } else { l };
                 let Some((corners, uv)) = box_face(bx, dir) else { continue };
+                let corners = corners.map(|p| random_transform.map_or(p, |m| m.transform_point3(p.into()).to_array()));
                 let corners = corners.map(|p| [p[0] + at[0], p[1] + at[1], p[2] + at[2]]);
                 for (k, l) in face_layers(c, info, bx.textures[dir] & face::TEX_MASK, dir)
                     .iter()
@@ -290,10 +297,25 @@ fn draw_block(
     }
 }
 
+fn random_transform_at(f: &crate::content::RandomTransform, x: i32, z: i32) -> Option<glam::Affine3A> {
+    if *f == crate::content::RandomTransform::NONE {
+        return None;
+    }
+    let h = [weft_noise::hash(1, x as i64, 0, z as i64), weft_noise::hash(1, x as i64, 1, z as i64)];
+    let r = |i: usize| f32::from((h[i / 4] >> (16 * (i % 4))) as u16) / f32::from(u16::MAX);
+    let range = |[min, max]: [f32; 2], i| min + (max - min) * r(i);
+    let (yaw, pitch, roll) = (range(f.yaw, 0), range(f.pitch, 6), range(f.roll, 7));
+    let (mid, turn) = (Vec3::new(0.5, 0.0, 0.5), Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), pitch.to_radians(), roll.to_radians()));
+    let lean = Vec3::new(r(2) * 2.0 - 1.0, 0.0, r(3) * 2.0 - 1.0) * f.offset;
+    let width = range(f.width_scale, 4);
+    let size = Vec3::new(width, range(f.height_scale, 1), width) * range(f.scale, 5);
+    let to = Affine3A::from_scale_rotation_translation(size, turn, mid + lean - turn * (size * mid));
+    Some(to)
+}
+
 /// Each cube owns only the portion of a spanning model inside it. Crop along the
 /// face's texture axes; tilted faces use the same bounds again at the fragment.
 fn clipped_face(corners: [[f32; 3]; 4], uv: [f32; 4], clip: u8, draw: &mut impl FnMut([[f32; 3]; 4], [f32; 4], bool)) {
-    use glam::Vec3;
     let [p, b, _, d] = corners.map(Vec3::from_array);
     let (u, v) = (b - p, d - p);
     let normal = u.cross(v).normalize_or_zero();
