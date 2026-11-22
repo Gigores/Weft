@@ -14,6 +14,8 @@ pub static BLUEGRASS_COVER: Component<f32> = Component::named("bluegrass");
 pub static SHORT_GRASS_COVER: Component<f32> = Component::named("short_grass");
 pub static CLOVER_COVER: Component<f32> = Component::named("clover");
 pub static COARSE_DIRT_COVER: Component<f32> = Component::named("coarse_dirt");
+pub static PALM_COVER: Component<f32> = Component::named("palm");
+pub static PALM_THRESHOLD: Component<f32> = Component::named("palm_threshold");
 /// Flowers a biome grows, picked evenly (`"base:dandelion base:rose"` where unset).
 pub static FLOWERS: Component<BlockList> = Component::named("flowers");
 pub static FROZEN: Tag = Tag::named("frozen");

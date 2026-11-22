@@ -790,6 +790,9 @@ pub fn register(r: &mut Registry) {
     // What may grow or stand where, from the common `dirt` and `sand` tags like modern vanilla:
     // a mod's sand tagged `sand` gets cactus and sugar cane, in the world and from players.
     r.tag("plant_soil", &["#dirt"]);
+    // Trees stand on sand too (palms on beaches), but ordinary plants do not.
+    r.tag("tree_soil", &["#plant_soil"]);
+    r.tag("tree_soil", &["#sand"]);
     r.tag("dyes/red", &["rose"]);
     r.tag("dyes/green", &["cactus"]);
     r.tag("torches", &["torch"]);

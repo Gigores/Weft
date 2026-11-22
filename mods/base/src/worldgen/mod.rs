@@ -209,7 +209,11 @@ pub fn register(r: &mut Registry) {
         .surface("sand", "sand", 3)
         .deep_top("gravel", SEA - 8)
         .tag("ocean");
-    r.biome(&BEACH).surface("sand", "sand", 3).tag("beach");
+    r.biome(&BEACH)
+        .surface("sand", "sand", 3)
+        .set(&TREES, 0.1)
+        .set(&TREE_KINDS, TreeKinds::from([("base:palm", 1)]))
+        .tag("beach");
     // Underground (3D): whole cubes deep under the surface; spiders like it there.
     r.biome(&DEEP_CAVES).tag("cave").tag("dark");
 
@@ -458,7 +462,7 @@ pub fn register(r: &mut Registry) {
         .spacing(5)
         .reach(20)
         .density(&TREES)
-        .ground("#plant_soil")
+        .ground("#tree_soil")
         .plan(|s| {
             if COARSE_DIRT.is(s.read(s.pos().below())) {
                 return;
