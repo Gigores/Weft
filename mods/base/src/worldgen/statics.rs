@@ -38,3 +38,4 @@ pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
 pub static PLANT_SOIL: Tag = Tag::named("plant_soil");
 pub static CACTUS_SOIL: Tag = Tag::named("cactus_soil");
 pub static SUGAR_CANE_SOIL: Tag = Tag::named("sugar_cane_soil");
+pub static GENERAL_SOIL: Tag = Tag::named("general_soil");

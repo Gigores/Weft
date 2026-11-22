@@ -451,6 +451,24 @@ pub fn register(r: &mut Registry) {
         .needs_below("#plant_soil")
         .tint_kind(&tints::GRASS)
         .tab(&crate::tabs::NATURAL);
+    r.block(&DRYGRASS)
+        .sound_group("grass")
+        .plant()
+        .random_offset(0.25)
+        .random_height_scale(0.85, 1.15)
+        .random_yaw(0.0, 90.0)
+        .replaceable()
+        .needs_below("#general_soil")
+        .tab(&crate::tabs::NATURAL);
+    r.block(&SHORT_DRYGRASS)
+        .sound_group("grass")
+        .plant()
+        .random_offset(0.25)
+        .random_height_scale(0.85, 1.15)
+        .random_yaw(0.0, 90.0)
+        .replaceable()
+        .needs_below("#general_soil")
+        .tab(&crate::tabs::NATURAL);
     plant(r, &DANDELION, "flower_dandelion");
     plant(r, &ROSE, "flower_rose");
     for color in ["orange", "pink", "purple", "red", "white", "yellow"] {
@@ -854,6 +872,7 @@ pub fn register(r: &mut Registry) {
     r.tag("crop_soil", &["farmland"]);
     r.tag("grass_spreads_to", &["dirt"]);
     r.tag("animal_spawn", &["grass"]);
+    r.tag("general_soil", &["#plant_soil", "sand"]);
 
     // A hoe's own use, as vanilla's, any mod's hoe: the soil stays a block nothing happens to
     // when clicked, so a block placed on it shows at once.
