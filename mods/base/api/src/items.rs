@@ -25,3 +25,5 @@ pub static EGG: Item = Item::named("base:egg");
 pub static ASSEMBLY_TOOL: Item = Item::named("base:assembly_tool");
 pub static GRAB_TOOL: Item = Item::named("base:grab_tool");
 pub static COCONUT_ITEM: Item = Item::named("base:coconut");
+pub static COCONUT_HALF: Item = Item::named("base:coconut_half");
+pub static COCONUT_SHELL: Item = Item::named("base:coconut_shell");

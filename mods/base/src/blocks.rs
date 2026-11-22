@@ -469,6 +469,11 @@ pub fn register(r: &mut Registry) {
         .replaceable()
         .needs_below("#general_soil")
         .tab(&crate::tabs::NATURAL);
+    r.loot(&SHORT_DRYGRASS).pool(
+        Pool::new()
+            .when(Cond::tool("#tools/shears"))
+            .item(SHORT_DRYGRASS.name()),
+    );
     plant(r, &DANDELION, "flower_dandelion");
     plant(r, &ROSE, "flower_rose");
     for color in ["orange", "pink", "purple", "red", "white", "yellow"] {
