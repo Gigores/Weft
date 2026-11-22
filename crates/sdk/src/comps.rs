@@ -131,6 +131,7 @@ pub mod sound {
     pub static RANGE: Component<f32, Sound> = Component::named(s::RANGE);
     pub static FULL_WITHIN: Component<f32, Sound> = Component::named(s::FULL_WITHIN);
     pub static FALLOFF: Component<i32, Sound> = Component::named(s::FALLOFF);
+    pub static THROUGH_WALLS: Component<f32, Sound> = Component::named(s::THROUGH_WALLS);
     pub static CATEGORY: Component<Text, Sound> = Component::named(s::CATEGORY);
 }
 
@@ -177,6 +178,7 @@ pub mod equipment_slot {
     use crate::{Component, Text};
     pub static COVERS: Component<Vec<String>, EquipmentSlot> = Component::named(e::COVERS);
     pub static BACKGROUND: Component<Text, EquipmentSlot> = Component::named(e::BACKGROUND);
+    pub static PRIORITIES: Component<Vec<crate::abi::SlotPriority>, EquipmentSlot> = Component::named(e::PRIORITIES);
 }
 
 /// What an entity category is made of.
@@ -388,6 +390,7 @@ pub mod feature {
     pub static PRIORITY: Component<i32, Feature> = Component::named(f::PRIORITY);
     pub static SEPARATION: Component<i32, Feature> = Component::named(f::SEPARATION);
     pub static GENERATE: Component<abi::Callback, Feature> = Component::named(f::GENERATE);
+    pub static SURFACE_COVER: Component<abi::Callback, Feature> = Component::named(f::SURFACE_COVER);
     pub static SHAPE: Component<u32, Feature> = Component::named(f::SHAPE);
     pub static VEIN: Component<abi::VeinShape, Feature> = Component::named(f::VEIN);
     pub static SIZE: Component<u32, Feature> = Component::named(f::SIZE);
@@ -567,16 +570,23 @@ pub mod block {
     pub static LAYER: Component<u32, Block> = Component::named(b::LAYER);
     pub static MODEL: Component<u32, Block> = Component::named(b::MODEL);
     pub static ITEM_FACE: Component<u8, Block> = Component::named(b::ITEM_FACE);
+    pub static RANDOM_OFFSET: Component<f32, Block> = Component::named(b::RANDOM_OFFSET);
+    pub static RANDOM_HEIGHT_SCALE: Component<[f32; 2], Block> = Component::named(b::RANDOM_HEIGHT_SCALE);
+    pub static RANDOM_WIDTH_SCALE: Component<[f32; 2], Block> = Component::named(b::RANDOM_WIDTH_SCALE);
+    pub static RANDOM_SCALE: Component<[f32; 2], Block> = Component::named(b::RANDOM_SCALE);
+    pub static RANDOM_YAW: Component<[f32; 2], Block> = Component::named(b::RANDOM_YAW);
+    pub static RANDOM_PITCH: Component<[f32; 2], Block> = Component::named(b::RANDOM_PITCH);
+    pub static RANDOM_ROLL: Component<[f32; 2], Block> = Component::named(b::RANDOM_ROLL);
     pub static TEXTURES: Component<[String; 6], Block> = Component::named(b::TEXTURES);
     pub static TURNS: Component<[u8; 6], Block> = Component::named(b::TURNS);
     pub static TURN: Component<u8, Block> = Component::named(b::TURN);
     pub static BOXES: Component<Vec<abi::ModelBox>, Block> = Component::named(b::BOXES);
     pub static HITBOX: Component<Vec<[f32; 6]>, Block> = Component::named(b::HITBOX);
+    pub static CYLINDER: Component<[f32; 3], Block> = Component::named(b::CYLINDER);
     pub static OUTLINE: Component<Vec<[f32; 6]>, Block> = Component::named(b::OUTLINE);
     pub static SIGNAL: Component<abi::SignalDesc, Block> = Component::named(b::SIGNAL);
     pub static LIQUID_WALLS: Component<u8, Block> = Component::named(b::LIQUID_WALLS);
     pub static PIECES: Component<Vec<abi::Piece>, Block> = Component::named(b::PIECES);
-    pub static CELLS: Component<Vec<[i32; 3]>, Block> = Component::named(b::CELLS);
     pub static RULES: Component<Vec<abi::BlockRule>, Block> = Component::named(b::RULES);
     pub static HAZARDS: Component<Vec<abi::Hazard>, Block> = Component::named(b::HAZARDS);
 }
@@ -624,6 +634,7 @@ pub mod bone_motion {
     pub static GRAVITY: Component<f32, BoneMotion> = Component::named(b::GRAVITY);
     pub static SPRING: Component<f32, BoneMotion> = Component::named(b::SPRING);
     pub static DRAG: Component<f32, BoneMotion> = Component::named(b::DRAG);
+    pub static MAX_ANGLE: Component<f32, BoneMotion> = Component::named(b::MAX_ANGLE);
 }
 
 /// What a menu is made of: tags for how its screen behaves (`abi::comp::menu::FLAGS`) and these.

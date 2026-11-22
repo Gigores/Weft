@@ -14,6 +14,8 @@ pub mod components;
 pub mod conditions;
 pub mod config;
 pub mod content;
+mod controller;
+mod controller_screen;
 pub mod dedicated;
 pub mod diag;
 pub mod editor;
@@ -52,6 +54,7 @@ pub mod tag_bits;
 pub mod template;
 pub mod touch;
 pub mod ui;
+mod weather;
 pub mod wire;
 pub mod world;
 
@@ -68,7 +71,7 @@ pub use winit::platform::android::activity::AndroidApp;
 /// `.geo.json` in `<dir>/<mod>/<name>.geo.json`, to go on with in Blockbench. How many.
 pub fn export_models(opts: &Options, out: &std::path::Path) -> Result<usize, String> {
     let off = modloader::off_file(&opts.run_dir, false);
-    let _mods = modloader::load(&opts.mod_dirs, &opts.cache_dir, &off, &opts.mods_off)?;
+    let _mods = modloader::load(&opts.mod_dirs, &opts.cache_dir, &off, &opts.mods_off, &app::engine_assets(opts.dev))?;
     let mut n = 0;
     for k in content::content()
         .game

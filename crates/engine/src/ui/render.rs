@@ -1075,13 +1075,13 @@ impl UiRenderer {
         gpu: &mut dyn Backend,
         assets: &Assets,
         ui: &Ui,
+        hovered: Option<super::NodeId>,
         look: &Look,
         scale: f32,
         at: glam::Vec2,
         game: Option<(&Content, &GameTextures)>,
     ) {
-        let Some(tip) = ui
-            .hovered
+        let Some(tip) = hovered
             .and_then(|h| ui.nodes.get(h))
             .and_then(|n| n.tooltip.as_ref())
         else {
@@ -1315,10 +1315,38 @@ impl UiRenderer {
                 }
             }
             Kind::Icons { .. } => {}
-            Kind::Slider { value, .. } => {
-                let k = Rect { x: r.x + (r.w - 8.0 * scale) * value.clamp(0.0, 1.0), y: r.y, w: 8.0 * scale, h: r.h };
-                self.class_background(gpu, assets, look, "slider", "", r, scale);
-                self.class_background(gpu, assets, look, "slider_knob", if hovered { "hover" } else { "" }, k, scale);
+            Kind::Slider(s) => {
+                let width = (super::slider::Slider::KNOB_WIDTH * scale).min(r.w);
+                let knob_x = |value| r.x + (r.w - width) * value;
+                background(self, &s.track, "");
+                if let Some([a, b]) = s.fill {
+                    let a = knob_x(s.thumbs[a].value) + width / 2.0;
+                    let b = knob_x(s.thumbs[b].value) + width / 2.0;
+                    self.rect(
+                        Rect { x: a.min(b), y: r.y + r.h / 2.0 - scale, w: (b - a).abs(), h: 2.0 * scale },
+                        look.text("slider_fill", ""),
+                    );
+                }
+                if s.enabled {
+                    let custom_knob = (s.track != "slider").then(|| format!("{}_knob", s.track));
+                    let knob = custom_knob
+                        .as_deref()
+                        .filter(|class| look.texture(class, "").is_some())
+                        .unwrap_or("slider_knob");
+                    let active = ui.focused == Some(id) || ui.pressed == Some(id);
+                    let draw = |me: &mut UiRenderer, index, t: &super::slider::Thumb| {
+                        let k = Rect { x: knob_x(t.value), y: r.y, w: width, h: r.h };
+                        let highlight = if active && index == s.active || hovered && s.thumbs.len() == 1 { "hover" } else { "" };
+                        me.class_background(gpu, assets, look, knob, highlight, k, scale);
+                    };
+                    let mut draw = draw;
+                    for (i, thumb) in s.thumbs.iter().enumerate().filter(|(i, _)| *i != s.active) {
+                        draw(self, i, thumb);
+                    }
+                    if let Some(thumb) = s.thumbs.get(s.active) {
+                        draw(self, s.active, thumb);
+                    }
+                }
             }
             Kind::Input { value, caret, area: Some(area), .. } => {
                 background(self, "input", if ui.focused == Some(id) { "focused" } else { "" });
@@ -1476,7 +1504,8 @@ impl UiRenderer {
             }
             let start = self.quads.len();
             let px = |r: super::Rect| Rect { x: r.x * scale, y: r.y * scale, w: r.w * scale, h: r.h * scale };
-            let track = px(super::Rect { x: bar.track.x + (bar.track.w - 6.0) / 2.0, w: 6.0, ..bar.track });
+            let width = bar.track.w.min(6.0);
+            let track = px(super::Rect { x: bar.track.x + (bar.track.w - width) / 2.0, w: width, ..bar.track });
             self.class_background(gpu, assets, look, "scrollbar", "", track, scale);
             let handle = bar.handle();
             let over = ui.dragging_bar() == Some(id);

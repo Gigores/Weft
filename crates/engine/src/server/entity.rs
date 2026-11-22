@@ -2,10 +2,10 @@
 //! as an engine contract every mod can read and write.
 
 use crate::tag_bits::entity as ef;
-use glam::{DVec3, IVec3};
+use glam::{DQuat, DVec3, IVec3};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
-use weft_abi::ItemStack;
+use weft_abi::{ItemStack, slot_flags as sf};
 
 use crate::content::Content;
 use crate::physics;
@@ -54,7 +54,8 @@ pub struct Entity {
     /// The block it is breaking.
     pub mining: Option<Mining>,
     pub anchor: Option<IVec3>,
-    pub sent: Option<(DVec3, f32, f32, crate::world::Pose, bool)>,
+    pub anchor_offset: IVec3,
+    pub sent: Option<crate::net::Move>,
     /// The solid body it rides (stands on, or flies above within its carry height).
     /// The body it is on: what it rides, or whose blocks hold it if it has an `anchor`.
     pub frame: Option<u64>,
@@ -66,9 +67,13 @@ pub struct Entity {
     pub strode: f32,
     pub stride: f32,
     pub motion: Motion,
-    /// A body that falls under its weight and is put down as blocks where it lands, whatever
-    /// its kind would do otherwise (`World::body_fall`, every falling block).
-    pub falls: bool,
+    pub mount: Option<Box<BodyMount>>,
+    pub(super) assembly_edit: Option<Box<super::assembly::Edit>>,
+    pub(super) ship: Option<Box<super::buoyancy::Ship>>,
+    pub(super) floater_driven: bool,
+    /// Resolved world orientation, shared by all the operations that move a frame.
+    pub frame_rotation: Option<Box<DQuat>>,
+    pub(super) completion: Completion,
     /// Its own box (width, height, eye) and another kind it looks like, set by mods.
     pub size: Option<weft_abi::EntitySize>,
     pub look: Option<u32>,
@@ -86,6 +91,7 @@ pub struct Entity {
     pub jumped: bool,
     /// Ticks since it last swung or changed items (players): what a hit's strength is judged by.
     pub swing_ticks: u32,
+    pub melee_recovery: u32,
     /// What it held when that was last looked at (`notice_hand`).
     pub in_hand: ItemStack,
     /// What its last hit did while `hurt_cooldown` runs: a stronger one only adds the difference.
@@ -106,6 +112,8 @@ pub struct Entity {
     pub stuck: Option<Stuck>,
     /// A player's actions held down, by key id, with the tick each went down at.
     pub keys: Vec<(u32, u64)>,
+    pub helm_pilot: Option<Box<crate::controller::Pilot>>,
+    pub(super) grab: Option<Box<super::grab::Grab>>,
 }
 
 /// Where a projectile sits stuck, where it is in the frame of what holds it, its yaw there,
@@ -131,7 +139,7 @@ pub enum StuckIn {
 pub struct Mining {
     pub frame: u64,
     pub pos: IVec3,
-    pub part: u32,
+    pub part: crate::world::placement::Part,
     pub progress: f32,
 }
 
@@ -171,6 +179,101 @@ pub enum Motion {
     },
     /// It has landed and is waiting to go: its blocks are the world's now.
     Parked,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BodyMotion {
+    Kinematic,
+    Dynamic,
+    Joint,
+    Held,
+    Parked,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Completion {
+    Stay,
+    LandOnSupport,
+    Dock,
+}
+
+#[derive(Clone, Copy)]
+pub struct BodyMount {
+    pub drive: Option<crate::controller::Drive>,
+    pub coast_rate: f64,
+    pub slide: Option<crate::controller::Slide>,
+    pub block: IVec3,
+    pub face: u8,
+    pub angle: f64,
+    pub last_grid: f64,
+    pub speed: u8,
+    pub stop: Option<f64>,
+}
+
+impl BodyMount {
+    pub fn rotation_at(&self, angle: f64) -> DQuat {
+        if angle == 0.0 { DQuat::IDENTITY } else { DQuat::from_axis_angle(crate::world::DIRS[self.face as usize].as_dvec3(), angle) }
+    }
+
+    pub fn place_at(&self, angle: f64) -> physics::Transform {
+        if let Some(slide) = self.slide {
+            return self.slide_place(slide.length);
+        }
+        let pivot = (self.block + crate::world::DIRS[self.face as usize]).as_dvec3() + physics::Transform::FEET;
+        physics::Transform::rotated(pivot, self.rotation_at(angle))
+    }
+
+    pub fn slide_place(&self, length: f64) -> physics::Transform {
+        let dirs = &crate::world::DIRS;
+        let side = self.slide.map_or(IVec3::ZERO, |s| dirs[s.side as usize]);
+        physics::Transform::of((self.block + side).as_dvec3() + dirs[self.face as usize].as_dvec3() * length + physics::Transform::FEET)
+    }
+
+    pub fn wire_place(&self) -> (physics::Transform, bool) {
+        if let Some(slide) = self.slide {
+            (self.slide_place(slide.length.round()), true)
+        } else {
+            (self.place_at(self.last_grid), self.angle == self.last_grid)
+        }
+    }
+}
+
+impl Entity {
+    pub(super) fn body_motion(&self) -> BodyMotion {
+        match self.motion {
+            Motion::Parked => BodyMotion::Parked,
+            _ if self.grab.is_some() => BodyMotion::Held,
+            _ if self.mount.is_some() => BodyMotion::Joint,
+            Motion::Free if self.ship.is_some() => BodyMotion::Dynamic,
+            _ => BodyMotion::Kinematic,
+        }
+    }
+
+    pub fn body_place(&self) -> physics::Transform {
+        self.oriented_place()
+            .unwrap_or_else(|| physics::Transform::of(self.pos))
+    }
+
+    pub(super) fn oriented_place(&self) -> Option<physics::Transform> {
+        Some(physics::Transform::rotated(self.pos, **self.frame_rotation.as_ref()?))
+    }
+
+    pub fn wire_rotation(&self) -> Option<[f32; 4]> {
+        let rotation = **self.frame_rotation.as_ref()?;
+        (rotation != DQuat::IDENTITY).then(|| rotation.as_quat().to_array())
+    }
+    pub(super) fn set_body_pose(&mut self, place: physics::Transform) {
+        self.pos = place.position();
+        self.set_frame_rotation(place.rotation());
+    }
+
+    pub fn set_frame_rotation(&mut self, rotation: DQuat) {
+        if let Some(current) = self.frame_rotation.as_deref_mut() {
+            *current = rotation;
+        } else if rotation != DQuat::IDENTITY {
+            self.frame_rotation = Some(Box::new(rotation));
+        }
+    }
 }
 
 impl Entity {
@@ -222,10 +325,17 @@ impl Entity {
             use_done: None,
             mining: None,
             anchor: None,
+            anchor_offset: IVec3::ZERO,
             sent: None,
             frame: None,
             motion: Motion::Free,
-            falls: false,
+            mount: None,
+            assembly_edit: None,
+            ship: None,
+            floater_driven: false,
+            frame_rotation: None,
+            grab: None,
+            completion: Completion::Stay,
             size: None,
             look: None,
             pose: Default::default(),
@@ -235,6 +345,7 @@ impl Entity {
             flying: false,
             jumped: false,
             swing_ticks: u32::MAX / 2,
+            melee_recovery: 0,
             in_hand: ItemStack::EMPTY,
             last_hurt: 0.0,
             nav: None,
@@ -245,6 +356,7 @@ impl Entity {
             projectile: false,
             stuck: None,
             keys: Vec::new(),
+            helm_pilot: None,
         }
     }
 
@@ -262,15 +374,20 @@ impl Entity {
             body_yaw: self.body_yaw,
             yaw: self.yaw,
             pitch: self.pitch,
-            walk: self.strode,
-            stride: self.stride,
+            posture: crate::model::Posture {
+                pose: self.pose,
+                riding: self.vehicle.is_some(),
+                age: self.age as f32 * crate::world::TICK as f32,
+                walk: self.strode,
+                stride: self.stride,
+                crouched: if self.pose == crate::world::Pose::CROUCH { 1.0 } else { 0.0 },
+            },
             size: self
                 .size
                 .unwrap_or(c.game.entities[self.kind as usize].size()),
             scale: self
                 .size
                 .map_or(1.0, |s| (s.height / c.game.entities[self.kind as usize].size().height.max(1e-3)) as f64),
-            pose: self.pose,
         }
     }
 
@@ -335,7 +452,12 @@ impl Entity {
     /// It comes and goes with the world's cube it is in: players have a file of their own, what is
     /// on a body goes with the body.
     pub fn saved_with_cube(&self) -> bool {
-        !self.removed && !self.player && self.block_frame() == 0
+        !self.removed && !self.player && self.structure_parent().is_none()
+    }
+
+    pub fn structure_parent(&self) -> Option<u64> {
+        self.frame
+            .filter(|_| self.anchor.is_some() || self.mount.is_some())
     }
 
     pub fn state(&self, c: &Content, max_health: f32) -> weft_abi::EntityState {
@@ -414,6 +536,20 @@ fn starting_value(c: &Content, kind: &crate::registry::EntityKind, comp: u32) ->
 }
 
 impl Entities {
+    pub(super) fn update_mount_pose(&mut self, id: u64) {
+        let Some((parent, local)) = self.get(id).and_then(|e| {
+            let mount = e.mount.as_ref()?;
+            Some((e.frame, mount.place_at(mount.angle)))
+        }) else {
+            return;
+        };
+        let parent = parent
+            .and_then(|f| self.get(f))
+            .map_or_else(physics::Transform::default, Entity::body_place);
+        if let Some(e) = self.get_mut(id) {
+            e.set_body_pose(local.in_frame(parent));
+        }
+    }
     /// What is in its selected slot, whether it can do anything with it or not.
     pub fn in_selected_slot(&self, id: u64) -> weft_abi::ItemStack {
         self.get(id)
@@ -445,7 +581,9 @@ impl Entities {
     pub fn insert(&mut self, c: &Content, mut e: Entity) {
         let id = e.id;
         // Saved mid-fall, it still lands.
-        e.falls |= e.kind == c.game.falling_kind;
+        if e.kind == c.game.falling_kind && e.completion == Completion::Stay {
+            e.completion = Completion::LandOnSupport;
+        }
         let kind = &c.game.entities[e.kind as usize];
         e.projectile = kind.projectile.is_some();
         for &comp in &kind.components {
@@ -529,12 +667,11 @@ impl Entities {
     }
 
     /// The block entity of kind `kind` in the cell at `at` in `frame`.
-    pub fn anchored_kind(&self, frame: u64, at: IVec3, kind: u32) -> Option<u64> {
-        self.anchors
-            .get(&(frame, at))?
-            .iter()
-            .copied()
-            .find(|&id| self.get(id).is_some_and(|e| e.kind == kind))
+    pub fn anchored_kind(&self, frame: u64, at: IVec3, kind: u32, offset: IVec3) -> Option<u64> {
+        self.anchors.get(&(frame, at))?.iter().copied().find(|&id| {
+            self.get(id)
+                .is_some_and(|e| e.kind == kind && e.anchor_offset == offset)
+        })
     }
 
     pub fn unanchor(&mut self, at: (u64, IVec3), id: u64) {
@@ -548,19 +685,44 @@ impl Entities {
 
     /// Who decides which region `e` is in: the body holding it, if it is a block on one.
     pub fn follows<'a>(&'a self, e: &'a Entity) -> &'a Entity {
-        e.frame
-            .filter(|_| e.anchor.is_some())
-            .and_then(|f| self.get(f))
-            .unwrap_or(e)
+        let mut root = e;
+        while let Some(parent) = root.structure_parent().and_then(|id| self.get(id)) {
+            root = parent;
+        }
+        root
     }
 
-    /// Block entities on body `id`.
-    pub fn on_body(&self, id: u64) -> Vec<u64> {
-        self.list
-            .iter()
-            .filter(|e| !e.removed && e.anchor.is_some() && e.frame == Some(id))
-            .map(|e| e.id)
-            .collect()
+    /// Each structure before its blocks and attached structures.
+    pub fn structure_tree(&self, roots: &[u64]) -> Vec<u64> {
+        if roots.is_empty() {
+            return Vec::new();
+        }
+        Self::indexed_structure_tree(roots, &self.structure_children())
+    }
+
+    pub(super) fn structure_children(&self) -> FxHashMap<u64, Vec<u64>> {
+        let mut children: FxHashMap<u64, Vec<u64>> = FxHashMap::default();
+        for e in self.list.iter().filter(|e| !e.removed) {
+            if let Some(parent) = e.structure_parent() {
+                children.entry(parent).or_default().push(e.id);
+            }
+        }
+        children
+    }
+
+    pub(super) fn indexed_structure_tree(roots: &[u64], children: &FxHashMap<u64, Vec<u64>>) -> Vec<u64> {
+        let mut pending: Vec<_> = roots.iter().rev().copied().collect();
+        let mut order = Vec::new();
+        let mut expanded = rustc_hash::FxHashSet::default();
+        while let Some(id) = pending.pop() {
+            order.push(id);
+            if let Some(attached) = children.get(&id)
+                && expanded.insert(id)
+            {
+                pending.extend(attached.iter().rev().copied());
+            }
+        }
+        order
     }
 
     /// Takes `id` out of the world for `why` (`abi::removal`).
@@ -613,17 +775,13 @@ impl Entities {
 
     /// Space in each slot under the same rules as item insertion.
     fn item_space<'a>(&'a self, c: &'a Content, id: u64, stack: ItemStack) -> impl Iterator<Item = u32> + 'a {
-        let kind = self.get(id).map(|e| &c.game.entities[e.kind as usize]);
-        let max = c.max_stack(&stack);
+        let limit = self.pickup_limit(c, id, stack);
         self.inventories
             .get(&id)
             .into_iter()
             .flatten()
             .enumerate()
-            .map(move |(i, &s)| {
-                let limit = kind.map_or(0, |k| Self::pickup_limit(k, i, s, max));
-                crate::stack::room_in(s, stack, limit)
-            })
+            .map(move |(i, &s)| crate::stack::room_in(s, stack, limit.as_ref().map_or(0, |f| f(i, s))))
     }
 
     pub fn item_room(&self, c: &Content, id: u64, stack: ItemStack) -> u64 {
@@ -634,8 +792,23 @@ impl Entities {
         self.item_space(c, id, stack).any(|room| room != 0)
     }
 
-    fn pickup_limit(k: &crate::registry::EntityKind, i: usize, current: ItemStack, max: u32) -> u32 {
-        if k.worn.contains(&(i as u32)) || (k.off == Some(i as u32) && current.is_empty()) { 0 } else { max }
+    fn pickup_limit<'a>(&self, c: &'a Content, owner: u64, stack: ItemStack) -> Option<impl Fn(usize, ItemStack) -> u32 + use<'a>> {
+        let entity = self.get(owner)?;
+        let k = &c.game.entities[entity.kind as usize];
+        let layout = entity.player.then_some(&c.game.player_layout);
+        let max = c.max_stack(&stack);
+        let liquid = c.item_fluid.contains_key(&stack.item);
+        Some(move |i: usize, current: ItemStack| {
+            let slot = i as u32;
+            if k.worn.contains(&slot) || (k.off == Some(slot) && current.is_empty()) {
+                return 0;
+            }
+            let Some(g) = layout.and_then(|layout| layout.storage_at(slot)) else { return max };
+            if g.flags & (sf::OUTPUT | sf::LOCKED | sf::TRASH) != 0 || !g.accepts(stack.item, liquid) {
+                return 0;
+            }
+            g.capacity(max)
+        })
     }
 
     pub fn take(&mut self, id: u64) -> Option<(Entity, Option<Vec<ItemStack>>, Vec<(u32, Box<[u8]>)>)> {
@@ -696,21 +869,49 @@ impl Entities {
 
     /// Merges into matching stacks, then empty slots. Returns the rest.
     pub fn insert_item(&mut self, c: &Content, owner: u64, stack: ItemStack) -> ItemStack {
-        let Some(e) = self.get(owner) else { return stack };
-        let k = &c.game.entities[e.kind as usize];
-        let max = c.max_stack(&stack);
+        self.insert_stack(c, owner, stack, false)
+    }
+
+    /// Menu results go into the player's storage even on screens which only show the result.
+    pub(super) fn insert_result(&mut self, c: &Content, player: u64, stack: ItemStack) -> ItemStack {
+        self.insert_stack(c, player, stack, true)
+    }
+
+    fn insert_stack(&mut self, c: &Content, owner: u64, stack: ItemStack, quick: bool) -> ItemStack {
+        let Some(limit) = self.pickup_limit(c, owner, stack) else { return stack };
         let Some(inv) = self.inventories.get_mut(&owner) else { return stack };
-        let rest = crate::stack::insert_into(
-            stack,
-            0..inv.len(),
-            |i, value| {
-                if let Some(value) = value {
-                    inv[i] = value;
-                }
-                inv[i]
-            },
-            |i, current| Self::pickup_limit(k, i, current, max),
-        );
+        let layout = &c.game.player_layout;
+        let count = inv.len();
+        let targets = (quick
+            && layout
+                .storage
+                .iter()
+                .any(|g| g.priority(Some(stack.item)) != 0))
+        .then(|| {
+            let mut targets: Vec<_> = inv
+                .iter()
+                .enumerate()
+                .map(|(i, &s)| {
+                    let slot = i as u32;
+                    let priority = layout
+                        .storage_at(slot)
+                        .map_or(0, |g| g.priority(Some(stack.item)));
+                    crate::stack::TransferTarget { slot, priority, limit: limit(i, s) }
+                })
+                .collect();
+            targets.sort_by_key(|t| std::cmp::Reverse(t.priority));
+            targets
+        });
+        let mut access = |i: usize, value| {
+            if let Some(s) = value {
+                inv[i] = s;
+            }
+            inv[i]
+        };
+        let rest = match targets {
+            Some(targets) => crate::stack::insert_by_priority(stack, &targets, |i, value| access(i as usize, value)),
+            None => crate::stack::insert_into(stack, 0..count, access, limit),
+        };
         if rest != stack {
             self.dirty_inv.insert(owner);
         }
@@ -730,8 +931,8 @@ impl Entities {
             .filter(|e| {
                 if touching {
                     let b = e.aabb(c);
-                    let (a, z) = (place.to_local(b.min), place.to_local(b.max));
-                    shape.test_box(a.min(z), a.max(z)).1
+                    let b = place.box_to_local(b);
+                    shape.test_box(b.min, b.max).1
                 } else {
                     shape.contains(place.to_local(e.pos))
                 }
@@ -784,16 +985,23 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     if e.anchor.is_some() || e.vehicle.is_some() || e.driver.is_some() {
         return out;
     }
-    if (k.is(ef::KINEMATIC) && !e.falls) || e.motion == Motion::Parked {
+    match e.body_motion() {
+        BodyMotion::Joint | BodyMotion::Dynamic | BodyMotion::Held => return out,
+        BodyMotion::Parked if e.mount.is_some() => return out,
+        _ => {}
+    }
+    let falls = e.completion == Completion::LandOnSupport;
+    if (k.is(ef::KINEMATIC) && !falls) || !matches!(e.motion, Motion::Free) {
         // On another body, it goes with that too (a piston on a platform moving blocks).
-        let carried = e
-            .frame
-            .and_then(|f| bodies.iter().find(|b| b.id == f))
-            .map_or(DVec3::ZERO, |b| b.delta);
+        let frame = e.frame.and_then(|f| bodies.iter().find(|b| b.id == f));
+        let carried = frame.map_or(DVec3::ZERO, |b| b.carry_from(e.pos));
+        if let Some((_, place)) = frame.and_then(|b| b.blocks) {
+            e.set_frame_rotation(place.rotation());
+        }
         e.pos += carried;
         match &mut e.motion {
             Motion::To { to, left } => {
-                *to += carried;
+                *to += frame.map_or(DVec3::ZERO, |b| b.carry_from(*to));
                 let arrived = *left <= 1;
                 let at = *to;
                 e.vel = (at - e.pos) / (*left as f64 * DT);
@@ -838,7 +1046,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
         e.vel = v / DT;
         e.moved = (e.pos - start).with_y(0.0).length() as f32;
         e.blocked = false;
-        e.in_liquid = physics::around(c, block, e.pos, h).in_liquid;
+        e.in_liquid = physics::around(c, block, e.pos, h, hw).in_liquid;
         e.fall = 0.0;
         return out;
     }
@@ -873,7 +1081,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     let frame = physics::Frame {
         half_width: hw,
         height: h,
-        gravity: if k.is(ef::NO_GRAVITY) && !e.falls { 0.0 } else { physics::gravity_per_tick(gravity) * e.moves.gravity },
+        gravity: if k.is(ef::NO_GRAVITY) && !falls { 0.0 } else { physics::gravity_per_tick(gravity) * e.moves.gravity },
         moves: physics::Moves { step: if e.item.is_empty() { e.moves.step } else { 0.0 }, ..e.moves },
     };
     let mut v = e.vel * DT;
@@ -883,13 +1091,11 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     e.blocked = r.hit[0] || r.hit[2];
     e.on_ground = r.on_ground;
     if r.on_ground {
-        if let Some(b) = physics::standing_on(c, e.pos, hw, bodies, e.id) {
-            e.frame = Some(b);
-        }
+        e.frame = physics::standing_on(c, e.pos, hw, bodies, e.id);
     }
     let dy = e.pos.y - start.y;
     e.moved = ((e.pos.x - start.x).powi(2) + (e.pos.z - start.z).powi(2)).sqrt() as f32;
-    let here = if physics::same_around(start, e.pos, h) { r.started_in } else { physics::around(c, block, e.pos, h) };
+    let here = if !block.masks_liquid() && start == e.pos { r.started_in } else { physics::around(c, block, e.pos, h, hw) };
     e.in_liquid = here.in_liquid;
     if let Some(land) = track_fall(&mut e.fall, dy, e.on_ground, here.in_liquid || here.climbing) {
         out.land = Some(land);

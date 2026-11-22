@@ -134,6 +134,7 @@ Snippets add to the engine's shaders, a shader pack replaces them. It is a folde
 | `model.wgsl` | mobs and the player's model |
 | `entity.wgsl` | held items |
 | `particle.wgsl` | particles |
+| `wake.wgsl` | wakes, bow waves and hull splash sheets |
 | `weather.wgsl` | rain and snow |
 | `sky.wgsl` | the sky, what is in it, and the overlay from inside a liquid |
 | `post.wgsl` | screen effects |

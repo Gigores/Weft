@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::add;
 use crate::runner::{R, T};
 
-use base_api::SMELTING_STATE as SMELTING;
+use base_api::components::SMELTING_STATE as SMELTING;
 use weft_sdk::*;
 
 /// Public stack data and slot order agree across display sources. Visual dependencies share

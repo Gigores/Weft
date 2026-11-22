@@ -291,6 +291,11 @@ impl IdTable {
         let to_runtime: Vec<u32> = names
             .iter()
             .map(|n| {
+                // Earlier saves filled a large block's other cells with directional placeholders.
+                // The owner's shape reconstructs those entries when its cube loads.
+                if n == "core:covered" || n.starts_with("core:covered[") {
+                    return AIR;
+                }
                 c.state_by_name(n).unwrap_or_else(|| {
                     missing.push(n.clone());
                     AIR
@@ -496,10 +501,7 @@ impl Storage {
         }
         let lod = dim_dirs
             .iter()
-            .enumerate()
-            .map(|(dim, dir)| {
-                crate::server::lod_tops::DimTops::read(&dir.join("lod.bin"), c, dim as u32, meta.seed, &mut |w| ids.runtime_id(w))
-            })
+            .map(|dir| crate::server::lod_tops::DimTops::read(&dir.join("lod.bin"), &mut |w| ids.runtime_id(w)))
             .collect();
         Storage { meta, ids, regions: FxHashMap::default(), dim_dirs, on_disk, saved, last_written: FxHashMap::default(), lod }
     }
@@ -533,6 +535,11 @@ impl Storage {
         &self.saved[dim as usize]
     }
 
+    pub fn lod_columns(&mut self, dim: u32) -> Vec<crate::server::lod_tops::LodColumn> {
+        let lod = &mut self.lod[dim as usize];
+        if lod.request(crate::content::content(), dim, self.meta.seed) { lod.columns.values().cloned().collect() } else { Vec::new() }
+    }
+
     /// The cube and the serialized entities that were in it.
     pub fn load(&mut self, dim: u32, pos: IVec3) -> Option<(Cube, Vec<u8>)> {
         let (r, i) = region_of(pos);
@@ -562,6 +569,10 @@ impl Storage {
             .palette()
             .iter()
             .chain(cube.all_extras().flat_map(|(_, parts)| parts))
+            .chain(
+                cube.layouts()
+                    .flat_map(|(_, layout)| layout.covers.iter().map(|p| &p.state)),
+            )
         {
             map.insert(s, self.ids.world_id(c, s));
         }

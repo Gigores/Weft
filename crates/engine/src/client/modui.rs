@@ -46,11 +46,16 @@ struct TextSink {
 pub struct ClientView {
     pub client: *const Client,
     pub run: *mut std::ffi::c_void,
+    pub read_music: std::cell::Cell<bool>,
 }
 
 impl ClientView {
     pub fn new(client: Option<&Client>) -> ClientView {
-        ClientView { client: client.map_or(std::ptr::null(), |c| c as *const Client), run: std::ptr::null_mut() }
+        ClientView {
+            client: client.map_or(std::ptr::null(), |c| c as *const Client),
+            run: std::ptr::null_mut(),
+            read_music: std::cell::Cell::new(false),
+        }
     }
 
     /// For a binding run with `ctx`.
@@ -72,8 +77,9 @@ pub fn build(ui: &mut Ui, lang: &Lang, input: Option<&crate::input::Input>, owne
     let menu = client.and_then(|c| c.menu.as_ref()).map(|m| m.kind);
     let mut b = UiBuild { tag: 1, owner, ui, lang, input, depth: 0, menu, recipe: None, client };
     let mut v = ClientView::new(client);
-    let mut args = abi::UiArgs { ui: &mut b as *mut UiBuild as *mut abi::UiCtx, client: v.raw() };
+    let mut args = abi::UiArgs { ui: &mut b as *mut UiBuild as *mut abi::UiCtx, client: v.raw(), data: 0 };
     host::invoke(owner, cb, &mut args);
+    b.ui.read_music |= v.read_music.get();
     for _ in 0..b.depth {
         b.ui.close();
     }
@@ -199,6 +205,7 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
             self_align: (n.self_align != u32::MAX).then(|| align(n.self_align)),
             scroll: flag(abi::ui_flags::SCROLL),
             bar_outside: false,
+            bar_thin: flag(abi::ui_flags::THIN_SCROLLBAR),
             fill: None,
             max_h: f32::INFINITY,
             at: None,
@@ -218,7 +225,7 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
         let on_change = move |ctx: &mut Ctx, text: String, value: f32| {
             if change.is_some() {
                 ctx.requests
-                    .push(crate::app::Request::ModChange(owner, change, text, value));
+                    .push(crate::app::Request::ModChange(owner, change, text, value, 0));
             }
         };
         let id = match n.kind {
@@ -260,10 +267,50 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
                 id
             }
             uk::SLIDER => {
-                let bind = float_bind(owner, n.bind);
-                let on_change: Rc<dyn Fn(&mut Ctx, f32)> = Rc::new(move |ctx: &mut Ctx, v: f32| on_change(ctx, String::new(), v));
-                let steps = if n.count == 0 { 100 } else { n.count };
-                b.ui.open(Kind::Slider { value: 0.0, bind, on_change, on_release: None, steps, step_value: None }, style)
+                use crate::ui::slider::{Change, Slider, Thumb};
+                let values = n.slider_values.as_slice();
+                let ordered = flag(abi::ui_flags::SLIDER_ORDERED);
+                let mut min = 0.0_f32;
+                let thumbs = values
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &value)| {
+                        let value = if value.is_finite() { value.clamp(min, 1.0) } else { min };
+                        if ordered {
+                            min = value;
+                        }
+                        let callback: Option<Change> = change.is_some().then(|| {
+                            Rc::new(move |ctx: &mut Ctx, value| {
+                                ctx.requests
+                                    .push(crate::app::Request::ModChange(owner, change, String::new(), value, i as u32));
+                            }) as Change
+                        });
+                        let (change, release) = if flag(abi::ui_flags::SLIDER_RELEASE) { (None, callback) } else { (callback, None) };
+                        Thumb { value, change, release }
+                    })
+                    .collect();
+                let mut slider = Slider::new(thumbs);
+                slider.enabled = !flag(abi::ui_flags::DISABLED) && !values.is_empty();
+                slider.ordered = ordered;
+                slider.snap = flag(abi::ui_flags::SLIDER_SNAP);
+                if n.count != 0 {
+                    slider.steps = n.count;
+                }
+                slider.track = class_or("slider");
+                let fill = n.slider_fill.map(|i| i as usize);
+                slider.fill = fill.iter().all(|&i| i < values.len()).then_some(fill);
+                if n.bind.is_some() && !values.is_empty() {
+                    let cb = n.bind;
+                    slider.binding = Some((
+                        vec![0.0; values.len()],
+                        Box::new(move |ctx, values| {
+                            let mut client = ClientView::bound(ctx);
+                            let mut args = abi::UiSliderBindArgs { client: client.raw(), values: values.as_mut_ptr(), len: values.len() };
+                            host::invoke(owner, cb, &mut args);
+                        }),
+                    ));
+                }
+                b.ui.open(Kind::Slider(slider), style)
             }
             uk::ITEM => {
                 let (item, count) = (n.data, n.count);
@@ -271,9 +318,13 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
             }
             uk::BUTTON => {
                 let cb = n.on_click;
+                let data = n.data;
                 // Run after the input with the whole client API: a mod's menu can open screens,
                 // worlds or quit like the engine's.
-                let action: crate::ui::Action = Rc::new(move |ctx: &mut Ctx| ctx.requests.push(crate::app::Request::ModCall(owner, cb)));
+                let action: crate::ui::Action = Rc::new(move |ctx: &mut Ctx| {
+                    ctx.requests
+                        .push(crate::app::Request::ModCall(owner, cb, data))
+                });
                 let (enabled, selected) = (!flag(abi::ui_flags::DISABLED), flag(abi::ui_flags::SELECTED));
                 // Unless the mod sizes it, as high and padded as the engine's buttons.
                 let mut style = style;
@@ -288,7 +339,7 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
                 let on_double: Option<crate::ui::Action> = double.is_some().then(|| {
                     Rc::new(move |ctx: &mut Ctx| {
                         ctx.requests
-                            .push(crate::app::Request::ModCall(owner, double))
+                            .push(crate::app::Request::ModCall(owner, double, data))
                     }) as crate::ui::Action
                 });
                 b.ui.open(
@@ -327,9 +378,9 @@ pub unsafe extern "C" fn ui_open(u: *mut abi::UiCtx, node: *const abi::UiNode) {
                 for e in layout
                     .equipment
                     .iter()
-                    .filter(|e| e.name != weft_abi::OFF_HAND_SLOT)
+                    .filter(|e| e.group.flags & weft_abi::slot_flags::OFF_HAND == 0)
                 {
-                    if let Some((g, first, _)) = def.and_then(|d| d.group(layout, &e.name)) {
+                    if let Some((g, first, _)) = def.and_then(|d| d.group(layout, &e.group.name)) {
                         let s = b.ui.add(
                             Kind::Custom { tag: TAG_SLOT, data: first as u64 },
                             Style { w: Len::Px(g.size), h: Len::Px(g.size), ..Style::default() },

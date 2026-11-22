@@ -2,6 +2,12 @@
 
 use super::*;
 
+fn restore_cave_biomes(c: &Content, dim: u32, seed: u64, pos: IVec3, cube: &mut Cube) {
+    if let (Some(terrain), Some(biomes)) = (&c.dims[dim as usize].terrain, &mut cube.biomes) {
+        terrain.backfill_cave_biomes(seed, pos, biomes);
+    }
+}
+
 impl Server {
     /// Inserts generated cubes and keeps the workers fed until `deadline`, between ticks.
     pub(super) fn load_until(&mut self, deadline: Instant) {
@@ -143,7 +149,7 @@ impl Server {
         *self.shared.views.write() = self
             .players
             .iter()
-            .filter(|p| p.joined)
+            .filter(|p| p.streams_world())
             .map(|p| (p.dim, self.view(p)))
             .collect();
         let mut wanted: Vec<(i32, u32, IVec3)> = Vec::new();
@@ -151,7 +157,7 @@ impl Server {
         let edited: Vec<Vec<IVec3>> = self.dims.iter_mut().map(|d| d.take_edited()).collect();
         for pi in 0..self.players.len() {
             let p = &self.players[pi];
-            if !p.joined {
+            if !p.streams_world() {
                 continue;
             }
             let view = self.view(p);
@@ -269,7 +275,12 @@ impl Server {
             }
             let t = Instant::now();
             let loaded = storage.and_then(|s| s.lock().load(dim, pos));
-            let (mut cube, entities) = loaded.unwrap_or_else(|| (dim::generate(content(), dim, seed, pos), Vec::new()));
+            let (mut cube, entities) = loaded
+                .map(|(mut cube, entities)| {
+                    restore_cave_biomes(content(), dim, seed, pos, &mut cube);
+                    (cube, entities)
+                })
+                .unwrap_or_else(|| (dim::generate(content(), dim, seed, pos), Vec::new()));
             dim::prepare(content(), dim, &edits, pos, &mut cube);
             let conn = dim::see_through(content(), &cube);
             shared
@@ -291,7 +302,7 @@ impl Server {
             let views: Vec<(View, i32, i32)> = self
                 .players
                 .iter()
-                .filter(|p| p.joined && p.dim as usize == di)
+                .filter(|p| p.streams_world() && p.dim as usize == di)
                 .map(|p| {
                     let view = self.view(p);
                     let (lo, hi) = view.loaded_y(def);
@@ -323,17 +334,19 @@ impl Server {
                     .map(|x| r.around(x.0, |p| removed.iter().find(|o| o.0 == p).map(|o| o.1.clone())))
                     .collect();
                 for ((pos, cube, inside), around) in removed.into_iter().zip(around) {
+                    let inside = r.entities.structure_tree(&inside);
                     if let Some(s) = &storage {
                         // Written in the background; loads queue behind it there.
-                        let (s, mut bytes, dim) = (s.clone(), serialize(c, r, &inside), r.id);
+                        let (s, mut bytes, dim) = (s.clone(), super::serialize_tree(c, r, &inside), r.id);
                         persist::append_timers(&mut bytes, c, &r.take_timers(pos));
                         crate::background().spawn(move || s.lock().save(c, dim, pos, &cube, &around, &bytes));
                     }
                     for id in inside {
                         r.entities.remove(id, weft_abi::removal::UNLOADED);
+                        r.bodies.remove(&id);
                     }
                 }
-                r.compact(c);
+                r.compact(0, c);
             }
             d.dirty |= d.regions.iter().map(|r| r.space.cubes.len()).sum::<usize>() != before;
         }
@@ -347,7 +360,7 @@ impl Server {
         let views: Vec<View> = self
             .players
             .iter()
-            .filter(|p| p.joined && p.dim == dim)
+            .filter(|p| p.streams_world() && p.dim == dim)
             .map(|p| self.view(p))
             .collect();
         let def = &c.dims[dim as usize];
@@ -379,7 +392,12 @@ impl Server {
             .par_iter()
             .map(|&pos| {
                 let loaded = storage.as_ref().and_then(|s| s.lock().load(dim, pos));
-                let (mut cube, entities) = loaded.unwrap_or_else(|| (dim::generate(c, dim, seed, pos), Vec::new()));
+                let (mut cube, entities) = loaded
+                    .map(|(mut cube, entities)| {
+                        restore_cave_biomes(c, dim, seed, pos, &mut cube);
+                        (cube, entities)
+                    })
+                    .unwrap_or_else(|| (dim::generate(c, dim, seed, pos), Vec::new()));
                 dim::prepare(c, dim, edits, pos, &mut cube);
                 let conn = dim::see_through(c, &cube);
                 (pos, cube, entities, conn)
@@ -400,7 +418,11 @@ impl Server {
         self.dims[dim as usize].area_fill(c, fill, &whole);
         if let Some(e) = self.dims[dim as usize].edits.last() {
             let spec = e.spec(c);
-            for p in self.players.iter_mut().filter(|p| p.joined && p.dim == dim) {
+            for p in self
+                .players
+                .iter_mut()
+                .filter(|p| p.streams_world() && p.dim == dim)
+            {
                 p.conn
                     .send(ToClient::Edits { dim, specs: vec![spec.clone()], all: false });
             }
@@ -459,13 +481,12 @@ pub(super) fn send_far(
             None => {
                 n += 1;
                 let Some((mut cube, _)) = storage.and_then(|s| s.lock().load(p.dim, pos)) else { continue };
+                restore_cave_biomes(c, p.dim, dim.seed(), pos, &mut cube);
                 dim.catch_up_edits(pos, &mut cube);
                 Arc::new(cube)
             }
         };
-        p.conn
-            .send(ToClient::Cube { dim: p.dim, frame: 0, pos, cube, edit: false });
-        p.send_levels(dim, pos);
+        p.send_terrain_cube(dim, pos, cube);
         p.sent.insert(pos);
     }
 }

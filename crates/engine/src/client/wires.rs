@@ -22,6 +22,7 @@ const WHOLE_FROM: usize = 256;
 struct Push {
     origin: [i32; 4],
     frac: [f32; 4],
+    rotation: [f32; 4],
 }
 
 #[derive(Default)]
@@ -62,11 +63,11 @@ struct WireSet {
     quads: Buffer,
     levels: Buffer,
     /// Wire cells per cube.
-    cubes: FxHashMap<IVec3, Vec<IVec3>>,
+    cubes: FxHashMap<IVec3, Vec<wire::Site>>,
     /// What the server says of each cell's pieces.
-    power: FxHashMap<IVec3, [u8; 6]>,
+    power: FxHashMap<wire::Site, [u8; 6]>,
     /// Where each piece's number is.
-    index: FxHashMap<(IVec3, u8), u32>,
+    index: FxHashMap<(wire::Site, u8), u32>,
     numbers: Vec<u32>,
     changed: Vec<u32>,
     count: u32,
@@ -146,12 +147,12 @@ impl Wires {
     /// A cube left: when it comes back, it says what has power there.
     pub fn cube_gone(&mut self, frame: u64, pos: IVec3) {
         if let Some(set) = self.sets.get_mut(&frame) {
-            set.power.retain(|p, _| *p >> 4 != pos);
+            set.power.retain(|p, _| p.cell >> 4 != pos);
         }
     }
 
     /// The server's word on some pieces' power.
-    pub fn power_changed(&mut self, frame: u64, changes: &[(IVec3, u8, u8)]) {
+    pub fn power_changed(&mut self, frame: u64, changes: &[(wire::Site, u8, u8)]) {
         self.sets.entry(frame).or_default().power_changed(changes);
     }
 
@@ -179,13 +180,14 @@ impl Wires {
     }
 
     /// `frames`: where bodies' block (0, 0, 0) is drawn; `lit` the world's light where each is.
-    pub fn draw(&self, list: &mut CommandList, cam: &Camera, scene: BufferId, frames: &[(u64, DVec3)], lit: &[u32]) {
+    pub fn draw(&self, list: &mut CommandList, cam: &Camera, scene: BufferId, frames: &[(u64, crate::physics::Transform)], lit: &[u32]) {
         let Some(pipe) = self.pipe else { return };
         for (&frame, set) in &self.sets {
             if frame == 0 {
-                set.draw(list, pipe, cam.pos, scene, None);
+                set.draw(list, pipe, cam.pos, glam::Quat::IDENTITY, scene, None);
             } else if let Some(k) = frames.iter().position(|f| f.0 == frame) {
-                set.draw(list, pipe, cam.pos - frames[k].1, scene, Some(lit[k]));
+                let place = frames[k].1;
+                set.draw(list, pipe, place.to_local(cam.pos), place.rotation().as_quat(), scene, Some(lit[k]));
             }
         }
     }
@@ -206,7 +208,7 @@ impl WireSet {
         self.count = 0;
     }
 
-    fn power_changed(&mut self, changes: &[(IVec3, u8, u8)]) {
+    fn power_changed(&mut self, changes: &[(wire::Site, u8, u8)]) {
         for &(cell, face, level) in changes {
             self.power.entry(cell).or_insert([0; 6])[face as usize % 6] = level;
             if let Some(&i) = self.index.get(&(cell, face)) {
@@ -259,7 +261,11 @@ impl WireSet {
         self.changed.clear();
         let looks = super::looks::current();
         let mut quads: Vec<GpuWireQuad> = Vec::new();
-        let get = |p: IVec3| world.block_or_air(p);
+        let get = |p: wire::Site| {
+            world
+                .block_or_air(p.cell)
+                .map(|main| p.state(c, main, world.layout(p.cell)))
+        };
         for cell in self.cubes.values().flatten().copied() {
             let Some(state) = get(cell) else { continue };
             let m = wire::mask(c, state);
@@ -273,21 +279,34 @@ impl WireSet {
             // Not in any mesh, so nothing else asks for these to be loaded.
             textures.ensure_blocks(gpu, [dot_tex, line_tex]);
             let (dot, line) = (textures.texture(dot_tex), textures.texture(line_tex));
-            let light = world.light(cell);
+            let light = world.light(cell.cell);
             let power = self.power.get(&cell).copied().unwrap_or([0; 6]);
+            let get_cell = |p| Some((world.block_or_air(p)?, world.layout(p)));
+            let contacts = if wire::needs_contacts(cell, get_cell) { wire::contacts(c, cell, state, get_cell) } else { Vec::new() };
             for f in wire::dirs(m) {
                 let piece = self.numbers.len() as u32;
                 self.index.insert((cell, f), piece);
                 self.numbers.push(power[f as usize] as u32);
                 let reach = |e: u8| match wire::link(c, &get, cell, f, e) {
                     Link::Piece(..) => true,
-                    _ => get(cell + DIRS[e as usize]).is_some_and(|n| reaches_device(c, n, e)),
+                    _ => {
+                        get(cell + DIRS[e as usize]).is_some_and(|n| reaches_device(c, n, e))
+                            || contacts.iter().any(|v| {
+                                v.dir == e
+                                    && v.near_faces & (1 << f) != 0
+                                    && (v.far_faces != 0 || get(v.at).is_some_and(|n| reaches_device(c, n, e)))
+                            })
+                    }
                 };
                 let (u, v) = axes(f);
                 let side = |axis: u8, positive: u8| reach(axis * 2 + positive);
                 let (up, un, vp, vn) = (side(u, 1), side(u, 0), side(v, 1), side(v, 0));
                 let mut push = |mode: u32, tex: u32| {
-                    quads.push(GpuWireQuad { pos: [cell.x, cell.y, cell.z, f as i32 | (mode as i32) << 3], data: [tex, light, piece, 0] })
+                    quads.push(GpuWireQuad {
+                        pos: [cell.cell.x, cell.cell.y, cell.cell.z, f as i32 | (mode as i32) << 3],
+                        data: [tex, light, piece, 0],
+                        offset: cell.part(0).shift().as_vec3().extend(0.0).to_array(),
+                    })
                 };
                 // A straight run is a line; anything else a dot with arms.
                 let any_u = up || un;
@@ -321,7 +340,7 @@ impl WireSet {
     }
 
     /// `eye`: the camera in the coordinates of these blocks.
-    fn draw(&self, list: &mut CommandList, pipe: PipelineId, eye: DVec3, scene: BufferId, lit: Option<u32>) {
+    fn draw(&self, list: &mut CommandList, pipe: PipelineId, eye: DVec3, rotation: glam::Quat, scene: BufferId, lit: Option<u32>) {
         let (Some(q), Some(l)) = (self.quads.id, self.levels.id) else { return };
         if self.count == 0 {
             return;
@@ -335,6 +354,7 @@ impl WireSet {
         list.push_constants(&Push {
             origin: [origin.x as i32, origin.y as i32, origin.z as i32, lit.unwrap_or(0) as i32],
             frac: [frac.x as f32, frac.y as f32, frac.z as f32, lit.is_some() as u32 as f32],
+            rotation: rotation.to_array(),
         });
         list.push(Cmd::Draw { vertices: 6, instances: self.count, first_vertex: 0, first_instance: 0 });
     }

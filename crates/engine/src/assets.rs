@@ -562,7 +562,7 @@ pub fn texture_stamp(assets: &Assets, name: &str) -> u64 {
 /// Full size first, halved down to 1x1. Transparent texels take the color of the opaque ones
 /// next to them first: filtering at cutout edges (tall grass, leaves, overlays) then blends
 /// towards the right color instead of black, which drew dark seams.
-fn mip_chain(mut rgba: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
+pub(crate) fn mip_chain(mut rgba: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
     let mut out = Vec::with_capacity(size.trailing_zeros() as usize + 1);
     let mut s = size;
     loop {

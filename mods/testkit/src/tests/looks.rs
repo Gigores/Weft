@@ -426,16 +426,17 @@ pub async fn clouds(t: T) -> R {
     let wall = t.shot("wall").await?.share(0.2, 0.3, 0.8, 0.7, white);
     t.check(wall < 0.005, format!("clouds through a wall: {wall:.3}"));
     // Weather supplies cloud appearance to the same environment as external sources.
-    t.c().teleport([s.pos.x + 80.0, 150.0, s.pos.z]);
-    t.c().set_look(0.0, 75.0);
+    // Seed 5 has a cloud in this cell. Frame its interior so sky gaps don't dominate the tint probes.
+    t.c().teleport([540.0, 195.0, 620.0]);
+    t.c().set_look(0.0, 89.0);
     t.secs(0.4).await?;
     let sky_lum = |shot: &crate::runner::Shot| crate::runner::lum(shot.avg(0.1, 0.05, 0.9, 0.8));
     let clear = sky_lum(&t.shot("clear_clouds").await?);
-    t.cmd("/weather rain").await?;
+    t.c().say("/weather rain");
     t.until("rain cloud tint", Duration::from_secs(8), |t| t.c().environment_values().cloud_gray > 0.9)
         .await?;
     let rain = sky_lum(&t.shot("rain_clouds").await?);
-    t.cmd("/weather thunder").await?;
+    t.c().say("/weather thunder");
     t.until("thunder cloud tint", Duration::from_secs(8), |t| t.c().environment_values().cloud_dark > 0.9)
         .await?;
     let thunder = sky_lum(&t.shot("thunder_clouds").await?);

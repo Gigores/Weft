@@ -59,7 +59,7 @@ r.ore(&TIN_ORE).y(-64, 90).per_cube(5).vein_size(8).replaces("#stone_ore_replace
 - `exposed(0.5)`: leaves out that share of what would touch a cave, as vanilla's gold and diamonds
 - `biome("#cave")`: only in these biomes, underground ones included; names and tags like anywhere else, `!` leaving some out
 
-An ore is named like its block, so `r.edit(base::IRON_ORE.ore()).per_cube(10)` changes base's iron: what you set replaces its own (`replaces` too: a block in `#stone_ore_replaceables` is in every ore's way), and `r.remove(base::IRON_ORE.ore())` takes it out of the world.
+An ore is named like its block, so `r.edit(base_api::blocks::IRON_ORE.ore()).per_cube(10)` changes base's iron: what you set replaces its own (`replaces` too: a block in `#stone_ore_replaceables` is in every ore's way), and `r.remove(base_api::blocks::IRON_ORE.ore())` takes it out of the world.
 
 ## Structures
 A structure is a template, a fixed shape of blocks, that stands on the ground now and then. You draw a template in layers from the bottom up: each layer is a list of rows along z, and each character in a row is one block along x. A key says which block a character means, a space leaves whatever is already there, and `air` clears it. `fill(block, from, to)` adds a box instead. Its blocks are checked when the game loads, so a typo is an error then, and the same template serves a structure, a piece of a plan, a moving body (`.body(&TEMPLATE)` on an entity) and code (`w.place_template`).
@@ -274,7 +274,7 @@ Any of the biome's own settings (`temperature`, `surface`, `frozen`...) can also
 A rule is named like its biome, which is how other mods point at it (`base:desert`). When one biome has two rules, like base's snowy plains on the coast and inland, the second gets its own name with `.named("snowy_coast")`.
 
 ### Water, caves and underground biomes
-`.sea(level, "water")` fills everything below a level with water. `.caves(Caves::new("lava", from_y, to_y))` carves tunnels and big caverns, and between those two heights some levels hold flat lava lakes. `.cave_biome("deep_caves", depth, size, threshold)` gives whole cubes at least `depth` blocks down a biome of their own, in patches about `size` across.
+`.sea(level, "water")` fills everything below a level with water. `.caves(Caves::new("lava", from_y, to_y))` carves tunnels and big caverns, and between those two heights some levels hold flat lava lakes. `.cave_biome("deep_caves", depth, size, threshold)` gives each column of a cube a biome based on its depth and three-dimensional noise. A final rule with threshold `-1.0` fills the space between patches below its minimum depth.
 
 ## Trees and other scattered things
 Anything bigger than a cube that stands on the ground here and there, like a tree, is a scatter: a feature on a grid whose chance comes from the biome. The engine picks one spot per cell from the seed, keeps it with the chance a biome component gives, and runs your plan for the blocks. It skips spots under the sea and where caves took the ground, puts the parts that reach into neighboring cubes there, keeps trees out of structures and players from spawning inside. That works in every dimension where the biome stands, so testmod's Mars grows trees in its patches of `base:forest` without any code of its own.
@@ -295,6 +295,10 @@ r.scatter(&TREE_SITES).spacing(5).reach(3).density(&TREES).plan(|p| {
 - `dimension(&D)`: only there
 
 `r.edit(&TREE_SITES)` changes another mod's scatter by its handle.
+
+`.impostor()` adds the `feature.impostor` tag to a grid feature. Distant terrain draws a view-dependent image of its occupied voxels. Loaded cubes show the placed blocks. Both grid odds and biome density work with the tag, including templates and plans.
+
+`.surface_cover(sample)` adds the `surface_projection` tag and supplies the callback for a terrain projection. Share the sampler with the decoration's placement rules. It returns the block state to use for the projection at a position, or air for no cover. A solid block can supply a projection texture by carrying the same tag.
 
 Base's real trees are in `mods/base/src/worldgen.rs`; how many grow where and which kinds are the biome components `trees` and `tree_kinds` (a `BlockList` of logs, `"birch_log:1 oak_log:4"`), and a log's leaves its `tree_leaves` (a `BlockRef`; logs tagged `cone_tree` grow spruce-like), so another mod can give a biome trees without touching code.
 

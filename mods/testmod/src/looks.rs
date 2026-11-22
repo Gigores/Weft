@@ -59,7 +59,7 @@ pub fn register(r: &mut Registry) {
     r.stack_component(&DISPLAY_PHASE, abi::stack_flags::VISUAL);
     r.storage(&DISPLAY_PARTS, 1).stack(abi::stack_flags::VISUAL);
     r.item(&DISPLAY_TOKEN)
-        .wearable(&base_api::HEAD, 0.5, "base:armor/iron_1")
+        .wearable(&base_api::slots::HEAD, 0.5, "base:armor/iron_1")
         .condition(|s, look| {
             DISPLAY_LOOK_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             match DISPLAY_PHASE.on_stack(s).unwrap_or(0) {
@@ -128,6 +128,7 @@ pub fn register(r: &mut Registry) {
     }
     drop(obelisk.key('s', "base:sandstone").key('g', "glow_crystal"));
     r.structure(&OBELISK)
+        .impostor()
         .dimension(&crate::MARS)
         .spacing(128)
         .chance(0.5)
@@ -319,8 +320,6 @@ pub fn register(r: &mut Registry) {
     r.item(&FOX_TAIL)
         .max_stack(1)
         .wearable_model(&EquipmentSlot::named("base:legs"), "fox_tail", "body");
-    r.bone_motion("fox_tail", "tail2", BoneMotion::SPRINGY);
-    r.bone_motion("fox_tail", "tail3", BoneMotion::SPRINGY);
     // Both hands, or one if the other is busy.
     static MAP_SHEET: Item = Item::named("map_sheet");
     r.item(&MAP_SHEET)
@@ -447,7 +446,10 @@ fn outpost(r: &mut Registry) {
 }
 
 fn environment_controls(r: &mut Registry) {
-    let suns = [base_api::OVERWORLD.sky(&base_api::SUN), base_api::FLATLANDS.sky(&base_api::SUN)];
+    let suns = [
+        base_api::dimensions::OVERWORLD.sky(&base_api::sky_objects::SUN),
+        base_api::dimensions::FLATLANDS.sky(&base_api::sky_objects::SUN),
+    ];
     r.command("eclipse", "<state:word(on,off)> [entity:int]", move |cmd| {
         let (w, player) = (cmd.world(), cmd.player());
         let entity = cmd.int("entity").map_or(player, |id| id as u64);

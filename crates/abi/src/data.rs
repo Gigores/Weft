@@ -368,6 +368,8 @@ schema_data!(
     ShapeStep,
     ItemStack,
     Mounting,
+    ShipCollision,
+    MusicSource,
     Worn,
     WeatherTick,
     Interaction,

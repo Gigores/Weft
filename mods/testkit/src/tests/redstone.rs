@@ -2060,10 +2060,11 @@ pub async fn redstone_on_a_structure(t: T) -> R {
     t.op(&format!("structureset {id} 0 1 -1 base:redstone[down=true]"))
         .await?;
     let uid: u64 = id.parse().map_err(|_| "not an id".to_string())?;
-    // From above.
-    t.c().set_flying(true);
-    t.cmd(&format!("/tp {} {} {}", f[0] + 4, f[1] + 7, f[2] - 8))
+    // Keep the camera above the lift throughout its cycle.
+    t.op("mode creative").await?;
+    t.cmd(&format!("/tp {} {} {}", f[0] + 4, f[1] + 10, f[2] - 8))
         .await?;
+    t.c().set_flying(true);
     t.secs(0.5).await?;
     let mut red = false;
     for _ in 0..40 {
@@ -2077,9 +2078,11 @@ pub async fn redstone_on_a_structure(t: T) -> R {
         t.frames(2).await?;
         let Some(o) = t.c().entity(uid).map(|e| e.pos) else { continue };
         if let Some((x, y)) = t.on_screen([o.x + 0.0, o.y + 1.03, o.z - 1.0]) {
-            // Beside the crosshair.
-            let px = t.pixel(x + 0.012, y + 0.01).await?;
-            red |= px[0] as i32 > px[1] as i32 * 2 && px[0] > 60;
+            let shot = t.shot("wire").await?;
+            red = shot.share(x - 0.009, y + 0.003, x + 0.009, y + 0.011, |px| px[0] as u16 > 2 * px[1] as u16 && px[0] > 120) > 0.12;
+            if red {
+                break;
+            }
         }
     }
     t.check(red, "wire on it shows red");

@@ -2,7 +2,7 @@
 //! A rider goes where its seat is after everything moved; a mob in a seat that steers walks
 //! its mount with its own AI, a player in one moves it from its client (`ToServer::MountMove`).
 
-use glam::DVec3;
+use glam::{DVec3, IVec3};
 use weft_abi as abi;
 
 use super::dim::Dim;
@@ -12,11 +12,16 @@ use crate::content::Content;
 const MOST_RIDING: usize = 32;
 
 impl Dim {
+    fn seats_for<'a>(&self, c: &'a Content, mount: &super::entity::Entity) -> &'a [crate::registry::Seat] {
+        c.game
+            .seats(mount.kind, self.active_helm(c, mount.id).is_some())
+    }
+
     /// Where a rider's feet go in seat `seat` of `mount`, if it has that seat.
     pub fn seat_pos(&self, c: &Content, mount: u64, seat: u8) -> Option<DVec3> {
         let m = self.entities.get(mount)?;
-        let s = c.game.entities[m.kind as usize].seats.get(seat as usize)?;
-        Some(m.pos + crate::world::turned(s.pos, m.yaw))
+        let helm = self.active_helm(c, mount).map(|(pos, _)| pos);
+        crate::physics::seat_at(c, m.kind, m.pos, m.yaw, seat, Some(m.body_place()), helm)
     }
 
     /// Who sits in `seat` of `mount`.
@@ -43,11 +48,19 @@ impl Dim {
 
     /// Puts `rider` in `seat` of `mount` (`None`: the first free one), asking mods first.
     pub fn mount(&mut self, c: &'static Content, rider: u64, mount: u64, seat: Option<u8>) -> bool {
+        self.mount_in(c, rider, mount, seat, None)
+    }
+
+    pub(super) fn mount_helm(&mut self, c: &'static Content, rider: u64, mount: u64, at: IVec3, face: u8) -> bool {
+        self.mount_in(c, rider, mount, Some(0), Some((at, face)))
+    }
+
+    fn mount_in(&mut self, c: &'static Content, rider: u64, mount: u64, seat: Option<u8>, helm: Option<(IVec3, u8)>) -> bool {
         let (Some(r), Some(m)) = (self.entities.get(rider), self.entities.get(mount)) else { return false };
         if r.removed || m.removed || !r.alive() || self.carries(rider, mount) {
             return false;
         }
-        let seats = &c.game.entities[m.kind as usize].seats;
+        let seats = if helm.is_some() { c.game.helm_seats() } else { self.seats_for(c, m) };
         let free = |s: u8| (s as usize) < seats.len() && self.rider_in(mount, s).is_none_or(|o| o == rider);
         let Some(seat) = (match seat {
             Some(s) => free(s).then_some(s),
@@ -56,8 +69,14 @@ impl Dim {
             return false;
         };
         let mut q = abi::Query { entity: rider, other: mount, amount: seat as f64, ..abi::Query::DEFAULT };
-        if !self.ask(c, abi::action::MOUNT, &mut q) {
+        if !self.ask(0, c, abi::action::MOUNT, &mut q) {
             return false;
+        }
+        if let Some((at, face)) = helm {
+            if !self.enable_dynamics(mount, Some(face)) {
+                return false;
+            }
+            self.set_helm(c, mount, at);
         }
         if self.entities.get(rider).and_then(|e| e.vehicle).is_some() {
             self.leave(c, rider);
@@ -73,18 +92,25 @@ impl Dim {
             }
         }
         self.seat_riders(c);
-        self.emit_engine(c, abi::action::MOUNT, &abi::Mounting { rider, mount, seat: seat as u32, pad: 0 });
+        if player && seat == 0 && self.active_helm(c, mount).is_some() {
+            self.refresh_helm(c, mount, rider);
+        }
+        self.emit_engine(0, c, abi::action::MOUNT, &abi::Mounting { rider, mount, seat: seat as u32, pad: 0 });
         true
     }
 
     /// Takes `rider` off what it rides, asking mods first, and puts it where its seat says.
-    pub fn dismount(&mut self, c: &'static Content, rider: u64) -> bool {
+    pub fn dismount(&mut self, space_id: u64, c: &'static Content, rider: u64) -> bool {
+        self.dismount_at(space_id, c, rider, None)
+    }
+
+    pub(super) fn dismount_at(&mut self, space_id: u64, c: &'static Content, rider: u64, at: Option<DVec3>) -> bool {
         let Some((mount, seat)) = self.entities.get(rider).and_then(|e| e.vehicle) else { return false };
         let mut q = abi::Query { entity: rider, other: mount, amount: seat as f64, ..abi::Query::DEFAULT };
-        if !self.ask(c, abi::action::DISMOUNT, &mut q) {
+        if !self.ask(space_id, c, abi::action::DISMOUNT, &mut q) {
             return false;
         }
-        let at = self.exit_pos(c, rider, mount, seat);
+        let at = at.unwrap_or_else(|| self.exit_pos(space_id, c, rider, mount, seat));
         self.leave(c, rider);
         if let Some(e) = self.entities.get_mut(rider) {
             e.pos = at;
@@ -94,7 +120,7 @@ impl Dim {
             self.events
                 .push(crate::server::DimEvent::Teleport { from: self.id, id: rider, dim: self.id, pos: at });
         }
-        self.emit_engine(c, abi::action::DISMOUNT, &abi::Mounting { rider, mount, seat: seat as u32, pad: 0 });
+        self.emit_engine(space_id, c, abi::action::DISMOUNT, &abi::Mounting { rider, mount, seat: seat as u32, pad: 0 });
         true
     }
 
@@ -120,9 +146,16 @@ impl Dim {
     /// Off its seat, without asking or moving it (its mount went, it died, it got on another,
     /// it was teleported away).
     pub fn leave(&mut self, c: &Content, rider: u64) {
-        let Some((mount, _)) = self.entities.get_mut(rider).and_then(|e| e.vehicle.take()) else { return };
+        let Some((mount, _)) = self.entities.get_mut(rider).and_then(|e| {
+            e.helm_pilot = None;
+            e.vehicle.take()
+        }) else {
+            return;
+        };
         // What it is saved and moved between regions with says so too, at once.
-        self.entities.comps.remove(&(rider, c.game.fields.riding));
+        self.entities
+            .comps
+            .insert((rider, c.game.fields.riding), Box::default());
         if let Some(m) = self
             .entities
             .get_mut(mount)
@@ -133,14 +166,14 @@ impl Dim {
     }
 
     /// Where `rider` gets off seat `seat` of `mount`.
-    fn exit_pos(&mut self, c: &'static Content, rider: u64, mount: u64, seat: u8) -> DVec3 {
+    fn exit_pos(&mut self, space_id: u64, c: &'static Content, rider: u64, mount: u64, seat: u8) -> DVec3 {
         let sat = self
             .seat_pos(c, mount, seat)
             .or_else(|| self.entities.get(rider).map(|e| e.pos))
             .unwrap_or(DVec3::ZERO);
         let Some(m) = self.entities.get(mount) else { return sat };
         let k = &c.game.entities[m.kind as usize];
-        let Some(s) = k.seats.get(seat as usize).copied() else { return sat };
+        let Some(s) = self.seats_for(c, m).get(seat as usize).copied() else { return sat };
         let (mpos, myaw) = (m.pos, m.yaw);
         let nearest = |d: &Dim, reach: f64| {
             d.free_spot(c, rider, mpos, k.width as f64 / 2.0, reach)
@@ -148,12 +181,20 @@ impl Dim {
         };
         match s.exit {
             abi::seat_exit::OFFSET => mpos + crate::world::turned(s.exit_at, myaw),
-            abi::seat_exit::STAY => sat,
+            abi::seat_exit::STAY => {
+                let Some(built) = self.bodies.get(&mount) else { return sat };
+                let Some(r) = self.entities.get(rider) else { return sat };
+                let place = m.body_place();
+                let dims = m.dims(c);
+                let body = crate::physics::Body::of(mount, k, place, (dims.half_width, dims.height), place, Some(&**built));
+                body.and_then(|b| b.deck_height(c, sat, r.dims(c).half_width, s.exit_at.y))
+                    .map_or(sat, |y| sat.with_y(y))
+            }
             abi::seat_exit::CALL => {
                 let first = nearest(self, 2.0);
                 let Some((owner, cb)) = k.dismount else { return first };
                 let out = first.to_array().into();
-                let a = self.call(owner, cb, |w| abi::DismountArgs { world: w, mount, rider, seat: seat as u32, out });
+                let a = self.call(space_id, owner, cb, |w| abi::DismountArgs { world: w, mount, rider, seat: seat as u32, out });
                 let p = crate::world::dvec(a.out);
                 if p.is_finite() { p } else { first }
             }
@@ -281,7 +322,7 @@ impl Dim {
     }
 
     /// The client of the player steering `mount` moved it.
-    pub fn mount_moved(&mut self, c: &'static Content, player: u64, pos: DVec3, yaw: f32, vel: DVec3, on_ground: bool) {
+    pub fn mount_moved(&mut self, space_id: u64, c: &'static Content, player: u64, pos: DVec3, yaw: f32, vel: DVec3, on_ground: bool) {
         let Some(mount) = self
             .entities
             .get(player)
@@ -302,10 +343,10 @@ impl Dim {
         (m.pos, m.yaw, m.vel, m.on_ground) = (pos, yaw, vel, on_ground);
         let fell = super::entity::track_fall(&mut m.fall, dy, on_ground, m.in_liquid);
         if let Some(f) = fell {
-            if let Some(amount) = self.fall_damage(c, mount, f) {
-                self.damage(c, mount, &abi::Damage::new(amount, abi::damage_cause::FALL));
+            if let Some(amount) = self.fall_damage(space_id, c, mount, f) {
+                self.damage(space_id, c, mount, &abi::Damage::new(amount, abi::damage_cause::FALL));
             }
-            self.riders_fall(c, mount, f);
+            self.riders_fall(space_id, c, mount, f);
         }
         self.seat_riders(c);
     }
@@ -313,7 +354,7 @@ impl Dim {
     /// A mount's fall hurts its riders too, when its kind says so (`RIDERS_FALL`).
     /// Riders of a mount that takes its riders' falls fall as far as it did, each hurt by its own
     /// attributes.
-    pub fn riders_fall(&mut self, c: &'static Content, mount: u64, fell: f32) {
+    pub fn riders_fall(&mut self, space_id: u64, c: &'static Content, mount: u64, fell: f32) {
         let Some(m) = self.entities.get(mount) else { return };
         if !c.game.entities[m.kind as usize].is(crate::tag_bits::entity::RIDERS_FALL) {
             return;
@@ -326,8 +367,8 @@ impl Dim {
             .map(|e| e.id)
             .collect();
         for r in riders {
-            if let Some(amount) = self.fall_damage(c, r, fell) {
-                self.damage(c, r, &abi::Damage::new(amount, abi::damage_cause::FALL));
+            if let Some(amount) = self.fall_damage(space_id, c, r, fell) {
+                self.damage(space_id, c, r, &abi::Damage::new(amount, abi::damage_cause::FALL));
             }
         }
     }

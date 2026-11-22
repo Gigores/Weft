@@ -349,6 +349,7 @@ impl World {
 
     /// Whether that point is under a liquid's surface, which a block that isn't full lies below
     /// its top: for what the block alone can't tell, like a head above shallow water.
+    /// World-space queries account for dry hulls; inside `on_body` this reads the body's own liquid cells.
     pub fn in_liquid(&self, pos: impl Into<Vec3>) -> bool {
         let pos = pos.into();
         unsafe { (host().in_liquid)(self.raw(), &pos) != 0 }
@@ -485,9 +486,14 @@ impl World {
         unsafe { (host().set_weather)(self.raw(), weather.into().raw(), ticks) }
     }
 
-    /// The weather's id now (`weathers::RAIN.id()`).
+    /// The weather's id at the dimension's origin (`weathers::RAIN.id()`).
     pub fn weather(&self) -> u32 {
         unsafe { (host().weather_now)(self.raw()) }
+    }
+
+    /// The weather's id at this block in the current space.
+    pub fn weather_at(&self, pos: impl Into<BlockPos>) -> u32 {
+        unsafe { (host().weather_at)(self.raw(), pos.into()) }
     }
 
     /// Effect `effect` on an entity at `level` (1 and up) for `ticks` (0 ends it,
@@ -722,7 +728,7 @@ pub struct PlayerInventoryBuilder<'a> {
 }
 
 impl PlayerInventoryBuilder<'_> {
-    /// A group of the player's inventory: its size from `slots` (`Slots::row(9).hotbar()`).
+    /// A named player storage group. Its menu slots inherit the group's filter, capacity, sorting and quick-transfer rules.
     pub fn group(mut self, name: &str, slots: Slots) -> Self {
         self.groups.push(slots.def(name, abi::slot_owner::PLAYER));
         self
@@ -1028,7 +1034,7 @@ impl EntityBuilder<'_> {
     pub fn solid(self) -> Self {
         self.tag(abi::comp::entity::SOLID).unpushable()
     }
-    /// Takes no damage (no hurt flash, health stays); `/clear` and the void still remove it.
+    /// Takes no damage (no hurt flash, health stays); `/clear entity` and the void still remove it.
     pub fn invulnerable(self) -> Self {
         self.modifier(crate::Modifier::set(&crate::attribute::INVULNERABLE, 1.0))
     }
@@ -1387,35 +1393,12 @@ pub const EQUIPMENT_GROUP: &str = "core:equipment";
 ///     .group("output", Slots::single().output().large());
 /// ```
 #[derive(Clone)]
-pub struct Slots {
-    owner: Option<u32>,
-    start: u32,
-    cols: u32,
-    rows: u32,
-    flags: u32,
-    accepts: String,
-    limit: u32,
-    size: f32,
-    background: String,
-    tooltip: String,
-    priority: i32,
-}
+pub struct Slots(abi::SlotGroupDef);
 
 impl Slots {
+    /// A sortable rectangular storage group.
     pub fn grid(cols: u32, rows: u32) -> Slots {
-        Slots {
-            owner: None,
-            start: u32::MAX,
-            cols,
-            rows,
-            flags: 0,
-            accepts: String::new(),
-            limit: 0,
-            size: 0.0,
-            background: String::new(),
-            tooltip: String::new(),
-            priority: 0,
-        }
+        Slots(abi::SlotGroupDef { owner: u32::MAX, start: u32::MAX, cols, rows, flags: slot_flags::ALLOW_SORTING, ..Default::default() })
     }
     pub fn row(n: u32) -> Slots {
         Slots::grid(n, 1)
@@ -1424,7 +1407,7 @@ impl Slots {
         Slots::grid(1, n)
     }
     pub fn single() -> Slots {
-        Slots::grid(1, 1)
+        Slots::grid(1, 1).allow_sorting(false)
     }
     /// Rows of nine, like a chest.
     pub fn chest(rows: u32) -> Slots {
@@ -1433,70 +1416,75 @@ impl Slots {
     /// The menu's own slots, given back to the player when it closes (crafting grids). The
     /// default for `MenuBuilder::group`.
     pub fn menu(mut self) -> Self {
-        self.owner = Some(abi::slot_owner::MENU);
+        self.0.owner = abi::slot_owner::MENU;
         self
     }
     /// The inventory of what the menu opened on: a block entity's (`.entity(|e| e.inventory(n))`), an
     /// entity's, a storage's.
     pub fn holder(mut self) -> Self {
-        self.owner = Some(abi::slot_owner::HOLDER);
+        self.0.owner = abi::slot_owner::HOLDER;
         self
     }
     /// The player's hotbar, in `Registry::player_slots`.
     pub fn hotbar(mut self) -> Self {
-        self.flags |= slot_flags::HOTBAR;
+        self.0.flags |= slot_flags::HOTBAR;
         self
     }
     /// From this index of the owner's inventory instead of right after the group before.
     pub fn at(mut self, start: u32) -> Self {
-        self.start = start;
+        self.0.start = start;
+        self
+    }
+    /// Allows or disables sorting within this group. Storage grids, rows and columns allow it by default.
+    pub fn allow_sorting(mut self, allow: bool) -> Self {
+        self.0.flags = if allow { self.0.flags | slot_flags::ALLOW_SORTING } else { self.0.flags & !slot_flags::ALLOW_SORTING };
         self
     }
     /// The player's trash (`slot_flags::TRASH`), one slot: it keeps the last thing put in until the
     /// next takes its place or the player leaves, and the trash key (Delete) over any slot sends
     /// that stack there.
     pub fn trash(mut self) -> Self {
-        self.flags |= abi::slot_flags::TRASH;
-        self
+        self.0.flags |= slot_flags::TRASH;
+        self.allow_sorting(false)
     }
     /// Items only go in (a machine uses them up).
     pub fn input(mut self) -> Self {
-        self.flags |= abi::slot_flags::INPUT;
-        self
+        self.0.flags |= slot_flags::INPUT;
+        self.allow_sorting(false)
     }
     /// Holds `capacity` millibuckets of one liquid: its item (`Item::named` the liquid's
     /// name), poured in and taken out with buckets by hand, read and set like any slot.
     pub fn liquid(mut self, capacity: u32) -> Self {
-        self.flags |= abi::slot_flags::LIQUID;
-        self.limit = capacity;
-        self
+        self.0.flags |= slot_flags::LIQUID;
+        self.0.limit = capacity;
+        self.allow_sorting(false)
     }
     /// A crafting grid of the menu's first `.recipes(..)` kind: the engine shows what it makes in
     /// the menu's `output()` group and uses it up when that is taken, as the recipe says
     /// (`RecipeBuilder::keep`, `wear`, `leaves`); a shift-click crafts all that fits at once.
     pub fn crafting(mut self) -> Self {
-        self.flags |= abi::slot_flags::GRID;
-        self
+        self.0.flags |= slot_flags::GRID;
+        self.allow_sorting(false)
     }
     /// Items only come out (results).
     pub fn output(mut self) -> Self {
-        self.flags |= abi::slot_flags::OUTPUT;
-        self
+        self.0.flags |= slot_flags::OUTPUT;
+        self.allow_sorting(false)
     }
     /// Only these items, a reference like everywhere else: `#fuel` (anything with the component),
     /// `#fuel #mymod:fire_starter` (either), `#fuel !base:lava_bucket` (but that one), names.
     pub fn accepts(mut self, items: &str) -> Self {
-        self.accepts = items.to_string();
+        self.0.accepts = items.to_string();
         self
     }
     /// At most this many items per slot.
     pub fn limit(mut self, n: u32) -> Self {
-        self.limit = n;
+        self.0.limit = n;
         self
     }
     /// Side of a slot in GUI pixels (18 by default).
     pub fn size(mut self, px: f32) -> Self {
-        self.size = px;
+        self.0.size = px;
         self
     }
     /// The big slot vanilla uses for results.
@@ -1505,36 +1493,30 @@ impl Slots {
     }
     /// A texture from `gui/` shown while a slot is empty (the armor silhouettes).
     pub fn background(mut self, texture: &str) -> Self {
-        self.background = crate::asset("gui", texture);
+        self.0.background = crate::asset("gui", texture);
         self
     }
     /// A translation shown over an empty slot.
     pub fn tooltip(mut self, key: &str) -> Self {
-        self.tooltip = key.to_string();
+        self.0.tooltip = key.to_string();
         self
     }
-    /// Shift-clicks from the player's inventory fill groups with a higher priority first.
-    pub fn priority(mut self, p: i32) -> Self {
-        self.priority = p;
+    /// Fills this group earlier for matching items on a quick transfer, e.g. `.priority(1, "#food")`.
+    /// The highest matching priority wins, zero by default. An empty reference matches every item.
+    pub fn priority(mut self, priority: i32, items: &str) -> Self {
+        self.0
+            .priorities
+            .push(abi::SlotPriority { priority, items: items.into() });
         self
     }
 
     /// As a menu or the player's inventory has it, owned by `default` unless it says.
-    fn def(self, name: &str, default: u32) -> abi::SlotGroupDef {
-        abi::SlotGroupDef {
-            name: name.to_string(),
-            owner: self.owner.unwrap_or(default),
-            start: self.start,
-            cols: self.cols,
-            rows: self.rows,
-            flags: self.flags,
-            accepts: self.accepts,
-            limit: self.limit,
-            size: self.size,
-            background: self.background,
-            tooltip: self.tooltip,
-            priority: self.priority,
+    fn def(mut self, name: &str, default: u32) -> abi::SlotGroupDef {
+        self.0.name = name.into();
+        if self.0.owner == u32::MAX {
+            self.0.owner = default;
         }
+        self.0
     }
 }
 
@@ -1794,7 +1776,7 @@ impl Registry {
     /// Adds to place `area` of a screen or HUD element without replacing it: a main menu button is
     /// `r.screen_part(&screens::TITLE, "buttons", 0, |ui| ..)`. Lower `order` comes first. The
     /// engine's places: `TITLE` `buttons` and `side`, `PAUSE` `buttons`, `SETTINGS` `buttons`, and
-    /// beside menus: any menu's own `side` (`r.screen_part(&base::CHEST, "side", ..)`, another
+    /// beside menus: any menu's own `side` (`r.screen_part(&base_api::menus::CHEST, "side", ..)`, another
     /// mod's menu too) and `MENUS` `side` beside every one (a sort button). Named
     /// `<mod>:<screen>/<area>` (`base:pause/buttons`, the next `/2`..), other mods edit it by that.
     pub fn screen_part<K: crate::kind::Kind>(
@@ -2042,6 +2024,13 @@ impl RecipeKindBuilder<'_> {
 pub struct EquipmentSlotBuilder<'a> {
     reg: &'a mut Registry,
     e: crate::entry::Entry,
+}
+
+impl EquipmentSlotBuilder<'_> {
+    /// Sets quick-transfer preferences like `Slots::priority`. Explicit rules replace the worn slot's default priority of one.
+    pub fn priority(self, priority: i32, items: &str) -> Self {
+        self.push(&comps::equipment_slot::PRIORITIES, abi::SlotPriority { priority, items: items.into() })
+    }
 }
 
 /// A tint kind being registered (`Registry::tint_kind`).
@@ -2336,9 +2325,8 @@ impl Projectile {
 
 /// What hits land on, part by part (`EntityBuilder::hitboxes`): boxes in pixels (1/16 block, its
 /// feet at 0, -Z its front, -X its right) at the kind's size; one made bigger is hit bigger. Rays, arrows and blows tell the part they hit (`RayHit::part`, `Damage::part`, the
-/// `part` a chain step reads in its query). They go with the body, a head with the look, arms
-/// and legs swing as it walks: run and an arrow may pass between them. Not the model's boxes:
-/// how a mob looks never changes where it can be hit.
+/// `part` a chain step reads in its query). A box bound to a bone follows the registered model's
+/// base pose on the server and client. Its dimensions are authored independently of the model's mesh.
 #[derive(Clone)]
 pub struct Hitboxes(abi::Hitboxes);
 
@@ -2349,12 +2337,20 @@ impl Hitboxes {
     fn add(mut self, name: &str, min: [f32; 3], max: [f32; 3], pivot: [f32; 3], follows: u32, swing: f32, phase: f32) -> Self {
         self.0
             .parts
-            .push(abi::HitboxPart { name: name.into(), min, max, pivot, follows, swing, phase });
+            .push(abi::HitboxPart { name: name.into(), bone: String::new(), min, max, pivot, follows, swing, phase });
         self
     }
     /// A part going with the body.
     pub fn part(self, name: &str, min: [f32; 3], max: [f32; 3]) -> Self {
         self.add(name, min, max, [0.0; 3], abi::hitbox_follows::BODY, 0.0, 0.0)
+    }
+    fn on_bone(mut self, bone: &str) -> Self {
+        self.0.parts.last_mut().unwrap().bone = bone.into();
+        self
+    }
+    /// A box in rest-pose model pixels that follows a bone of the registered entity model.
+    pub fn bone(self, name: &str, bone: &str, min: [f32; 3], max: [f32; 3]) -> Self {
+        self.part(name, min, max).on_bone(bone)
     }
     /// A head: it turns with the look about `pivot`, its neck.
     pub fn head(self, name: &str, min: [f32; 3], max: [f32; 3], pivot: [f32; 3]) -> Self {
@@ -2370,22 +2366,32 @@ impl Hitboxes {
         let pi = std::f32::consts::PI;
         Hitboxes::new()
             .head("head", [-4.0, 24.0, -4.0], [4.0, 32.0, 4.0], [0.0, 24.0, 0.0])
-            .part("body", [-4.0, 12.0, -2.0], [4.0, 24.0, 2.0])
+            .on_bone("head")
+            .bone("body", "body", [-4.0, 12.0, -2.0], [4.0, 24.0, 2.0])
             .limb("right_arm", [-8.0, 12.0, -2.0], [-4.0, 24.0, 2.0], [-5.0, 22.0, 0.0], 0.8, pi)
+            .on_bone("rightArm")
             .limb("left_arm", [4.0, 12.0, -2.0], [8.0, 24.0, 2.0], [5.0, 22.0, 0.0], 0.8, 0.0)
+            .on_bone("leftArm")
             .limb("right_leg", [-4.0, 0.0, -2.0], [0.0, 12.0, 2.0], [-2.0, 12.0, 0.0], 0.8, 0.0)
+            .on_bone("rightLeg")
             .limb("left_leg", [0.0, 0.0, -2.0], [4.0, 12.0, 2.0], [2.0, 12.0, 0.0], 0.8, pi)
+            .on_bone("leftLeg")
     }
     /// A body on four legs with a head ahead, 25 pixels tall: a cow's.
     pub fn quadruped() -> Hitboxes {
         let pi = std::f32::consts::PI;
         Hitboxes::new()
             .head("head", [-5.0, 16.0, -15.0], [5.0, 25.0, -8.0], [0.0, 20.0, -8.0])
-            .part("body", [-6.0, 11.0, -8.0], [6.0, 22.0, 10.0])
+            .on_bone("head")
+            .bone("body", "body", [-6.0, 11.0, -8.0], [6.0, 22.0, 10.0])
             .limb("front_right_leg", [-6.0, 0.0, -7.0], [-2.0, 12.0, -3.0], [-4.0, 12.0, -5.0], 0.8, pi)
+            .on_bone("leg3")
             .limb("front_left_leg", [2.0, 0.0, -7.0], [6.0, 12.0, -3.0], [4.0, 12.0, -5.0], 0.8, 0.0)
+            .on_bone("leg2")
             .limb("back_right_leg", [-6.0, 0.0, 5.0], [-2.0, 12.0, 9.0], [-4.0, 12.0, 7.0], 0.8, 0.0)
+            .on_bone("leg0")
             .limb("back_left_leg", [2.0, 0.0, 5.0], [6.0, 12.0, 9.0], [4.0, 12.0, 7.0], 0.8, pi)
+            .on_bone("leg1")
     }
     /// Its arms held out ahead, not swinging, as a zombie's.
     pub fn reaching(mut self) -> Self {
@@ -2448,7 +2454,7 @@ impl Ray {
         self.flags |= abi::ray::SOLID;
         self
     }
-    /// It goes through `id` (the one looking, the shooter).
+    /// It goes through entity `id`, including its blocks when raycasting from the world.
     pub fn skip(mut self, id: u64) -> Ray {
         self.skip = id;
         self

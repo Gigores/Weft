@@ -103,7 +103,7 @@ impl<'a> Snapshot<'a> {
             .filter(|c| c.height != i32::MIN)
             .map_or(0, |c| self.read(IVec3::new(x, c.height, z)))
     }
-    fn cube(&self, pos: IVec3) -> Arc<Vec<u32>> {
+    pub(crate) fn cube(&self, pos: IVec3) -> Arc<Vec<u32>> {
         let key = (self.seed, self.before, self.terrain_only, pos);
         let cache = &self.def().snapshots.0;
         if let Some(v) = cache.lock().unwrap().get(&key).cloned() {
@@ -230,6 +230,11 @@ impl Cells for Point {
     }
     fn get(&self, p: IVec3) -> Option<u32> {
         (p == self.pos).then_some(self.state)
+    }
+    fn add_part(&mut self, p: IVec3, part: crate::world::placement::Part) {
+        if self.state == crate::content::AIR {
+            self.set(p, part.state);
+        }
     }
     fn set(&mut self, p: IVec3, state: u32) {
         if p == self.pos {

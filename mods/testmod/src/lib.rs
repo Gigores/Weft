@@ -56,7 +56,7 @@ static GENERATOR_MENU: Menu = Menu::named("generator");
 static FURNACE_MENU: Menu = Menu::named("electric_furnace");
 static BATTERY_MENU: Menu = Menu::named("battery");
 static TANK_MENU: Menu = Menu::named("tank");
-use base_api::SMELTING as SMELTING_RECIPES;
+use base_api::recipes::SMELTING as SMELTING_RECIPES;
 static VOID: Dimension = Dimension::named("void");
 pub static MARS: Dimension = Dimension::named("mars");
 static MARS_SUN: SkyObject = SkyObject::named("mars_sun");
@@ -75,6 +75,7 @@ static TIN_INGOT: Item = Item::named("tin_ingot");
 static ANOTHER_STICK: Item = Item::named("another_stick");
 static POUCH: Item = Item::named("pouch");
 static POUCH_MENU: Menu = Menu::named("pouch");
+static SHELVES: Menu = Menu::named("shelves");
 static NOTES: TextPlace = TextPlace::named("notes");
 
 value! {
@@ -91,7 +92,7 @@ value! {
 static BURNER: Component<Burner> = Component::named("testmod:burner");
 static WORK: Component<Work> = Component::named("testmod:work");
 /// The common fuel value; the base game sets it, this mod only reads it.
-use base_api::FUEL;
+use base_api::components::FUEL;
 static FOOD_HEAL: Component<f32> = Component::named("testmod:food_heal");
 
 const PER_TICK: i64 = 40;
@@ -170,11 +171,9 @@ fn init(r: &mut Registry) {
         );
     // One block in 2x2x2 cells, its model and boxes spanning them from its own.
     static BIG: Block = Block::named("big");
-    let others = [[1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
     r.block(&BIG)
         .texture("base:mossy_cobblestone")
-        .model_box([0.0; 3], [32.0; 3])
-        .cells(&others);
+        .model_box([0.0; 3], [32.0; 3]);
     // Edited by testkit (`max_stack` 8 there): an edit wins whichever mod loads first.
     static EDITED: Item = Item::named("edited");
     r.item(&EDITED).max_stack(16).attack_damage(3.0);
@@ -276,6 +275,7 @@ fn init(r: &mut Registry) {
         .ends("machine_top")
         .hardness(3.0)
         .mined_by("pickaxe", 0)
+        .tag("conductor")
         .entity(|e| {
             e.attach(&WORK)
                 .attach_with(&ENERGY, Energy { stored: 0, capacity: 40_000, max_in: 400, max_out: 0 })
@@ -313,7 +313,7 @@ fn init(r: &mut Registry) {
         .screen(|ui| machine_screen(ui, |_| {}));
 
     // The base game's kinds, by name: no code dependency on it.
-    use base_api::CRAFTING;
+    use base_api::recipes::CRAFTING;
     recipe_showcase(r);
     r.shaped(&CRAFTING, "generator", 1, &["iii", "ifi", "iii"], &[('i', "#ingots/iron"), ('f', "#furnaces")]);
     r.shaped(&CRAFTING, "electric_furnace", 1, &["iii", "iFi", "ici"], &[('i', "#ingots/iron"), ('F', "#furnaces"), ('c', "#cables")]);
@@ -384,6 +384,18 @@ fn init(r: &mut Registry) {
                 ui.player_inventory(true);
             });
         });
+    r.menu(&SHELVES)
+        .group("stock", Slots::row(3).holder())
+        .group(
+            "fuel",
+            Slots::row(2)
+                .holder()
+                .accepts("#fuel")
+                .limit(4)
+                .priority(1, "#stick"),
+        )
+        .group("display", Slots::row(2).holder().allow_sorting(false))
+        .default_screen();
 
     // A tier between vanilla's iron (200) and diamond (300): mines everything iron does plus
     // reinforced stone, which iron cannot.
@@ -416,9 +428,9 @@ fn init(r: &mut Registry) {
     // Deep under Mars, where its glow crystals grow.
     r.biome(&CRYSTAL_CAVES).tag("cave").tag("dark");
     r.item(&APPLE)
-        .set(&base_api::FOOD, base_api::Food { hunger: 4, saturation: 2.4 })
+        .set(&base_api::components::FOOD, base_api::components::Food { hunger: 4, saturation: 2.4 })
         .use_ticks(32)
-        .on_use(base_api::eat)
+        .on_use(base_api::components::eat)
         .set(&FOOD_HEAL, 2.0)
         .tab(&BASE_TOOLS);
     // The hottest, driest part of Mars.
@@ -818,7 +830,7 @@ fn tick_furnaces(b: &mut SystemBatch<Work>) {
 }
 
 /// Another mod's blocks, found by name the first time they are used.
-static STONE: Block = Block::named("base:stone");
+use base_api::blocks::STONE;
 static GRASS: Block = Block::named("base:grass");
 static DIRT: Block = Block::named("base:dirt");
 static CHEST: Block = Block::named("base:chest");

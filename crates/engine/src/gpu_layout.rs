@@ -17,6 +17,10 @@ macro_rules! shared {
 }
 
 shared! {
+    rain_cover {
+        CELL = 4,
+        CUBES = 16,
+    }
     /// Block face record, four words. Word 0: x, y, z in the cube (4 bits each), direction,
     /// corner AO (2 bits per corner), tint kind. Word 1: texture, biome. Words 2 and 3: corner
     /// light, 16 bits per corner.
@@ -56,6 +60,9 @@ shared! {
         TINT_SHIFT = 24,
         /// Tint flag: no directional shading (plants).
         FLAT = 16,
+        LIQUID = 32,
+        /// A clipped model face has uniform light in word 6 and its six clipping planes in word 7.
+        CLIP = 64,
     }
     /// Distant terrain record (`client::lod`), four words in the faces' pages: x, z in the tile
     /// (10 bits each), direction, tint kind, sky light; texture and biome like a face's; y
@@ -63,6 +70,8 @@ shared! {
     /// each), corner AO in the top byte.
     lod_face {
         POS_MASK = 1023,
+        /// Extra space on each side of a fine tile for structures spanning its border.
+        DETAIL_PAD = 480,
         Z_SHIFT = 10,
         DIR_SHIFT = 20,
         TINT_SHIFT = 23,
@@ -83,6 +92,23 @@ shared! {
         /// edges go: red and green at the top of word 2, blue under word 3's AO.
         LIGHT_RG_SHIFT = 26,
         LIGHT_B_SHIFT = 20,
+        /// Word 3 flag: word 1 holds an RGB565 texture gain. For a partial box it
+        /// also selects alpha testing. For a plain terrain wall there is a pattern.
+        COVER_SHIFT = 23,
+        COVER_GAIN = 2,
+        /// Cutout box modes, stored in the unused tint kind when COVER is set.
+        FILLED_LEAVES = 1,
+        PLANT = 2,
+        /// On a covered wall, the pattern texture uses the AO byte and block light bits.
+        PATTERN_LOW_SHIFT = 24,
+        PATTERN_MID_MASK = 63,
+        PATTERN_HIGH_MASK = 3,
+    }
+    /// A forest atlas has one row per elevation and one column per azimuth.
+    forest {
+        VIEWS = 8,
+        ELEVATIONS = 5,
+        FRAME = 32,
     }
     /// Per-draw distant terrain metadata, sharing the origin's fourth word.
     lod_draw {
@@ -135,6 +161,7 @@ shared! {
         GLOW = 4,
         OVERLAY = 5,
         CLOUDS = 6,
+        LIGHTNING = 7,
     }
 }
 
@@ -151,10 +178,8 @@ pub mod terrain {
             /// The noise seeds, in `SEEDS` order.
             SEEDS = 13,
             FIELD_OFF = 18, FEAT_OFF = 19, RULE_OFF = 20, CAVE_OFF = 21,
-            /// Distant terrain's scattered things (`describe_lod`).
-            SCATTER_OFF = 22,
             /// The header's length.
-            LEN = 23,
+            LEN = 22,
         }
         /// Words per record of the description and per cube made. A rule is: biome, lowest and
         /// highest surface height, the word where its conditions start and how many there
@@ -172,8 +197,6 @@ pub mod terrain {
             /// A condition of a rule: the field, from, to.
             COND = 3,
             CAVE = 5,
-            /// Per scatter and biome: threshold (two words), canopy radius, top, block.
-            SCATTER_BIOME = 5,
             OUT = 2560,
         }
         /// Sizes of the shader's own arrays: the values of the fields at one column, and what an
@@ -189,16 +212,33 @@ pub mod terrain {
             HEIGHTS = 2176,
             COLUMN_BIOMES = 2432,
         }
-        /// Distant terrain tiles (`client::lod`): samples per side (a tile's 32 cells and one
-        /// around it), all of them, and words per sample: ground height and top block; biome
+        /// Distant terrain tiles (`client::lod`): 32 cells and their sampling border.
+        /// Words per sample: ground height and top block; biome
         /// and the block under the top; what stands over the ground up to a height (a sea: its
-        /// surface and block), none for 0.
+        /// surface and block), or the depth of a cave cut if there is no surface block; and
+        /// the floor and roof depths of an opening (bytes), then the surface soil depth.
         lod {
-            SIDE = 34,
-            SAMPLES = 34 * 34,
+            BORDER = 2,
+            SIDE = 32 + 2 * 2,
+            SAMPLES = 36 * 36,
+            WORDS = 4,
+            CAVE_REACH = 48,
+            CAVE_DEPTH_MASK = 127,
+            CAVE_OPEN_FLOOR = 128,
+            CAVE_ROOF_SHIFT = 8,
+            SOIL_DEPTH_SHIFT = 16,
+        }
+        /// GPU-only distant terrain: one shared corner grid, and two indirect draws
+        /// followed by compact ground/wall and water records.
+        far_lod {
+            CELLS = 32,
+            SIDE = 35,
+            SAMPLES = 35 * 35,
+            HEADER = 8,
+            SOLID_MAX = 32 * 32 * 3 + 64,
+            WATER_MAX = 32 * 32,
             WORDS = 3,
-            SCATTER_STEP = 32,
-            COVER_SCALE = 65536,
+            SCRATCH = HEADER + (SOLID_MAX + WATER_MAX) * WORDS,
         }
         /// Expression step kinds.
         expr {
@@ -350,8 +390,8 @@ pub fn lod_record(dir: u32, pos: [i32; 3], size: [i32; 3], tex: u32, tint: u32, 
     let [r, g, b] = light.map(|c| c.min(15) as u32 / 2);
     let across = |v: i32| (v.max(1) as u32 - 1).min(wide);
     [
-        pos[0] as u32
-            | (pos[2] as u32) << l::Z_SHIFT
+        (pos[0] as u32 & lod_face::POS_MASK)
+            | (pos[2] as u32 & lod_face::POS_MASK) << l::Z_SHIFT
             | dir << l::DIR_SHIFT
             | tint << l::TINT_SHIFT
             | (sky.min(15) as u32 / 2) << l::SKY_SHIFT,
@@ -365,6 +405,39 @@ pub fn lod_record(dir: u32, pos: [i32; 3], size: [i32; 3], tex: u32, tint: u32, 
 pub fn lod_draw_data(level: u32, fade: f32) -> i32 {
     let fade = (((fade.clamp(-1.0, 2.0) + 1.0) / 3.0) * lod_draw::FADE_MASK as f32).round() as u32;
     ((level.saturating_sub(lod_draw::PACKED_LEVEL) << lod_draw::SCALE_SHIFT) | fade) as i32
+}
+
+pub fn lod_set_cover_pattern(r: &mut [u32; 4], tex: u16) {
+    use lod_face as l;
+    let tex = u32::from(tex);
+    r[2] = (r[2] & !(l::PATTERN_MID_MASK << l::LIGHT_RG_SHIFT)) | (((tex >> 8) & l::PATTERN_MID_MASK) << l::LIGHT_RG_SHIFT);
+    r[3] = (r[3] & !((0xff << l::PATTERN_LOW_SHIFT) | (7 << l::LIGHT_B_SHIFT)))
+        | ((tex & 255) << l::PATTERN_LOW_SHIFT)
+        | ((tex >> 14) << l::LIGHT_B_SHIFT);
+}
+
+pub fn lod_cover_pattern(r: &[u32; 4]) -> Option<u32> {
+    use lod_face as l;
+    (r[3] & (1 << l::COVER_SHIFT) != 0 && r[0] & (1 << l::PARTIAL_SHIFT) == 0 && face_dir_lod(r[0]) != 3).then(|| {
+        (r[3] >> l::PATTERN_LOW_SHIFT)
+            | (((r[2] >> l::LIGHT_RG_SHIFT) & l::PATTERN_MID_MASK) << 8)
+            | (((r[3] >> l::LIGHT_B_SHIFT) & l::PATTERN_HIGH_MASK) << 14)
+    })
+}
+
+pub fn lod_color_gain(gain: [f32; 3]) -> u16 {
+    let pack = |x: f32, max: f32| ((x / lod_face::COVER_GAIN as f32).clamp(0.0, 1.0) * max).round() as u16;
+    pack(gain[0], 31.0) << 11 | pack(gain[1], 63.0) << 5 | pack(gain[2], 31.0)
+}
+
+pub fn lod_set_gain(r: &mut [u32; 4], gain: u16) {
+    r[0] &= !(tint::MASK << lod_face::TINT_SHIFT);
+    r[1] = (r[1] & face::TEX_MASK) | (u32::from(gain) << face::BIOME_SHIFT);
+    r[3] |= 1 << lod_face::COVER_SHIFT;
+}
+
+fn face_dir_lod(word: u32) -> u32 {
+    (word >> lod_face::DIR_SHIFT) & face::DIR_MASK
 }
 
 /// `r` (a one-block record) as the part of its block from `min` to `max` in 1/16; `extrude`: up
@@ -556,10 +629,24 @@ gpu_struct! {
         /// dimension without sky light). For shader packs' shadows; follows the day, whatever
         /// bodies mods put in the sky.
         pub sun: [f32; 4],
-        /// x solar sky-light multiplier; yz cloud fog start/end in blocks from the camera.
+        /// x solar sky-light multiplier, yz cloud fog start/end in blocks, w local rain mist.
         pub environment: [f32; 4],
         /// The cloud layer visible this frame, with zero opacity when absent.
         pub cloud: GpuSky,
+        /// Width and height of the current depth copy. Zero if using the texture cloud path.
+        pub atmosphere_extent: [u32; 4],
+        /// Start and end of the fade from voxel clouds to their projected footprint.
+        pub cloud_lod: [f32; 4],
+        /// Current and previous origins of the world-space cloud cache, in voxel columns.
+        pub cloud_cache: [i32; 4],
+        /// Cloud cache side, rain cache row width, and whether the depth pyramid is available.
+        pub atmosphere_cache: [u32; 4],
+        /// Camera position relative to the cover map's horizontal origin, then an enabled flag.
+        pub rain_cover: [f32; 4],
+        /// Lightning origins relative to the camera, with flash strength in w.
+        pub lightning_start: [[f32; 4]; 3],
+        /// Channel ends relative to the camera, with w set for ground strikes.
+        pub lightning_end: [[f32; 4]; 3],
     }
 }
 
@@ -577,8 +664,11 @@ gpu_struct! {
         /// x bindless picture (`u32::MAX` none), y `sky` kind, z shader slot, w 1 if additive.
         pub ids: [u32; 4],
         /// x half size across (a body's tangent). Overlay: x tiles across, y 1 for the screen's
-        /// lower part only, z where its frame starts in the picture.
+        /// lower part only, z where its frame starts in the picture. Weather clouds: tile size,
+        /// height, base relative to the eye, and forced weather class (clear/rain/thunder).
         pub extra: [f32; 4],
+        /// Direct solar light for procedural clouds, linear RGB with a precomputed path scale in w.
+        pub cloud_sun: [f32; 4],
     }
 }
 
@@ -648,6 +738,15 @@ gpu_struct! {
         pub worn: u32,
         // Whole 16 bytes: WGSL rounds the array stride up to them.
         pub pad1: u32,
+    }
+}
+
+gpu_struct! {
+    pub struct GpuDryVolume as "DryVolume" {
+        pub origin: [f32; 4],
+        pub inverse: [f32; 4],
+        pub lo: [f32; 4],
+        pub hi: [f32; 4],
     }
 }
 
@@ -797,6 +896,20 @@ gpu_struct! {
         pub pos: [i32; 4],
         /// x texture index, y light (as `GpuParticle`), z its piece's number among the levels.
         pub data: [u32; 4],
+        pub offset: [f32; 4],
+    }
+}
+
+gpu_struct! {
+    pub struct GpuWake as "WakeStrip" {
+        pub left_from: [f32; 4],
+        pub right_from: [f32; 4],
+        pub left_to: [f32; 4],
+        pub right_to: [f32; 4],
+        /// Wake distance and age at each end, or splash camera XZ (mod 256) and profile range.
+        pub course: [f32; 4],
+        /// x is one for a splash sheet, y is its normalized age as f32 bits.
+        pub style: [u32; 4],
     }
 }
 
@@ -807,6 +920,8 @@ gpu_struct! {
         pub place: [f32; 4],
         /// x its left in the picture, y its top, z how much of the picture high, w alpha.
         pub uv: [f32; 4],
+        /// Wind slope in x/z, unscrolled height phase at the strip's top, and rain flag.
+        pub wind: [f32; 4],
         /// x texture index, y light of the column (as `GpuParticle`), z a number of its own, w how
         /// much of the picture shows (0..255).
         pub data: [u32; 4],
@@ -913,12 +1028,17 @@ bindings! {
         // Block shader slot (`shaders/block/<name>.wgsl`) per texture id, 0 none.
         TEX_SHADER "tex_shader": "array<u32>",
         SCENE "scene": "Scene",
-        // A bit per cube column around the camera's, addressed modulo 2 * g.extra.w + 1:
-        // its cubes show its ground, distant terrain is not drawn there (`client::lod`).
+        // Ground and surface bitmaps, then the origin, stride and shown cubes per column.
+        // Columns are addressed modulo 2 * g.extra.w + 1 (`client::lod`).
         LOD_MASK "lod_mask": "array<u32>",
         // Which blocks around the camera cast shadows, for shader packs that call `solid_at`
         // (`client::world_render::Solid`); a single word otherwise.
         SOLID "solid": "array<u32>",
+        BODY_ROTATIONS "body_rotations": "array<vec4<f32>>",
+        DRY_VOLUMES "dry_volumes": "array<DryVolume>",
+        CLOUD_CELLS "cloud_cells": "array<u32>",
+        RAIN_DEPTH "rain_depth": "array<vec2<u32>>",
+        RAIN_COVER "rain_cover": "array<i32>",
     }
     // `item_boxes`: item models in their own space, kept between frames
     // (`EntityRenderer::item_model`); an item instance is a box in `boxes` whose rows place
@@ -968,9 +1088,19 @@ bindings! {
         COLUMNS "columns": "array<WeatherColumn>",
         SCENE "scene": "Scene",
     }
+    wake "wake.wgsl" {
+        STRIPS "strips": "array<WakeStrip>",
+        SCENE "scene": "Scene",
+    }
     sky "sky.wgsl" {
         OBJECTS "sky": "array<Sky>",
         SCENE "scene": "Scene",
+        WORLD_DEPTH "world_depth": "array<f32>",
+        CLOUD_CELLS "cloud_cells": "array<u32>",
+        CLOUD_CELLS_OUT "cloud_cells_out": "array<u32>",
+        RAIN_DEPTH "rain_depth": "array<vec2<u32>>",
+        RAIN_DEPTH_OUT "rain_depth_out": "array<vec2<u32>>",
+        RAIN_COVER "rain_cover": "array<i32>",
     }
     ui "ui.wgsl" {
         QUADS "quads": "array<Quad>",
@@ -1008,6 +1138,7 @@ fn structs() -> String {
         GpuBox::wgsl(),
         Instance::wgsl(),
         GpuCuboid::wgsl(),
+        GpuDryVolume::wgsl(),
         GpuCorner::wgsl(),
         GpuBone::wgsl(),
         GpuParticle::wgsl(),
@@ -1015,6 +1146,7 @@ fn structs() -> String {
         GpuParticleKind::wgsl(),
         GpuParticleRule::wgsl(),
         GpuWireQuad::wgsl(),
+        GpuWake::wgsl(),
         GpuWeather::wgsl(),
         GpuSky::wgsl(),
         Quad::wgsl(),
@@ -1032,13 +1164,26 @@ pub fn prelude(shader: &str, common: &str) -> String {
     s.push_str(&records());
     s.push_str(&structs());
     for (i, (name, ty)) in bindings(shader).iter().enumerate() {
-        s.push_str(&format!("@group(1) @binding({i}) var<storage, read> {name}: {ty};\n"));
+        let access = if matches!(*name, "atmosphere_out" | "cloud_cells_out" | "rain_depth_out" | "atmosphere_history_out") {
+            "read_write"
+        } else {
+            "read"
+        };
+        s.push_str(&format!("@group(1) @binding({i}) var<storage, {access}> {name}: {ty};\n"));
     }
     if shader == "world.wgsl" {
         s.push_str(SOLID_AT);
     }
     s.push_str(common);
     s.push('\n');
+    if matches!(shader, "sky.wgsl" | "world.wgsl") {
+        s.push_str(include_str!("../assets/shaders/atmosphere-cache.wgsl"));
+    } else {
+        s.push_str(
+            "fn cloud_cache_value(view: Scene, cell: vec2<i32>, band: i32) -> u32 { return 0xffffffffu; }
+             fn rain_exposed(view: Scene, rel: vec3<f32>) -> bool { return true; }\n",
+        );
+    }
     s
 }
 
@@ -1133,6 +1278,12 @@ mod tests {
         let q = quad_pos([-2.0, 0.5, 61.9375]);
         assert_eq!([q & quad::POS_MASK, (q >> quad::POS_BITS) & quad::POS_MASK, q >> (2 * quad::POS_BITS)], [0, 40, 1023]);
         let l = lod_record(4, [1023, -300, 5], [1024, 7, 1], 9, 3, 2, 9, [15, 4, 13]);
+        assert_eq!(lod_cover_pattern(&l), None);
+        let mut cover = l;
+        cover[3] |= 1 << lod_face::COVER_SHIFT;
+        lod_set_cover_pattern(&mut cover, 0xb5e1);
+        assert_eq!(lod_cover_pattern(&cover), Some(0xb5e1));
+        assert_eq!(cover[2] & ((1 << lod_face::LIGHT_RG_SHIFT) - 1), l[2] & ((1 << lod_face::LIGHT_RG_SHIFT) - 1));
         assert_eq!(l[0] & lod_face::POS_MASK, 1023);
         assert_eq!((l[0] >> lod_face::Z_SHIFT) & lod_face::POS_MASK, 5);
         assert_eq!((l[0] >> lod_face::DIR_SHIFT) & face::DIR_MASK, 4);
@@ -1167,7 +1318,7 @@ mod tests {
     fn terrain_prelude() {
         use terrain::*;
         assert_eq!(d::SEEDS as usize + SEEDS.len(), d::FIELD_OFF as usize);
-        assert!(d::SCATTER_OFF < d::LEN);
+        assert!(d::CAVE_OFF < d::LEN);
         let src = prelude() + include_str!("../assets/shaders/terrain.wgsl");
         let module = naga::front::wgsl::parse_str(&src).expect("terrain shader parses");
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())

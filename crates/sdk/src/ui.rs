@@ -53,7 +53,7 @@ impl ClientView {
     pub fn day_time(&self) -> u64 {
         unsafe { (host().client_day_time)(self.raw) }
     }
-    /// The weather's id now (`weathers::RAIN.id()`), as the server says.
+    /// The weather's id at the camera (`weathers::RAIN.id()`).
     pub fn weather(&self) -> u32 {
         unsafe { (host().client_weather)(self.raw) }
     }
@@ -269,6 +269,11 @@ impl S {
         self.flags |= abi::ui_flags::SCROLL;
         self
     }
+    /// Children scroll, with a narrow bar for a compact panel.
+    pub fn scroll_thin(mut self) -> S {
+        self.flags |= abi::ui_flags::SCROLL | abi::ui_flags::THIN_SCROLLBAR;
+        self
+    }
     /// Text on one line.
     pub fn no_wrap(mut self) -> S {
         self.flags |= abi::ui_flags::NO_WRAP;
@@ -285,7 +290,7 @@ impl S {
         self.scale = s;
         self
     }
-    /// A button that can't be pressed now.
+    /// A button or slider that can't be used now.
     pub fn disabled(mut self, yes: bool) -> S {
         if yes {
             self.flags |= abi::ui_flags::DISABLED;
@@ -641,12 +646,23 @@ impl Ui {
 
     /// A button whose label has arguments (`settings.gui_scale` with the scale).
     pub fn button_args(&mut self, key: &str, args: &[Arg], s: S, f: impl Fn(&ClientView) + Send + Sync + 'static) {
+        self.button_data(key, args, s, 0, move |c, _| f(c));
+    }
+
+    /// A button with an index or other small value passed to its callback.
+    pub fn button_data(&mut self, key: &str, args: &[Arg], s: S, data: u32, f: impl Fn(&ClientView, u32) + Send + Sync + 'static) {
+        self.button_content(s, data, f, |ui| ui.text_styled(S::column().class("button").no_wrap(), key, args));
+    }
+
+    /// A button with custom content and a small value passed to its callback.
+    pub fn button_content(&mut self, s: S, data: u32, f: impl Fn(&ClientView, u32) + Send + Sync + 'static, content: impl FnOnce(&mut Ui)) {
         let mut n = node(k::BUTTON, s);
-        n.on_click = callback(move |a: &mut abi::UiArgs| f(&ClientView { raw: a.client }));
+        n.data = data;
+        n.on_click = callback(move |a: &mut abi::UiArgs| f(&ClientView { raw: a.client }, a.data));
         if n.class.len == 0 {
             n.class = Str::new("button");
         }
-        self.with(n, |ui| ui.text_styled(S::column().class("button").no_wrap(), key, args));
+        self.with(n, content);
     }
 
     /// A one-line text field starting with `value` (at most `max` characters, 0 for any);
@@ -666,10 +682,83 @@ impl Ui {
         value: impl Fn(&ClientView) -> f32 + Send + Sync + 'static,
         on_change: impl Fn(&ClientView, f32) + Send + Sync + 'static,
     ) {
+        self.make_slider(s, value, on_change, false);
+    }
+
+    /// A slider whose bound value is committed once when the pointer is released.
+    pub fn slider_on_release(
+        &mut self,
+        s: S,
+        value: impl Fn(&ClientView) -> f32 + Send + Sync + 'static,
+        on_release: impl Fn(&ClientView, f32) + Send + Sync + 'static,
+    ) {
+        self.make_slider(s, value, on_release, true);
+    }
+
+    fn make_slider(
+        &mut self,
+        s: S,
+        value: impl Fn(&ClientView) -> f32 + Send + Sync + 'static,
+        on_change: impl Fn(&ClientView, f32) + Send + Sync + 'static,
+        release: bool,
+    ) {
+        self.slider_track(
+            s,
+            &[0.0],
+            SliderOptions { release, ..SliderOptions::default() },
+            move |c, values| values[0] = value(c),
+            move |c, _, v| on_change(c, v),
+        );
+    }
+
+    /// A range with two ordered handles. The edit reports the endpoint index and its new 0..1 value.
+    pub fn range_slider(
+        &mut self,
+        s: S,
+        value: impl Fn(&ClientView) -> [f32; 2] + Send + Sync + 'static,
+        on_change: impl Fn(&ClientView, usize, f32) + Send + Sync + 'static,
+    ) {
+        self.slider_track(
+            s,
+            &[0.0, 1.0],
+            SliderOptions { ordered: true, fill: Some([0, 1]), ..SliderOptions::default() },
+            move |c, values| values.copy_from_slice(&value(c)),
+            on_change,
+        );
+    }
+
+    /// A slider track with any number of handles. `values` defines the starting positions and
+    /// handle order. `bind` can update all positions at once; an edit names the modified index.
+    pub fn slider_track(
+        &mut self,
+        s: S,
+        values: &[f32],
+        options: SliderOptions,
+        bind: impl Fn(&ClientView, &mut [f32]) + Send + Sync + 'static,
+        change: impl Fn(&ClientView, usize, f32) + Send + Sync + 'static,
+    ) {
+        if values.is_empty() {
+            return;
+        }
         let mut n = node(k::SLIDER, s);
-        n.bind = bind_cb(value);
-        n.on_change = callback(move |a: &mut abi::UiChangeArgs| on_change(&ClientView { raw: a.client }, a.value));
-        self.leaf(n)
+        n.slider_values = abi::Slice::new(values);
+        n.slider_fill = options.fill.unwrap_or([u32::MAX; 2]);
+        n.count = options.steps;
+        if options.release {
+            n.flags |= abi::ui_flags::SLIDER_RELEASE;
+        }
+        if options.ordered {
+            n.flags |= abi::ui_flags::SLIDER_ORDERED;
+        }
+        if options.snap {
+            n.flags |= abi::ui_flags::SLIDER_SNAP;
+        }
+        n.bind = callback(move |a: &mut abi::UiSliderBindArgs| {
+            let values = unsafe { std::slice::from_raw_parts_mut(a.values, a.len) };
+            bind(&ClientView { raw: a.client }, values);
+        });
+        n.on_change = callback(move |a: &mut abi::UiChangeArgs| change(&ClientView { raw: a.client }, a.handle as usize, a.value));
+        self.leaf(n);
     }
 
     /// An item's icon, with `count` under it when above 1.
@@ -679,6 +768,17 @@ impl Ui {
         n.count = count;
         self.leaf(n)
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SliderOptions {
+    /// Steps across the track for arrow keys. Zero uses the default of 100.
+    pub steps: u32,
+    pub snap: bool,
+    pub ordered: bool,
+    pub release: bool,
+    /// Indices of the two handles marking a highlighted span.
+    pub fill: Option<[u32; 2]>,
 }
 
 fn bind_cb(f: impl Fn(&ClientView) -> f32 + Send + Sync + 'static) -> abi::Callback {

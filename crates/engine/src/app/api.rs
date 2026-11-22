@@ -494,17 +494,80 @@ pub unsafe extern "C" fn client_text(c: *mut abi::ClientCtx, which: u32, index: 
     }
 }
 
+pub unsafe extern "C" fn client_music(c: *mut abi::ClientCtx, source: abi::MusicSource, op: u32, track: Str, value: f64) -> u32 {
+    use abi::local_music as music;
+    let Some(r) = (unsafe { run(c) }) else { return 0 };
+    let Some(game) = r.game.as_mut() else { return 0 };
+    let cl = &mut game.client;
+    let folder = crate::audio::music_folder(&r.settings.run_dir);
+    let (ok, rebuild) = match op {
+        music::REFRESH => match cl.local_music.refresh(&folder) {
+            Ok(changed) => (true, changed),
+            Err(err) => {
+                log::warn!("music directory: {err}");
+                (false, false)
+            }
+        },
+        music::OPEN_FOLDER => {
+            if let Err(err) = std::fs::create_dir_all(&folder) {
+                log::warn!("music directory: {err}");
+                return 0;
+            }
+            crate::packs::open_path(&folder);
+            (true, false)
+        }
+        music::PLAY => {
+            let ok = if let (Some(pos), Some(audio)) = (cl.music_source_position(source), r.audio.as_mut()) {
+                let listener = cl.render_camera().pos;
+                let filter = cl.source_filter(pos, listener);
+                audio.start_local(&mut cl.local_music, &folder, source, pos, listener, filter, unsafe { track.as_str() })
+            } else {
+                cl.local_music.fail(source);
+                false
+            };
+            (ok, true)
+        }
+        _ => {
+            let ok = cl.local_music.control(source, op, value);
+            (ok, ok && matches!(op, music::TOGGLE_PAUSE | music::STOP))
+        }
+    };
+    if rebuild {
+        r.rebuild_music_screens();
+    }
+    ok as u32
+}
+
+pub unsafe extern "C" fn client_music_track(c: *mut abi::ClientCtx, index: u32, out: *mut abi::MusicTrack) {
+    let track = unsafe { music_client(c) }.map_or(abi::MusicTrack { file: Str::EMPTY, duration: 0.0 }, |cl| cl.local_music.track(index));
+    unsafe { out.write(track) };
+}
+
+pub unsafe extern "C" fn client_music_status(c: *mut abi::ClientCtx, source: abi::MusicSource, out: *mut abi::MusicStatus) {
+    let status = unsafe { music_client(c) }.map_or(
+        abi::MusicStatus { track: Str::EMPTY, position: 0.0, duration: 0.0, volume: 1.0, state: abi::local_music::STOPPED },
+        |cl| cl.local_music.status(source),
+    );
+    unsafe { out.write(status) };
+}
+
+unsafe fn music_client<'a>(c: *mut abi::ClientCtx) -> Option<&'a Client> {
+    let view = unsafe { view(c)? };
+    view.read_music.set(true);
+    unsafe { view.client.as_ref() }
+}
+
 pub unsafe extern "C" fn client_block_in(c: *mut abi::ClientCtx, frame: u64, pos: *const abi::BlockPos) -> u32 {
     unsafe {
         let Some(cl) = client(c) else { return u32::MAX };
         let p = crate::world::ivec(*pos);
         if frame == 0 {
-            return cl.world.block(p);
+            return cl.world.seen(p);
         }
         cl.entities
             .get(&frame)
             .and_then(|e| e.structure.as_ref())
-            .map_or(u32::MAX, |s| s.block(p))
+            .map_or(u32::MAX, |s| s.seen(p))
     }
 }
 
@@ -589,7 +652,7 @@ pub unsafe extern "C" fn client_ui_rect(c: *mut abi::ClientCtx, query: Str, out:
         } else if q == "slider" {
             ui.nodes
                 .iter()
-                .position(|node| matches!(node.kind, Kind::Slider { .. }))
+                .position(|node| matches!(node.kind, Kind::Slider(_)))
         } else if q == "entity" {
             ui.nodes
                 .iter()

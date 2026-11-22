@@ -30,6 +30,12 @@ impl Transform {
     fn turn(self) -> abi::Turn {
         abi::Turn { east: [1, 5, 0, 4][self.quarter() as usize], up: 3 }
     }
+    pub fn offset(self, mut v: IVec3) -> IVec3 {
+        if self.mirrored() {
+            v.x = -v.x;
+        }
+        self.turn().vector(v.to_array()).into()
+    }
     fn vector(self, v: Vec3) -> Vec3 {
         let v = if self.mirrored() { Vec3::new(-v.x, v.y, v.z) } else { v };
         Vec3::from(self.turn().vector_f(v.to_array()))
@@ -98,6 +104,7 @@ pub struct TemplateDef {
     pub cells: Vec<(IVec3, Cell)>,
     /// Its cells of one state, for what is built of it as drawn (moving bodies).
     pub blocks: Vec<(IVec3, u32)>,
+    pub positioned: Vec<(IVec3, crate::world::placement::Part)>,
     /// What each slot takes unless a palette says.
     pub slots: FxHashMap<String, String>,
     pub entities: Vec<abi::TemplateEntity>,
@@ -114,9 +121,11 @@ pub type Placed = (DVec3, u32, Option<Arc<[u8]>>);
 /// A template as placed one way with one palette: what each cell gets, from the placed box's
 /// lowest corner.
 pub struct Variant {
+    pub transform: Transform,
     pub size: IVec3,
     /// `GROUND`: the column's top block, or `ground` where it has none.
     pub cells: Vec<(IVec3, u32)>,
+    pub positioned: Vec<(IVec3, crate::world::placement::Part)>,
     pub ground: u32,
     /// Where it stands on the ground: the columns its bottom layer has a block in.
     pub bottom: Vec<(i32, i32)>,
@@ -136,6 +145,7 @@ impl TemplateDef {
             size,
             cells,
             blocks: Vec::new(),
+            positioned: Vec::new(),
             slots: FxHashMap::default(),
             entities: Vec::new(),
             loot: Vec::new(),
@@ -172,6 +182,14 @@ impl TemplateDef {
             }
         }
         let mut def = TemplateDef::new(name.to_string(), cells);
+        for (b, offset) in parts.positioned {
+            match resolve(&b.block) {
+                Ok(state) => def
+                    .positioned
+                    .push((IVec3::from(b.pos), crate::world::placement::Part { state, offset })),
+                Err(err) => errors.push(format!("template {name}: {err}")),
+            }
+        }
         for s in parts.slots {
             if let Err(err) = resolve(&s.block) {
                 errors.push(format!("template {name}: slot {}: {err}", s.name));
@@ -252,8 +270,17 @@ impl TemplateDef {
             })
             .collect();
         Variant {
+            transform: t,
             size,
             cells,
+            positioned: self
+                .positioned
+                .iter()
+                .map(|(p, part)| {
+                    let placed = crate::world::placement::Part { state: t.state(c, part.state), offset: t.offset(part.offset) };
+                    placed.owner(t.cell(self.size, *p))
+                })
+                .collect(),
             ground,
             bottom,
             entities,
@@ -319,6 +346,7 @@ pub fn parse_slot(text: &str) -> Option<Cell> {
 #[derive(Default)]
 pub struct Parts {
     pub blocks: Vec<abi::TemplateBlock>,
+    pub positioned: Vec<(abi::TemplateBlock, IVec3)>,
     pub slots: Vec<abi::PaletteSlot>,
     pub entities: Vec<abi::TemplateEntity>,
     pub loot: Vec<abi::TemplateLoot>,
@@ -380,8 +408,19 @@ pub fn read_json(bytes: &[u8]) -> Result<Parts, String> {
         let block = palette
             .get(n(3) as usize)
             .ok_or_else(|| format!("palette index {} past the palette", n(3)))?;
-        out.blocks
-            .push(abi::TemplateBlock { pos: [n(0) as i32, n(1) as i32, n(2) as i32], block: block.clone() });
+        let b = abi::TemplateBlock { pos: [n(0) as i32, n(1) as i32, n(2) as i32], block: block.clone() };
+        if let Some(raw) = a.get(4) {
+            let offset = ivec(Some(raw)).ok_or("invalid placement offset")?;
+            if offset
+                .iter()
+                .any(|&v| !(0..crate::world::placement::UNIT).contains(&v))
+            {
+                return Err("placement offset outside cell".into());
+            }
+            out.positioned.push((b, IVec3::from(offset)));
+        } else {
+            out.blocks.push(b);
+        }
     }
     if let Some(slots) = v.get("slots").and_then(|s| s.as_object()) {
         for (name, block) in slots {
@@ -427,7 +466,12 @@ pub fn read_json(bytes: &[u8]) -> Result<Parts, String> {
 pub fn write_json(size: IVec3, parts: &Parts) -> String {
     let mut palette: Vec<&str> = Vec::new();
     let mut blocks = Vec::with_capacity(parts.blocks.len());
-    for b in &parts.blocks {
+    for (b, offset) in parts
+        .blocks
+        .iter()
+        .map(|b| (b, None))
+        .chain(parts.positioned.iter().map(|(b, o)| (b, Some(o))))
+    {
         let i = match palette.iter().position(|p| *p == b.block) {
             Some(i) => i,
             None => {
@@ -435,7 +479,14 @@ pub fn write_json(size: IVec3, parts: &Parts) -> String {
                 palette.len() - 1
             }
         };
-        blocks.push(serde_json::json!([b.pos[0], b.pos[1], b.pos[2], i]));
+        let mut record = serde_json::json!([b.pos[0], b.pos[1], b.pos[2], i]);
+        if let Some(offset) = offset {
+            record
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!(offset.to_array()));
+        }
+        blocks.push(record);
     }
     let v = serde_json::json!({
         "format": FORMAT,
@@ -550,6 +601,7 @@ mod tests {
     #[test]
     fn a_file_reads_back_as_written() {
         let parts = Parts {
+            positioned: vec![(abi::TemplateBlock { pos: [0; 3], block: "base:ladder".into() }, IVec3::new(32768, 0, 0))],
             blocks: vec![
                 abi::TemplateBlock { pos: [0, 0, 0], block: "base:stone".into() },
                 abi::TemplateBlock { pos: [1, 0, 0], block: "@wall:stairs[facing=north]".into() },
@@ -562,6 +614,7 @@ mod tests {
         };
         let back = read_json(write_json(IVec3::new(2, 1, 1), &parts).as_bytes()).unwrap();
         assert_eq!(back.blocks, parts.blocks);
+        assert_eq!(back.positioned, parts.positioned);
         assert_eq!(back.slots, parts.slots);
         assert_eq!(back.entities, parts.entities);
         assert_eq!(back.loot, parts.loot);

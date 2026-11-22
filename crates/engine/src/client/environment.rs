@@ -14,6 +14,8 @@ use weft_abi::{
     environment::{EnvironmentLayer as Layer, EnvironmentOverlay as Overlay, EnvironmentValues as Values},
 };
 
+const RAIN_MIST: &str = "core:rain_mist";
+
 #[derive(Default)]
 pub struct Environment {
     pub local: FxHashMap<String, Layer>,
@@ -26,6 +28,7 @@ pub struct Environment {
     pub overlays: Vec<sky::Overlay>,
     pub post: Vec<(String, f32)>,
     pub sky: FxHashMap<String, f32>,
+    pub(super) rain_mist: f32,
 }
 
 struct Active {
@@ -125,9 +128,9 @@ impl Client {
                 .world
                 .block_or_air(point.floor().as_ivec3())
                 .unwrap_or(0);
-            let in_liquid =
-                crate::physics::liquid_at(content(), &super::world::SeenCells { world: &self.world, air_if_missing: false }, point)
-                    .is_some_and(|l| self.player.swims_in.get(l as usize) == Some(&true));
+            let in_liquid = self
+                .visible_liquid(point)
+                .is_some_and(|l| self.player.swims_in.get(l as usize) == Some(&true));
             let ask = crate::conditions::Ask {
                 pos: point,
                 state,
@@ -148,10 +151,13 @@ impl Client {
         }
     }
 
-    pub fn update_environment(&mut self, textures: &GameTextures, dt: f32) {
+    pub fn update_environment(&mut self, textures: &GameTextures, dt: f32, audio: bool) {
         let c = content();
         let d = &c.dims[self.world.dim as usize];
         let cam = self.render_camera();
+        if audio {
+            self.soundscape.refresh(&self.world, cam.pos);
+        }
         let body = self.smooth_pos() + DVec3::Y * self.player.eye;
         let mut env = std::mem::take(&mut self.environment);
         self.environment.values = env.values;
@@ -195,6 +201,7 @@ impl Client {
             cloud_fog_end: cloud_distance,
             lowpass: 20_000.0,
             volume: 1.0,
+            reverb: self.soundscape.reverb,
             night_vision: self.night_vision,
             ..Default::default()
         };
@@ -203,23 +210,42 @@ impl Client {
 
         let mut weather = Layer::new("core:weather".into());
         weather.priority = -900;
-        weather.values.daylight =
-            if self.lightning > 0.0 { (day * (1.0 - self.look.darkness) + 0.5).min(1.0) } else { day * (1.0 - self.look.darkness) };
+        weather.values.daylight = day * (1.0 - self.look.darkness);
         weather.values.sky_gray = self.look.sky_gray;
         weather.values.fog_gray = self.look.fog_gray;
         weather.values.sky_cover = self.look.sky_cover;
         weather.values.cloud_gray = self.look.cloud_gray;
         weather.values.cloud_dark = self.look.cloud_dark;
         env.contribute("weather".into(), weather, 1.0);
+
+        let preset = &c.game.weathers[self.weather_id as usize];
+        if preset.falls() && preset.look.falls > 0.0 {
+            let eye = cam.pos.floor().as_ivec3();
+            let precipitation = self
+                .world
+                .biome_at(eye)
+                .and_then(|biome| c.biome_precipitation.get(biome as usize))
+                .copied()
+                .unwrap_or(0);
+            let outside = self
+                .world
+                .light_loaded(eye)
+                .is_some_and(|light| abi::light::sky(light) == 15);
+            if outside && c.game.precipitations[precipitation as usize].name == "core:rain" {
+                let mut mist = Layer::new(RAIN_MIST.into());
+                mist.priority = -890;
+                mist.fade_in = 1.5;
+                mist.fade_out = 2.5;
+                let distance: f32 = if preset.lightning() { 110.0 } else { 170.0 };
+                mist.values.fog_end = distance.min(view_distance);
+                mist.values.fog_start = mist.values.fog_end * 0.12;
+                let gray = fog.dot(Vec3::new(0.30, 0.59, 0.11));
+                mist.values.fog_color = fog.lerp(Vec3::splat(gray), 0.8).powf(2.2).to_array();
+                env.contribute(RAIN_MIST.into(), mist, 1.0);
+            }
+        }
         let weather_layers = env.layers(c, abi::entry_kind::WEATHER as usize, self.weather_id as u32);
         self.environment_layers(&mut env, &weather_layers, "weather-data", 0, cam.pos);
-
-        let mut cave = Layer::new("core:enclosed".into());
-        cave.priority = -800;
-        cave.values.reverb = 10.0f32.powf(-9.0 / 20.0);
-        if crate::world::light::enclosed(d, self.world.light(cam.pos.floor().as_ivec3())) {
-            env.contribute("enclosed".into(), cave, 1.0);
-        }
 
         for (point, observer) in [(cam.pos, abi::environment::observer::CAMERA), (body, abi::environment::observer::BODY)] {
             let block = self
@@ -236,15 +262,28 @@ impl Client {
             for layer in block_layers.iter().filter(|l| l.observer == observer) {
                 self.environment_source(&mut env, format!("block/{observer}/{block}/{}", layer.name), layer.clone(), 0, point);
             }
-            if let Some(liquid) =
-                crate::physics::liquid_at(c, &super::world::SeenCells { world: &self.world, air_if_missing: false }, point)
-            {
+            if let Some((liquid, dry)) = self.liquid_sampler().observation(point) {
+                if dry && observer != abi::environment::observer::CAMERA {
+                    continue;
+                }
                 for layer in c.liquids[liquid as usize]
                     .environment
                     .iter()
                     .filter(|l| l.observer == observer)
                 {
-                    let layer = self.environment_material(layer.clone(), point, Some(c.liquids[liquid as usize].first_state));
+                    let mut layer = self.environment_material(layer.clone(), point, Some(c.liquids[liquid as usize].first_state));
+                    if dry {
+                        // The camera can see the liquid outside a dry hull.
+                        layer.values = Values {
+                            fog_color: layer.values.fog_color,
+                            fog_start: layer.values.fog_start,
+                            fog_end: layer.values.fog_end,
+                            ..Values::unset()
+                        };
+                        layer.sky.clear();
+                        layer.post.clear();
+                        layer.replace_post = false;
+                    }
                     self.environment_source(&mut env, format!("liquid/{observer}/{liquid}/{}", layer.name), layer, 0, point);
                 }
             }
@@ -412,6 +451,7 @@ impl Client {
         post.retain(|(_, weight)| weight.is_finite() && *weight > 0.0);
         env.post = post;
         env.sky = sky_weights;
+        env.rain_mist = env.active.get(RAIN_MIST).map_or(0.0, |mist| mist.weight);
         self.environment = env;
     }
 }

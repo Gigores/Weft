@@ -34,11 +34,12 @@ pub enum In {
         cube: Arc<Cube>,
         edit: bool,
     },
-    Blocks(Vec<(IVec3, u32)>, Vec<(IVec3, Vec<u32>)>),
+    Blocks(Vec<(IVec3, u32)>, Vec<(IVec3, crate::world::placement::CellLayout)>),
+    SpaceLanded(u64),
     Unload(IVec3),
     Saved(Vec<IVec3>),
     Edits {
-        specs: Vec<String>,
+        edits: Vec<AreaFill>,
         all: bool,
     },
     /// Every cube held within `reach` cubes of `center` lit again from nothing (`area::relight_anew`).
@@ -66,7 +67,7 @@ pub enum Out {
         cube: Arc<Cube>,
         around: Around,
     },
-    Blocks(Vec<(IVec3, u32)>, Vec<(IVec3, Vec<u32>)>),
+    Blocks(Vec<(IVec3, u32)>, Vec<(IVec3, crate::world::placement::CellLayout)>),
     Unload(IVec3),
     /// The view now spans cubes `lo..=hi` up and down.
     Range {
@@ -82,6 +83,7 @@ pub struct Batch {
     pub resets: u64,
     pub whole: bool,
     pub out: Vec<Out>,
+    pub landings: Vec<u64>,
 }
 
 /// The client's end: send what the server says and where the player is, take finished batches.
@@ -340,6 +342,7 @@ struct Terrain {
     waiting: FxHashMap<IVec3, (Cube, bool)>,
     gen_tx: Sender<Made>,
     out: Vec<Out>,
+    landings: Vec<u64>,
     pending: Arc<AtomicU64>,
     gpu: Option<(Sender<super::terrain_gpu::Job>, Arc<std::sync::atomic::AtomicBool>)>,
     /// Whether the GPU can make this dimension's terrain.
@@ -388,6 +391,7 @@ impl Terrain {
             waiting: FxHashMap::default(),
             gen_tx,
             out: Vec::new(),
+            landings: Vec::new(),
             pending,
             gpu: None,
             gpu_able: false,
@@ -432,9 +436,14 @@ impl Terrain {
             if out_tx.len() < BACKLOG {
                 self.request();
             }
-            if !self.out.is_empty()
+            if !(self.out.is_empty() && self.landings.is_empty())
                 && out_tx
-                    .send(Batch { resets: self.epoch, whole: std::mem::take(&mut self.whole), out: std::mem::take(&mut self.out) })
+                    .send(Batch {
+                        resets: self.epoch,
+                        whole: std::mem::take(&mut self.whole),
+                        out: std::mem::take(&mut self.out),
+                        landings: std::mem::take(&mut self.landings),
+                    })
                     .is_err()
             {
                 return;
@@ -497,7 +506,7 @@ impl Terrain {
                 }
                 for (p, parts) in &extras {
                     if let Some(cube) = self.cubes.get_mut(&crate::world::cube_of(*p)) {
-                        Arc::make_mut(cube).set_extras(crate::world::local_index(*p), parts.clone());
+                        Arc::make_mut(cube).set_layout(crate::world::local_index(*p), parts.clone());
                     }
                 }
                 self.out.push(Out::Blocks(changes, extras));
@@ -505,23 +514,23 @@ impl Terrain {
             In::Unload(pos) => {
                 self.server.remove(&pos);
             }
+            In::SpaceLanded(frame) => self.landings.push(frame),
             In::Saved(list) => {
                 for p in list {
                     self.saved.insert(p);
                 }
             }
-            In::Edits { specs, all } => {
+            In::Edits { edits, all } => {
                 self.whole |= !all;
-                let parsed: Vec<AreaFill> = specs.iter().filter_map(|s| AreaFill::parse(c, s)).collect();
                 if all {
-                    self.edits = Arc::new(parsed);
+                    self.edits = Arc::new(edits);
                     return;
                 }
                 let mut dirty = FxHashSet::default();
-                for fill in &parsed {
+                for fill in &edits {
                     area::fill_cubes(c, self.dim, fill, &mut self.cubes, &mut dirty);
                 }
-                Arc::make_mut(&mut self.edits).extend(parsed);
+                Arc::make_mut(&mut self.edits).extend(edits);
                 for &p in &dirty {
                     if self.conn.remove(&p).is_some() {
                         self.edited.push(p);

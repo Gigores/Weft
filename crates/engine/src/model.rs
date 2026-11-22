@@ -14,6 +14,26 @@ use weft_abi::MeshVertex;
 
 use crate::registry::{Cuboid, Part};
 
+/// The text of an asset component, with `{name}` as the entry's path.
+pub fn asset_name(components: &crate::components::Components, kind: usize, entry: u32, key: &str, name: &str) -> Option<String> {
+    let text = components.text(kind, entry, components.id(key)?)?;
+    Some(text.replace("{name}", name.split_once(':').map_or(name, |n| n.1)))
+}
+
+pub fn entity_geometry(
+    read: impl FnOnce(&str, &str, &str) -> Option<String>,
+    name: &str,
+    fallback: &[Part],
+) -> (Vec<Part>, Option<[u32; 2]>) {
+    if let Some(src) = read(name, "models", "geo.json") {
+        match load_geo(&src) {
+            Ok(g) => return (g.parts, g.texture),
+            Err(e) => log::error!("model {name}: {e}"),
+        }
+    }
+    (fallback.to_vec(), None)
+}
+
 fn num(v: &Value) -> f32 {
     match v {
         Value::Number(n) => n.as_f64().unwrap_or(0.0) as f32,
@@ -259,11 +279,13 @@ pub struct BoneMotion {
     pub spring: f32,
     /// How fast the swing dies down.
     pub drag: f32,
+    /// Cone half-angle around the animated direction, in degrees.
+    pub max_angle: f32,
 }
 
 impl BoneMotion {
     /// What a bone called `hanging` does: hangs and swings.
-    pub const HANGING: BoneMotion = BoneMotion { gravity: 40.0, spring: 0.0, drag: 2.5 };
+    pub const HANGING: BoneMotion = BoneMotion { gravity: 40.0, spring: 0.0, drag: 2.5, max_angle: 180.0 };
 }
 
 /// What a bone named so does without being told: `hanging` and `hanging_<anything>`.
@@ -272,17 +294,22 @@ pub fn motion_by_name(name: &str) -> Option<BoneMotion> {
     n.starts_with("hanging").then_some(BoneMotion::HANGING)
 }
 
-/// A sidecar `models/<name>.bones`, lines `bone = gravity spring drag`, for what a file alone
+/// A sidecar `models/<name>.bones`, lines `bone = gravity spring drag [max_angle]`, for what a file alone
 /// has to say (an avatar has no code to say it with).
 pub fn load_bones(src: &str) -> Vec<(String, BoneMotion)> {
     crate::kv::pairs(src)
         .filter_map(|(line, bone, v)| {
             let n: Vec<f32> = v.split_whitespace().map_while(|x| x.parse().ok()).collect();
-            if v.split_whitespace().count() != 3 || n.len() != 3 {
-                log::warn!("bones file, line {}: {bone} wants gravity, spring and drag, has `{v}`", line + 1);
+            if !(3..=4).contains(&n.len()) || n.len() != v.split_whitespace().count() || !n.iter().all(|x| x.is_finite()) {
+                log::warn!("bones file, line {}: {bone} wants gravity, spring, drag and an optional angle in degrees, has `{v}`", line + 1);
                 return None;
             }
-            Some((bone.to_string(), BoneMotion { gravity: n[0], spring: n[1], drag: n[2] }))
+            let max_angle = n
+                .get(3)
+                .copied()
+                .unwrap_or_else(|| weft_abi::comp::bone_motion::default_max_angle(n[1]))
+                .clamp(0.0, 180.0);
+            Some((bone.to_string(), BoneMotion { gravity: n[0], spring: n[1], drag: n[2], max_angle }))
         })
         .collect()
 }
@@ -882,9 +909,174 @@ impl Bound {
         if looping || a.looping { secs.rem_euclid(a.length + a.loop_delay).min(a.length) } else { secs.min(a.length) }
     }
 
+    pub fn sample(&self, how: &Play) -> (f32, f32) {
+        let t = match self.anim.drive.unwrap_or(how.drive) {
+            Drive::Clock => self.at(how.clock, how.looping),
+            Drive::Distance => self.at(how.distance, true),
+            Drive::Progress => how.progress.clamp(0.0, 1.0) * self.anim.length,
+        };
+        let speed = if how.by_speed || self.anim.by_speed { how.speed } else { 1.0 };
+        let w = how.weight * self.anim.weight * speed;
+        (t, w)
+    }
+
     pub fn finished(&self, secs: f32, looping: bool) -> bool {
         let a = &self.anim;
         !looping && !a.looping && !a.hold && secs >= a.start_delay + a.length
+    }
+}
+
+/// The engine's own animations for a model of this shape, which any of its bones go by unless
+/// the kind has clips of its own for them.
+pub fn stock_file(parts: &[Part]) -> &'static str {
+    let has = |r: u32| parts.iter().any(|p| p.role == r);
+    let arms = parts
+        .iter()
+        .filter(|p| p.role == role::ARM_LEFT || p.role == role::ARM_RIGHT);
+    if has(role::LEG_SWEEP) {
+        "core:stock_spider"
+    } else if has(role::LEG_FRONT_LEFT) || has(role::LEG_FRONT_RIGHT) {
+        "core:stock_quadruped"
+    } else if arms.clone().any(|p| p.rest[0].abs() > 1.0) {
+        "core:stock_biped_arms_out"
+    } else if arms.count() > 0 || has(role::LEG_LEFT) || has(role::LEG_RIGHT) {
+        "core:stock_biped"
+    } else {
+        "core:stock_other"
+    }
+}
+
+pub const STOCK_FILES: [&str; 5] =
+    ["core:stock_biped", "core:stock_biped_arms_out", "core:stock_quadruped", "core:stock_spider", "core:stock_other"];
+
+/// Binds one action's clips: `over` wins on the bones it names, `under` plays the rest.
+pub fn bind(anims: &mut Vec<Bound>, parts: &[Part], over: &Arc<Animation>, under: &[u32]) -> Vec<u32> {
+    let top = Bound::new(over.clone(), parts);
+    let mut out = Vec::new();
+    for &i in under {
+        let rest = anims[i as usize].without(&top);
+        out.push(anims.len() as u32);
+        anims.push(rest);
+    }
+    out.push(anims.len() as u32);
+    anims.push(top);
+    out
+}
+
+pub type Actions = rustc_hash::FxHashMap<String, Vec<u32>>;
+
+pub const MAX_CLIPS: usize = 16;
+
+pub fn bind_actions(parts: &[Part], own: &[Arc<Animation>], stock: &[Arc<Animation>]) -> (Vec<Bound>, Actions) {
+    let mut anims: Vec<Bound> = Vec::new();
+    let mut actions: Actions = Actions::default();
+    for a in stock {
+        actions.insert(a.name.clone(), vec![anims.len() as u32]);
+        anims.push(Bound::new(a.clone(), parts));
+    }
+    for a in own {
+        let under = actions.remove(&a.name).unwrap_or_default();
+        let top = bind(&mut anims, parts, a, &under);
+        actions.insert(a.name.clone(), top);
+    }
+    (anims, actions)
+}
+
+/// Base movement of a skeleton. Equipment, emotes and view effects are layered on by rendering.
+#[derive(Clone, Copy)]
+pub struct Posture {
+    pub pose: crate::world::Pose,
+    pub riding: bool,
+    pub age: f32,
+    pub walk: f32,
+    pub stride: f32,
+    pub crouched: f32,
+}
+
+impl Posture {
+    /// The last argument tells a cosmetic layer whether to apply a locomotion replacement.
+    pub fn play(self, mut clips: impl FnMut(&str, &Play, bool) -> bool) {
+        use crate::world::Pose;
+        use weft_abi::pose_tilt;
+        let def = self.pose.def();
+        let how = Play { clock: self.age, distance: self.walk * 0.6, speed: self.stride, ..Play::default() };
+        let looped = Play { looping: true, ..how };
+        clips("idle", &looped, true);
+        if self.riding {
+            clips("ride", &looped, true);
+        } else if def.tilt == pose_tilt::UPRIGHT {
+            clips("walk", &Play { drive: Drive::Distance, by_speed: true, ..how }, true);
+        }
+        if self.crouched > 0.0 {
+            clips("sneak", &Play { weight: self.crouched, ..looped }, true);
+        }
+        if def.tilt == pose_tilt::UPRIGHT && self.pose != Pose::CROUCH && !def.action.is_empty() {
+            clips(&def.action, &looped, false);
+        } else if def.tilt != pose_tilt::UPRIGHT && def.tilt != pose_tilt::ON_BACK {
+            let swimming = Play { drive: Drive::Distance, ..how };
+            if !clips(&def.action, &swimming, false) {
+                clips("swim", &swimming, true);
+            }
+        }
+    }
+}
+
+pub fn body_tilt(pose: crate::world::Pose, pitch: f32) -> Option<f32> {
+    use weft_abi::pose_tilt;
+    let side = std::f32::consts::FRAC_PI_2;
+    match pose.def().tilt {
+        pose_tilt::ALONG_LOOK => Some(pitch - side),
+        pose_tilt::FACE_DOWN => Some(-side),
+        pose_tilt::ON_BACK => Some(side),
+        _ => None,
+    }
+}
+
+pub fn tilted_body(tilt: f32) -> Mat4 {
+    Mat4::from_translation(Vec3::Y * 0.3) * Mat4::from_rotation_x(tilt) * Mat4::from_translation(-Vec3::Y * 0.9)
+}
+
+pub fn head_look(sleeping: bool, lying: bool, pitch: f32, side: f32) -> (f32, f32) {
+    if sleeping {
+        (0.0, 0.0)
+    } else if lying {
+        (std::f32::consts::FRAC_PI_4, 0.0)
+    } else {
+        (pitch, side)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Play {
+    pub drive: Drive,
+    pub clock: f32,
+    pub distance: f32,
+    pub progress: f32,
+    pub looping: bool,
+    pub weight: f32,
+    pub speed: f32,
+    pub by_speed: bool,
+    pub mirror: bool,
+    pub aim: bool,
+    /// One hand's and what it holds, not the whole body's.
+    pub hand: bool,
+}
+
+impl Default for Play {
+    fn default() -> Play {
+        Play {
+            drive: Drive::Clock,
+            clock: 0.0,
+            distance: 0.0,
+            progress: 0.0,
+            looping: false,
+            weight: 1.0,
+            speed: 1.0,
+            by_speed: false,
+            mirror: false,
+            aim: false,
+            hand: false,
+        }
     }
 }
 
@@ -1016,6 +1208,12 @@ pub fn pose(parts: &[Part], root: Mat4, m: &Motion, out: &mut Vec<Mat4>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bones_accept_per_joint_limits_and_legacy_presets() {
+        let joints = load_bones("a = 5 30 5\nb = 40 0 2.5\nc = 6 30 5 65\nd = 4 0 1 0\ne = 6 30 5 NaN\nf = 4 0 1 bad");
+        assert_eq!(joints.iter().map(|(_, m)| m.max_angle).collect::<Vec<_>>(), [30.0, 180.0, 65.0, 0.0]);
+    }
 
     #[test]
     fn roles_from_names() {
@@ -1218,6 +1416,9 @@ mod tests {
 /// second and no more, and the limbs move by the swing. However fast it flies, they keep their pace.
 pub fn walk_limbs(limb: &mut f32, swing: &mut f32, speed: f32, dt: f32) {
     *swing += ((speed / 5.0).min(1.0) - *swing) * (1.0 - 0.6f32.powf(dt * crate::world::TPS as f32));
+    if speed == 0.0 && *swing < 0.002 {
+        *swing = 0.0;
+    }
     *limb += *swing * 5.0 * dt;
 }
 

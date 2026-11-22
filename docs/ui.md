@@ -33,7 +33,9 @@ ui.panel("panel", S::column().pad(7.0).gap(4.0), |ui| {
 | `text(key)` | a translation. `text_args(key, &[Arg::Int(5)])` fills `{0}` and the rest, `text_styled(s, key, args)` takes a style too (class, size, one line, `mono`) |
 | `button(key, s, on_click)` | a button with a translated label (`button_args` with arguments); the closure runs on click and can drive the game through `c.client()` (open screens and worlds, quit, change settings), even in the main menu |
 | `input(value, max, s, on_change)` | a one-line text field; the closure gets the text after every edit |
-| `slider(s, value, on_change)` | a slider at `value` (0..1, read every frame); the closure gets where it is dragged |
+| `slider(s, value, on_change)`, `slider_on_release(s, value, on_release)` | one handle at a live value from 0 to 1 |
+| `range_slider(s, value, on_change)` | two ordered handles with a highlighted span between them |
+| `slider_track(s, initial, options, bind, on_change)` | any number of handles on one track, with the same pointer and keyboard controls |
 | `item(id, count, s)` | an item's icon with its count |
 | `image(texture, w, h)` | a GUI texture such as `base:gui/arrow_bg` |
 | `spacer()` | an empty part that grows, to push others apart or center them |
@@ -45,6 +47,12 @@ ui.panel("panel", S::column().pad(7.0).gap(4.0), |ui| {
 Text is a translation key rather than a raw string, which keeps everything translatable and lets it use the rich text of the [tooltips guide](localization.md), pictures included. Text that isn't words of yours (a number, a player's name) goes in as an argument, `Arg::Text(..)` shows exactly what it holds; `Arg::Float(v, 2)` has two decimals. Any part with a style can have a tooltip too: `S::column().tooltip("examplemod.what_this_does")`, or `tooltip_args(key, &[..])` with arguments.
 
 The engine's own pause, death and settings screens are built from exactly these parts, so a screen that replaces one can look and work the same.
+
+### Sliders
+
+`range_slider` binds a pair `[low, high]`. Its change callback reports the endpoint index (`0` or `1`) and the new value. For a custom track, pass one normalized position per handle to `slider_track`. The binding receives all positions in one mutable slice. The change callback receives the stable index of the handle that moved and its new normalized value. Handles can cross unless `SliderOptions::ordered` is set. `snap` applies the `steps` intervals to dragging as well as arrow keys. `release` commits after dragging, and `fill` highlights the span between two chosen handles.
+
+Click a track to focus it. Left and Right move the focused handle. Up and Down select a different handle on the same track. `S::class` can choose a custom track texture and its matching `<class>_knob` texture while keeping the shared input behavior.
 
 ## Layout
 Layout works like flexbox, and all sizes are in GUI pixels, so the GUI scale in the settings makes them bigger or smaller. `S` describes one part, starting from `S::column()` or `S::row()` (rows center their children vertically, columns start at the top left):
@@ -129,7 +137,7 @@ still use bindings. `view.target()` identifies the block or entity under the cro
 For a block it gives its `state`, `pos` and `body` (0 for the world); for an entity, its `entity`
 id. Nothing targeted gives `None`.
 
-Base's target information panel accepts `r.screen_part(&base_api::TARGET_INFO, "details", order,
+Base's target information panel accepts `r.screen_part(&base_api::hud::TARGET_INFO, "details", order,
 |ui| ..)`. The same text, item, progress and icon widgets work there as on a screen.
 Read entity components shared with `SYNC_WATCHERS`, or use your mod's existing channels for
 server data the client doesn't have. A HUD element exposes its own extension areas with

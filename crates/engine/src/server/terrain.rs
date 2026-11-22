@@ -610,6 +610,42 @@ impl Terrain {
         smooth4([c(0, 0), c(1, 0), c(0, 1), c(1, 1)], (x % 4) as i32, (z % 4) as i32)
     }
 
+    fn cave_biome(&self, seed: u64, ox: i32, oy: i32, oz: i32, i: usize, height: i32) -> Option<u16> {
+        self.cave_biomes.iter().enumerate().find_map(|(k, b)| {
+            (oy + 15 < height - b.depth
+                && (b.threshold <= -ONE
+                    || perlin3(
+                        seed32(seed, salt::CAVE_BIOME ^ k as u64),
+                        (ox + (i % 16) as i32) * 16,
+                        (oy + 8) * 16,
+                        (oz + (i / 16) as i32) * 16,
+                        b.size,
+                        b.size,
+                        b.size,
+                    ) > b.threshold))
+                .then_some(b.biome as u16)
+        })
+    }
+
+    /// Replace leftover surface biome IDs in saved deep cubes. The extra depth
+    /// leaves the old surface alone if the terrain profile has changed since saving.
+    pub(super) fn backfill_cave_biomes(&self, seed: u64, pos: glam::IVec3, biomes: &mut [u16; 256]) {
+        let Some(fallback) = self.cave_biomes.iter().find(|b| b.threshold <= -ONE) else { return };
+        let [ox, oy, oz] = (pos * 16).to_array();
+        let cols = self.columns(seed, pos.x, pos.z);
+        for (i, (id, col)) in biomes.iter_mut().zip(&cols.cols).enumerate() {
+            let saved = u32::from(*id);
+            if oy + 47 < col.height.saturating_sub(fallback.depth)
+                && self.rules.iter().any(|r| r.biome == saved)
+                && !self.cave_biomes.iter().any(|b| b.biome == saved)
+            {
+                *id = self
+                    .cave_biome(seed, ox, oy, oz, i, col.height)
+                    .unwrap_or(*id);
+            }
+        }
+    }
+
     /// Fills cube `pos` with stone, surface layers, water and caves and sets its biomes; returns
     /// its columns.
     pub fn generate(&self, seed: u64, pos: [i32; 3], blocks: &mut [u32], biomes: &mut [u16; 256]) -> Arc<Columns> {
@@ -617,12 +653,9 @@ impl Terrain {
         let (ox, oy, oz) = (cx * 16, cy * 16, cz * 16);
         let cols = self.columns(seed, cx, cz);
         for (i, c) in cols.cols.iter().enumerate() {
-            let (x, z) = ((ox + (i % 16) as i32) * 16, (oz + (i / 16) as i32) * 16);
-            let deep = self.cave_biomes.iter().enumerate().find(|&(k, b)| {
-                oy + 15 < c.height - b.depth
-                    && perlin3(seed32(seed, salt::CAVE_BIOME ^ k as u64), x, (oy + 8) * 16, z, b.size, b.size, b.size) > b.threshold
-            });
-            biomes[i] = deep.map_or(c.biome, |(_, b)| b.biome) as u16;
+            biomes[i] = self
+                .cave_biome(seed, ox, oy, oz, i, c.height)
+                .unwrap_or(c.biome as u16);
         }
         let max_h = cols.cols.iter().map(|c| c.height).max().unwrap_or(0);
         let sea = self.sea.map_or(i32::MIN, |s| s.0);
@@ -842,6 +875,26 @@ mod tests {
         let mut blocks = vec![0u32; 4096];
         t.generate(seed, pos, &mut blocks, &mut [0; 256]);
         blocks
+    }
+
+    #[test]
+    fn deep_cave_fallback_covers_new_and_saved_cubes() {
+        let mut t = terrain(Vec::new(), vec![rule(1)], None, 64.0);
+        t.cave_biomes
+            .push(CaveBiome { biome: 2, depth: 48, size: 96 * 16, threshold: -ONE });
+        let mut biomes = [0; 256];
+        let mut blocks = [0; 4096];
+        t.generate(5, [0, 3, 0], &mut blocks, &mut biomes);
+        assert_eq!(biomes, [1; 256]);
+        t.generate(5, [0, -625, 0], &mut blocks, &mut biomes);
+        assert_eq!(biomes, [2; 256]);
+        biomes.fill(1);
+        biomes[0] = 3; // A custom saved biome, outside the surface rules.
+        t.backfill_cave_biomes(5, glam::IVec3::new(0, 3, 0), &mut biomes);
+        assert_eq!(biomes[1], 1);
+        t.backfill_cave_biomes(5, glam::IVec3::new(0, -625, 0), &mut biomes);
+        assert_eq!(biomes[0], 3);
+        assert_eq!(biomes[1..], [2; 255]);
     }
 
     #[test]

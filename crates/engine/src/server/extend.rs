@@ -112,7 +112,7 @@ pub(super) fn rebase_clock(c: &Content, e: &mut super::entity::Entity, comps: &m
 
 impl Dim {
     /// Queues an event value for the end of the tick; values of the wrong size are refused.
-    pub fn emit(&mut self, c: &Content, event: u32, bytes: &[u8]) {
+    pub fn emit(&mut self, space_id: u64, c: &Content, event: u32, bytes: &[u8]) {
         let Some(def) = c.game.events.get(event as usize) else { return };
         if def.handlers.is_empty() {
             return;
@@ -124,7 +124,7 @@ impl Dim {
             log::error!("event {}: value of {} bytes, others had {size}", def.name, bytes.len());
             return;
         }
-        self.space
+        self.space_mut(space_id)
             .event_queue
             .entry(event)
             .or_default()
@@ -132,51 +132,51 @@ impl Dim {
     }
 
     /// Engine events by name, with their `abi` struct as the value.
-    pub fn emit_engine<T: Copy>(&mut self, c: &Content, name: &str, v: &T) {
+    pub fn emit_engine<T: Copy>(&mut self, space_id: u64, c: &Content, name: &str, v: &T) {
         if let Some(&e) = c.game.event_names.get(name) {
             let bytes = unsafe { std::slice::from_raw_parts(v as *const T as *const u8, size_of::<T>()) };
-            self.emit(c, e, bytes);
+            self.emit(space_id, c, e, bytes);
         }
     }
 
     /// Hands every queued value to the handlers: one call per event and handler with the batch.
-    pub fn deliver_events(&mut self, c: &'static Content) {
+    pub fn deliver_events(&mut self, space_id: u64, c: &'static Content) {
         for _ in 0..MAX_ROUNDS {
-            if self.space.event_queue.is_empty() {
+            if self.space(space_id).event_queue.is_empty() {
                 return;
             }
-            let queue = std::mem::take(&mut self.space.event_queue);
+            let queue = std::mem::take(&mut self.space_mut(space_id).event_queue);
             for (event, bytes) in queue {
                 let def = &c.game.events[event as usize];
                 let stride = def.size.load(Ordering::Relaxed).max(1);
                 let count = bytes.len() as u32 / stride;
                 for &(owner, cb) in &def.handlers {
                     let data = bytes.as_ptr();
-                    self.call(owner, cb, |w| abi::EventArgs { world: w, event, data, count, stride });
+                    self.call(space_id, owner, cb, |w| abi::EventArgs { world: w, event, data, count, stride });
                 }
             }
         }
-        if !self.space.event_queue.is_empty() {
+        if !self.space(space_id).event_queue.is_empty() {
             log::warn!("events still queued after {MAX_ROUNDS} rounds in dimension {}; dropping them", self.id);
-            self.space.event_queue.clear();
+            self.space_mut(space_id).event_queue.clear();
         }
     }
 
     /// Question `question` about `q`: its chain from yes (1). Every step answers no, keeps or
     /// yes; the last that doesn't keep wins.
-    pub fn ask(&mut self, c: &'static Content, question: &str, q: &abi::Query) -> bool {
-        self.ask_or(c, question, q, true)
+    pub fn ask(&mut self, space_id: u64, c: &'static Content, question: &str, q: &abi::Query) -> bool {
+        self.ask_or(space_id, c, question, q, true)
     }
 
     /// `ask` starting from `default` where nobody says either way.
-    pub fn ask_or(&mut self, c: &'static Content, question: &str, q: &abi::Query, default: bool) -> bool {
+    pub fn ask_or(&mut self, space_id: u64, c: &'static Content, question: &str, q: &abi::Query, default: bool) -> bool {
         let list = Self::chain_steps(c, question);
-        self.run(c, question, list, if default { 1.0 } else { 0.0 }, q, &[], false) != 0.0
+        self.run(space_id, c, question, list, if default { 1.0 } else { 0.0 }, q, &[], false) != 0.0
     }
 
     /// Runs value chain `chain` from `base`; with `explain` the steps go to `explanation`.
-    pub fn compute(&mut self, c: &'static Content, chain: &str, base: f64, q: &abi::Query, explain: bool) -> f64 {
-        self.run(c, chain, Self::chain_steps(c, chain), base, q, &[], explain)
+    pub fn compute(&mut self, space_id: u64, c: &'static Content, chain: &str, base: f64, q: &abi::Query, explain: bool) -> f64 {
+        self.run(space_id, c, chain, Self::chain_steps(c, chain), base, q, &[], explain)
     }
 
     fn chain_steps<'a>(c: &'a Content, chain: &str) -> &'a [u32] {
@@ -186,7 +186,17 @@ impl Dim {
     /// A chain's own steps (`list`) and `extra` ones (what an entity has on it), phase by phase:
     /// in each, the chain's first, then the extra in their order.
     #[allow(clippy::too_many_arguments)]
-    fn run(&mut self, c: &'static Content, chain: &str, list: &[u32], base: f64, q: &abi::Query, extra: &[Extra], explain: bool) -> f64 {
+    fn run(
+        &mut self,
+        space_id: u64,
+        c: &'static Content,
+        chain: &str,
+        list: &[u32],
+        base: f64,
+        q: &abi::Query,
+        extra: &[Extra],
+        explain: bool,
+    ) -> f64 {
         let steps = &c.game.steps;
         let mut text = explain.then(|| format!("{chain}: {base}"));
         let mut value = base;
@@ -207,9 +217,9 @@ impl Dim {
                     let before = value;
                     let mut calc = Calc { base, start, value, arg };
                     match steps.defs[s as usize].run {
-                        Run::Native(f) => f(self, c, q, &mut calc),
+                        Run::Native(f) => f(self, space_id, c, q, &mut calc),
                         Run::Mod(owner, cb) => {
-                            let a = self.call(owner, cb, |w| abi::StepArgs {
+                            let a = self.call(space_id, owner, cb, |w| abi::StepArgs {
                                 world: w,
                                 chain: abi::Str::new(chain),
                                 ctx: q,
@@ -307,12 +317,12 @@ impl Dim {
     }
 
     /// Value of attribute `attr` for an entity; with `explain` the steps go to `explanation`.
-    pub fn attribute(&mut self, c: &'static Content, entity: u64, attr: u32, explain: bool) -> f64 {
-        self.attribute_for(c, attr, &abi::Query { entity, ..abi::Query::DEFAULT }, explain)
+    pub fn attribute(&mut self, space_id: u64, c: &'static Content, entity: u64, attr: u32, explain: bool) -> f64 {
+        self.attribute_for(space_id, c, attr, &abi::Query { entity, ..abi::Query::DEFAULT }, explain)
     }
 
     /// `attribute` of `q.entity` with more said about what it is for (whom a hit goes at).
-    pub fn attribute_for(&mut self, c: &'static Content, attr: u32, q: &abi::Query, explain: bool) -> f64 {
+    pub fn attribute_for(&mut self, space_id: u64, c: &'static Content, attr: u32, q: &abi::Query, explain: bool) -> f64 {
         let def = &c.game.attributes[attr as usize];
         let Some(kind) = self.entities.get(q.entity).map(|e| e.kind) else { return def.default };
         let base = Self::base_attribute(c, kind, attr);
@@ -332,7 +342,7 @@ impl Dim {
             return base.clamp(def.min, def.max);
         }
         let extra = self.attribute_steps(c, kind, q.entity, attr, explain);
-        let v = self.run(c, &def.name, list, base, q, &extra, explain);
+        let v = self.run(space_id, c, &def.name, list, base, q, &extra, explain);
         let clamped = v.clamp(def.min, def.max);
         if explain && clamped != v {
             set_explanation(format!("{}, kept to {clamped}", explanation()));
@@ -453,8 +463,8 @@ impl Dim {
         let mut now: Vec<(u64, u64, u64, f64)> = Vec::new();
         for (m, times, when) in from {
             let holds = match (m.when, when) {
-                (Some(w), _) => crate::conditions::on_server(self, c, w, &ask),
-                (None, Some(e)) => crate::conditions::holds_server(self, c, &e, &ask),
+                (Some(w), _) => crate::conditions::on_server(self, 0, c, w, &ask),
+                (None, Some(e)) => crate::conditions::holds_server(self, 0, c, &e, &ask),
                 (None, None) => true,
             };
             if !holds {
@@ -492,14 +502,14 @@ impl Dim {
     }
 
     /// The only maximum health there is: the attribute (the kind's value plus modifiers).
-    pub fn max_health(&mut self, c: &'static Content, entity: u64) -> f32 {
-        self.attribute(c, entity, crate::registry::attr::MAX_HEALTH, false) as f32
+    pub fn max_health(&mut self, space_id: u64, c: &'static Content, entity: u64) -> f32 {
+        self.attribute(space_id, c, entity, crate::registry::attr::MAX_HEALTH, false) as f32
     }
 
     /// Attribute by name, the default for unknown entities, NaN for unknown names.
-    pub fn attribute_named(&mut self, c: &'static Content, entity: u64, name: &str, explain: bool) -> f64 {
+    pub fn attribute_named(&mut self, space_id: u64, c: &'static Content, entity: u64, name: &str, explain: bool) -> f64 {
         match c.game.catalog.ids(ek::ATTRIBUTE).get(name) {
-            Some(&a) => self.attribute(c, entity, a, explain),
+            Some(&a) => self.attribute(space_id, c, entity, a, explain),
             None => f64::NAN,
         }
     }
@@ -529,7 +539,7 @@ impl Dim {
         let ask = crate::conditions::Ask { pos, entity, state: ctx.state, loot: Some(ctx), ..Default::default() };
         let me = std::cell::RefCell::new(self);
         let mut rng = || me.borrow_mut().random_unit();
-        let mut holds = |id| crate::conditions::on_server(&mut me.borrow_mut(), c, id, &ask);
+        let mut holds = |id| crate::conditions::on_server(&mut me.borrow_mut(), 0, c, id, &ask);
         crate::loot::roll(c, t, ctx, &mut rng, &mut holds)
     }
 }

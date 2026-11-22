@@ -1910,6 +1910,10 @@ impl Backend for VulkanBackend {
         }
     }
 
+    fn prepare_uploads(&mut self) {
+        self.ensure_slot_ready();
+    }
+
     fn begin_frame(&mut self) -> Option<FrameInfo> {
         self.ensure_slot_ready();
         if self.surface == vk::SurfaceKHR::null() {
@@ -1946,8 +1950,8 @@ impl Backend for VulkanBackend {
         }
     }
 
-    fn end_frame(&mut self, list: &CommandList) {
-        let Some(image_index) = self.image_index.take() else { return };
+    fn end_frame(&mut self, list: &CommandList) -> bool {
+        let Some(image_index) = self.image_index.take() else { return false };
         let frame_cmd = self.frames[self.slot].cmd;
         let frame_pool = self.frames[self.slot].pool;
         unsafe {
@@ -1958,7 +1962,7 @@ impl Backend for VulkanBackend {
                 .ok();
         }
         let cmd = frame_cmd;
-        unsafe {
+        let presented = unsafe {
             let first_query = self.slot as u32 * MAX_MARKS;
             self.device
                 .cmd_reset_query_pool(cmd, self.queries, first_query, MAX_MARKS);
@@ -2289,14 +2293,17 @@ impl Backend for VulkanBackend {
                 .wait_semaphores(&wait)
                 .swapchains(&swapchains)
                 .image_indices(&indices);
-            match self.swapchain_fn.queue_present(self.queue, &present) {
+            let result = self.swapchain_fn.queue_present(self.queue, &present);
+            match result {
                 Ok(suboptimal) if !suboptimal || self.turned => {}
                 Ok(_) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => self.dirty_swapchain = true,
                 Err(e) => log::error!("vkQueuePresentKHR: {e:?}"),
             }
-        }
+            result.is_ok()
+        };
         self.slot = (self.slot + 1) % FRAMES;
         self.save_pipeline_cache();
+        presented
     }
 
     fn request_capture(&mut self) {

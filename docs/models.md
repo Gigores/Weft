@@ -164,7 +164,7 @@ r.item(&GREATSWORD).two_handed();                     // does nothing while the 
 r.item(&MAP).one_handed_action("hold_one");               // two hands, or one with this action
 r.item(&BOW).use_priority(10);                        // goes before the other hand on a right click
 ```
-A right click goes to the block first (not while sneaking), then to the hands by `use_priority`, the main hand if they are equal. The next hand gets its turn when the item does nothing, which `on_use` says by returning `false`: a bow with no arrows lets the torches in the other hand go down. Hits are for the main hand. The second hand itself is an equipment slot, `r.equipment_slot(&OFF_HAND, &[], "slot_offhand")`, and base registers it. A menu with `.equipment()` has it; its screen places it with `ui.group(OFF_HAND.name())`, as `ui.equipment()` draws only what is worn.
+A right click goes to the block first (not while sneaking), then to the hands by `use_priority`, the main hand if they are equal. The next hand gets its turn when the item does nothing, which `on_use` says by returning `false`: a bow with no arrows lets the torches in the other hand go down. Hits are for the main hand. The second hand itself is an equipment slot. Base registers it with `.priority(1, "#offhand_preferred")`. Tag an item `offhand_preferred` to send it there on a shift-click or shift-drag when the hand has room. A menu with `.equipment()` has it; its screen places it with `ui.group(OFF_HAND.name())`, as `ui.equipment()` draws only what is worn.
 
 Where the item sits in the hand comes from `display.thirdperson_righthand` of `models/item/<name>.json`, which is Blockbench's Display tab, the same from the eyes and from outside; the other hand mirrors it. And `models/item/<name>.geo.json` makes the item out of bones (its texture is `textures/item/<name>.png`). Its origin is the palm with -Z along the arm, and its bones go in the same clips as the arms, so a gun's slide is one more bone in `swing`. On the ground and in the inventory it still shows its sprite.
 
@@ -194,17 +194,21 @@ The callback reads components marked `abi::stack_flags::VISUAL` (`r.stack_compon
 A second model can sit on a bone of the first, with its own texture and clips, like a tail:
 ```rust
 r.bone_model(&PLAYER, "tailmod:tail", "body");                                  // on every player
-r.item(&TAIL).wearable_model(&base_api::CHEST, "tailmod:tail", "body");           // on who wears it
+r.item(&TAIL).wearable_model(&base_api::slots::CHEST, "tailmod:tail", "body");           // on who wears it
 ```
 Draw it in the pixels of the model it goes on, with the same origin (`player_template.geo.json` in the example mod is good to draw on top of). What plays on the wearer plays on it: its own `walk` plays with theirs, and when someone's `walk` names a bone `tail` that is in your model, it moves. Nobody knowing of the other two mods is needed for that.
 
 ## Bones that move by themselves
 On top of clips. A bone whose name starts with `hanging` hangs down whichever way what holds it turns, and swings when that moves: a lantern on a chain is a hook and two `hanging_` links, with no code. For something other than hanging:
 ```rust
-r.bone_motion("tailmod:tail", "tail2", BoneMotion::SPRINGY);                                   // keeps its shape, lags behind
+r.bone_motion_with_limit("tailmod:tail", "tail2", BoneMotion::SPRINGY, 45.0);
 r.bone_motion("mymod:banner", "cloth", BoneMotion { gravity: 20.0, spring: 5.0, drag: 1.5 });
 ```
-A file can say the same, for those without code: `models/<model>.bones` with lines like `tail2 = 5 30 5` (gravity, spring, drag).
+In `models/<model>.bones` or an avatar's `avatar.bones`, write `tail2 = 5 30 5 45` (gravity, spring, drag, maximum angle in degrees).
+An entry in the file overrides the mod's settings for that bone, so a resource pack can change the swing.
+Each bone measures its angle from its animated direction after its parent moves. Zero locks it to that direction and 180 allows a full swing.
+Omitting the angle, or calling `r.bone_motion`, uses 30 degrees for a positive spring and 180 otherwise.
+To record the pivot, tip and animated direction of each simulated bone every frame, run with `--log bones=trace`. Positions are relative to the camera in blocks.
 
 Each frame on the client, from `r.client_entity_frame(&KIND, |c, e| ..)` (any number of mods on one kind, the local player too) or `r.client_frame`:
 ```rust

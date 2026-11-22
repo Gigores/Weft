@@ -1,11 +1,125 @@
-//! Axis-separated AABB movement against block collision boxes and solid bodies (entities others
-//! stand on and bump into), riding bodies, plus voxel raycasts. Shared by the client (local
-//! player prediction) and the server (entities), so both agree.
+//! AABB movement against block collision boxes and solid bodies, riding bodies, and voxel raycasts.
+//! Shared by the client (local player prediction) and the server (entities).
 
-use glam::{DVec3, IVec3};
+use glam::{DMat3, DQuat, DVec3, IVec3};
 use weft_abi::{EntitySize, block_flags as bf};
 
 use crate::content::Content;
+use crate::world::placement::{CellLayout, Part};
+
+mod character;
+use character::{Collider, Sweep, Travel};
+
+const WALKABLE_Y: f64 = std::f64::consts::FRAC_1_SQRT_2;
+const DECK_REACH: f64 = 0.45;
+pub(crate) const LIQUID_SOURCES: u32 = 1 << 31;
+
+pub(crate) fn seat_at(
+    c: &Content,
+    kind: u32,
+    pos: DVec3,
+    yaw: f32,
+    seat: u8,
+    place: Option<Transform>,
+    helm: Option<IVec3>,
+) -> Option<DVec3> {
+    let offset = c.game.seats(kind, helm.is_some()).get(seat as usize)?.pos;
+    Some(if let Some(helm) = helm {
+        place?.to_world(helm.as_dvec3() + Transform::FEET + offset)
+    } else {
+        pos + crate::world::turned(offset, yaw)
+    })
+}
+
+/// Position and orient the placed shape on the space's grid or against the clicked surface.
+/// Looking within the face still chooses the authored slab half, hinge or orientation.
+pub(crate) fn placement(
+    c: &Content,
+    state: u32,
+    clicked: IVec3,
+    surface: Part,
+    face: u8,
+    hit: [f32; 3],
+    look: [f32; 3],
+    replacing: bool,
+    by_face: bool,
+) -> Option<(IVec3, Part, [f32; 3])> {
+    let normal = *crate::world::DIRS.get(face as usize)?;
+    if !hit.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let hit = hit.map(|v| v.clamp(0.0, 1.0));
+    let axis = face as usize / 2;
+    let positive = face % 2 == 1;
+    let def = c.block_of(state);
+    let by_face = by_face && !def.grid_placement;
+    // Find the clicked unit of the supporting instance's grid, even in a covered cell.
+    let shift = if by_face && !replacing { surface.shift().rem_euclid(DVec3::ONE) } else { DVec3::ZERO };
+    let local = DVec3::from_array(hit.map(f64::from)) - shift;
+    let delta = (local - normal.as_dvec3() * 1e-5).floor().as_ivec3();
+    let local = if replacing { DVec3::from_array(hit.map(f64::from)) } else { local - delta.as_dvec3() };
+    let plane = local[axis];
+    let inner = !replacing && plane > 1e-5 && plane < 1.0 - 1e-5;
+    let cell = if replacing {
+        clicked
+    } else if inner {
+        clicked + delta
+    } else {
+        clicked + delta + normal
+    };
+    let mut hit = local.as_vec3().to_array();
+    hit[axis] = if inner {
+        plane as f32 + if positive { 0.001 } else { -0.001 }
+    } else if positive {
+        0.001
+    } else {
+        0.999
+    };
+    let state = placement_state(def, cell, face, look, hit).ok()?;
+    if !by_face {
+        let aligned = Part::aligned(state);
+        // A slab or another small part can accept a complementary shape in the same cell.
+        // If they intersect, try the next whole cell along the clicked face.
+        if inner && !c.may_share(state, surface.state) && aligned.overlaps(surface.in_cell(delta), c) {
+            let cell = cell + normal;
+            hit[axis] = if positive { 0.001 } else { 0.999 };
+            let state = placement_state(def, cell, face, look, hit).ok()?;
+            return Some((cell, Part::aligned(state), hit));
+        }
+        return Some((cell, aligned, hit));
+    }
+    let mut offset = shift;
+    if inner {
+        let mount = Part::aligned(state)
+            .bounds(c)
+            .map(|b| if positive { b.min[axis] } else { b.max[axis] })
+            .reduce(if positive { f64::min } else { f64::max })?;
+        offset[axis] += plane - mount;
+    }
+    let part = Part {
+        state,
+        offset: (offset * f64::from(crate::world::placement::UNIT))
+            .round()
+            .as_ivec3(),
+    };
+    let (owner, part) = part.owner(cell);
+    Some((owner, part, hit))
+}
+
+pub(crate) fn placement_state(def: &crate::content::BlockDef, pos: IVec3, face: u8, look: [f32; 3], hit: [f32; 3]) -> Result<u32, u32> {
+    let Some((owner, cb)) = def.cb.placement else { return Ok(def.first_state) };
+    let mut args = weft_abi::PlaceArgs {
+        pos: pos.to_array().into(),
+        face: face as u32,
+        look,
+        state: def.first_state,
+        first: def.first_state,
+        hit,
+        placed: 0,
+    };
+    crate::host::invoke(owner, cb, &mut args);
+    if (def.first_state..def.first_state + def.states).contains(&args.state) { Ok(args.state) } else { Err(args.state) }
+}
 
 /// The box of an entity in a pose (modern vanilla), on client and server
 /// alike, from its width, height and eyes standing: crouching lowers them like the player's 1.8 to
@@ -85,35 +199,169 @@ impl Aabb {
     pub fn shifted(&self, by: DVec3) -> Aabb {
         Aabb { min: self.min + by, max: self.max + by }
     }
+
+    pub fn swept(self, delta: DVec3) -> Aabb {
+        Aabb { min: self.min + delta.min(DVec3::ZERO), max: self.max + delta.max(DVec3::ZERO) }
+    }
 }
 
-/// Where a body's blocks are: from its own coordinates to the world's and back. All of that goes
-/// through here, which is where turning would go.
+#[derive(Clone, Copy, Debug)]
+pub struct Cylinder {
+    pub center: DVec3,
+    pub axis: DVec3,
+    pub radius: f64,
+    pub half: f64,
+    pub grip: f64,
+}
+
+impl Cylinder {
+    pub fn bounds(self) -> Aabb {
+        let axial = self.axis.abs();
+        let radial = (DVec3::ONE - axial * axial).max(DVec3::ZERO).map(f64::sqrt);
+        let half = axial * self.half + radial * self.radius;
+        Aabb { min: self.center - half, max: self.center + half }
+    }
+
+    pub fn placed(self, place: Transform) -> Self {
+        Self { center: place.to_world(self.center), axis: place.vector_to_world(self.axis), ..self }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Solid {
+    Box(Aabb),
+    Cylinder(Cylinder),
+}
+
+impl Solid {
+    pub fn bounds(self) -> Aabb {
+        match self {
+            Self::Box(bounds) => bounds,
+            Self::Cylinder(cylinder) => cylinder.bounds(),
+        }
+    }
+
+    pub fn world_bounds(self, place: Transform) -> Aabb {
+        match self {
+            Self::Box(bounds) => place.box_to_world(bounds),
+            Self::Cylinder(cylinder) => cylinder.placed(place).bounds(),
+        }
+    }
+
+    pub(crate) fn overlaps(self, other: Self) -> bool {
+        if (self.bounds().max.min(other.bounds().max) - self.bounds().min.max(other.bounds().min)).min_element() <= 1e-6 {
+            return false;
+        }
+        matches!((self, other), (Self::Box(_), Self::Box(_))) || convex_contact(self, Transform::default(), other, DVec3::ZERO).is_some()
+    }
+
+    pub fn volume(self) -> f64 {
+        match self {
+            Self::Box(bounds) => (bounds.max - bounds.min).element_product(),
+            Self::Cylinder(c) => std::f64::consts::PI * c.radius * c.radius * 2.0 * c.half,
+        }
+    }
+}
+
+pub fn block_solids(offset: DVec3, state: &crate::content::StateInfo) -> impl Iterator<Item = Solid> + '_ {
+    state
+        .cylinder
+        .map(|s| Solid::Cylinder(Cylinder { center: s.center + offset, ..s }))
+        .into_iter()
+        .chain(
+            state
+                .collision
+                .iter()
+                .filter(move |_| state.cylinder.is_none())
+                .map(move |b| {
+                    let b = b.map(f64::from);
+                    Solid::Box(Aabb { min: offset + DVec3::new(b[0], b[1], b[2]), max: offset + DVec3::new(b[3], b[4], b[5]) })
+                }),
+        )
+}
+
+mod convex;
+use convex::convex_contact;
+
+/// Where a body's blocks are, from its own coordinates to the world's and back.
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct Transform {
     origin: DVec3,
+    rotation: DQuat,
 }
 
 impl Transform {
-    /// Of a body whose entity is at `pos`: its block (0, 0, 0) is centered on it.
+    const CENTER: DVec3 = DVec3::splat(0.5);
+    pub const FEET: DVec3 = DVec3::new(0.5, 0.0, 0.5);
+
     pub fn of(pos: DVec3) -> Transform {
-        Transform { origin: pos - DVec3::new(0.5, 0.0, 0.5) }
+        Self { origin: pos - Self::FEET, rotation: DQuat::IDENTITY }
     }
-    /// Where its block (0, 0, 0) starts, for what can only move: drawing.
+    pub fn rotated(pos: DVec3, rotation: DQuat) -> Transform {
+        if rotation == DQuat::IDENTITY {
+            return Self::of(pos);
+        }
+        let center = pos + DVec3::Y * 0.5;
+        Transform { origin: center - rotation * Self::CENTER, rotation }
+    }
     pub fn origin(self) -> DVec3 {
         self.origin
     }
+    pub fn rotation(self) -> DQuat {
+        self.rotation
+    }
+    pub fn position(self) -> DVec3 {
+        self.origin + self.vector_to_world(Self::CENTER) - DVec3::Y * 0.5
+    }
+    pub fn vector_to_world(self, v: DVec3) -> DVec3 {
+        if self.rotation == DQuat::IDENTITY { v } else { self.rotation * v }
+    }
+    pub fn vector_to_local(self, v: DVec3) -> DVec3 {
+        if self.rotation == DQuat::IDENTITY { v } else { self.rotation.conjugate() * v }
+    }
     pub fn to_world(self, p: DVec3) -> DVec3 {
-        p + self.origin
+        self.vector_to_world(p) + self.origin
     }
     pub fn to_local(self, p: DVec3) -> DVec3 {
-        p - self.origin
+        self.vector_to_local(p - self.origin)
     }
     pub fn box_to_world(self, b: Aabb) -> Aabb {
-        b.shifted(self.origin)
+        if self.rotation == DQuat::IDENTITY {
+            return b.shifted(self.origin);
+        }
+        let m = DMat3::from_quat(self.rotation);
+        let abs = DMat3::from_cols(m.x_axis.abs(), m.y_axis.abs(), m.z_axis.abs());
+        let center = self.to_world((b.min + b.max) * 0.5);
+        let half = abs * ((b.max - b.min) * 0.5);
+        Aabb { min: center - half, max: center + half }
     }
     pub fn box_to_local(self, b: Aabb) -> Aabb {
-        b.shifted(-self.origin)
+        Self { origin: self.vector_to_local(-self.origin), rotation: self.rotation.conjugate() }.box_to_world(b)
+    }
+    pub fn cell_at(self, p: IVec3) -> IVec3 {
+        self.to_world(p.as_dvec3() + Self::CENTER)
+            .floor()
+            .as_ivec3()
+    }
+    pub fn relative_to(self, parent: Transform) -> Transform {
+        Transform { origin: parent.to_local(self.origin), rotation: parent.rotation.conjugate() * self.rotation }
+    }
+    pub fn in_frame(self, parent: Transform) -> Transform {
+        Transform { origin: parent.to_world(self.origin), rotation: (parent.rotation * self.rotation).normalize() }
+    }
+    pub fn turn(self) -> weft_abi::Turn {
+        let face = |v| {
+            let v = self.vector_to_world(v);
+            crate::world::DIRS
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| v.dot(a.as_dvec3()).total_cmp(&v.dot(b.as_dvec3())))
+                .map_or(0, |(i, _)| i as u8)
+        };
+        weft_abi::Turn { east: face(DVec3::X), up: face(DVec3::Y) }
+    }
+    pub fn grid_aligned(self) -> bool {
+        self.vector_to_world(DVec3::X).abs().max_element() > 1.0 - 1e-9 && self.vector_to_world(DVec3::Y).abs().max_element() > 1.0 - 1e-9
     }
     /// The whole-block place of its coordinates among a world's, which was `was`. On each axis it
     /// gets to the next only strictly past the middle: exactly half is no more, or which way
@@ -126,14 +374,172 @@ impl Transform {
     }
 }
 
+#[derive(Clone, Copy)]
+struct RotatedBox {
+    center: DVec3,
+    half: DVec3,
+    axes: DMat3,
+}
+
+struct BoxInterval {
+    enter: f64,
+    leave: f64,
+    entry_normal: DVec3,
+    depth: f64,
+    overlap_normal: DVec3,
+}
+
+impl RotatedBox {
+    fn new(b: Aabb, place: Transform) -> Self {
+        Self { center: place.to_world((b.min + b.max) * 0.5), half: (b.max - b.min) * 0.5, axes: DMat3::from_quat(place.rotation()) }
+    }
+
+    // Project the boxes and the motion onto the separating axes.
+    fn overlap_interval(self, b: Aabb, velocity: DVec3) -> Option<(f64, f64)> {
+        let hit = self.project::<false>(b, velocity)?;
+        Some((hit.enter, hit.leave))
+    }
+
+    fn project<const CONTACT: bool>(self, b: Aabb, velocity: DVec3) -> Option<BoxInterval> {
+        let center = (b.min + b.max) * 0.5 - self.center;
+        let half = (b.max - b.min) * 0.5;
+        let opposite = self.axes.transpose();
+        let mut hit = BoxInterval {
+            enter: f64::NEG_INFINITY,
+            leave: f64::INFINITY,
+            entry_normal: DVec3::ZERO,
+            depth: f64::INFINITY,
+            overlap_normal: DVec3::ZERO,
+        };
+        let basis = [DVec3::X, DVec3::Y, DVec3::Z];
+        let axes = [self.axes.x_axis, self.axes.y_axis, self.axes.z_axis];
+        for axis in basis
+            .into_iter()
+            .chain(axes)
+            .chain(basis.into_iter().flat_map(|a| axes.map(|b| a.cross(b))))
+        {
+            let length = axis.length();
+            if length < 1e-8 {
+                continue;
+            }
+            let room = (opposite * axis).abs().dot(self.half) + axis.abs().dot(half);
+            let distance = center.dot(axis);
+            let speed = velocity.dot(axis);
+            if CONTACT {
+                let depth = (room - distance.abs()) / length;
+                if depth < hit.depth - 1e-7 {
+                    hit.depth = depth;
+                    hit.overlap_normal = axis * (-1.0f64.copysign(distance) / length);
+                }
+            }
+            if speed.abs() < 1e-9 * length {
+                if distance.abs() >= room - 1e-7 * length {
+                    return None;
+                }
+                continue;
+            }
+            let mid = -distance / speed;
+            let size = room / speed.abs();
+            if mid - size > hit.enter {
+                hit.enter = mid - size;
+                if CONTACT {
+                    hit.entry_normal = axis * (speed.signum() / length);
+                }
+            }
+            hit.leave = hit.leave.min(mid + size);
+            if hit.enter >= hit.leave {
+                return None;
+            }
+        }
+        Some(hit)
+    }
+
+    fn axis_aligned(b: Aabb) -> Self {
+        Self { center: (b.min + b.max) * 0.5, half: (b.max - b.min) * 0.5, axes: DMat3::IDENTITY }
+    }
+}
+
+pub fn rotated_collides(c: &Content, block: &impl Cells, local: Solid, place: Transform) -> bool {
+    let area = local.world_bounds(place);
+    let mut rotated = None;
+    each_shape(c, block, area, |world, _| {
+        if !world.bounds().intersects(&area) {
+            return false;
+        }
+        match (local, world) {
+            (Solid::Box(_), Solid::Box(_)) if place.rotation() == DQuat::IDENTITY => true,
+            (Solid::Box(local), Solid::Box(world)) => rotated
+                .get_or_insert_with(|| RotatedBox::new(local, place))
+                .overlap_interval(world, DVec3::ZERO)
+                .is_some(),
+            _ => convex_contact(local, place, world, DVec3::ZERO).is_some(),
+        }
+    })
+}
+
+#[derive(Clone, Copy)]
+pub struct BoxContact {
+    pub fraction: f64,
+    pub normal: DVec3,
+    pub point: DVec3,
+    pub depth: f64,
+}
+
+/// Contact of an oriented box with the cells along a linear displacement, or current overlap.
+pub fn rotated_contacts(c: &Content, block: &impl Cells, local: Solid, place: Transform, delta: DVec3, mut report: impl FnMut(BoxContact)) {
+    let area = local.world_bounds(place).swept(delta);
+    let mut rotated = None;
+    each_merged_shape(c, block, area, |target| {
+        let (Solid::Box(local), Solid::Box(world)) = (local, target) else {
+            if let Some(hit) = convex_contact(local, place, target, delta) {
+                report(hit);
+            }
+            return;
+        };
+        let shape = rotated.get_or_insert_with(|| RotatedBox::new(local, place));
+        let Some(hit) = shape.project::<true>(world, -delta) else { return };
+        let (fraction, normal, depth) = if delta == DVec3::ZERO {
+            (0.0, hit.overlap_normal, hit.depth)
+        } else if hit.enter >= -1e-6 && hit.enter <= 1.0 && hit.leave > 1e-7 {
+            (hit.enter.max(0.0), hit.entry_normal, 0.0)
+        } else if hit.enter < 0.0 && hit.leave > 0.0 && hit.depth > 1e-6 {
+            (0.0, hit.overlap_normal, hit.depth)
+        } else {
+            return;
+        };
+        let feature = |mut center: DVec3, axes: DMat3, half: DVec3, normal: DVec3| {
+            let mut free = half;
+            for i in 0..3 {
+                let axis = axes.col(i);
+                let n = axis.dot(normal);
+                if n.abs() > 1e-5 {
+                    center += axis * (n.signum() * half[i]);
+                    free[i] = 0.0;
+                }
+            }
+            (center, axes.transpose(), free)
+        };
+        let (a, a_axes, a_half) = feature(shape.center + delta * fraction, shape.axes, shape.half, -normal);
+        let (b, b_axes, b_half) = feature((world.min + world.max) * 0.5, DMat3::IDENTITY, (world.max - world.min) * 0.5, normal);
+        let (u, v) = normal.any_orthonormal_pair();
+        let span = |axis: DVec3| {
+            let (x, y) = (a.dot(axis), b.dot(axis));
+            let (r, s) = ((a_axes * axis).abs().dot(a_half), (b_axes * axis).abs().dot(b_half));
+            ((x - r).max(y - s) + (x + r).min(y + s)) * 0.5
+        };
+        let point = u * span(u) + v * span(v) + normal * ((a + b).dot(normal) * 0.5);
+        report(BoxContact { fraction, normal, point, depth });
+    });
+}
+
 /// Blocks a moving structure is built of, in its own coordinates (outside it: air).
 pub trait Blocks: Sync {
     fn block(&self, p: IVec3) -> u32;
     /// The corners of its blocks, inclusive; `None` when it has none.
     fn bounds(&self) -> Option<(IVec3, IVec3)>;
     /// What else is in that cell.
-    fn extras(&self, _p: IVec3) -> &[u32] {
-        &[]
+    fn layout(&self, _p: IVec3) -> &CellLayout {
+        &crate::world::placement::EMPTY_LAYOUT
     }
 }
 
@@ -141,20 +547,68 @@ pub trait Blocks: Sync {
 /// count as solid), and what else is in it. A plain closure has nothing else.
 pub trait Cells {
     fn main(&self, p: IVec3) -> Option<u32>;
-    fn extras(&self, _p: IVec3) -> &[u32] {
-        &[]
+    fn layout(&self, _p: IVec3) -> &CellLayout {
+        &crate::world::placement::EMPTY_LAYOUT
     }
     /// Both at once, for what reads every cell around every mob every tick.
     #[inline]
-    fn cell(&self, p: IVec3) -> Option<(u32, &[u32])> {
-        Some((self.main(p)?, self.extras(p)))
+    fn cell(&self, p: IVec3) -> Option<(u32, &CellLayout)> {
+        Some((self.main(p)?, self.layout(p)))
     }
     /// The liquid in a cell, on its own or in with something.
     fn liquid(&self, c: &Content, p: IVec3) -> Option<u32> {
         self.main(p)
             .into_iter()
-            .chain(self.extras(p).iter().copied())
+            .chain(self.layout(p).extras.iter().copied())
             .find(|&s| c.states[s as usize].liquid.is_some())
+    }
+
+    fn liquid_block_at(&self, c: &Content, p: DVec3) -> Option<u32> {
+        self.liquid(c, p.floor().as_ivec3())
+    }
+
+    fn masks_liquid(&self) -> bool {
+        false
+    }
+}
+
+pub type DryVolume<'a> = (Transform, &'a [(IVec3, IVec3)]);
+
+pub fn inside_dry_volume((place, boxes): DryVolume<'_>, point: DVec3) -> bool {
+    let p = place.to_local(point).floor().as_ivec3();
+    boxes
+        .iter()
+        .any(|&(lo, hi)| p.cmpge(lo).all() && p.cmplt(hi).all())
+}
+
+pub struct ObservedCells<'a, C> {
+    pub cells: C,
+    pub dry: &'a [DryVolume<'a>],
+}
+
+impl<C: Cells> Cells for ObservedCells<'_, C> {
+    fn main(&self, p: IVec3) -> Option<u32> {
+        self.cells.main(p)
+    }
+    fn layout(&self, p: IVec3) -> &CellLayout {
+        self.cells.layout(p)
+    }
+    fn cell(&self, p: IVec3) -> Option<(u32, &CellLayout)> {
+        self.cells.cell(p)
+    }
+    fn liquid(&self, c: &Content, p: IVec3) -> Option<u32> {
+        self.cells.liquid(c, p)
+    }
+    fn liquid_block_at(&self, c: &Content, point: DVec3) -> Option<u32> {
+        let state = self.cells.liquid_block_at(c, point)?;
+        let dry = self
+            .dry
+            .iter()
+            .any(|&volume| inside_dry_volume(volume, point));
+        (!dry).then_some(state)
+    }
+    fn masks_liquid(&self) -> bool {
+        !self.dry.is_empty()
     }
 }
 
@@ -171,19 +625,9 @@ impl Cells for BodyCells<'_> {
     fn main(&self, p: IVec3) -> Option<u32> {
         Some(self.0.block(p))
     }
-    fn extras(&self, p: IVec3) -> &[u32] {
-        self.0.extras(p)
+    fn layout(&self, p: IVec3) -> &CellLayout {
+        self.0.layout(p)
     }
-}
-
-/// The block a cell is part of, its cell and what else is there: a big block's own cell and
-/// block for its others (`Content::block_at`), whose boxes reach this one.
-fn block_of_cell<'a>(c: &Content, block: &'a impl Cells, p: IVec3, main: u32, extras: &'a [u32]) -> Option<(IVec3, u32, &'a [u32])> {
-    if c.covered_step(main).is_none() {
-        return Some((p, main, extras));
-    }
-    let (at, s) = c.block_at(|q| block.main(q), p)?;
-    Some((at, s, if at == p { &[] } else { block.extras(at) }))
 }
 
 /// Collision boxes of a state in block-local coordinates.
@@ -207,6 +651,7 @@ pub struct Body<'a> {
     pub carry: f64,
     pub crushes: &'a [crate::content::Hazard],
     pub blocks: Option<(&'a dyn Blocks, Transform)>,
+    before: Transform,
 }
 
 impl<'a> Body<'a> {
@@ -215,12 +660,12 @@ impl<'a> Body<'a> {
     pub fn of(
         id: u64,
         kind: &'a crate::registry::EntityKind,
-        pos: DVec3,
+        place: Transform,
         size: (f64, f64),
-        delta: DVec3,
+        before: Transform,
         built: Option<&'a dyn Blocks>,
     ) -> Option<Body<'a>> {
-        let place = Transform::of(pos);
+        let pos = place.position();
         let aabb = match built {
             Some(s) => {
                 let (lo, hi) = s.bounds()?;
@@ -229,7 +674,20 @@ impl<'a> Body<'a> {
             None => Aabb::around(pos, size.0, size.1),
         };
         let blocks = built.map(|s| (s, place));
-        Some(Body { id, aabb, delta, carry: kind.carry_height as f64, crushes: &kind.hazards, blocks })
+        let delta = pos - before.position();
+        Some(Body { id, aabb, delta, carry: kind.carry_height as f64, crushes: &kind.hazards, blocks, before })
+    }
+
+    fn change_at(&self, now: DVec3) -> DVec3 {
+        self.blocks
+            .filter(|(_, place)| place.rotation() != self.before.rotation())
+            .map_or(self.delta, |(_, place)| now - self.before.to_world(place.to_local(now)))
+    }
+
+    pub fn carry_from(&self, was: DVec3) -> DVec3 {
+        self.blocks
+            .filter(|(_, place)| place.rotation() != self.before.rotation())
+            .map_or(self.delta, |(_, place)| place.to_world(self.before.to_local(was)) - was)
     }
 
     /// Its solid boxes touching `area`, in world space (until `f` returns true).
@@ -239,48 +697,142 @@ impl<'a> Body<'a> {
         }
         match self.blocks {
             None => f(self.aabb),
-            Some((blocks, place)) => each_solid(c, &BodyCells(blocks), place.box_to_local(area), |b| f(place.box_to_world(b))),
+            Some((blocks, place)) => each_shape(c, &BodyCells(blocks), place.box_to_local(area), |solid, _| match solid {
+                Solid::Box(b)
+                    if place.rotation() != DQuat::IDENTITY
+                        && RotatedBox::new(b, place)
+                            .overlap_interval(area, DVec3::ZERO)
+                            .is_none() =>
+                {
+                    false
+                }
+                Solid::Cylinder(_) if convex_contact(solid, place, Solid::Box(area), DVec3::ZERO).is_none() => false,
+                _ => f(solid.world_bounds(place)),
+            }),
         }
     }
 
     /// Its solid boxes something with feet at `pos` could stand on, at most `reach` below the feet.
-    fn under(&self, c: &Content, pos: DVec3, half_width: f64, reach: f64, mut f: impl FnMut(Aabb)) {
+    fn under(&self, c: &Content, pos: DVec3, half_width: f64, below: f64, above: f64, before: bool, mut f: impl FnMut(Aabb, f64)) {
         let area = Aabb {
-            min: DVec3::new(pos.x - half_width, pos.y - reach - 1e-3, pos.z - half_width),
-            max: DVec3::new(pos.x + half_width, pos.y + 1e-3, pos.z + half_width),
+            min: DVec3::new(pos.x - half_width, pos.y - below - 1e-3, pos.z - half_width),
+            max: DVec3::new(pos.x + half_width, pos.y + above + 1e-3, pos.z + half_width),
         };
-        let mut look = |b: Aabb| {
+        let mut look = |b: Aabb, slip| {
             let inside = b.min.x < area.max.x && b.max.x > area.min.x && b.min.z < area.max.z && b.max.z > area.min.z;
-            if inside && b.max.y <= pos.y + 1e-3 && b.max.y >= pos.y - reach - 1e-3 {
-                f(b);
+            if inside && b.max.y <= area.max.y && b.max.y >= area.min.y {
+                f(b, slip);
             }
             false
         };
         match self.blocks {
             // Some only shove, and aren't to stand on and be taken away by.
-            Some((blocks, place)) if self.aabb.intersects(&area) => {
-                let solid = |p: IVec3| {
-                    Some(blocks.block(p))
-                        .filter(|s| c.states[*s as usize].flags & bf::NOT_STOOD_ON == 0)
-                        .or(Some(crate::content::AIR))
-                };
-                each_solid(c, &solid, place.box_to_local(area), |b| look(place.box_to_world(b)));
+            Some((blocks, place)) => {
+                let place = if before { self.before } else { place };
+                let Some((lo, hi)) = blocks.bounds() else { return };
+                let bounds = Aabb { min: lo.as_dvec3(), max: (hi + IVec3::ONE).as_dvec3() };
+                if !place.box_to_world(bounds).intersects(&area) {
+                    return;
+                }
+                each_shape(c, &BodyCells(blocks), place.box_to_local(area), |solid, state| {
+                    if c.states[state as usize].flags & bf::NOT_STOOD_ON != 0 {
+                        return false;
+                    }
+                    let mut world = solid.world_bounds(place);
+                    let probe = Aabb::around(pos.with_y(area.max.y), half_width, 1e-3);
+                    match solid {
+                        Solid::Box(b) if place.rotation() != DQuat::IDENTITY => {
+                            let Some(hit) = RotatedBox::new(b, place).project::<true>(probe, -DVec3::Y) else { return false };
+                            if -hit.entry_normal.y < WALKABLE_Y {
+                                return false;
+                            }
+                            world.max.y = probe.min.y - hit.enter;
+                        }
+                        Solid::Cylinder(cylinder) => {
+                            let delta = DVec3::NEG_Y * (area.max.y - area.min.y + 1e-3);
+                            let Some(hit) =
+                                convex_contact(Solid::Box(probe), Transform::default(), Solid::Cylinder(cylinder.placed(place)), delta)
+                            else {
+                                return false;
+                            };
+                            if hit.normal.y < WALKABLE_Y {
+                                return false;
+                            }
+                            world.max.y = probe.min.y + delta.y * hit.fraction;
+                        }
+                        _ => {}
+                    };
+                    look(world, c.states[state as usize].friction as f64)
+                });
             }
             _ => {
-                self.solids(c, area, look);
+                look(
+                    self.aabb
+                        .shifted(if before { -self.delta } else { DVec3::ZERO }),
+                    0.6,
+                );
             }
         }
     }
 
     /// How much of it a box with feet at `pos` stands on.
-    fn contact(&self, c: &Content, pos: DVec3, half_width: f64, reach: f64) -> f64 {
+    fn contact(&self, c: &Content, pos: DVec3, half_width: f64, reach: f64, before: bool) -> f64 {
         let mut area = 0.0;
-        self.under(c, pos, half_width, reach, |b| {
-            let width = |lo: f64, hi: f64, at: f64| (hi.min(at + half_width) - lo.max(at - half_width)).max(0.0);
-            area += width(b.min.x, b.max.x, pos.x) * width(b.min.z, b.max.z, pos.z);
+        self.under(c, pos, half_width, reach, 0.0, before, |b, _| {
+            area += footprint_area(b, pos, half_width);
         });
         area
     }
+
+    pub fn deck_height(&self, c: &Content, pos: DVec3, half_width: f64, above: f64) -> Option<f64> {
+        let above = above.max(0.0).min((self.aabb.max.y - pos.y).max(0.0));
+        let mut top = None::<f64>;
+        self.under(c, pos, half_width, DECK_REACH, above, false, |b, _| {
+            top = Some(top.map_or(b.max.y, |y| y.max(b.max.y)));
+        });
+        top
+    }
+}
+
+fn footprint_area(b: Aabb, pos: DVec3, half_width: f64) -> f64 {
+    let width = |lo: f64, hi: f64, at: f64| (hi.min(at + half_width) - lo.max(at - half_width)).max(0.0);
+    width(b.min.x, b.max.x, pos.x) * width(b.min.z, b.max.z, pos.z)
+}
+
+fn ground_material(c: &Content, block: &impl Cells, bodies: &[Body<'_>], skip: u64, pos: DVec3, half_width: f64) -> f64 {
+    let mut top = None::<(f64, f64, f64)>;
+    let mut consider = |shape: Aabb, slip| {
+        let y = shape.max.y;
+        let area = footprint_area(shape, pos, half_width);
+        if area > 0.0 && top.is_none_or(|(height, coverage, _)| y > height + 1e-7 || (y - height).abs() <= 1e-7 && area > coverage) {
+            top = Some((y, area, slip));
+        }
+    };
+    let mut body_underfoot = false;
+    for b in bodies.iter().filter(|b| b.id != skip) {
+        b.under(c, pos, half_width, 0.0, 0.0, false, |shape, slip| {
+            body_underfoot = true;
+            consider(shape, slip);
+        });
+    }
+    if body_underfoot {
+        // At the junction with a deck the world can still be bearing most of the footprint.
+        let probe = Aabb::around(pos - DVec3::Y * 1e-3, half_width, 2e-3);
+        each_solid_with_state(c, block, probe, |shape, state| {
+            if shape.max.y >= probe.min.y && shape.max.y <= probe.max.y {
+                consider(shape, c.states[state as usize].friction as f64);
+            }
+            false
+        });
+    }
+    top.map_or_else(
+        || {
+            block
+                .main((pos - DVec3::Y * 0.5).floor().as_ivec3())
+                .map_or(0.6, |s| c.states[s as usize].friction as f64)
+        },
+        |(_, _, slip)| slip,
+    )
 }
 
 /// What a box stands on, given where its feet are against each body: the one it has most under it.
@@ -291,18 +843,19 @@ fn most_under<'a>(
     skip: u64,
     half_width: f64,
     reach: f64,
-    feet: impl Fn(&Body) -> DVec3,
+    pos: DVec3,
+    before: bool,
 ) -> Option<&'a Body<'a>> {
     let mut best: Option<(&Body, f64)> = None;
     let mut tied = false;
     for b in bodies.iter().filter(|b| b.id != skip) {
-        let area = b.contact(c, feet(b), half_width, reach);
+        let area = b.contact(c, pos, half_width, reach, before);
         if area <= 1e-9 {
             continue;
         }
         match best {
             Some((_, most)) if area > most + 1e-9 => (best, tied) = (Some((b, area)), false),
-            Some((other, most)) if area >= most - 1e-9 => tied |= other.delta != b.delta,
+            Some((other, most)) if area >= most - 1e-9 => tied |= other.carry_from(pos) != b.carry_from(pos),
             Some(_) => {}
             None => best = Some((b, area)),
         }
@@ -323,9 +876,7 @@ pub struct Ride {
 /// ship); further away it lets go. What stood on a body before its move rides from that move.
 pub fn ride(c: &Content, pos: DVec3, half_width: f64, on_ground: bool, support: &mut Option<u64>, bodies: &[Body<'_>], skip: u64) -> Ride {
     if support.is_none() && on_ground {
-        *support = most_under(c, bodies, skip, half_width, 0.0, |b| pos + b.delta)
-            .filter(|b| b.delta != DVec3::ZERO)
-            .map(|b| b.id);
+        *support = most_under(c, bodies, skip, half_width, 0.0, pos, true).map(|b| b.id);
     }
     let Some(id) = *support else { return Ride::default() };
     let Some(b) = bodies.iter().find(|b| b.id == id) else {
@@ -333,23 +884,44 @@ pub fn ride(c: &Content, pos: DVec3, half_width: f64, on_ground: bool, support: 
         return Ride::default();
     };
     // Where the body was before its move, which is where the rider stood on it.
-    let (lo, hi) = (b.aabb.min - b.delta, b.aabb.max - b.delta);
+    let past = b
+        .blocks
+        .filter(|(_, place)| place.rotation() != b.before.rotation())
+        .and_then(|(s, _)| s.bounds())
+        .map_or_else(
+            || b.aabb.shifted(-b.delta),
+            |(lo, hi)| {
+                b.before
+                    .box_to_world(Aabb { min: lo.as_dvec3(), max: (hi + IVec3::ONE).as_dvec3() })
+            },
+        );
+    let (lo, hi) = (past.min, past.max);
+    let mut carry = b.carry_from(pos);
+    if on_ground
+        && b.blocks
+            .is_some_and(|(_, place)| place.rotation() != b.before.rotation())
+    {
+        let at = pos + carry;
+        if let Some(y) = b.deck_height(c, at, half_width, DECK_REACH) {
+            carry.y = y - pos.y;
+        }
+    }
     // A rider right at the edge stays on (exact edges come and go with rounding).
     let e = half_width + 1e-6;
     let over = pos.x + e > lo.x && pos.x - e < hi.x && pos.z + e > lo.z && pos.z - e < hi.z;
     // Anywhere from its bottom (inside a structure's cabin, say) up to its carry height.
     if over && pos.y > lo.y - 0.25 && pos.y - hi.y <= b.carry.max(0.01) {
-        Ride { carry: b.delta, released: None }
+        Ride { carry, released: None }
     } else {
         *support = None;
-        Ride { carry: DVec3::ZERO, released: Some(b.delta) }
+        Ride { carry: DVec3::ZERO, released: Some(carry) }
     }
 }
 
 /// The body under a box with feet at `pos`, its top at most `reach` below the feet: the frame
 /// a position put there belongs to.
 pub fn body_below(c: &Content, pos: DVec3, half_width: f64, bodies: &[Body<'_>], reach: f64) -> Option<u64> {
-    most_under(c, bodies, 0, half_width, reach, |_| pos).map(|b| b.id)
+    most_under(c, bodies, 0, half_width, reach, pos, false).map(|b| b.id)
 }
 
 /// What bodies did to a box before its own move: the last move of one it let go of (for keeping
@@ -375,7 +947,7 @@ pub fn carried(
 ) -> Carried {
     let rode = ride(c, *pos, half_width, on_ground, support, bodies, skip);
     if rode.carry != DVec3::ZERO {
-        *pos = move_box(c, block, *pos, half_width, height, rode.carry, 0.0).pos;
+        *pos = move_box_excluding(c, block, bodies, [skip, support.unwrap_or(0)], *pos, half_width, height, rode.carry, 0.0, 0.0).pos;
     }
     let (shift, crushes) = push(c, *pos, half_width, height, bodies, skip, *support);
     let mut crushed = Vec::new();
@@ -391,12 +963,45 @@ pub fn carried(
         }
         *pos = to;
     }
+    let crushes_rotated = |b: &&Body<'_>| {
+        b.id != skip
+            && Some(b.id) != *support
+            && b.blocks
+                .is_some_and(|(_, place)| place.rotation() != DQuat::IDENTITY && place != b.before)
+            && b.crushes
+                .iter()
+                .any(|h| h.at == weft_abi::hazard_at::CRUSHED)
+    };
+    let overlaps = |b: &Body<'_>, pos| {
+        let area = Aabb::around(pos, half_width, height);
+        b.solids(c, area, |solid| solid.intersects(&area))
+    };
+    // Settle into the current frame before the caller chooses a new pose. Otherwise
+    // a wall that moved a little into the standing box can make a walker crawl under it.
+    if bodies
+        .iter()
+        .any(|b| b.id != skip && b.blocks.is_some() && overlaps(b, *pos))
+    {
+        *pos = move_box_with(c, block, bodies, skip, *pos, half_width, height, DVec3::ZERO, 0.0).pos;
+        for b in bodies
+            .iter()
+            .filter(crushes_rotated)
+            .filter(|b| overlaps(b, *pos))
+        {
+            crushed.extend(
+                b.crushes
+                    .iter()
+                    .filter(|h| h.at == weft_abi::hazard_at::CRUSHED)
+                    .copied(),
+            );
+        }
+    }
     Carried { released: rode.released, crushed }
 }
 
 /// The body whose top a box with feet at `pos` rests on.
 pub fn standing_on(c: &Content, pos: DVec3, half_width: f64, bodies: &[Body<'_>], skip: u64) -> Option<u64> {
-    most_under(c, bodies, skip, half_width, 0.0, |_| pos).map(|b| b.id)
+    most_under(c, bodies, skip, half_width, 0.0, pos, false).map(|b| b.id)
 }
 
 /// How far bodies that moved this step and overlap a box push it out of them, along each body's
@@ -417,9 +1022,19 @@ pub fn push<'a>(
     let (mut shift, mut crushes): (DVec3, &[crate::content::Hazard]) = (DVec3::ZERO, &[]);
     for b in bodies
         .iter()
-        .filter(|b| b.id != skip && Some(b.id) != support && b.delta != DVec3::ZERO)
+        .filter(|b| b.id != skip && Some(b.id) != support && b.aabb.intersects(&me))
     {
-        let d = b.delta.abs();
+        let change = b.change_at((me.min + me.max) * 0.5);
+        if change == DVec3::ZERO {
+            continue;
+        }
+        // Rotated contacts, including overlap with the support, go through the character sweep.
+        if b.blocks
+            .is_some_and(|(_, p)| p.rotation() != DQuat::IDENTITY)
+        {
+            continue;
+        }
+        let d = change.abs();
         let axis = if d.y >= d.x && d.y >= d.z {
             1
         } else if d.x >= d.z {
@@ -427,7 +1042,7 @@ pub fn push<'a>(
         } else {
             2
         };
-        let up = b.delta[axis] > 0.0;
+        let up = change[axis] > 0.0;
         b.solids(c, me, |s| {
             if s.intersects(&me) {
                 let need = if up { s.max[axis] - me.min[axis] } else { s.min[axis] - me.max[axis] };
@@ -447,14 +1062,14 @@ pub fn push<'a>(
     (shift, crushes)
 }
 
-/// Calls `f` with the solid collision boxes of the blocks around `area` (unloaded positions count
-/// as full blocks) until it returns true; true if it did. Nothing is collected: thousands of mobs
-/// move every tick.
-fn each_solid(c: &Content, block: &impl Cells, area: Aabb, mut f: impl FnMut(Aabb) -> bool) -> bool {
-    // One extra layer below for collision boxes taller than a block (fences); everything else
-    // stays inside its own block.
-    let lo = area.min.floor().as_ivec3() - IVec3::Y;
+fn each_solid_with_state(c: &Content, block: &impl Cells, area: Aabb, mut f: impl FnMut(Aabb, u32) -> bool) -> bool {
+    each_shape(c, block, area, |shape, state| f(shape.bounds(), state))
+}
+
+fn each_shape(c: &Content, block: &impl Cells, area: Aabb, mut f: impl FnMut(Solid, u32) -> bool) -> bool {
+    let lo = area.min.floor().as_ivec3();
     let hi = area.max.floor().as_ivec3();
+    let mut visited = Vec::new();
     for y in lo.y..=hi.y {
         for z in lo.z..=hi.z {
             for x in lo.x..=hi.x {
@@ -462,17 +1077,22 @@ fn each_solid(c: &Content, block: &impl Cells, area: Aabb, mut f: impl FnMut(Aab
                 let b = p.as_dvec3();
                 let full = Aabb { min: b, max: b + DVec3::ONE };
                 let Some((s, extras)) = block.cell(p) else {
-                    if f(full) {
+                    if f(Solid::Box(full), crate::content::AIR) {
                         return true;
                     }
                     continue;
                 };
-                let Some((at, s, extras)) = block_of_cell(c, block, p, s, extras) else { continue };
-                let b = at.as_dvec3();
-                for s in std::iter::once(s).chain(extras.iter().copied()) {
-                    for bx in &c.states[s as usize].collision {
-                        let bx = bx.map(|v| v as f64);
-                        if f(Aabb { min: b + DVec3::new(bx[0], bx[1], bx[2]), max: b + DVec3::new(bx[3], bx[4], bx[5]) }) {
+                for part in extras.parts(s) {
+                    let s = part.state;
+                    let (owner, resident) = part.owner(p);
+                    if owner != p || !c.states[s as usize].cells.is_empty() || resident.offset != IVec3::ZERO {
+                        if visited.contains(&(owner, resident)) {
+                            continue;
+                        }
+                        visited.push((owner, resident));
+                    }
+                    for shape in block_solids(b + part.shift(), &c.states[s as usize]) {
+                        if f(shape, s) {
                             return true;
                         }
                     }
@@ -481,6 +1101,62 @@ fn each_solid(c: &Content, block: &impl Cells, area: Aabb, mut f: impl FnMut(Aab
         }
     }
     false
+}
+
+fn each_merged_shape(c: &Content, block: &impl Cells, area: Aabb, mut visit: impl FnMut(Solid)) {
+    let mut boxes = CONTACT_SOLIDS.with_borrow_mut(std::mem::take);
+    boxes.clear();
+    each_shape(c, block, area, |shape, _| {
+        if shape.bounds().intersects(&area) {
+            match shape {
+                Solid::Box(b) => boxes.push(b),
+                Solid::Cylinder(_) => visit(shape),
+            }
+        }
+        false
+    });
+    merge_adjacent_boxes(&mut boxes);
+    for &b in &boxes {
+        visit(Solid::Box(b));
+    }
+    CONTACT_SOLIDS.with_borrow_mut(|saved| *saved = boxes);
+}
+
+// Adjacent boxes with the same cross section have one continuous surface for contact normals.
+fn merge_adjacent_boxes(boxes: &mut Vec<Aabb>) {
+    for axis in [0, 1, 2] {
+        if boxes.len() < 2 {
+            break;
+        }
+        let (a, b) = ((axis + 1) % 3, (axis + 2) % 3);
+        boxes.sort_unstable_by(|p, q| {
+            p.min[a]
+                .total_cmp(&q.min[a])
+                .then_with(|| p.max[a].total_cmp(&q.max[a]))
+                .then_with(|| p.min[b].total_cmp(&q.min[b]))
+                .then_with(|| p.max[b].total_cmp(&q.max[b]))
+                .then_with(|| p.min[axis].total_cmp(&q.min[axis]))
+        });
+        let mut kept = 0;
+        for i in 0..boxes.len() {
+            let next = boxes[i];
+            if kept > 0 {
+                let last = &mut boxes[kept - 1];
+                if last.min[a] == next.min[a]
+                    && last.max[a] == next.max[a]
+                    && last.min[b] == next.min[b]
+                    && last.max[b] == next.max[b]
+                    && last.max[axis] == next.min[axis]
+                {
+                    last.max[axis] = next.max[axis];
+                    continue;
+                }
+            }
+            boxes[kept] = next;
+            kept += 1;
+        }
+        boxes.truncate(kept);
+    }
 }
 
 /// How far along `from`..`to` (0..1) a cube `half` each way around `from` goes before something
@@ -493,7 +1169,14 @@ pub fn sweep(c: &Content, block: &impl Cells, from: DVec3, to: DVec3, half: f64)
     let h = DVec3::splat(half);
     let area = Aabb { min: from.min(to) - h, max: from.max(to) + h };
     let mut t = 1.0f64;
-    each_solid(c, block, area, |b| {
+    each_shape(c, block, area, |solid, _| {
+        let Solid::Box(b) = solid else {
+            let moving = Solid::Box(Aabb { min: from - h, max: from + h });
+            if let Some(hit) = convex_contact(moving, Transform::default(), solid, d).filter(|h| h.depth <= 1e-7) {
+                t = t.min(hit.fraction);
+            }
+            return false;
+        };
         let grown = Aabb { min: b.min - h, max: b.max + h };
         let inside = from.cmpgt(grown.min).all() && from.cmplt(grown.max).all();
         if !inside {
@@ -508,16 +1191,26 @@ pub fn sweep(c: &Content, block: &impl Cells, from: DVec3, to: DVec3, half: f64)
 
 /// Whether `area` overlaps anything solid.
 pub fn collides(c: &Content, block: &impl Cells, area: Aabb) -> bool {
-    each_solid(c, block, area, |s| s.intersects(&area))
+    rotated_collides(c, block, Solid::Box(area), Transform::of(Transform::FEET))
+}
+
+pub fn occupied(c: &Content, block: &impl Cells, bodies: &[Body<'_>], skip: u64, area: Aabb) -> bool {
+    collides(c, block, area)
+        || bodies
+            .iter()
+            .any(|b| b.id != skip && b.solids(c, area, |s| s.intersects(&area)))
 }
 
 thread_local! {
     /// `move_box_with`'s obstacles, kept between calls.
     static SOLIDS: std::cell::RefCell<Vec<Aabb>> = const { std::cell::RefCell::new(Vec::new()) };
+    static BODY_SOLIDS: std::cell::RefCell<Vec<Collider>> = const { std::cell::RefCell::new(Vec::new()) };
+    static CONTACT_SOLIDS: std::cell::RefCell<Vec<Aabb>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 pub struct MoveResult {
     pub pos: DVec3,
+    pub velocity: DVec3,
     pub hit: [bool; 3],
     pub on_ground: bool,
 }
@@ -541,78 +1234,147 @@ pub fn move_box_with(
     delta: DVec3,
     step_height: f64,
 ) -> MoveResult {
+    move_box_excluding(c, block, bodies, [skip, 0], pos, half_width, height, delta, step_height, 0.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn move_box_excluding(
+    c: &Content,
+    block: &impl Cells,
+    bodies: &[Body<'_>],
+    skip: [u64; 2],
+    pos: DVec3,
+    half_width: f64,
+    height: f64,
+    delta: DVec3,
+    step_height: f64,
+    grip: f64,
+) -> MoveResult {
     let start = Aabb::around(pos, half_width, height);
-    let mut sweep = start;
-    for i in 0..3 {
-        if delta[i] < 0.0 {
-            sweep.min[i] += delta[i];
-        } else {
-            sweep.max[i] += delta[i];
+    let bodies = || bodies.iter().filter(|b| !skip.contains(&b.id));
+    let mut body_shapes = BODY_SOLIDS.with_borrow_mut(std::mem::take);
+    body_shapes.clear();
+    // Sliding can introduce movement on an axis absent from the original displacement.
+    let radius = DVec3::splat(delta.length() + character::RECOVERY);
+    let area = Aabb { min: start.min - radius - DVec3::Y * step_height, max: start.max + radius + DVec3::Y * step_height };
+    for b in bodies().filter(|b| b.aabb.intersects(&area)) {
+        if let Some((blocks, place)) = b.blocks {
+            each_merged_shape(c, &BodyCells(blocks), place.box_to_local(area), |s| {
+                if s.world_bounds(place).intersects(&area) {
+                    body_shapes.push(Collider::new(s, place));
+                }
+            });
         }
     }
-    sweep.max.y += step_height;
+    let mut has_structure = !body_shapes.is_empty();
+    let mut bounds = if has_structure {
+        area
+    } else {
+        let mut bounds = start.swept(delta);
+        bounds.max.y += step_height;
+        bounds
+    };
     let mut solids = SOLIDS.with_borrow_mut(std::mem::take);
     solids.clear();
-    each_solid(c, block, sweep, |b| {
-        solids.push(b);
-        false
-    });
-    for b in bodies.iter().filter(|b| b.id != skip) {
-        b.solids(c, sweep, |s| {
-            solids.push(s);
+    let collect = |bounds: Aabb, wide: bool, solids: &mut Vec<Aabb>, body_shapes: &mut Vec<Collider>| {
+        each_shape(c, block, bounds, |solid, _| {
+            let b = solid.bounds();
+            match solid {
+                Solid::Box(_) if !wide || b.intersects(&bounds) => solids.push(b),
+                Solid::Cylinder(_) if b.intersects(&bounds) => body_shapes.push(Collider::new(solid, Transform::default())),
+                _ => {}
+            }
             false
-        });
+        })
+    };
+    collect(bounds, has_structure, &mut solids, &mut body_shapes);
+    if !has_structure && !body_shapes.is_empty() {
+        bounds = area;
+        has_structure = true;
+        solids.clear();
+        body_shapes.clear();
+        collect(bounds, true, &mut solids, &mut body_shapes);
     }
+    if has_structure {
+        merge_adjacent_boxes(&mut solids);
+    }
+    for b in bodies().filter(|b| b.blocks.is_none() && b.aabb.intersects(&bounds)) {
+        solids.push(b.aabb);
+    }
+    let sweep = Sweep { aligned: &solids, structures: &body_shapes };
+    let start = if has_structure { sweep.recover(start) } else { start };
+    let travel = |from, wish| {
+        if has_structure { sweep.travel(from, wish, grip) } else { axis_travel(&solids, from, wish) }
+    };
+    let mut path = travel(start, delta);
+    if step_height > 0.0 && (path.hit[0] || path.hit[2]) && delta.y <= 0.0 {
+        let vertical = |at, dy| {
+            if has_structure { sweep.vertical(at, dy) } else { axis_travel(&solids, at, DVec3::Y * dy) }
+        };
+        let up = vertical(start, step_height);
+        let lifted = up.area.min.y - start.min.y;
+        if lifted > 1e-7 {
+            let side = travel(up.area, delta.with_y(0.0));
+            let down = vertical(side.area, delta.y - lifted);
+            let gain = |a: Aabb| (a.min - start.min).with_y(0.0).length_squared();
+            if (down.floor || !has_structure) && gain(down.area) > gain(path.area) + 1e-6 {
+                path = Travel {
+                    area: down.area,
+                    velocity: side.velocity.with_y(if down.floor { 0.0 } else { delta.y }),
+                    hit: [side.hit[0], down.floor, side.hit[2]],
+                    floor: down.floor,
+                };
+            }
+        }
+    }
+    if has_structure && delta.y <= 0.0 && (path.floor || step_height > 0.0) {
+        let reach = (path.area.min - start.min)
+            .with_y(0.0)
+            .length()
+            .min(character::RECOVERY);
+        let floor = sweep.floor(path.area, reach);
+        path.floor = floor.is_some();
+        if let Some(at) = floor {
+            path.area = at;
+            path.velocity.y = 0.0;
+            path.hit[1] = true;
+        }
+    }
+    let pos = path.area.min + DVec3::new(half_width, 0.0, half_width);
+    SOLIDS.with_borrow_mut(|s| *s = solids);
+    BODY_SOLIDS.with_borrow_mut(|s| *s = body_shapes);
+    MoveResult { pos, hit: path.hit, velocity: path.velocity, on_ground: path.floor }
+}
 
-    let try_move = |from: Aabb, delta: DVec3| -> (Aabb, [bool; 3], DVec3) {
-        let mut b = from;
-        let mut hit = [false; 3];
-        let mut moved = DVec3::ZERO;
-        for axis in [1usize, 0, 2] {
-            let mut d = delta[axis];
-            if d == 0.0 {
+fn axis_travel(solids: &[Aabb], mut area: Aabb, delta: DVec3) -> Travel {
+    let mut hit = [false; 3];
+    let mut velocity = delta;
+    for axis in [1usize, 0, 2] {
+        let mut d = delta[axis];
+        if d == 0.0 {
+            continue;
+        }
+        for s in solids {
+            let overlap = (0..3)
+                .filter(|&a| a != axis)
+                .all(|a| area.min[a] < s.max[a] - 1e-7 && area.max[a] > s.min[a] + 1e-7);
+            if !overlap {
                 continue;
             }
-            for s in &solids {
-                let overlap = (0..3)
-                    .filter(|&a| a != axis)
-                    .all(|a| b.min[a] < s.max[a] - 1e-7 && b.max[a] > s.min[a] + 1e-7);
-                if !overlap {
-                    continue;
-                }
-                if d > 0.0 && b.max[axis] <= s.min[axis] + 1e-7 {
-                    d = d.min(s.min[axis] - b.max[axis]);
-                } else if d < 0.0 && b.min[axis] >= s.max[axis] - 1e-7 {
-                    d = d.max(s.max[axis] - b.min[axis]);
-                }
+            if d > 0.0 && area.max[axis] <= s.min[axis] + 1e-7 {
+                d = d.min(s.min[axis] - area.max[axis]);
+            } else if d < 0.0 && area.min[axis] >= s.max[axis] - 1e-7 {
+                d = d.max(s.max[axis] - area.min[axis]);
             }
-            if d != delta[axis] {
-                hit[axis] = true;
-            }
-            b.min[axis] += d;
-            b.max[axis] += d;
-            moved[axis] = d;
         }
-        (b, hit, moved)
-    };
-
-    let (mut b, mut hit, _) = try_move(start, delta);
-    let falling_or_grounded = delta.y <= 0.0;
-    if step_height > 0.0 && (hit[0] || hit[2]) && falling_or_grounded {
-        // Retry lifted by the step height, keep it if it gets further horizontally.
-        let (up, _, lifted) = try_move(start, DVec3::new(0.0, step_height, 0.0));
-        let (side, side_hit, _) = try_move(up, DVec3::new(delta.x, 0.0, delta.z));
-        let (down, _, _) = try_move(side, DVec3::new(0.0, -lifted.y + delta.y.min(0.0), 0.0));
-        let gained = |a: &Aabb| (a.min.x - start.min.x).powi(2) + (a.min.z - start.min.z).powi(2);
-        if gained(&down) > gained(&b) + 1e-6 {
-            b = down;
-            hit = [side_hit[0], false, side_hit[2]];
+        if d != delta[axis] {
+            hit[axis] = true;
+            velocity[axis] = 0.0;
         }
+        area.min[axis] += d;
+        area.max[axis] += d;
     }
-    let on_ground = hit[1] && delta.y < 0.0;
-    let pos = DVec3::new(b.min.x + half_width, b.min.y, b.min.z + half_width);
-    SOLIDS.with_borrow_mut(|s| *s = solids);
-    MoveResult { pos, hit, on_ground }
+    Travel { area, velocity, hit, floor: hit[1] && delta.y <= 0.0 }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -620,14 +1382,21 @@ pub struct Hit {
     /// In the coordinates of `frame`: the moving structure (entity) the block is part of, 0 for
     /// the world.
     pub block: IVec3,
-    /// The cell of the block hit: `block` itself, or a big block's own cell (`Content::block_at`).
+    /// The cell of the block hit: `block` itself, or a big block's own cell of the instance.
     pub origin: IVec3,
+    pub offset: IVec3,
     pub frame: u64,
     /// Face index (-X, +X, -Y, +Y, -Z, +Z) that was entered.
     pub face: u8,
     pub state: u32,
     /// From the ray's start to where it entered the block's selection.
     pub dist: f64,
+}
+
+impl Hit {
+    pub fn part(self) -> Part {
+        Part { state: self.state, offset: self.offset }
+    }
 }
 
 /// The one way to find what a ray from `eye` hits within `reach`: the nearest selection box of
@@ -645,7 +1414,7 @@ pub fn pick(
 ) -> Option<Hit> {
     let mut best = raycast(c, world, eye, dir, reach, flags);
     for &(id, place, blocks) in structures {
-        if let Some(mut h) = raycast(c, &BodyCells(blocks), place.to_local(eye), dir, reach, flags) {
+        if let Some(mut h) = raycast(c, &BodyCells(blocks), place.to_local(eye), place.vector_to_local(dir), reach, flags) {
             if best.is_none_or(|b| h.dist < b.dist) {
                 h.frame = id;
                 best = Some(h);
@@ -696,7 +1465,8 @@ fn slab(o: DVec3, d: DVec3, lo: DVec3, hi: DVec3, max: f64) -> Option<(f64, f64,
 /// First targetable block along the ray; with `abi::ray::LIQUIDS` liquids stop it too, with
 /// `SOLID` blocks are hit by their collision instead, what stops a body.
 pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: f64, flags: u32) -> Option<Hit> {
-    let (liquids, solid) = (flags & weft_abi::ray::LIQUIDS != 0, flags & weft_abi::ray::SOLID != 0);
+    let sources = flags & LIQUID_SOURCES != 0;
+    let (liquids, solid) = (sources || flags & weft_abi::ray::LIQUIDS != 0, flags & weft_abi::ray::SOLID != 0);
     let dir = dir.normalize();
     let mut p = origin.floor().as_ivec3();
     let step = dir.signum().as_ivec3();
@@ -708,24 +1478,31 @@ pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: 
     }
     let mut t = 0.0;
     while t <= max {
-        if let Some((at, main, extras)) = block
-            .cell(p)
-            .and_then(|(main, extras)| block_of_cell(c, block, p, main, extras))
-        {
-            let local = origin - at.as_dvec3();
-            // The nearest of what is in the cell; when asking for liquids, one in it comes first.
+        if let Some((main, layout)) = block.cell(p) {
             let mut best: Option<Hit> = None;
-            for state in std::iter::once(main).chain(extras.iter().copied()) {
+            for part in layout.parts(main) {
+                let state = part.state;
+                let (at, resident) = part.owner(p);
+                let local = origin - p.as_dvec3() - part.shift();
                 let s = &c.states[state as usize];
+                if sources
+                    && s.liquid
+                        .is_some_and(|liquid| state != c.liquids[liquid as usize].first_state)
+                {
+                    continue;
+                }
                 let wanted = liquids && s.liquid.is_some();
                 if s.flags & bf::NOT_TARGETABLE != 0 && !wanted && !solid {
                     continue;
                 }
-                let stuck = t == 0.0
+                let stuck = s.cylinder.is_none()
+                    && t == 0.0
                     && s.collision
                         .iter()
                         .any(|b| (0..3).all(|i| (b[i] as f64..b[i + 3] as f64).contains(&local[i])));
-                let near = if stuck {
+                let near = if let Some(cylinder) = s.cylinder {
+                    convex::cylinder_ray(cylinder, local, dir, max)
+                } else if stuck {
                     // Entered, as it were, through the face it looks most toward.
                     let axis = (0..3)
                         .max_by(|&a, &b| dir[a].abs().total_cmp(&dir[b].abs()))
@@ -738,12 +1515,12 @@ pub fn raycast(c: &Content, block: &impl Cells, origin: DVec3, dir: DVec3, max: 
                         .filter_map(|b| ray_box(local, dir, b, max))
                         .min_by(|a, b| a.0.total_cmp(&b.0))
                 };
-                if let Some((dist, face)) = near {
+                if let Some((dist, face)) = near.filter(|(dist, _)| *dist + 1e-8 >= t && *dist <= t_max.min_element() + 1e-8) {
                     if wanted {
-                        return Some(Hit { frame: 0, block: p, origin: at, face, state, dist });
+                        return Some(Hit { frame: 0, block: p, origin: at, offset: resident.offset, face, state, dist });
                     }
                     if best.is_none_or(|b| dist < b.dist) {
-                        best = Some(Hit { frame: 0, block: p, origin: at, face, state, dist });
+                        best = Some(Hit { frame: 0, block: p, origin: at, offset: resident.offset, face, state, dist });
                     }
                 }
             }
@@ -777,9 +1554,7 @@ fn ray_box(o: DVec3, d: DVec3, b: &[f32; 6], max: f64) -> Option<(f64, u8)> {
 /// Whether liquid fills the block `level` above the feet at `pos` (0 the feet, the eye height for
 /// eyes): the one question of "in water", asked at the height the caller means.
 pub fn in_liquid(c: &Content, block: &impl Cells, pos: DVec3, level: f64) -> bool {
-    block
-        .liquid(c, (pos + DVec3::Y * level).floor().as_ivec3())
-        .is_some()
+    block.liquid_block_at(c, pos + DVec3::Y * level).is_some()
 }
 
 /// What the cells a box of that height stands in do to it, by all that is in them: the one answer
@@ -797,34 +1572,48 @@ pub fn body_level(height: f64) -> f64 {
     (height * 0.5).min(1.0)
 }
 
-/// Whether `around` is the same at both, the cells it reads being the same: most of what moves
-/// a tick stays in them, and thousands of items lie still.
-pub fn same_around(a: DVec3, b: DVec3, height: f64) -> bool {
-    let mid = DVec3::Y * body_level(height);
-    a.floor() == b.floor() && (a + mid).floor() == (b + mid).floor()
-}
-
-pub fn around(c: &Content, block: &impl Cells, pos: DVec3, height: f64) -> Around {
-    let climbs = |s: u32| c.states[s as usize].flags & bf::CLIMBABLE != 0;
-    Around {
-        in_liquid: in_liquid(c, block, pos, 0.0) || in_liquid(c, block, pos, body_level(height)),
-        climbing: block
-            .cell(pos.floor().as_ivec3())
-            .is_some_and(|(main, extras)| climbs(main) || extras.iter().any(|&s| climbs(s))),
-    }
+pub fn around(c: &Content, block: &impl Cells, pos: DVec3, height: f64, half_width: f64) -> Around {
+    let area = Aabb::around(pos, half_width + 1e-4, height);
+    let lo = area.min.floor().as_ivec3();
+    let hi = area.max.floor().as_ivec3();
+    let climbing = (lo.y..=hi.y).any(|y| {
+        (lo.z..=hi.z).any(|z| {
+            (lo.x..=hi.x).any(|x| {
+                let cell = IVec3::new(x, y, z);
+                block.cell(cell).is_some_and(|(main, layout)| {
+                    layout.parts(main).any(|part| {
+                        c.states[part.state as usize].flags & bf::CLIMBABLE != 0
+                            && part
+                                .bounds(c)
+                                .any(|b| area.intersects(&Aabb { min: cell.as_dvec3() + b.min, max: cell.as_dvec3() + b.max }))
+                    })
+                })
+            })
+        })
+    });
+    Around { in_liquid: in_liquid(c, block, pos, 0.0) || in_liquid(c, block, pos, body_level(height)), climbing }
 }
 
 /// Which liquid a point is under, its surface considered: water in a block only fills it up to
 /// its level, unless more of the same is on top.
 pub fn liquid_at(c: &Content, block: &impl Cells, p: DVec3) -> Option<u16> {
     let at = p.floor().as_ivec3();
-    let st = &c.states[block.liquid(c, at)? as usize];
+    let (liquid, surface) = surface_of(c, block, at, block.liquid_block_at(c, p)?)?;
+    (p.y <= surface).then_some(liquid)
+}
+
+pub fn liquid_surface(c: &Content, block: &impl Cells, at: IVec3) -> Option<(u16, f64)> {
+    surface_of(c, block, at, block.liquid(c, at)?)
+}
+
+fn surface_of(c: &Content, block: &impl Cells, at: IVec3, state: u32) -> Option<(u16, f64)> {
+    let st = &c.states[state as usize];
     let liquid = st.liquid?;
     let covered = block
         .liquid(c, at + IVec3::Y)
         .is_some_and(|s| c.states[s as usize].liquid == Some(liquid));
     let surface = if covered { 1.0 } else { (8.0 - st.level as f64) / 9.0 };
-    (p.y - at.y as f64 <= surface).then_some(liquid)
+    Some((liquid, at.y as f64 + surface))
 }
 
 /// How a walker moves itself this tick, in blocks per tick like vanilla.
@@ -929,19 +1718,18 @@ pub fn walk(
     f: &Frame,
 ) -> Walked {
     let feet = pos.floor().as_ivec3();
-    let started_in = around(c, block, *pos, f.height);
+    let started_in = around(c, block, *pos, f.height, f.half_width);
     let Around { in_liquid: liquid, climbing } = started_in;
     let drag = block
-        .liquid(c, feet)
-        .or(block.main(feet))
+        .liquid_block_at(c, *pos)
+        .or_else(|| {
+            block
+                .main(feet)
+                .filter(|&s| c.states[s as usize].liquid.is_none())
+        })
         .map_or(1.0, |s| c.states[s as usize].drag as f64);
     // Never quite all of the speed kept, however slippery it is made.
-    let slip_at = |y: f64| {
-        let ground = block
-            .main(IVec3::new(feet.x, (y - 0.5).floor() as i32, feet.z))
-            .map_or(0.6, |s| c.states[s as usize].friction as f64);
-        (ground * f.moves.slip).min(0.999)
-    };
+    let slip = if on_ground { (ground_material(c, block, bodies, skip, *pos, f.half_width) * f.moves.slip).clamp(0.0, 0.999) } else { 1.0 };
     let accelerate = |vel: &mut DVec3, k: f64| {
         let len2 = ctl.wish.length_squared();
         if len2 > 1e-7 {
@@ -964,8 +1752,7 @@ pub fn walk(
             }
         }
     } else {
-        let slip = slip_at(pos.y);
-        let accel = if on_ground { ctl.ground * (0.216 / (slip * slip * slip)) } else { ctl.air * f.moves.air };
+        let accel = if on_ground { ctl.ground * (0.216 / slip.max(0.1).powi(3)) } else { ctl.air * f.moves.air };
         if ctl.jump > 0.0 && on_ground {
             vel.y = ctl.jump;
             *vel += ctl.jump_boost;
@@ -984,10 +1771,7 @@ pub fn walk(
     if ctl.careful && on_ground {
         let ground = |dx: f64, dz: f64| {
             let area = Aabb::around(*pos + DVec3::new(dx, -0.6, dz), f.half_width, f.height);
-            collides(c, block, area)
-                || bodies
-                    .iter()
-                    .any(|b| b.solids(c, area, |s| s.intersects(&area)))
+            occupied(c, block, bodies, skip, area)
         };
         let shrink = |v: f64| if v.abs() < 0.05 { 0.0 } else { v - 0.05 * v.signum() };
         while vel.x != 0.0 && !ground(vel.x, 0.0) {
@@ -1002,9 +1786,13 @@ pub fn walk(
         }
     }
     let before = *pos;
-    let move_by = |delta, step| move_box_with(c, block, bodies, skip, before, f.half_width, f.height, delta, step);
+    // Slipperiness is the retained speed. A quadratic conversion gives ordinary blocks
+    // static grip on a gentle slope while leaving nearly all of the slope force on ice.
+    let grip = 2.5 * (1.0 - slip).powi(2);
+    let move_by = |delta, step| move_box_excluding(c, block, bodies, [skip, 0], before, f.half_width, f.height, delta, step, grip);
     let step = if on_ground { f.moves.step } else { 0.0 };
-    let mut r = move_by(*vel, step);
+    let travel = *vel;
+    let mut r = move_by(travel, step);
     if ctl.auto_jump > 0.0 && on_ground && !jumped && !liquid && !climbing && !ctl.careful && (r.hit[0] || r.hit[2]) {
         let max_rise = jump_rise(ctl.auto_jump, f.gravity);
         if max_rise > step {
@@ -1018,11 +1806,7 @@ pub fn walk(
         }
     }
     *pos = r.pos;
-    for i in 0..3 {
-        if r.hit[i] {
-            vel[i] = 0.0;
-        }
-    }
+    *vel = r.velocity;
     if (r.hit[0] || r.hit[2] || ctl.jump > 0.0) && climbing {
         vel.y = 0.2 * f.moves.climb;
     }
@@ -1036,13 +1820,13 @@ pub fn walk(
         }
         // Up a ledge out of the water, vanilla's little boost at a wall with room above it.
         if r.hit[0] || r.hit[2] {
-            let above = Aabb::around(*pos + DVec3::new(vel.x, vel.y + 0.6, vel.z), f.half_width - 1e-3, f.height);
-            if !collides(c, block, above) {
+            let at = DVec3::new(before.x + travel.x, pos.y + vel.y + 0.6, before.z + travel.z);
+            let above = Aabb::around(at, f.half_width, f.height);
+            if !occupied(c, block, bodies, skip, above) {
                 vel.y = 0.3;
             }
         }
     } else {
-        let slip = if on_ground { slip_at(before.y) } else { 1.0 };
         vel.y = falling_speed(vel.y, f.gravity);
         vel.x *= slip * 0.91;
         vel.z *= slip * 0.91;
@@ -1107,11 +1891,7 @@ pub fn fly(
     } else {
         let r = move_box_with(c, block, bodies, skip, *pos, half_width, height, *vel, 0.0);
         *pos = r.pos;
-        for i in 0..3 {
-            if r.hit[i] {
-                vel[i] = 0.0;
-            }
-        }
+        *vel = r.velocity;
         *on_ground = r.on_ground;
         landed = r.on_ground && r.hit[1];
     }
@@ -1126,16 +1906,6 @@ pub fn fly(
 pub fn nudge(d: DVec3) -> DVec3 {
     let dist = d.x.abs().max(d.z.abs()).max(0.01).sqrt();
     DVec3::new(d.x, 0.0, d.z) * ((1.0 / dist).min(1.0) / dist * 0.05)
-}
-
-/// The top of a state's collision boxes in the block (a slab 0.5, a fence 1.5), `None` when
-/// nothing there stops a walker.
-pub fn collision_top(c: &Content, state: u32) -> Option<f64> {
-    c.states[state as usize]
-        .collision
-        .iter()
-        .map(|b| b[4] as f64)
-        .reduce(f64::max)
 }
 
 #[cfg(test)]

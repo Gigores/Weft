@@ -21,7 +21,7 @@ pub struct Calc {
 }
 
 /// An engine step: the dimension, what the value is about, the run.
-pub type Native = fn(&mut Dim, &'static Content, &abi::Query, &mut Calc);
+pub type Native = fn(&mut Dim, u64, &'static Content, &abi::Query, &mut Calc);
 
 #[derive(Clone, Copy)]
 pub enum Run {
@@ -61,24 +61,24 @@ impl Steps {
     }
 }
 
-fn add(_: &mut Dim, _: &'static Content, _: &abi::Query, s: &mut Calc) {
+fn add(_: &mut Dim, _space_id: u64, _: &'static Content, _: &abi::Query, s: &mut Calc) {
     s.value += s.arg;
 }
 
-fn mul(_: &mut Dim, _: &'static Content, _: &abi::Query, s: &mut Calc) {
+fn mul(_: &mut Dim, _space_id: u64, _: &'static Content, _: &abi::Query, s: &mut Calc) {
     s.value *= s.arg;
 }
 
-fn set(_: &mut Dim, _: &'static Content, _: &abi::Query, s: &mut Calc) {
+fn set(_: &mut Dim, _space_id: u64, _: &'static Content, _: &abi::Query, s: &mut Calc) {
     s.value = s.arg;
 }
 
-fn percent(_: &mut Dim, _: &'static Content, _: &abi::Query, s: &mut Calc) {
+fn percent(_: &mut Dim, _space_id: u64, _: &'static Content, _: &abi::Query, s: &mut Calc) {
     s.value += s.start * s.arg;
 }
 
 /// Nothing is built or broken in a dimension made not to be edited (`DimensionDef::editable`).
-fn fixed_dimension(d: &mut Dim, c: &'static Content, _: &abi::Query, s: &mut Calc) {
+fn fixed_dimension(d: &mut Dim, _space_id: u64, c: &'static Content, _: &abi::Query, s: &mut Calc) {
     if !c.dims[d.id as usize].editable {
         s.value = 0.0;
     }
@@ -87,7 +87,7 @@ fn fixed_dimension(d: &mut Dim, c: &'static Content, _: &abi::Query, s: &mut Cal
 /// What the attacker holds adds to its own `ATTACK_DAMAGE`, as vanilla's: an item's damage is
 /// what it hits for in a bare hand of the attribute's default (1), so a 6 sword adds 5. The
 /// stack `q.item` says (data and all while it still holds it), else what is in its hand.
-fn weapon(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn weapon(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let held = d.entities.held(q.entity);
     let stack = if q.item == 0 || held.item == q.item { held } else { abi::ItemStack::new(q.item, 1) };
     let from_item = c
@@ -99,28 +99,28 @@ fn weapon(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
 }
 
 /// Modern's swing: a hit does less the less it was charged.
-fn charge(_: &mut Dim, _: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn charge(_: &mut Dim, _space_id: u64, _: &'static Content, q: &abi::Query, s: &mut Calc) {
     s.value *= 0.2 + 0.8 * (q.charge as f64).powi(2);
 }
 
-fn crit(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn crit(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     if q.crit != 0 {
-        s.value *= d.attribute_for(c, crate::registry::attr::CRIT_DAMAGE, q, false);
+        s.value *= d.attribute_for(_space_id, c, crate::registry::attr::CRIT_DAMAGE, q, false);
     }
 }
 
 /// Vanilla's: a full swing while falling, off the ground, out of liquids and ladders, not
 /// sprinting.
-fn vanilla_crit(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn vanilla_crit(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let Some(e) = d.entities.get(q.entity) else { return };
-    let here = crate::physics::around(c, &*d.space, e.pos, e.height(c));
+    let here = crate::physics::around(c, &*d.space, e.pos, e.height(c), e.dims(c).half_width);
     if q.charge > 0.9 && e.fall > 0.0 && !e.on_ground && !here.in_liquid && !here.climbing && !e.sprinting {
         s.value = 1.0;
     }
 }
 
 /// Vanilla's: a full swing on the ground with what sweeps, not sprinting, not a crit.
-fn vanilla_sweep(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn vanilla_sweep(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let Some(e) = d.entities.get(q.entity) else { return };
     let sweeps = c
         .ids
@@ -131,12 +131,12 @@ fn vanilla_sweep(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc)
     }
 }
 
-fn sweep_damage(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
-    s.value = 1.0 + d.attribute_for(c, crate::registry::attr::SWEEPING_DAMAGE_RATIO, q, false) * s.value;
+fn sweep_damage(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+    s.value = 1.0 + d.attribute_for(_space_id, c, crate::registry::attr::SWEEPING_DAMAGE_RATIO, q, false) * s.value;
 }
 
 /// A full swing while sprinting knocks one more.
-fn sprint_knockback(d: &mut Dim, _: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn sprint_knockback(d: &mut Dim, _space_id: u64, _: &'static Content, q: &abi::Query, s: &mut Calc) {
     if q.charge > 0.9 && d.entities.get(q.entity).is_some_and(|e| e.sprinting) {
         s.value += 1.0;
     }
@@ -144,7 +144,7 @@ fn sprint_knockback(d: &mut Dim, _: &'static Content, q: &abi::Query, s: &mut Ca
 
 /// What can't be hurt so: a kind immune to the cause, a cause the world's rules turned off, and
 /// the invulnerable (`attribute::INVULNERABLE`) unless the cause pierces that.
-fn immune(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn immune(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     use crate::tag_bits::damage as df;
     let Some(kind) = d.entities.get(q.entity).map(|e| e.kind) else { return };
     let Some(def) = c.game.damage_causes.get(q.cause as usize) else { return };
@@ -155,7 +155,8 @@ fn immune(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
         .flatten()
         .is_some_and(|t| c.components.has(crate::components::ENTITY, kind, t));
     let off = c.game.damage_rules[q.cause as usize].is_some_and(|r| crate::config::get(r) == 0.0);
-    let spared = !def.has(df::PIERCES_INVULNERABLE) && d.attribute(c, q.entity, crate::registry::attr::INVULNERABLE, false) >= 1.0;
+    let spared =
+        !def.has(df::PIERCES_INVULNERABLE) && d.attribute(_space_id, c, q.entity, crate::registry::attr::INVULNERABLE, false) >= 1.0;
     if immune || off || spared {
         s.value = 0.0;
     }
@@ -163,18 +164,18 @@ fn immune(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
 
 /// What it resists comes off: `DAMAGE_RESISTANCE`, and `FIRE_RESISTANCE` of burning. What
 /// pierces invulnerability gets through.
-fn resistance(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn resistance(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     use crate::tag_bits::damage as df;
     let Some(def) = c.game.damage_causes.get(q.cause as usize) else { return };
     if def.has(df::PIERCES_INVULNERABLE) {
         return;
     }
-    let fire = if def.has(df::BURNING) { d.attribute(c, q.entity, crate::registry::attr::FIRE_RESISTANCE, false) } else { 0.0 };
-    s.value *= (1.0 - d.attribute(c, q.entity, crate::registry::attr::DAMAGE_RESISTANCE, false)) * (1.0 - fire);
+    let fire = if def.has(df::BURNING) { d.attribute(_space_id, c, q.entity, crate::registry::attr::FIRE_RESISTANCE, false) } else { 0.0 };
+    s.value *= (1.0 - d.attribute(_space_id, c, q.entity, crate::registry::attr::DAMAGE_RESISTANCE, false)) * (1.0 - fire);
 }
 
 /// What can't kill leaves half a heart.
-fn not_lethal(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn not_lethal(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let lethal = c
         .game
         .damage_causes
@@ -190,7 +191,7 @@ fn not_lethal(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
 }
 
 /// Recovering while its last hurt's `HURT_COOLDOWN` runs, unless the cause ignores that.
-fn hurt_cooldown(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn hurt_cooldown(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let ignores = c
         .game
         .damage_causes
@@ -206,21 +207,21 @@ fn hurt_cooldown(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc)
 }
 
 /// Past its `SAFE_FALL`, times its `FALL_DAMAGE_MULTIPLIER`; none for a kind that takes none.
-fn safe_fall(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn safe_fall(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let Some(kind) = d.entities.get(q.entity).map(|e| e.kind) else { return };
-    let safe = d.attribute(c, q.entity, crate::registry::attr::SAFE_FALL, false);
-    let mul = d.attribute(c, q.entity, crate::registry::attr::FALL_DAMAGE_MULTIPLIER, false);
+    let safe = d.attribute(_space_id, c, q.entity, crate::registry::attr::SAFE_FALL, false);
+    let mul = d.attribute(_space_id, c, q.entity, crate::registry::attr::FALL_DAMAGE_MULTIPLIER, false);
     let takes = c.game.entities[kind as usize].is(crate::tag_bits::entity::FALL_DAMAGE);
     s.value = if takes { (s.value - safe).max(0.0) * mul } else { 0.0 };
 }
 
 /// Vanilla's arrow: its damage times its speed, rounded up.
-fn by_speed(_: &mut Dim, _: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn by_speed(_: &mut Dim, _space_id: u64, _: &'static Content, q: &abi::Query, s: &mut Calc) {
     s.value = (s.value * q.amount).ceil();
 }
 
 /// A kind tagged `immune_effect/<effect>` never takes it.
-fn effect_immune(d: &mut Dim, c: &'static Content, q: &abi::Query, s: &mut Calc) {
+fn effect_immune(d: &mut Dim, _space_id: u64, c: &'static Content, q: &abi::Query, s: &mut Calc) {
     let Some(kind) = d.entities.get(q.entity).map(|e| e.kind) else { return };
     let tag = c.effect_immune.get(q.cause as usize).copied().flatten();
     if tag.is_some_and(|t| c.components.has(crate::components::ENTITY, kind, t)) {

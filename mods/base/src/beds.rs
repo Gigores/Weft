@@ -8,10 +8,10 @@ use std::time::Instant;
 
 use weft_sdk::*;
 
-pub use base_api::{BED_SPAWN, BedSpawn};
+pub use base_api::components::{BED_SPAWN, BedSpawn};
 
-pub static BED: Block = Block::named("bed");
-static BED_ITEM: Item = Item::named("bed");
+use base_api::blocks::BED;
+use base_api::items::BED as BED_ITEM;
 
 value! {
     /// Lying in the bed at `bed` (its foot) since world time `since`, during night number `night`
@@ -179,7 +179,6 @@ pub fn register(r: &mut Registry) {
         .sound_group("wood")
         .facing(Facings::HORIZONTAL, Toward::Player)
         // One block on two cells, its own the foot, the head away from the player.
-        .cells(&[[0, 0, -1]])
         .states(|p, s| {
             // What the model file of a bed says for one facing south, turned to this one; the head
             // is the next cell north.
@@ -376,7 +375,7 @@ fn watch_sleepers(w: &World) {
     w.set_day_time((w.day_time() / 24000 + 1) * 24000);
 }
 
-static SLEEP_SCREEN: Menu = Menu::named("sleeping");
+use base_api::menus::SLEEPING as SLEEP_SCREEN;
 /// Darkens the picture while lying in bed (`shaders/post/sleep.wgsl`).
 static SLEEP_EFFECT: Shader = Shader::named("sleep");
 

@@ -16,7 +16,8 @@ use super::{ClientConn, Conn, ServerConn, ToClient, ToServer};
 use crate::settings::Settings;
 
 const ALPN: &[u8] = b"weft/1";
-const PROTOCOL: u32 = 3;
+// Peers must agree on deterministic terrain and weather as well as the wire format.
+const PROTOCOL: u32 = 24;
 
 fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();

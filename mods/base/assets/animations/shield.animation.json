@@ -49,15 +49,15 @@
       "bones": {
         "mainArm": {
           "rotation": [
-            -90,
-            35,
+            -83,
+            29,
             -5
           ]
         },
         "guard": {
           "rotation": [
             0,
-            -35,
+            -29,
             5
           ],
           "position": [

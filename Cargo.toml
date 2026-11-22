@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "backends/*", "mods/*", "mods/base/api"]
 
 [workspace.package]
-version = "26.11.5"
+version = "26.11.7"
 edition = "2024"
 license = "MPL-2.0"
 rust-version = "1.95"
@@ -41,7 +41,7 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 iroh = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-kira = { version = "0.12.5", default-features = false, features = ["cpal", "wav", "pcm", "ogg", "vorbis"] }
+kira = { version = "0.12.5", default-features = false, features = ["cpal", "wav", "pcm", "ogg", "vorbis", "mp3", "flac"] }
 serde_json = "1"
 # The mod catalog's downloads: certificates of its own, as a phone has none for Rust to read.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "blocking"] }

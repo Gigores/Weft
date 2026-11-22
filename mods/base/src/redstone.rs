@@ -3,26 +3,8 @@
 
 use weft_sdk::*;
 
-pub static REDSTONE: Block = Block::named("redstone");
-pub static REDSTONE_ORE: Block = Block::named("redstone_ore");
-pub static REDSTONE_BLOCK: Block = Block::named("redstone_block");
-pub static REDSTONE_TORCH: Block = Block::named("redstone_torch");
-pub static REPEATER: Block = Block::named("repeater");
-pub static COMPARATOR: Block = Block::named("comparator");
-pub static LEVER: Block = Block::named("lever");
-pub static BUTTON: Block = Block::named("stone_button");
-pub static LAMP: Block = Block::named("redstone_lamp");
-pub static PISTON: Block = Block::named("piston");
-pub static STICKY_PISTON: Block = Block::named("sticky_piston");
-pub static PISTON_HEAD: Block = Block::named("piston_head");
-pub static STICKY_PISTON_HEAD: Block = Block::named("sticky_piston_head");
-pub static OBSERVER: Block = Block::named("observer");
-pub static DISPENSER: Block = Block::named("dispenser");
-pub static DISPENSER_MENU: Menu = Menu::named("dispenser");
-pub static SLIME_BLOCK: Block = Block::named("slime_block");
-pub static ANCHOR: Block = Block::named("anchor");
-pub static FLOATER: Block = Block::named("floater");
-pub static GOLDEN_LAMP: Block = Block::named("golden_lamp");
+pub use base_api::blocks::*;
+pub use base_api::menus::DISPENSER as DISPENSER_MENU;
 
 const BUTTON_TICKS: u32 = 20;
 
@@ -45,6 +27,15 @@ fn slab(top: &str) -> [(&str, [f32; 4]); 6] {
 
 fn toggle(u: &mut Use) -> bool {
     u.world().prop_cycle(u.pos(), "power");
+    true
+}
+
+fn switch_stop_mode(w: World, p: BlockPos, player: u64) -> bool {
+    if !w.prop_cycle(p, "mode") {
+        return false;
+    }
+    let key = if w.prop(p, "mode") == Some("hold") { "assembly.base.hold" } else { "assembly.base.disassemble" };
+    w.hint(key, &[]).to(player);
     true
 }
 
@@ -116,7 +107,6 @@ pub fn register(r: &mut Registry) {
         .not_solid()
         .hardness(0.0)
         .sound_group("stone")
-        .item_texture("repeater")
         .tab(&crate::tabs::REDSTONE);
 
     r.block(&COMPARATOR)
@@ -141,7 +131,6 @@ pub fn register(r: &mut Registry) {
         .not_solid()
         .hardness(0.0)
         .sound_group("stone")
-        .item_texture("comparator")
         .tab(&crate::tabs::REDSTONE);
 
     r.block(&LEVER)
@@ -167,7 +156,6 @@ pub fn register(r: &mut Registry) {
         .not_solid()
         .hardness(0.5)
         .sound_group("wood")
-        .item_texture("lever")
         .tab(&crate::tabs::REDSTONE);
 
     r.block(&BUTTON)
@@ -222,8 +210,7 @@ pub fn register(r: &mut Registry) {
                 let plate = [strip, strip, ("piston_top", UV_FROM_BOX), (top, UV_FROM_BOX), strip, strip];
                 let none = ("piston_side", UV_NO_FACE);
                 let rod = [strip, strip, none, none, strip, strip];
-                s.cells(&[[0, 1, 0]])
-                    .model_box_faces([0.0, 28.0, 0.0], [16.0, 32.0, 16.0], plate)
+                s.model_box_faces([0.0, 28.0, 0.0], [16.0, 32.0, 16.0], plate)
                     .model_box_faces([6.0, 12.0, 6.0], [10.0, 28.0, 10.0], rod)
                     .turned([1, 1, 0, 0, 1, 1])
                     .hitbox([0.0, 0.0, 0.0], [16.0, 12.0, 16.0])
@@ -282,15 +269,17 @@ pub fn register(r: &mut Registry) {
         .tab(&crate::tabs::REDSTONE);
 
     r.block(&FLOATER)
-        // It goes where the player looks, and what it was placed against is what it takes along.
         .facing(Facings::ALL, Toward::Away)
         .signal_floater(false)
         .states(|p, s| {
             // Arrows on the sides, toward the sticky front, in the color of how it is doing.
-            let side = match p.int("power") {
-                1 => "floater_side_going",
-                2 => "floater_side_stuck",
-                _ => "floater_side",
+            let side = match (p.is("mode", "hold"), p.int("power")) {
+                (true, 1) => "floater_hold_side_going",
+                (true, 2) => "floater_hold_side_stuck",
+                (true, _) => "floater_hold_side",
+                (false, 1) => "floater_side_going",
+                (false, 2) => "floater_side_stuck",
+                (false, _) => "floater_side",
             };
             let back = match p.int("power") {
                 1 => "floater_back_going",
@@ -311,7 +300,79 @@ pub fn register(r: &mut Registry) {
         .sound_group("stone")
         .hardness(3.5)
         .mined_by("pickaxe", tool_tier::HAND)
+        .tab(&crate::tabs::REDSTONE)
+        .on_use(|u| {
+            if u.sneaking() && switch_stop_mode(u.world(), u.pos(), u.player()) {
+                return true;
+            }
+            crate::assembly::use_controller(u.world(), u.player(), u.pos(), true)
+        });
+
+    r.block(&THRUSTER)
+        .facing(Facings::ALL, Toward::Away)
+        .signal_thruster(384.0)
+        .texture("thruster_side")
+        .states(|p, s| {
+            let rear = if p.int("power") > 0 { "thruster_back_on" } else { "thruster_back" };
+            let mut faces = [("thruster_side", UV_FROM_BOX); 6];
+            faces[Dir::North as usize].0 = "iron_block";
+            faces[Dir::South as usize].0 = rear;
+            s.model_box_faces([0.0; 3], [16.0; 3], faces)
+                .turned([1, 3, 2, 0, 0, 0])
+                .light_opacity(15)
+        })
+        .sound_group("stone")
+        .hardness(3.5)
+        .mined_by("pickaxe", tool_tier::HAND)
         .tab(&crate::tabs::REDSTONE);
+
+    for (block, rotates) in [(&ROTOR, true), (&ASSEMBLER, false)] {
+        r.block(block)
+            .facing(Facings::ALL, Toward::Away)
+            .signal_body_mount(rotates)
+            .texture(if rotates { "rotor_side" } else { "assembler_side" })
+            .states(move |p, s| {
+                let hold = p.is("mode", "hold");
+                let side = match (rotates, hold, p.int("power")) {
+                    (true, true, 1) => "rotor_hold_side_going",
+                    (true, true, 2) => "rotor_hold_side_stuck",
+                    (true, true, _) => "rotor_hold_side",
+                    (true, false, 1) => "rotor_side_going",
+                    (true, false, 2) => "rotor_side_stuck",
+                    (true, false, _) => "rotor_side",
+                    (false, _, 1) => "assembler_side_going",
+                    (false, _, 2) => "assembler_side_stuck",
+                    (false, _, _) => "assembler_side",
+                };
+                let (front, back) = match (rotates, hold) {
+                    (true, true) => ("rotor_hold_front", "rotor_hold_back"),
+                    (true, false) => ("piston_top_sticky", "furnace_top"),
+                    (false, _) => ("assembler_front", "iron_block"),
+                };
+                let faces = [
+                    (side, UV_FROM_BOX),
+                    (side, UV_FROM_BOX),
+                    (side, UV_FROM_BOX),
+                    (side, UV_FROM_BOX),
+                    (front, UV_FROM_BOX),
+                    (back, UV_FROM_BOX),
+                ];
+                s.model_box_faces([0.0, 0.0, 0.0], [16.0, 16.0, 16.0], faces)
+                    .turned([1, 3, 2, 0, 0, 0])
+                    .light_opacity(15)
+                    .immovable()
+            })
+            .signal_read(|w, p| match w.prop(p, "power") {
+                Some("1") => 1,
+                Some("2") => 15,
+                _ => 0,
+            })
+            .sound_group("stone")
+            .hardness(3.5)
+            .mined_by("pickaxe", tool_tier::HAND)
+            .tab(&crate::tabs::REDSTONE)
+            .on_use(|u| crate::assembly::use_controller(u.world(), u.player(), u.pos(), true));
+    }
 
     // Vanilla's copper bulb: each new pulse flips it, and a comparator reads which way it is.
     r.block(&GOLDEN_LAMP)
@@ -414,7 +475,7 @@ pub fn register(r: &mut Registry) {
         .group("dispenser", Slots::chest(1).holder())
         .default_screen();
 
-    const C: &RecipeKind = &base_api::CRAFTING;
+    const C: &RecipeKind = &base_api::recipes::CRAFTING;
     r.shaped(C, "redstone_block", 1, &["rrr", "rrr", "rrr"], &[('r', "redstone")]);
     r.shaped(C, "redstone", 9, &["b"], &[('b', "redstone_block")]);
     r.shaped(C, "redstone_torch", 1, &["r", "s"], &[('r', "redstone"), ('s', "#stick")]);
@@ -427,6 +488,8 @@ pub fn register(r: &mut Registry) {
     r.shaped(C, "slime_block", 1, &["ccc", "cwc", "ccc"], &[('c', "clay"), ('w', "#crops/wheat")]);
     r.shaped(C, "sticky_piston", 1, &["s", "p"], &[('s', "slime_block"), ('p', "piston")]);
     r.shaped(C, "floater", 1, &["ipi", "iri", "ipi"], &[('i', "iron_ingot"), ('r', "redstone"), ('p', "piston")]);
+    r.shaped(C, "assembler", 1, &["ipi", "iri", "iii"], &[('i', "#ingots/iron"), ('r', "redstone"), ('p', "piston")]);
+    r.shaped(C, "rotor", 1, &[" i ", "iai", " r "], &[('i', "#ingots/iron"), ('a', "assembler"), ('r', "redstone")]);
     r.shaped(C, "golden_lamp", 1, &[" c ", "crc", " c "], &[('c', "gold_ingot"), ('r', "redstone")]);
     r.shaped(C, "anchor", 1, &["iii", "iri", "iii"], &[('i', "iron_ingot"), ('r', "redstone")]);
     r.shaped(C, "observer", 1, &["ccc", "rri", "ccc"], &[('c', "#cobblestone"), ('r', "redstone"), ('i', "iron_ingot")]);

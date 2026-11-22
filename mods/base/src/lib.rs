@@ -2,6 +2,7 @@
 //! engine knows about stone, water or zombies.
 
 mod advancements;
+mod assembly;
 mod beds;
 mod block_entities;
 mod blocks;
@@ -11,32 +12,34 @@ mod doors;
 mod effects;
 mod items;
 mod mobs;
+mod music_player;
 mod player;
 mod recipes;
 mod redstone;
 mod sounds;
 mod storage;
 mod target_info;
+mod vehicles;
 mod woodcutter;
 mod worldgen;
 
 use weft_sdk::*;
 
-pub use base_api::{CLOUDS, FLATLANDS, MOON, OVERWORLD, STARS, SUN, tabs};
+pub use base_api::{dimensions::*, sky_objects::*, tabs};
 
 declare_mod!(deps: [], init: init);
 
 fn init(r: &mut Registry) {
-    base_api::editor_methods(r);
+    base_api::components::editor_methods(r);
     // Vanilla's creative tabs; blocks and items join them with `.tab(..)`.
     for (tab, icon) in [
         (&tabs::BUILDING, &Item::named("bricks")),
         (&tabs::COLORED, &Item::named("red_stained_glass")),
         (&tabs::NATURAL, &Item::named("grass")),
         (&tabs::FUNCTIONAL, &Item::named("crafting_table")),
-        (&tabs::TOOLS, &Item::named("iron_pickaxe")),
-        (&tabs::COMBAT, &Item::named("iron_sword")),
-        (&tabs::FOOD, &Item::named("apple")),
+        (&tabs::TOOLS, &items::IRON_PICKAXE),
+        (&tabs::COMBAT, &items::IRON_SWORD),
+        (&tabs::FOOD, &items::APPLE),
         (&tabs::INGREDIENTS, &items::IRON_INGOT),
         (&tabs::REDSTONE, &Item::named("redstone")),
     ] {
@@ -57,6 +60,9 @@ fn init(r: &mut Registry) {
     doors::register(r);
     effects::register(r);
     redstone::register(r);
+    assembly::register(r);
+    vehicles::register(r);
+    music_player::register(r);
     woodcutter::register(r);
     storage::register(r);
     target_info::register(r);

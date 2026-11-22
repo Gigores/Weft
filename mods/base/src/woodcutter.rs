@@ -4,28 +4,64 @@
 
 use weft_sdk::*;
 
-pub use base_api::WOODCUTTING;
+pub use base_api::blocks::WOODCUTTER;
+pub use base_api::recipes::WOODCUTTING;
 
-pub static WOODCUTTER: Block = Block::named("woodcutter");
-static MENU: Menu = Menu::named("woodcutter");
+pub use base_api::menus::WOODCUTTER as MENU;
 
 pub fn register(r: &mut Registry) {
     r.block(&WOODCUTTER)
         .sound_group("wood")
         .facing(Facings::HORIZONTAL, Toward::Player)
+        .default_facing(Dir::North)
         .states(|_, s| {
-            let blade = [("iron_block", abi::UV_FROM_BOX); 6];
-            s.texture("planks_oak")
-                .model_box([0.0; 3], [16.0, 9.0, 16.0])
-                .model_box_faces([1.0, 9.0, 7.5], [15.0, 16.0, 8.5], blade)
+            let mut m = s;
+            for (x, z) in [(1.0, 1.0), (28.0, 1.0), (1.0, 12.0), (28.0, 12.0)] {
+                m = m.model_box_faces(
+                    [x, 0.0, z],
+                    [x + 3.0, 12.0, z + 3.0],
+                    [
+                        ("woodcutter", [0.0, 8.75, 0.75, 11.5]),
+                        ("woodcutter", [0.0, 8.75, 0.75, 11.5]),
+                        ("woodcutter", [0.0, 8.0, 0.75, 8.75]),
+                        ("woodcutter", [0.0, 8.0, 0.75, 8.75]),
+                        ("woodcutter", [0.0, 8.75, 0.75, 11.5]),
+                        ("woodcutter", [0.0, 8.75, 0.75, 11.5]),
+                    ],
+                );
+            }
+            m.model_box_faces(
+                [0.0; 3],
+                [32.0, 16.0, 16.0],
+                [
+                    ("woodcutter", [0.0, 4.0, 4.0, 8.0]),
+                    ("woodcutter", [12.0, 4.0, 16.0, 8.0]),
+                    ("woodcutter", UV_NO_FACE),
+                    ("woodcutter", [4.0, 4.0, 12.0, 8.0]),
+                    ("woodcutter", [4.0, 0.0, 12.0, 4.0]),
+                    ("woodcutter", [4.0, 8.0, 12.0, 12.0]),
+                ],
+            )
+            .model_box_faces(
+                [8.0, 16.0, 8.0],
+                [24.0, 32.0, 8.1],
+                [
+                    ("woodcutter", UV_NO_FACE),
+                    ("woodcutter", UV_NO_FACE),
+                    ("woodcutter", UV_NO_FACE),
+                    ("woodcutter", UV_NO_FACE),
+                    ("woodcutter", [0.0, 12.0, 4.0, 16.0]),
+                    ("woodcutter", [0.0, 12.0, 4.0, 16.0]),
+                ],
+            )
         })
-        .hitbox([0.0; 3], [16.0, 9.0, 16.0])
+        .hitbox([0.0; 3], [32.0, 16.0, 16.0])
         .hardness(2.5)
         .mined_by("axe", tool_tier::HAND)
         .opens(&MENU)
         .tab(&crate::tabs::FUNCTIONAL);
     r.menu(&MENU)
-        .group("input", Slots::single())
+        .group("input", Slots::single().priority(1, ""))
         .group("results", Slots::grid(3, 2).output())
         .player_inventory()
         .recipes(&WOODCUTTING)

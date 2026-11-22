@@ -58,6 +58,7 @@ pub struct Ask<'a> {
     pub daylight: Option<f32>,
     /// Sides named (`side(down)`) are of `state`'s own frame, turned as it is (a block's rules).
     pub own_frame: bool,
+    pub placement: Option<(glam::IVec3, crate::world::placement::Part)>,
     /// Whether it may hold some time, not whether it does now: what changes by itself (light,
     /// time, chance, a mod's answer) is not known then.
     pub could: bool,
@@ -297,7 +298,7 @@ impl Parser<'_, '_> {
                     .equipment
                     .iter()
                     .enumerate()
-                    .filter(|(_, e)| e.name == what || e.bones.iter().any(|b| b == what))
+                    .filter(|(_, e)| e.group.name == what || e.bones.iter().any(|b| b == what))
                     .fold(0, |m, (i, _)| m | 1 << i);
                 if slots == 0 {
                     return Err(format!("condition {name}({text}): no equipment slot is or covers {what}"));
@@ -305,7 +306,7 @@ impl Parser<'_, '_> {
                 Arg::Slots(slots)
             }
             k::BLOCK => Arg::Blocks(crate::refs::compile(&text, self.look.block_names, self.look.blocks, self.look.components)?),
-            k::TOOL => Arg::Tag(crate::refs::tag(self.look.components, text.trim_start_matches('#'))?),
+            k::TOOL => Arg::Tag(crate::refs::tag(self.look.components, &text)?),
             k::STATE => Arg::Text(text),
             k::SIDE | k::BESIDE | k::OPEN => {
                 let (first, rest) = text
@@ -429,46 +430,54 @@ pub fn compile_all(texts: &Texts, look: &Look, errors: &mut Vec<String>) -> Vec<
 }
 
 /// Condition `id` (`Content::conds`) on the server.
-pub fn on_server(d: &mut Dim, c: &'static Content, id: u32, a: &Ask) -> bool {
+pub fn on_server(d: &mut Dim, space_id: u64, c: &'static Content, id: u32, a: &Ask) -> bool {
     c.conds
         .get(id as usize)
-        .is_some_and(|e| holds_server(d, c, e, a))
+        .is_some_and(|e| holds_server(d, space_id, c, e, a))
 }
 
 /// Whether condition `id` may hold there some time (`Ask::could`).
-pub fn may_server(d: &mut Dim, c: &'static Content, id: u32, a: &Ask) -> bool {
+pub fn may_server(d: &mut Dim, space_id: u64, c: &'static Content, id: u32, a: &Ask) -> bool {
     c.conds
         .get(id as usize)
-        .is_some_and(|e| server(d, c, e, &Ask { could: true, ..*a }) != Some(false))
+        .is_some_and(|e| server(d, space_id, c, e, &Ask { could: true, ..*a }) != Some(false))
 }
 
-pub fn holds_server(d: &mut Dim, c: &'static Content, e: &Expr, a: &Ask) -> bool {
-    server(d, c, e, a) == Some(true)
+pub fn holds_server(d: &mut Dim, space_id: u64, c: &'static Content, e: &Expr, a: &Ask) -> bool {
+    server(d, space_id, c, e, a) == Some(true)
 }
 
 enum Context<'a> {
-    Server(&'a mut Dim),
+    Server(&'a mut Dim, u64),
     Client(Option<&'a crate::client::Client>),
 }
 
 impl Context<'_> {
     fn grid_pos(&self, pos: DVec3) -> glam::IVec3 {
         match self {
-            Self::Server(d) => d.place.to_local(pos).floor().as_ivec3(),
+            Self::Server(d, space_id) => d.space_pose(*space_id).to_local(pos).floor().as_ivec3(),
             Self::Client(_) => pos.floor().as_ivec3(),
         }
     }
 
     fn cell(&self, p: glam::IVec3) -> Option<u32> {
         match self {
-            Self::Server(d) => d.get(p),
+            Self::Server(d, space_id) => d.get(*space_id, p),
             Self::Client(cl) => cl.and_then(|cl| cl.world.block_or_air(p)),
         }
     }
 
+    fn placed_at(&self, p: glam::IVec3) -> Option<(u32, &crate::world::placement::CellLayout)> {
+        let layout = match self {
+            Self::Server(d, id) => d.space(*id).layout(p),
+            Self::Client(cl) => cl.as_ref()?.world.layout(p),
+        };
+        Some((self.cell(p)?, layout))
+    }
+
     fn parts(&self, p: glam::IVec3) -> Vec<u32> {
         match self {
-            Self::Server(d) => d.parts(p),
+            Self::Server(d, space_id) => d.parts(*space_id, p),
             Self::Client(cl) => cl.map_or_else(Vec::new, |cl| {
                 cl.world
                     .block_or_air(p)
@@ -481,21 +490,21 @@ impl Context<'_> {
 
     fn light(&self, p: glam::IVec3) -> u32 {
         match self {
-            Self::Server(d) => d.light(p),
+            Self::Server(d, space_id) => d.light(*space_id, p),
             Self::Client(cl) => cl.map_or(0, |cl| cl.world.light(p)),
         }
     }
 
     fn daylight(&self, c: &Content) -> Option<f32> {
         match self {
-            Self::Server(d) => Some(d.daylight(c)),
+            Self::Server(d, _) => Some(d.daylight(c)),
             Self::Client(cl) => cl.map(|cl| cl.daylight()),
         }
     }
 
     fn enclosed(&self, c: &Content, p: glam::IVec3) -> Option<bool> {
         let dim = match self {
-            Self::Server(d) => d.id,
+            Self::Server(d, _) => d.id,
             Self::Client(cl) => cl.as_ref()?.world.dim,
         };
         Some(crate::world::light::enclosed(&c.dims[dim as usize], self.light(p)))
@@ -527,27 +536,27 @@ impl Context<'_> {
                 (k::SURFACE, _) => !self.enclosed(c, p)?,
                 (k::LIGHT, _) => in_range(arg, light_for(arg, p, &|q| self.light(q), a.daylight.or_else(|| self.daylight(c))?)),
                 (k::CHANCE, Arg::Num(n)) => match self {
-                    Self::Server(d) => d.random_unit() < *n,
+                    Self::Server(d, _) => d.random_unit() < *n,
                     Self::Client(_) => false,
                 },
                 (k::SKY, _) => in_range(arg, abi::light::sky(self.light(p)) as f32),
                 (k::SHELTERED, _) => {
                     let weather = match self {
-                        Self::Server(d) => d.weather,
-                        Self::Client(cl) => cl.as_ref()?.weather_id,
+                        Self::Server(d, _) => d.weather.at_pos(a.pos),
+                        Self::Client(cl) => cl.as_ref()?.weather_at(a.pos),
                     };
                     c.game.weathers[weather as usize].shelters()
                 }
                 (k::HEIGHT, _) => in_range(arg, a.pos.y as f32),
                 (k::ATTRIBUTE, _) => {
                     let value = match self {
-                        Self::Server(d) => d.attribute(c, a.entity, attr(arg), false) as f32,
+                        Self::Server(d, space_id) => d.attribute(*space_id, c, a.entity, attr(arg), false) as f32,
                         Self::Client(cl) => cl.as_ref()?.attribute(attr(arg)),
                     };
                     in_range(arg, value)
                 }
                 (k::WEARS, Arg::Slots(slots)) => match self {
-                    Self::Server(d) => {
+                    Self::Server(d, _) => {
                         let e = d.entities.get(a.entity)?;
                         wears(
                             &c.game.entities[e.kind as usize],
@@ -564,6 +573,28 @@ impl Context<'_> {
                     }
                 },
                 (k::SIDE, Arg::Side(f, m)) => {
+                    if let Some((cell, part)) = a.placement
+                        && *f < 6
+                    {
+                        let face = c.states[a.state as usize].turn.face(*f as usize);
+                        let context = &*self;
+                        let accepts = |s| {
+                            m.as_ref()
+                                .map_or_else(|| c.solid(s), |m| crate::refs::has(m, s))
+                        };
+                        let held = crate::world::placement::supported(c, cell, part, face, |at| context.placed_at(at), accepts);
+                        // A tagged neighbor is also an authored grid relationship. Existing crops
+                        // can sit in the cell above farmland or another plant with a shorter model.
+                        if held == Some(true) || m.is_none() || part.offset != glam::IVec3::ZERO {
+                            return held;
+                        }
+                        let (main, layout) = context.placed_at(cell + crate::world::DIRS[face])?;
+                        return Some(
+                            layout
+                                .residents(main)
+                                .any(|v| v.offset == glam::IVec3::ZERO && accepts(v.state)),
+                        );
+                    }
                     let at = toward(*f);
                     self.cell(at)?;
                     self.parts(at)
@@ -571,6 +602,21 @@ impl Context<'_> {
                         .any(|s| m.as_ref().map_or(c.solid(s), |m| crate::refs::has(m, s)))
                 }
                 (k::OPEN, Arg::Side(f, _)) => {
+                    if let Some((cell, part)) = a.placement
+                        && *f < 6
+                    {
+                        let face = c.states[a.state as usize].turn.face(*f as usize);
+                        let context = &*self;
+                        return crate::world::placement::supported(
+                            c,
+                            cell,
+                            part,
+                            face,
+                            |at| context.placed_at(at),
+                            |s| c.states[s as usize].flags & abi::block_flags::REPLACEABLE == 0,
+                        )
+                        .map(|held| !held);
+                    }
                     let s = self.cell(toward(*f))?;
                     s == crate::content::AIR || c.states[s as usize].flags & abi::block_flags::REPLACEABLE != 0
                 }
@@ -597,14 +643,14 @@ impl Context<'_> {
                 _ => false,
             },
             Answer::Mode(m) => match self {
-                Self::Server(d) => d.entities.get(a.entity)?.mode == m,
+                Self::Server(d, _) => d.entities.get(a.entity)?.mode == m,
                 Self::Client(cl) => cl.as_ref()?.mode == m,
             },
             Answer::Mod(owner, cb) => {
                 let text = if let Arg::Text(t) = arg { t.as_str() } else { "" };
                 match self {
-                    Self::Server(d) => {
-                        d.call(owner, cb, |w| abi::ConditionArgs {
+                    Self::Server(d, space_id) => {
+                        d.call(*space_id, owner, cb, |w| abi::ConditionArgs {
                             world: w,
                             client: std::ptr::null_mut(),
                             pos: a.pos.to_array().into(),
@@ -634,8 +680,8 @@ impl Context<'_> {
     }
 }
 
-fn server(d: &mut Dim, c: &'static Content, e: &Expr, a: &Ask) -> Option<bool> {
-    let mut context = Context::Server(d);
+fn server(d: &mut Dim, space_id: u64, c: &'static Content, e: &Expr, a: &Ask) -> Option<bool> {
+    let mut context = Context::Server(d, space_id);
     eval(e, &mut |id, arg| context.answer(c, id, arg, a))
 }
 

@@ -11,6 +11,7 @@ pub mod lang;
 pub mod look;
 pub mod meter;
 pub mod render;
+pub mod slider;
 pub mod text;
 
 use std::rc::Rc;
@@ -90,6 +91,7 @@ pub struct Style {
     pub scroll: bool,
     /// Its scroll bar goes just past its right edge, taking nothing from what it holds.
     pub bar_outside: bool,
+    pub bar_thin: bool,
     /// A plain color behind the node, RGBA.
     pub fill: Option<u32>,
     /// Placed at a point instead of in the flow: (x, y) in GUI pixels from the parent's inner
@@ -117,6 +119,7 @@ impl Default for Style {
             self_align: None,
             scroll: false,
             bar_outside: false,
+            bar_thin: false,
             fill: None,
             at: None,
             at_from: [0.0; 2],
@@ -296,17 +299,7 @@ pub enum Kind {
         on_change: Option<Rc<dyn Fn(&mut Ctx, &str)>>,
         area: Option<Area>,
     },
-    /// Focused by a click, the arrow keys move it a step of `steps` across.
-    Slider {
-        value: f32,
-        bind: FloatBind,
-        on_change: Rc<dyn Fn(&mut Ctx, f32)>,
-        /// With one, dragging only shows (`on_change`) and this takes the value when let go: a
-        /// GUI scale that would change under the cursor on its way.
-        on_release: Option<Rc<dyn Fn(&mut Ctx, f32)>>,
-        steps: u32,
-        step_value: Option<Box<dyn Fn(f32, f32) -> f32>>,
-    },
+    Slider(slider::Slider),
     /// Engine-drawn content (slots, 3D previews) identified by a tag.
     Custom {
         tag: u32,
@@ -352,9 +345,9 @@ impl Scrollbar {
 
     /// The handle's rect.
     pub fn handle(&self) -> Rect {
-        let [w, h] = Self::HANDLE;
+        let (w, h) = (self.track.w, Self::HANDLE[1]);
         let y = self.track.y + (self.track.h - h).max(0.0) * (self.offset / self.max.max(1.0)).clamp(0.0, 1.0);
-        Rect { x: self.track.x + (self.track.w - w) / 2.0, y, w, h }
+        Rect { x: self.track.x, y, w, h }
     }
 
     /// Offset that puts the handle's center at height `y`.
@@ -367,6 +360,8 @@ impl Scrollbar {
 
 pub struct Ui {
     pub nodes: Vec<Node>,
+    /// The layout was built from the local music library or transport state.
+    pub read_music: bool,
     /// The screen supplies a Back/Done button or a close icon of its own.
     pub has_close: bool,
     stack: Vec<NodeId>,
@@ -561,6 +556,7 @@ impl Ui {
         Ui {
             nodes: vec![root],
             has_close: false,
+            read_music: false,
             stack: vec![0],
             hovered: None,
             pressed: None,
@@ -859,7 +855,7 @@ impl Ui {
                     let (along, across) = (*count as f32 * 8.0 + 1.0, 9.0 + (rows - 1) as f32 * step);
                     if matches!(*dir, weft_abi::ui_dir::UP | weft_abi::ui_dir::DOWN) { [across, along] } else { [along, across] }
                 }
-                Kind::Slider { .. } => [100.0, 12.0],
+                Kind::Slider(_) => [100.0, 12.0],
                 Kind::Input { .. } => [120.0, 18.0],
                 _ => {
                     let children = self.nodes[id].children.clone();
@@ -1017,13 +1013,15 @@ impl Ui {
             scrolled = *v;
             past_end = max - scrolled;
             free = free.max(0.0);
-            if max > 0.0 && !style.row && cross_size > Scrollbar::ROOM * 2.0 {
+            let bar_width = if style.bar_thin { 5.0 } else { Scrollbar::HANDLE[0] };
+            let bar_room = bar_width + Scrollbar::ROOM - Scrollbar::HANDLE[0];
+            if max > 0.0 && !style.row && cross_size > bar_room * 2.0 {
                 let r = self.nodes[id].rect;
                 let track = if style.bar_outside {
-                    Rect { x: r.x + r.w + Scrollbar::OUTSIDE_GAP, y: r.y, w: Scrollbar::HANDLE[0], h: r.h }
+                    Rect { x: r.x + r.w + Scrollbar::OUTSIDE_GAP, y: r.y, w: bar_width, h: r.h }
                 } else {
-                    cross_size -= Scrollbar::ROOM;
-                    Rect { x: inner.x + inner.w - Scrollbar::HANDLE[0], y: inner.y, w: Scrollbar::HANDLE[0], h: inner.h }
+                    cross_size -= bar_room;
+                    Rect { x: inner.x + inner.w - bar_width, y: inner.y, w: bar_width, h: inner.h }
                 };
                 let offset = if style.justify == Justify::End { max - scrolled } else { scrolled };
                 self.nodes[id].scrollbar = Some(Scrollbar { track, offset, max });
@@ -1073,9 +1071,10 @@ impl Ui {
                 return;
             }
             let button = matches!(n.kind, Kind::Button { .. });
-            let interactive = matches!(n.kind, Kind::Input { .. } | Kind::Slider { .. } | Kind::Custom { .. })
-                || n.tooltip.is_some()
-                || matches!(&n.kind, Kind::Text(t) if !t.layout.links.is_empty());
+            let interactive =
+                matches!(n.kind, Kind::Input { .. } | Kind::Slider(crate::ui::slider::Slider { enabled: true, .. }) | Kind::Custom { .. })
+                    || n.tooltip.is_some()
+                    || matches!(&n.kind, Kind::Text(t) if !t.layout.links.is_empty());
             // What a button contains (labels, icons) is part of the button, but for another button.
             if (button || interactive && !in_button) && id != 0 {
                 *best = Some(id);

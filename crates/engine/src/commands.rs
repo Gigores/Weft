@@ -140,21 +140,46 @@ pub struct Origin {
     pub pitch: f32,
 }
 
+const SELECTORS: [&str; 5] = ["@p", "@a", "@e", "@s", "@r"];
+const SELECTOR_SORTS: [&str; 4] = ["nearest", "furthest", "random", "arbitrary"];
+
+#[derive(Clone, Copy)]
+enum SelectorFilter {
+    Type,
+    Distance,
+    Limit,
+    Sort,
+    Name,
+}
+
+impl SelectorFilter {
+    const KEYS: [(&str, Self); 5] =
+        [("type", Self::Type), ("distance", Self::Distance), ("limit", Self::Limit), ("sort", Self::Sort), ("name", Self::Name)];
+
+    fn of(key: &str) -> Option<Self> {
+        Self::KEYS
+            .iter()
+            .find(|(k, _)| *k == key.trim())
+            .map(|(_, f)| *f)
+    }
+}
+
+fn selector_head(tok: &str) -> Option<(char, &str)> {
+    let base = SELECTORS.iter().find(|base| tok.starts_with(**base))?;
+    Some((base.as_bytes()[1] as char, &tok[base.len()..]))
+}
+
 fn parse_selector(c: &Content, tok: &str, players: &[String]) -> Result<Selector, Msg> {
     let mut s = Selector { base: 'n', name: None, kind: None, distance: None, limit: None, sort: None };
-    let Some(rest) = tok.strip_prefix('@') else {
+    if !tok.starts_with('@') {
         if !players.iter().any(|n| n == tok) {
             return Err(err("no_player", tok));
         }
         s.name = Some(tok.to_string());
         return Ok(s);
-    };
-    let mut chars = rest.chars();
-    s.base = chars
-        .next()
-        .filter(|b| "paesr".contains(*b))
-        .ok_or_else(|| err("unknown_selector", tok))?;
-    let filters = chars.as_str();
+    }
+    let (base, filters) = selector_head(tok).ok_or_else(|| err("unknown_selector", tok))?;
+    s.base = base;
     if filters.is_empty() {
         return Ok(s);
     }
@@ -164,22 +189,22 @@ fn parse_selector(c: &Content, tok: &str, players: &[String]) -> Result<Selector
         .ok_or_else(|| err("bad_selector", tok))?;
     for f in inner.split(',').filter(|f| !f.is_empty()) {
         let (k, v) = f.split_once('=').ok_or_else(|| err("bad_filter", f))?;
-        match k.trim() {
-            "type" => {
+        match SelectorFilter::of(k) {
+            Some(SelectorFilter::Type) => {
                 let (neg, name) = v.strip_prefix('!').map_or((false, v), |n| (true, n));
                 let full = resolve(c.game.catalog.ids(ek::ENTITY).keys(), name).ok_or_else(|| err("unknown_entity", name))?;
                 s.kind = Some((c.game.catalog.ids(ek::ENTITY)[&full], neg));
             }
-            "distance" => {
+            Some(SelectorFilter::Distance) => {
                 let num = |t: &str, d: f64| if t.is_empty() { Ok(d) } else { t.parse::<f64>().map_err(|_| err("bad_distance", v)) };
                 s.distance = Some(match v.split_once("..") {
                     Some((a, b)) => (num(a, 0.0)?, num(b, f64::INFINITY)?),
                     None => (num(v, 0.0)?, num(v, 0.0)?),
                 });
             }
-            "limit" => s.limit = Some(v.parse().map_err(|_| err("bad_limit", v))?),
-            "sort" if ["nearest", "furthest", "random", "arbitrary"].contains(&v) => s.sort = Some(v.to_string()),
-            "name" => s.name = Some(v.to_string()),
+            Some(SelectorFilter::Limit) => s.limit = Some(v.parse().map_err(|_| err("bad_limit", v))?),
+            Some(SelectorFilter::Sort) if SELECTOR_SORTS.contains(&v) => s.sort = Some(v.to_string()),
+            Some(SelectorFilter::Name) => s.name = Some(v.to_string()),
             _ => return Err(err("unknown_filter", f)),
         }
     }
@@ -558,6 +583,76 @@ fn names_from<'a>(keys: impl Iterator<Item = &'a String>, partial: &str) -> Vec<
     names
 }
 
+fn entry_names(c: &Content, kind: u32, partial: &str) -> Vec<String> {
+    names_from(
+        c.game
+            .catalog
+            .ids(kind)
+            .iter()
+            .filter(|(_, id)| kind != ek::ENTITY || !c.game.is_block_entity(**id))
+            .map(|(n, _)| n),
+        partial,
+    )
+}
+
+fn complete_selector(c: &Content, partial: &str, players: &[String]) -> Vec<String> {
+    let Some((_, filters)) = selector_head(partial) else {
+        return SELECTORS
+            .into_iter()
+            .chain(players.iter().map(String::as_str))
+            .filter(|n| n.starts_with(partial))
+            .map(String::from)
+            .collect();
+    };
+    if filters.is_empty() {
+        return vec![format!("{partial}[")];
+    }
+    let Some(inner) = filters.strip_prefix('[').filter(|f| !f.contains(']')) else { return Vec::new() };
+    let tail = inner.rsplit_once(',').map_or(inner, |(_, tail)| tail);
+    let prefix = &partial[..partial.len() - tail.len()];
+    if !prefix.ends_with('[') && parse_selector(c, &format!("{prefix}]"), players).is_err() {
+        return Vec::new();
+    }
+    let Some((key, value)) = tail.split_once('=') else {
+        return SelectorFilter::KEYS
+            .iter()
+            .filter(|(key, _)| key.starts_with(tail))
+            .map(|(key, _)| format!("{prefix}{key}="))
+            .collect();
+    };
+    let Some(filter) = SelectorFilter::of(key) else { return Vec::new() };
+    let values = match filter {
+        SelectorFilter::Type => {
+            let (neg, name) = value.strip_prefix('!').map_or(("", value), |n| ("!", n));
+            entry_names(c, ek::ENTITY, name)
+                .into_iter()
+                .map(|n| format!("{neg}{n}"))
+                .collect()
+        }
+        SelectorFilter::Sort => SELECTOR_SORTS
+            .iter()
+            .filter(|v| v.starts_with(value))
+            .map(|v| v.to_string())
+            .collect(),
+        SelectorFilter::Name => players
+            .iter()
+            .filter(|n| n.starts_with(value))
+            .cloned()
+            .collect(),
+        SelectorFilter::Distance | SelectorFilter::Limit => Vec::new(),
+    };
+    let mut suggestions: Vec<_> = values
+        .into_iter()
+        .filter(|v| v != value)
+        .map(|v| format!("{prefix}{key}={v}"))
+        .collect();
+    if !value.is_empty() && parse_selector(c, &format!("{partial}]"), players).is_ok() {
+        suggestions.push(format!("{partial}]"));
+        suggestions.push(format!("{partial},"));
+    }
+    suggestions
+}
+
 pub fn complete(c: &Content, line: &str, players: &[String], permission: u32) -> Completion {
     let from = line.rfind(' ').map_or(0, |i| i + 1);
     let partial = &line[from..];
@@ -590,26 +685,13 @@ pub fn complete(c: &Content, line: &str, players: &[String], permission: u32) ->
                 }),
                 partial,
             ),
-            Kind::Entry(kind) => names_from(
-                c.game
-                    .catalog
-                    .ids(*kind)
-                    .iter()
-                    .filter(|(_, id)| *kind != ek::ENTITY || !c.game.is_block_entity(**id))
-                    .map(|(n, _)| n),
-                partial,
-            ),
+            Kind::Entry(kind) => entry_names(c, *kind, partial),
             Kind::Player => players
                 .iter()
                 .filter(|n| n.starts_with(partial))
                 .cloned()
                 .collect(),
-            Kind::Targets => ["@p", "@a", "@e", "@s", "@r"]
-                .iter()
-                .map(|s| s.to_string())
-                .chain(players.iter().cloned())
-                .filter(|n| n.starts_with(partial))
-                .collect(),
+            Kind::Targets => complete_selector(c, partial, players),
             Kind::Int(named) => named
                 .iter()
                 .filter(|n| n.starts_with(partial))

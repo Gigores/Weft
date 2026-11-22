@@ -26,6 +26,8 @@ pub struct FeatureDef {
     /// Index in `Content::features`.
     pub id: u32,
     pub owner: ModId,
+    pub impostor: bool,
+    pub surface_cover: Option<(ModId, abi::Callback)>,
     pub stage: u32,
     /// From the name, so adding one moves none of the others.
     pub salt: u64,
@@ -72,6 +74,17 @@ pub enum Chance {
     Density(Option<u32>),
 }
 
+impl Chance {
+    pub(crate) fn in_biome(self, c: &Content, biome: u32) -> f32 {
+        match self {
+            Chance::Fixed(p) => p,
+            Chance::Density(d) => d
+                .and_then(|id| c.components.get::<f32>(crate::components::BIOME, biome, id))
+                .unwrap_or_default(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Shape {
     Vein {
@@ -116,6 +129,13 @@ impl Write {
 }
 
 impl FeatureDef {
+    pub(crate) fn impostor_grid(&self) -> Option<(i32, Chance)> {
+        match self.spread {
+            Spread::Grid { spacing, chance } if self.impostor => Some((spacing, chance)),
+            _ => None,
+        }
+    }
+
     /// How far from its start a vein may put blocks.
     pub fn vein_reach(&self) -> i32 {
         match self.shape {
@@ -209,6 +229,7 @@ pub struct Extra {
     pub at: DVec3,
     /// A block entity's block: `data` goes into it, `loot` fills it.
     pub anchor: Option<IVec3>,
+    pub transform: Transform,
     /// `u32::MAX`: from `data`.
     pub kind: u32,
     pub data: Option<Arc<[u8]>>,
@@ -219,6 +240,7 @@ pub struct Extra {
 /// world.
 #[derive(Clone, Default)]
 pub struct Generated {
+    pub layouts: rustc_hash::FxHashMap<usize, crate::world::placement::CellLayout>,
     pub extras: Vec<Extra>,
     /// Starts whose cube this is: (feature, start, transform).
     pub placed: Vec<(u32, IVec3, u8)>,
@@ -233,11 +255,12 @@ pub struct Start {
     pub hi: IVec3,
     pub puts: Vec<Put>,
     pub extras: Vec<Extra>,
+    lod: std::sync::OnceLock<Vec<(IVec3, u32)>>,
 }
 
 impl Start {
     fn new(feature: usize, pos: IVec3, transform: Transform) -> Start {
-        Start { feature, pos, transform, lo: IVec3::MAX, hi: IVec3::MIN, puts: Vec::new(), extras: Vec::new() }
+        Start { feature, pos, transform, lo: IVec3::MAX, hi: IVec3::MIN, puts: Vec::new(), extras: Vec::new(), lod: Default::default() }
     }
 
     /// One of no feature, for a template placed by hand.
@@ -268,12 +291,45 @@ impl Start {
     fn touches(&self, lo: IVec3, hi: IVec3) -> bool {
         self.lo.cmple(hi).all() && self.hi.cmpge(lo).all()
     }
+
+    /// The above-ground part of the same shape generation writes to cubes.
+    pub(crate) fn lod_blocks(&self, snapshot: crate::generation::Snapshot<'_>) -> &[(IVec3, u32)] {
+        self.lod.get_or_init(|| {
+            let lo = self.lo.max(IVec3::new(i32::MIN, self.pos.y, i32::MIN));
+            let consult_terrain = self
+                .puts
+                .iter()
+                .any(|p| matches!(p, Put::Cells(_) | Put::Fill { only: Some(_), .. } | Put::Block { force: false, .. }));
+            let mut space = PreviewCells { lo, hi: self.hi, base: consult_terrain.then_some(snapshot), blocks: Default::default() };
+            write_start(snapshot.c, snapshot.def(), snapshot.seed, self, &mut space);
+            let mut blocks: Vec<_> = space
+                .blocks
+                .into_iter()
+                .filter(|&(_, s)| s != AIR)
+                .collect();
+            blocks.sort_unstable_by_key(|(p, _)| (p.y, p.z, p.x));
+            blocks
+        })
+    }
 }
 
-/// Where a feature on a grid starts in a cell, if it does: the start (above the ground, sunk by
-/// its burying), the biome, its random bits and the transform its template takes. From the seed
-/// and the columns alone; distant terrain repeats the test for trees exactly
-/// (`terrain_gpu::describe_lod`).
+/// The same site offset is used when placing a feature and drawing it beyond loaded cubes.
+pub(crate) fn grid_position(cell: (i32, i32), spacing: i32, room: i32, h: u64) -> (i32, i32) {
+    (cell.0 * spacing + (h % room as u64) as i32, cell.1 * spacing + ((h >> 8) % room as u64) as i32)
+}
+
+pub(crate) fn grid_layout(c: &Content, f: &FeatureDef, cell: (i32, i32), spacing: i32, h: u64) -> ((i32, i32), IVec3, u64, Transform) {
+    let random = hash(h, 1, 2, 3);
+    let transform = f.transforms[(random >> 40) as usize % f.transforms.len()];
+    let foot = match f.shape {
+        Shape::Template(t) => transform.size(c.templates[t as usize].size),
+        _ => IVec3::ZERO,
+    };
+    let room = (spacing - foot.x.max(foot.z)).max(1);
+    (grid_position(cell, spacing, room, h), foot, random, transform)
+}
+
+/// A grid feature's fitted start, biome, shape seed and transform.
 pub fn grid_site(
     c: &Content,
     def: &DimensionDef,
@@ -284,14 +340,7 @@ pub fn grid_site(
 ) -> Option<(IVec3, u32, u64, Transform)> {
     let Spread::Grid { spacing, chance } = f.spread else { return None };
     let h = hash(seed ^ f.salt, cell.0 as i64, 0, cell.1 as i64);
-    let random = hash(h, 1, 2, 3);
-    let transform = f.transforms[(random >> 40) as usize % f.transforms.len()];
-    let foot = match f.shape {
-        Shape::Template(t) => transform.size(c.templates[t as usize].size),
-        _ => IVec3::ZERO,
-    };
-    let room = (spacing - foot.x.max(foot.z)).max(1);
-    let (x, z) = (cell.0 * spacing + (h % room as u64) as i32, cell.1 * spacing + ((h >> 8) % room as u64) as i32);
+    let ((x, z), foot, random, transform) = grid_layout(c, f, cell, spacing, h);
     let mid = (x + foot.x / 2, z + foot.z / 2);
     let col = def.column(seed, mid.0, mid.1)?;
     let fit = &f.fit;
@@ -304,15 +353,7 @@ pub fn grid_site(
     {
         return None;
     }
-    let chance = match chance {
-        Chance::Fixed(p) => p,
-        Chance::Density(d) => d
-            .and_then(|d| {
-                c.components
-                    .get::<f32>(crate::components::BIOME, col.biome, d)
-            })
-            .unwrap_or(0.0),
-    };
+    let chance = chance.in_biome(c, col.biome);
     if weft_noise::unit(h.rotate_left(17)) >= chance as f64 {
         return None;
     }
@@ -444,15 +485,21 @@ pub fn make_piece(view: &crate::generation::ReadCtx<'_>, at: IVec3, variant: Arc
 pub fn add_piece(start: &mut Start, piece: Piece) {
     let (at, variant) = (piece.at, &piece.variant);
     for (p, kind, data) in &variant.entities {
-        start
-            .extras
-            .push(Extra { at: at.as_dvec3() + *p, anchor: None, kind: *kind, data: data.clone(), loot: None });
+        start.extras.push(Extra {
+            at: at.as_dvec3() + *p,
+            anchor: None,
+            transform: Transform::default(),
+            kind: *kind,
+            data: data.clone(),
+            loot: None,
+        });
     }
     for (p, data) in &variant.data {
         let b = at + *p;
         start.extras.push(Extra {
             at: b.as_dvec3() + DVec3::splat(0.5),
             anchor: Some(b),
+            transform: variant.transform,
             kind: u32::MAX,
             data: Some(data.clone()),
             loot: None,
@@ -463,10 +510,14 @@ pub fn add_piece(start: &mut Start, piece: Piece) {
         start.extras.push(Extra {
             at: b.as_dvec3() + DVec3::splat(0.5),
             anchor: Some(b),
+            transform: Transform::default(),
             kind: u32::MAX,
             data: None,
             loot: Some(table.clone()),
         });
+    }
+    for &(p, _) in &variant.positioned {
+        start.grow(at + p, at + p);
     }
     // What it stands on and what it cuts away count as its own.
     if piece.foundation != 0 || piece.clear_above {
@@ -578,6 +629,7 @@ impl PlanCtx<'_> {
                 self.start.extras.push(Extra {
                     at: pos.as_dvec3() + DVec3::new(0.5, 0.0, 0.5),
                     anchor: None,
+                    transform: Transform::default(),
                     kind,
                     data: None,
                     loot: None,
@@ -588,9 +640,14 @@ impl PlanCtx<'_> {
                     return false;
                 }
                 let at = pos.as_dvec3() + DVec3::splat(0.5);
-                self.start
-                    .extras
-                    .push(Extra { at, anchor: Some(pos), kind: u32::MAX, data: None, loot: Some(Arc::from(name)) });
+                self.start.extras.push(Extra {
+                    at,
+                    anchor: Some(pos),
+                    transform: Transform::default(),
+                    kind: u32::MAX,
+                    data: None,
+                    loot: Some(Arc::from(name)),
+                });
             }
             _ => return false,
         }
@@ -693,7 +750,7 @@ fn grid_starts(c: &Content, def: &DimensionDef, dim: u32, seed: u64, fi: usize, 
 
 /// Every start on a grid whose box reaches into cube column (`x`, `z`), in feature order: the
 /// same for every cube of the column, so worked out once for it.
-fn column_starts(c: &Content, def: &DimensionDef, dim: u32, seed: u64, x: i32, z: i32) -> Arc<Vec<Arc<Start>>> {
+pub(crate) fn column_starts(c: &Content, def: &DimensionDef, dim: u32, seed: u64, x: i32, z: i32) -> Arc<Vec<Arc<Start>>> {
     def.sites.get(seed, x, z, || {
         (0..def.features.len())
             .flat_map(|fi| grid_starts(c, def, dim, seed, fi, x, z))
@@ -717,6 +774,45 @@ pub trait Cells {
     /// What is at `p`, `None` past the bounds.
     fn get(&self, p: IVec3) -> Option<u32>;
     fn set(&mut self, p: IVec3, state: u32);
+    fn add_part(&mut self, p: IVec3, part: crate::world::placement::Part);
+}
+
+struct PreviewCells<'a> {
+    lo: IVec3,
+    hi: IVec3,
+    base: Option<crate::generation::Snapshot<'a>>,
+    blocks: rustc_hash::FxHashMap<IVec3, u32>,
+}
+
+impl Cells for PreviewCells<'_> {
+    fn bounds(&self) -> (IVec3, IVec3) {
+        (self.lo, self.hi)
+    }
+
+    fn get(&self, p: IVec3) -> Option<u32> {
+        (p.cmpge(self.lo).all() && p.cmple(self.hi).all()).then(|| {
+            self.blocks
+                .get(&p)
+                .copied()
+                .unwrap_or_else(|| self.base.map_or(AIR, |base| base.read(p)))
+        })
+    }
+
+    fn set(&mut self, p: IVec3, state: u32) {
+        self.blocks.insert(p, state);
+    }
+
+    fn add_part(&mut self, p: IVec3, part: crate::world::placement::Part) {
+        let (cell, part) = part.owner(p);
+        if self.get(cell).is_some() {
+            // The impostor samples one material per voxel.
+            if part.offset == IVec3::ZERO {
+                self.set(cell, part.state);
+            } else {
+                self.blocks.entry(cell).or_insert(part.state);
+            }
+        }
+    }
 }
 
 /// Writes what `start` puts into `to`, as far as its bounds go.
@@ -790,6 +886,9 @@ fn write_piece(piece: &Piece, to: &mut impl Cells) {
         };
         to.set(at, state);
     }
+    for &(p, part) in &v.positioned {
+        to.add_part(piece.at + p, part);
+    }
     let inside = |x: i32, z: i32| x >= lo.x && x <= hi.x && z >= lo.z && z <= hi.z;
     if piece.foundation != 0 {
         for &(x, z) in &v.bottom {
@@ -850,6 +949,7 @@ impl Cells for CubeGen<'_> {
     }
     fn set(&mut self, p: IVec3, state: u32) {
         let Some(i) = self.local(p) else { return };
+        self.generated.layouts.remove(&i);
         if self.blocks[i] != state {
             self.blocks[i] = state;
             self.changed = true;
@@ -859,6 +959,16 @@ impl Cells for CubeGen<'_> {
                 p.push(state);
             }
         }
+    }
+    fn add_part(&mut self, p: IVec3, part: crate::world::placement::Part) {
+        let Some(i) = self.local(p) else { return };
+        let layout = self.generated.layouts.entry(i).or_default();
+        let mut parts: Vec<_> = layout.residents(self.blocks[i]).collect();
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
+        self.blocks[i] = layout.set_residents(&parts);
+        self.changed = true;
     }
 }
 
@@ -1114,16 +1224,20 @@ pub fn nearest(c: &Content, dim: u32, seed: u64, name: &str, pos: IVec3, radius:
     best
 }
 
-/// The blocks a feature on a grid puts from a start at `pos`, relative to it, with whether each
-/// goes over what is there: what distant terrain samples of trees.
-pub fn sample(c: &Content, dim: u32, seed: u64, fi: usize, pos: IVec3, biome: u32, random: u64) -> Vec<(IVec3, u32, bool)> {
-    let def = &c.dims[dim as usize];
-    let Some(s) = make_start(c, def, dim, seed, fi, pos, biome, random, Transform(0)) else { return Vec::new() };
-    s.puts
+/// Sample the shape a distant grid feature places relative to its start.
+pub(crate) fn sample(
+    snapshot: crate::generation::Snapshot<'_>,
+    fi: usize,
+    pos: IVec3,
+    biome: u32,
+    random: u64,
+    transform: Transform,
+) -> Vec<(IVec3, u32)> {
+    let Some(s) = make_start(snapshot.c, snapshot.def(), snapshot.dim, snapshot.seed, fi, pos, biome, random, transform) else {
+        return Vec::new();
+    };
+    s.lod_blocks(snapshot)
         .iter()
-        .filter_map(|p| match p {
-            Put::Block { at, state, force } => Some((*at - pos, *state, *force)),
-            _ => None,
-        })
+        .map(|&(at, state)| (at - pos, state))
         .collect()
 }

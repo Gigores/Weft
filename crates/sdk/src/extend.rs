@@ -12,7 +12,7 @@
 //! r.modify(&attribute::MOVEMENT_SPEED, &phase::ADD, |m| m.value += 0.1);
 //! // Loot tables any mod can change:
 //! r.loot(&OAK_LEAVES).pool(Pool::new().when(Cond::chance(0.05)).item("sapling"));
-//! r.edit(base::ZOMBIE.loot()).pool(Pool::new().item("mymod:brain"));
+//! r.edit(base_api::entities::ZOMBIE.loot()).pool(Pool::new().item("mymod:brain"));
 //! ```
 
 use crate::abi::BlockPos;
@@ -286,6 +286,8 @@ schema_values!(
     abi::ItemUsed,
     abi::Interaction,
     abi::Mounting,
+    abi::ShipCollision,
+    abi::MusicSource,
     abi::DimensionChange,
     abi::WeatherTick,
     abi::Spawned,
@@ -316,6 +318,8 @@ pub static ENTITY_REMOVED: Event<abi::Removed> = Event::named(abi::event::ENTITY
 pub static FEATURE_PLACED: Event<abi::FeaturePlaced> = Event::named(abi::event::FEATURE_PLACED);
 /// An effect ran out or was taken off.
 pub static EFFECT_ENDED: Event<abi::EffectChange> = Event::named(abi::event::EFFECT_ENDED);
+/// The strongest applied collision impulse with each obstacle during a ship's tick.
+pub static SHIP_COLLISION: Event<abi::ShipCollision> = Event::named(abi::event::SHIP_COLLISION);
 
 /// Something that happens, as one name: the question asked before it (`r.before_event(&A, ..)`)
 /// and the event after (`r.on_event(&A, ..)`). The engine's are in `actions`; a mod's

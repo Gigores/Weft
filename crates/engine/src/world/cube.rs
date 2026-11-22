@@ -1,6 +1,9 @@
 //! 16^3 block storage. Palette indices are packed into u64 words with 4, 8 or 16 bits per block
 //! (always a divisor of 64, so an index never straddles two words).
 
+use super::placement::CellLayout;
+use crate::net::codec::Wire;
+
 pub const SIZE: usize = 16;
 pub const VOLUME: usize = SIZE * SIZE * SIZE;
 
@@ -82,7 +85,8 @@ pub struct Cube {
     blocks: Blocks,
     /// Blocks sharing a cell with the one `get` gives, by index; nearly always none at all. A
     /// cell of air has none.
-    extras: std::collections::BTreeMap<u16, Vec<u32>>,
+    extras: std::collections::BTreeMap<u16, CellLayout>,
+    shape_light: std::sync::OnceLock<rustc_hash::FxHashMap<u16, crate::content::Tight>>,
     light: Light,
     pub biomes: Option<Box<[u16; 256]>>,
     /// World time it was simulated to when it was last unloaded (0: never), for growth to catch
@@ -105,6 +109,7 @@ impl Cube {
     pub fn uniform(state: u32, light: u32) -> Cube {
         Cube {
             blocks: Blocks::Uniform(state),
+            shape_light: Default::default(),
             extras: Default::default(),
             light: Light::Uniform(light),
             biomes: None,
@@ -180,24 +185,61 @@ impl Cube {
         if self.extras.is_empty() {
             return &[];
         }
-        self.extras.get(&(i as u16)).map_or(&[], Vec::as_slice)
+        &self.layout(i).extras
     }
 
-    /// Every cell with anything else in it.
+    #[inline]
+    pub fn layout(&self, i: usize) -> &CellLayout {
+        if self.extras.is_empty() {
+            return &crate::world::placement::EMPTY_LAYOUT;
+        }
+        self.extras
+            .get(&(i as u16))
+            .unwrap_or(&crate::world::placement::EMPTY_LAYOUT)
+    }
+
+    pub fn light_material(&self, c: &crate::content::Content, i: usize) -> crate::content::Tight {
+        if !self.extras.is_empty()
+            && let Some(t) = self
+                .shape_light
+                .get_or_init(|| {
+                    self.layouts()
+                        .map(|(i, layout)| (i as u16, layout.light(c, self.get(i))))
+                        .collect()
+                })
+                .get(&(i as u16))
+        {
+            return *t;
+        }
+        c.tight[self.get(i) as usize]
+    }
+
+    pub fn layouts(&self) -> impl Iterator<Item = (usize, &CellLayout)> {
+        self.extras.iter().map(|(&i, v)| (i as usize, v))
+    }
+
     pub fn all_extras(&self) -> impl Iterator<Item = (usize, &[u32])> {
-        self.extras.iter().map(|(&i, v)| (i as usize, v.as_slice()))
+        self.layouts().map(|(i, v)| (i, v.extras.as_slice()))
     }
 
     pub fn set_extras(&mut self, i: usize, extras: Vec<u32>) {
-        if extras.is_empty() {
+        self.set_layout(i, CellLayout { extras, ..CellLayout::EMPTY });
+    }
+
+    pub fn set_layout(&mut self, i: usize, layout: CellLayout) {
+        self.shape_light.take();
+        if layout == CellLayout::EMPTY {
             self.extras.remove(&(i as u16));
         } else {
-            self.extras.insert(i as u16, extras);
+            self.extras.insert(i as u16, layout);
         }
     }
 
     /// Writes the block of a cell, returning the previous state; what else was in it is gone.
     pub fn set(&mut self, i: usize, state: u32) -> u32 {
+        if !self.extras.is_empty() {
+            self.shape_light.take();
+        }
         if !self.extras.is_empty() {
             self.extras.remove(&(i as u16));
         }
@@ -290,7 +332,7 @@ impl Cube {
                 .chain(old.extras.keys())
                 .map(|&i| i as usize)
             {
-                if self.extras(i) != old.extras(i) {
+                if self.layout(i) != old.layout(i) {
                     let at = offset(i);
                     mask |= around_mask(at.x, at.y, at.z);
                 }
@@ -445,12 +487,12 @@ impl Cube {
             }
         }
         // Bit 0: biomes follow, bit 1: the simulated time, bit 2: the last area edit, bit 3: what
-        // else is in cells.
+        // else was in cells in older saves, bit 4: placement layouts.
         out.push(
             self.biomes.is_some() as u8
                 | ((self.ticked != 0) as u8) << 1
                 | ((self.edits != 0) as u8) << 2
-                | (!self.extras.is_empty() as u8) << 3,
+                | (!self.extras.is_empty() as u8) << 4,
         );
         if let Some(b) = &self.biomes {
             for v in b.iter() {
@@ -465,12 +507,11 @@ impl Cube {
         }
         if !self.extras.is_empty() {
             out.extend_from_slice(&(self.extras.len() as u16).to_le_bytes());
-            for (i, parts) in &self.extras {
+            for (i, layout) in &self.extras {
                 out.extend_from_slice(&i.to_le_bytes());
-                out.extend_from_slice(&(parts.len() as u16).to_le_bytes());
-                for &p in parts {
-                    out.extend_from_slice(&map(p).to_le_bytes());
-                }
+                let mut layout = layout.clone();
+                layout.map_states(&map);
+                out.extend(layout.to_bytes());
             }
         }
     }
@@ -533,11 +574,22 @@ impl Cube {
                 if i as usize >= VOLUME {
                     return None;
                 }
-                extras.insert(i, parts);
+                extras.insert(i, CellLayout { extras: parts, ..CellLayout::EMPTY });
+            }
+        }
+        if flags & 16 != 0 {
+            for _ in 0..r.u16()? {
+                let i = r.u16()?;
+                if i as usize >= VOLUME {
+                    return None;
+                }
+                let mut layout = CellLayout::get(&mut r)?;
+                layout.map_states(&map);
+                extras.insert(i, layout);
             }
         }
         *data = r.0;
-        Some(Cube { blocks, extras, light, biomes, ticked, edits, generated: None })
+        Some(Cube { blocks, extras, shape_light: Default::default(), light, biomes, ticked, edits, generated: None })
     }
 }
 

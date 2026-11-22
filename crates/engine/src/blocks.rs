@@ -89,6 +89,7 @@ pub(crate) fn freeze(
     let mut out = Blocks {
         states: vec![air()],
         block_defs: vec![BlockDef {
+            grid_placement: false,
             name: "core:air".into(),
             owner: crate::registry::ENGINE,
             first_state: 0,
@@ -252,7 +253,19 @@ pub(crate) fn freeze(
             signal_gate: e.callback(b::SIGNAL_GATE),
         };
         let sneak_use = e.or(b::SNEAK_USE, abi::sneak_use::EMPTY_HANDS);
-        let def = BlockDef { name: e.name, owner: e.owner, first_state: first, states: count, props, cb, opens: None, sneak_use, sides };
+        let grid_placement = e.has(b::GRID_PLACEMENT) || e.has("plantable");
+        let def = BlockDef {
+            name: e.name,
+            owner: e.owner,
+            first_state: first,
+            states: count,
+            props,
+            cb,
+            opens: None,
+            sneak_use,
+            sides,
+            grid_placement,
+        };
         // A piece's properties are of the state it is in.
         for (state, raw) in pieces {
             let to = |text: &str| def.changed_text(state as u32, text);
@@ -397,7 +410,7 @@ fn full_key(props: &[Prop], s: u32) -> String {
 }
 
 /// What only a block as a whole has: its states leave it out.
-const BLOCK_ONLY: [&str; 16] = [
+const BLOCK_ONLY: [&str; 17] = [
     b::PROPS,
     b::ON_USE,
     b::ON_NEIGHBOR,
@@ -405,6 +418,7 @@ const BLOCK_ONLY: [&str; 16] = [
     b::ON_CARRIED,
     b::ON_GROW,
     b::PLACEMENT,
+    b::GRID_PLACEMENT,
     b::MERGE,
     b::ON_SIGNAL,
     b::SIGNAL_GATE,
@@ -700,7 +714,26 @@ fn bake_state(
             })
             .collect()
     };
-    let (hitbox, outline) = (sixteenths(b::HITBOX), sixteenths(b::OUTLINE));
+    let (mut hitbox, outline) = (sixteenths(b::HITBOX), sixteenths(b::OUTLINE));
+    let cylinder = s
+        .get::<[f32; 3]>(b::CYLINDER)
+        .and_then(|[radius, half, grip]| {
+            if !(0.0 < radius && radius <= 1.5 && 0.0 < half && half <= 0.5 && (0.0..=4.0).contains(&grip)) {
+                errors.push(format!("{name}: invalid cylinder radius, half length or grip"));
+                return None;
+            }
+            let axis = glam::DVec3::from_array(turn.vector([0, 0, 1]).map(f64::from));
+            let shape = crate::physics::Cylinder {
+                center: glam::DVec3::splat(0.5),
+                axis,
+                radius: f64::from(radius),
+                half: f64::from(half),
+                grip: f64::from(grip),
+            };
+            let b = shape.bounds();
+            hitbox = vec![[b.min.x as f32, b.min.y as f32, b.min.z as f32, b.max.x as f32, b.max.y as f32, b.max.z as f32]];
+            (flags & bf::SOLID != 0).then_some(shape)
+        });
     let rules = s.or::<Vec<abi::BlockRule>>(b::RULES, Vec::new());
     let pieces = s
         .or::<Vec<abi::Piece>>(b::PIECES, Vec::new())
@@ -757,20 +790,6 @@ fn bake_state(
             .map(|b| [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]])
             .collect()
     };
-    let own_cells = s.or::<Vec<[i32; 3]>>(b::CELLS, Vec::new());
-    let tall = own_cells.contains(&[0, 1, 0]);
-    let cells = cells_of(name, turn, own_cells, errors);
-    // A big block's reach out of its cell is its cells.
-    let (lo, hi) = cells
-        .iter()
-        .fold((IVec3::ZERO, IVec3::ZERO), |(lo, hi), (o, _)| (lo.min(*o), hi.max(*o)));
-    for bx in &hitbox {
-        let out = (0..3).any(|i| bx[i] < lo[i] as f32 - 1.0 || bx[i + 3] > hi[i] as f32 + 2.0);
-        if out {
-            errors
-                .push(format!("{name}: hitbox {:?} reaches more than a block out of its cell (it is in sixteenths)", bx.map(|v| v * 16.0)));
-        }
-    }
     // What stops a walker: nothing at all unless it is solid, decided here once for whoever asks.
     let collision = if flags & bf::SOLID == 0 {
         Vec::new()
@@ -792,6 +811,25 @@ fn bake_state(
     } else {
         vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]
     };
+    // Offsets in coverage records use signed 16.16 coordinates. Bound the indexing work
+    // before enumerating cells, including malformed bounds read from a model file.
+    let valid = selection
+        .iter()
+        .all(|b| b.iter().all(|v| v.is_finite() && v.abs() < 32767.0) && (0..3).all(|i| b[i] <= b[i + 3]))
+        && selection
+            .iter()
+            .map(|b| {
+                (0..3)
+                    .map(|i| f64::from(b[i + 3].ceil() - b[i].floor()))
+                    .product::<f64>()
+            })
+            .sum::<f64>()
+            <= 1_048_576.0;
+    if !valid {
+        errors.push(format!("{name}: invalid or excessively large block hitbox"));
+    }
+    let cells = if valid { crate::world::placement::covered_cells(&selection, cylinder, glam::IVec3::ZERO) } else { Vec::new() };
+    let tall = cells.contains(&IVec3::Y);
     let own: [u32; 6] = if model == BlockModel::None { [0; 6] } else { std::array::from_fn(|i| tex(&faces[i])) };
     let item_face = match s.get::<u8>(b::ITEM_FACE) {
         Some(f) => Some(f),
@@ -830,6 +868,15 @@ fn bake_state(
         level: 0,
         model,
         item_face,
+        random_transform: crate::content::RandomTransform {
+            offset: s.or(b::RANDOM_OFFSET, 0.0),
+            height_scale: s.or(b::RANDOM_HEIGHT_SCALE, [1.0; 2]),
+            width_scale: s.or(b::RANDOM_WIDTH_SCALE, [1.0; 2]),
+            scale: s.or(b::RANDOM_SCALE, [1.0; 2]),
+            yaw: s.or(b::RANDOM_YAW, [0.0f32; 2]),
+            pitch: s.or(b::RANDOM_PITCH, [0.0f32; 2]),
+            roll: s.or(b::RANDOM_ROLL, [0.0f32; 2]),
+        },
         signal: Signal {
             kind: signal.kind,
             inputs: turn.faces(signal.inputs as u8),
@@ -846,9 +893,11 @@ fn bake_state(
         textures: crate::content::turned_faces(turn, own),
         boxes,
         collision,
+        cylinder,
         selection,
         outline,
         hardness: 1.0,
+        sound_absorption: 0.18,
         friction: 0.6,
         drag: 1.0,
         conductor: false,
@@ -893,39 +942,9 @@ fn face_texture(spec: &str, retexture: &[(String, String)]) -> String {
     )
 }
 
-/// A big block's other cells turned, each with its step toward the block's own cell, found
-/// spreading from it face by face.
-fn cells_of(name: &str, turn: weft_abi::Turn, own: Vec<[i32; 3]>, errors: &mut Vec<String>) -> Vec<(IVec3, u8)> {
-    use crate::world::DIRS;
-    let mut left: Vec<IVec3> = own
-        .into_iter()
-        .map(|o| IVec3::from_array(turn.vector(o)))
-        .filter(|o| *o != IVec3::ZERO)
-        .collect();
-    left.sort_by_key(|o| o.to_array());
-    left.dedup();
-    let (mut out, mut reached) = (Vec::new(), vec![IVec3::ZERO]);
-    let mut at = 0;
-    while at < reached.len() {
-        let from = reached[at];
-        at += 1;
-        for (d, step) in DIRS.iter().enumerate() {
-            if let Some(i) = left.iter().position(|o| *o == from + *step) {
-                let o = left.swap_remove(i);
-                // The way back is the opposite face.
-                out.push((o, (d ^ 1) as u8));
-                reached.push(o);
-            }
-        }
-    }
-    if !left.is_empty() {
-        errors.push(format!("{name}: cells {left:?} don't touch the rest of the block by a face"));
-    }
-    out
-}
-
 fn air() -> StateInfo {
     StateInfo {
+        cylinder: None,
         turn: weft_abi::Turn::NONE,
         sides: 0,
         liquid_walls: u8::MAX,
@@ -941,12 +960,14 @@ fn air() -> StateInfo {
         level: 0,
         model: BlockModel::None,
         item_face: None,
+        random_transform: crate::content::RandomTransform::NONE,
         textures: [0; 6],
         boxes: Vec::new(),
         collision: Vec::new(),
         selection: Vec::new(),
         outline: Vec::new(),
         hardness: -1.0,
+        sound_absorption: 1.0,
         friction: 0.6,
         drag: 1.0,
         conductor: false,

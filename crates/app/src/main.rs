@@ -60,7 +60,8 @@ options:
   --size <WxH>         window size
   --screen <name>      open this screen at start
   --renderer <name>    vulkan or wgpu
-  --no-vsync           frames as fast as they come
+  --legacy-lod         use the previous distant-terrain path for comparison
+  --no-vsync           disable vertical sync for this run
   --gpu-debug          the graphics API's validation
   --dev                engine assets from the source tree
   --verbose            more in the log

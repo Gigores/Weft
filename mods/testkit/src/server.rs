@@ -12,8 +12,7 @@ static COUNTS: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
 const EVENT_NAMES: [&str; 8] =
     ["block_broken", "block_placed", "item_picked_up", "entity_died", "entity_hurt", "player_joined", "item_used", "smelted"];
 
-use base_api::SMELTED;
-static GOLD: Block = Block::named("base:gold_block");
+use base_api::{blocks::GOLD_BLOCK, entities::PIG, events::SMELTED};
 static GOLD_HELMET: Item = Item::named("base:gold_helmet");
 static RED_LAMP: Item = Item::named("base:red_lamp");
 static BLUE_LAMP: Item = Item::named("base:blue_lamp");
@@ -31,7 +30,6 @@ static DISPLAY_PHASE: Component<u32> = Component::named("testmod:display_phase")
 static DISPLAY_PARTS: Storage = Storage::named("testmod:display_parts");
 /// A stash every player carries, for menus on an inventory that is no block's or entity's own.
 static STASH: Storage = Storage::named("testkit:stash");
-static PIG: EntityKind = EntityKind::named("base:pig");
 /// Green light and nothing drawn, for the dynamic light test.
 static LIT: EntityEffect = EntityEffect::named("lit");
 /// Shows what is in its one slot.
@@ -195,7 +193,7 @@ pub fn register(r: &mut Registry) {
     r.edit(&OAK_STAIRS).light(7);
     r.set("#testkit:lamp*", &WARMTH, 1.5);
     r.tag("testkit:lit", &["lamp[lit=true]"]);
-    r.shapeless(&base_api::SMELTING, "base:stick", 1, &["testmod:edited"], 200)
+    r.shapeless(&base_api::recipes::SMELTING, "base:stick", 1, &["testmod:edited"], 200)
         .named("smelt_edited");
     r.remove(&Recipe::named("smelt_edited"));
     r.loot(&EDITED_LOOT)
@@ -285,7 +283,10 @@ pub fn register(r: &mut Registry) {
             .extend(b.iter().map(|v| (v.feature, v.pos)));
     });
     r.config(&HALF_DAMAGE).bool(false).world();
-    r.before_event(&actions::BREAK_BLOCK, |q| if GOLD.is(q.state()) && PROTECT_GOLD.get() { Verdict::Deny } else { Verdict::Abstain });
+    r.before_event(
+        &actions::BREAK_BLOCK,
+        |q| if GOLD_BLOCK.is(q.state()) && PROTECT_GOLD.get() { Verdict::Deny } else { Verdict::Abstain },
+    );
     r.modify(&chain::DAMAGE, &phase::FINAL, |m| {
         if HALF_DAMAGE.get() {
             m.value *= 0.5;
@@ -512,7 +513,7 @@ const OPS: &[(&str, &str, Run)] = &[
     ("structureset", "<id:int> <x:int> <y:int> <z:int> <block:block>", |w, cmd, _, _| {
         let (id, p) = (int::<u64>(cmd, "id")?, [int::<i32>(cmd, "x")?, int::<i32>(cmd, "y")?, int::<i32>(cmd, "z")?]);
         let block = self::id(cmd, "block")?;
-        match w.on_body(id) {
+        match w.in_space(id) {
             Some(f) if f.set_block(p, block) => Ok(String::new()),
             _ => Err(format!("no structure {id}")),
         }
@@ -596,7 +597,9 @@ const OPS: &[(&str, &str, Run)] = &[
             .unwrap_or("none")
             .to_string())
     }),
-    ("parts", "<pos:pos>", |w, cmd, _, _| {
+    ("parts", "<pos:pos> [body:int]", |w, cmd, _, _| {
+        let frame = int::<u64>(cmd, "body").unwrap_or(0);
+        let w = w.in_space(frame).ok_or("no space")?;
         Ok(w.parts(pos(cmd, "pos")?)
             .into_iter()
             .map(block_name)
@@ -644,7 +647,7 @@ const OPS: &[(&str, &str, Run)] = &[
     ("sblock", "<id:int> <pos:pos> [block:block]", |w, cmd, _, _| {
         // A block of a moving structure, or set it.
         let (id_, p) = (int::<u64>(cmd, "id")?, pos(cmd, "pos")?);
-        let f = w.on_body(id_).ok_or("not a structure")?;
+        let f = w.in_space(id_).ok_or("not a structure")?;
         match cmd.id("block") {
             Some(b) => Ok((f.set_block(p, b) as u32).to_string()),
             None => f
@@ -663,7 +666,7 @@ const OPS: &[(&str, &str, Run)] = &[
             .split_whitespace()
             .map(|n| if n == "air" { ItemStack::EMPTY } else { ItemStack::new(Item::lookup(n).unwrap_or(0), 1) })
             .collect();
-        let made = recipe_grid_output(&base_api::CRAFTING, &grid, width, height);
+        let made = recipe_grid_output(&base_api::recipes::CRAFTING, &grid, width, height);
         Ok(format!("{} {}", name_of(abi::entry_kind::ITEM, made.item), made.count))
     }),
     ("seed", "<pos:pos>", |w, cmd, _, _| {
@@ -927,7 +930,7 @@ const OPS: &[(&str, &str, Run)] = &[
         let mut n = [0u32; 4];
         for z in me[2] - r..=me[2] + r {
             for x in me[0] - r..=me[0] + r {
-                let h = base_api::OVERWORLD.column(5, x, z).height;
+                let h = base_api::dimensions::OVERWORLD.column(5, x, z).height;
                 if h < 63 {
                     continue;
                 }
@@ -956,14 +959,24 @@ const OPS: &[(&str, &str, Run)] = &[
     }),
     // A timer on the player, `dim` or `block` under them: `after 60`, then `rings` counts the
     // ones that fired.
-    ("after", "<ticks:int> [on:word]", |w, cmd, player, me| {
+    ("after", "<ticks:int> [on:word] [body:int]", |w, cmd, player, me| {
+        let body = int::<u64>(cmd, "body").ok();
         let on = match cmd.text("on") {
             Some("dim") => Holder::NONE,
+            Some("block") if body.is_some() => Holder::from([0, 1, 0]),
             Some("block") => Holder::from([me[0], me[1] - 1, me[2]]),
             _ => Holder::entity(player),
         };
-        w.timer(on, int(cmd, "ticks")?, &RANG, player);
+        w.in_space(body.unwrap_or(0))
+            .ok_or("no space")?
+            .timer(on, int(cmd, "ticks")?, &RANG, player);
         Ok(String::new())
+    }),
+    ("assemble_one", "<pos:pos>", |w, cmd, player, _| {
+        let cell = BlockPos::from(pos(cmd, "pos")?);
+        w.assembly_select(player, Some(cell), true);
+        w.assembly_select(player, Some(cell), true);
+        Ok(w.assembly_select(player, None, true).to_string())
     }),
     ("rings", "", |_, _, _, _| Ok(RINGS.load(Ordering::Relaxed).to_string())),
     ("edited", "", |w, _, player, _| {
@@ -1003,7 +1016,7 @@ const OPS: &[(&str, &str, Run)] = &[
                 comps::weather::UNSHELTERED.on_id(STORM.id())
             ),
             w.attribute(player, &GRIT),
-            recipe_process(&base_api::SMELTING, i).is_none(),
+            recipe_process(&base_api::recipes::SMELTING, i).is_none(),
             drops.join(","),
             liquid_of(OIL.id()) == Some(OIL.liquid().id()),
             oil.on_block(OIL.id()) && oil.on_item(Item::generated(OIL.name().to_string()).id()),

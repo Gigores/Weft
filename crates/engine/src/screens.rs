@@ -18,6 +18,7 @@ pub struct BuildCx<'a> {
     pub settings: &'a Settings,
     pub languages: &'a [(String, String)],
     pub in_game: bool,
+    pub debug: bool,
     /// Joined someone else's world (their synced settings apply).
     pub remote: bool,
     pub mods: usize,
@@ -83,6 +84,10 @@ pub trait Screen: std::any::Any {
     fn escape_closes(&self) -> bool {
         true
     }
+    /// Validates or applies edits before closing the top screen. False keeps it open.
+    fn close_action(&self) -> Option<fn(&mut Ctx) -> bool> {
+        None
+    }
     fn closes_on_respawn(&self) -> bool {
         false
     }
@@ -114,6 +119,7 @@ pub fn named(name: &str) -> Option<Box<dyn Screen>> {
         }
         "core:language" => Box::new(LanguageScreen),
         "core:controls" => Box::new(Controls::default()),
+        crate::controller::SCREEN => Box::new(crate::controller_screen::ControllerScreen::default()),
         "core:mod_settings" => Box::new(ModSettings),
         "core:worlds" => Box::new(crate::saves::WorldSelect::default()),
         "core:create_world" => Box::new(crate::saves::CreateWorld::new()),
@@ -610,15 +616,13 @@ fn settings_links(cx: &BuildCx) -> Vec<(&'static str, &'static str)> {
         ("settings.resource_packs", "core:resource_packs"),
         ("settings.shader_packs", "core:shader_packs"),
         ("settings.mods", "core:mod_settings"),
+        ("settings.hud", "core:hud_editor"),
     ];
-    if cx.in_game {
-        v.push(("settings.hud", "core:hud_editor"));
-        if cx
-            .client
-            .is_some_and(|cl| cl.permission >= weft_abi::permission::ADMIN)
-        {
-            v.push(("world.rules", "core:world_rules"));
-        }
+    if cx
+        .client
+        .is_some_and(|cl| cl.permission >= weft_abi::permission::ADMIN)
+    {
+        v.push(("world.rules", "core:world_rules"));
     }
     v
 }
@@ -639,6 +643,12 @@ fn config_row(ui: &mut Ui, cx: &BuildCx, id: u32, d: &crate::config::ConfigDef, 
             .chain(
                 small
                     .then(|| (d.min as i64..=d.max as i64).map(|n| n.to_string()))
+                    .into_iter()
+                    .flatten(),
+            )
+            .chain(
+                (d.kind == ck::INT && !small)
+                    .then(|| [d.show(d.min), d.show(d.max)])
                     .into_iter()
                     .flatten(),
             )
@@ -735,17 +745,17 @@ fn config_row(ui: &mut Ui, cx: &BuildCx, id: u32, d: &crate::config::ConfigDef, 
                     }) as Box<dyn Fn(f32, f32) -> f32>
                 });
                 let definition = d.clone();
-                ui.add(
-                    Kind::Slider {
-                        value: 0.0,
-                        bind: Box::new(move |_: &Ctx| definition.slider_position(crate::config::get(id))),
-                        on_change,
-                        on_release,
-                        steps,
-                        step_value,
-                    },
-                    Style::default().h(20.0).stretch(),
-                );
+                let thumb = crate::ui::slider::Thumb { value: 0.0, change: Some(on_change), release: on_release };
+                let mut slider = crate::ui::slider::Slider::new(vec![thumb]);
+                slider.binding = Some((
+                    vec![0.0],
+                    Box::new(move |_, values| {
+                        values[0] = definition.slider_position(crate::config::get(id));
+                    }),
+                ));
+                slider.steps = steps;
+                slider.step_value = step_value;
+                ui.add(Kind::Slider(slider), Style::default().h(20.0).stretch());
             }
         }),
     };
@@ -1099,12 +1109,6 @@ impl Screen for Controls {
             ui.set_id(list, "controls");
             ui.container(Style::row().gap(6.0), |ui| {
                 button(ui, cx, "controls.reset", &[], 120.0, |c| c.requests.push(Request::ResetBinds));
-                if crate::settings::touch_controls() {
-                    button(ui, cx, "touch.title", &[], 120.0, |c| {
-                        c.requests
-                            .push(Request::Screen("core:touch_buttons".into()))
-                    });
-                }
                 back_button(ui, cx, "menu.done", &[], 120.0, |c| c.requests.push(Request::Close));
             });
         });
@@ -1149,20 +1153,30 @@ pub struct Message {
     pub args: Vec<Arg>,
 }
 
-/// While shaders compile ahead (`Backend::precompile`) and a world waits for them: once, on a
-/// phone's first start, which it says so nobody takes it for every time.
-pub struct Compiling;
+/// Loading without a saved preview, including a cold shader compilation.
+pub enum LoadingWorld {
+    Compiling,
+    Streaming,
+}
 
-impl Screen for Compiling {
+impl Screen for LoadingWorld {
     fn name(&self) -> &str {
-        "core:compiling"
+        match self {
+            Self::Compiling => "core:compiling",
+            Self::Streaming => "core:loading_world",
+        }
     }
 
     fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
         ui.root_style(Style::default().stretch());
-        ui.panel("background", Style::default().grow().center().pad(12.0).gap(10.0), |ui| {
-            label(ui, cx, "world.compiling", &[], "title");
-            label(ui, cx, "world.compiling.once", &[], "label");
+        ui.panel("background", Style::default().grow().center().pad(12.0).gap(10.0), |ui| match self {
+            Self::Compiling => {
+                label(ui, cx, "world.compiling", &[], "title");
+                label(ui, cx, "world.compiling.once", &[], "label");
+            }
+            Self::Streaming => {
+                label(ui, cx, "world.loading", &[], "title");
+            }
         });
     }
 

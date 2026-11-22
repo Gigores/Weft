@@ -63,7 +63,6 @@ pub fn find(c: &Content, block: &impl physics::Cells, from: DVec3, to: DVec3, di
     let target = to;
     let (from, to) = (cell(from), cell(to));
     let area = |p: IVec3| Aabb::around(p.as_dvec3() + offset, dims.half_width, dims.height);
-    let top = |s: u32| physics::collision_top(c, s);
     let burns = |s: u32| {
         c.states[s as usize]
             .liquid
@@ -80,7 +79,7 @@ pub fn find(c: &Content, block: &impl physics::Cells, from: DVec3, to: DVec3, di
             for z in lo.z..=hi.z {
                 for x in lo.x..=hi.x {
                     let p = IVec3::new(x, y, z);
-                    if block.main(p).is_none_or(burns) || block.extras(p).iter().any(|&s| burns(s)) {
+                    if block.main(p).is_none_or(burns) || block.layout(p).extras.iter().any(|&s| burns(s)) {
                         return false;
                     }
                 }
@@ -92,17 +91,18 @@ pub fn find(c: &Content, block: &impl physics::Cells, from: DVec3, to: DVec3, di
         let area = area(p);
         let lo = area.min.floor().as_ivec3();
         let hi = area.max.ceil().as_ivec3() - IVec3::ONE;
-        let holds = |s: u32| c.states[s as usize].liquid.is_some() || top(s).is_some_and(|t| t >= 0.5);
-        let mut supported = false;
+        let floor = Aabb { min: area.min - DVec3::Y * 0.50001, max: DVec3::new(area.max.x, area.min.y, area.max.z) };
+        let mut supported = physics::collides(c, block, floor);
         for z in lo.z..=hi.z {
             for x in lo.x..=hi.x {
                 let below = IVec3::new(x, p.y - 1, z);
-                if let Some(s) = block.main(below) {
-                    let extras = block.extras(below);
-                    if burns(s) || extras.iter().any(|&s| burns(s)) {
-                        return false;
+                if let Some(main) = block.main(below) {
+                    for part in block.layout(below).parts(main) {
+                        if burns(part.state) {
+                            return false;
+                        }
+                        supported |= c.states[part.state as usize].liquid.is_some();
                     }
-                    supported |= holds(s) || extras.iter().any(|&s| holds(s));
                 }
             }
         }

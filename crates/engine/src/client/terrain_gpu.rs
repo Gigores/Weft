@@ -140,83 +140,6 @@ fn steps(w: &mut Vec<i32>, e: &Expr, seed: u64) -> (i32, i32) {
     (start, e.0.len() as i32)
 }
 
-/// `describe` for distant terrain, with the dimension's scattered things (trees) after it
-/// (`d::SCATTER_OFF` points there): per scatter its cell, reach and hash seed, then per biome the chance
-/// as a threshold on the site's bits (`dim::scatter_site`'s test, exactly), and the canopy its
-/// shape callback makes there (radius, top above the site, block), from a few sample runs; then
-/// the ground it stands on (`ScatterDef::ground`) as state ranges (count, then first and count
-/// each), none for any.
-pub fn describe_lod(c: &Content, dim: u32, seed: u64) -> Option<Vec<i32>> {
-    use crate::features::{Chance, Shape, Spread};
-    let mut w = describe(c, dim, seed)?;
-    let def = &c.dims[dim as usize];
-    w[d::SCATTER_OFF as usize] = w.len() as i32;
-    let grid: Vec<(usize, &crate::features::FeatureDef)> = def
-        .features
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| f.grid().is_some())
-        .collect();
-    w.push(grid.len() as i32);
-    let biomes = c.biomes.len().max(1);
-    for (fi, sc) in grid {
-        // Far away only what a mod's plan grows by a biome's density shows (trees).
-        let (spacing, density) = match (&sc.spread, &sc.shape) {
-            (Spread::Grid { spacing, chance: Chance::Density(d) }, Shape::Plan(..)) => (*spacing, *d),
-            (Spread::Grid { spacing, .. }, _) => (*spacing, None),
-            _ => continue,
-        };
-        let key = seed ^ sc.salt;
-        w.extend_from_slice(&[spacing, sc.reach[0], key as u32 as i32, (key >> 32) as u32 as i32, biomes as i32]);
-        for b in 0..biomes as u32 {
-            let density = density
-                .and_then(|d| c.components.get::<f32>(crate::components::BIOME, b, d))
-                .unwrap_or(0.0);
-            let threshold = (density as f64 * (1u64 << 53) as f64).ceil() as u64;
-            let (mut tops, mut radii, mut states) = (Vec::new(), Vec::new(), rustc_hash::FxHashMap::<u32, u32>::default());
-            for k in 0..8u64 {
-                if threshold == 0 {
-                    continue;
-                }
-                let blocks = crate::features::sample(c, dim, seed, fi, glam::IVec3::new(0, 64, 0), b, weft_noise::mix(k));
-                let Some(top) = blocks.iter().map(|b| b.0.y).max() else { continue };
-                tops.push(top);
-                radii.push(
-                    blocks
-                        .iter()
-                        .filter(|b| b.0.y >= 1)
-                        .map(|b| b.0.x.abs().max(b.0.z.abs()))
-                        .max()
-                        .unwrap_or(0),
-                );
-                for b in blocks.iter().filter(|b| !b.2) {
-                    *states.entry(b.1).or_default() += 1;
-                }
-            }
-            if tops.is_empty() {
-                w.extend_from_slice(&[0; words::SCATTER_BIOME as usize]);
-                continue;
-            }
-            tops.sort_unstable();
-            radii.sort_unstable();
-            let state = states.into_iter().max_by_key(|e| e.1).map_or(0, |e| e.0);
-            let entry: [i32; words::SCATTER_BIOME as usize] =
-                [threshold as u32 as i32, (threshold >> 32) as u32 as i32, radii[radii.len() / 2], tops[tops.len() / 2], state as i32];
-            w.extend_from_slice(&entry);
-        }
-        // The states its ground takes, as runs (first, count); none: any.
-        let runs = sc
-            .fit
-            .ground
-            .map_or(Vec::new(), |m| crate::refs::runs(c.matchers.set(m), c.states.len() as u32));
-        w.push(runs.len() as i32);
-        for (first, count) in runs {
-            w.extend_from_slice(&[first as i32, count as i32]);
-        }
-    }
-    Some(w)
-}
-
 #[derive(Default)]
 struct Slot {
     desc: Option<(BufferId, usize)>,
@@ -231,7 +154,7 @@ struct Slot {
     reading: [Option<Arc<Readback>>; 2],
     /// The same for distant terrain tiles (`lod`), read back right away (a few kilobytes each).
     lod_desc: Option<(BufferId, usize)>,
-    lod_desc_key: Option<(u32, u64)>,
+    lod_desc_key: Option<u64>,
     lod_jobs: Option<(BufferId, usize)>,
     lod_out: Option<(BufferId, usize)>,
     lod_flight: Vec<super::lod::LodJob>,
@@ -256,22 +179,28 @@ impl Readback {
 pub struct GpuTerrain {
     pipeline: Option<PipelineId>,
     lod_pipeline: Option<PipelineId>,
+    pub far_lod_pipeline: Option<PipelineId>,
     rx: Receiver<Job>,
     queue: VecDeque<Job>,
     /// Distant terrain tiles asked for (`lod::Lod`).
     pub lod_tx: Sender<super::lod::LodJob>,
+    pub lod_shader: Option<u64>,
     lod_rx: Receiver<super::lod::LodJob>,
     lod_queue: VecDeque<super::lod::LodJob>,
     slots: Vec<Slot>,
     /// (dim, seed) and its description, for cubes and for tiles.
     desc: Option<((u32, u64), Vec<i32>)>,
-    lod_desc: Option<((u32, u64), Vec<i32>)>,
     /// Set once the pipeline works: the terrain thread sends jobs here instead of to the CPU.
     pub on: Arc<AtomicBool>,
 }
 
 /// The terrain's pipelines: label and entry point.
 const PIPELINES: [(&str, &str); 2] = [("terrain", "generate"), ("terrain lod", "lod")];
+const FAR_LOD_PIPELINE: (&str, &str) = ("far terrain lod", "lod_far");
+
+fn far_lod_enabled() -> bool {
+    !crate::app::api::launch_options().contains_key("legacy-lod")
+}
 
 impl GpuTerrain {
     /// Its pipelines compiled ahead on another thread (`Backend::precompile`), from the title
@@ -282,7 +211,10 @@ impl GpuTerrain {
         }
         match Self::shader(assets) {
             Ok(s) => {
-                for (label, entry) in PIPELINES {
+                for (label, entry) in PIPELINES
+                    .into_iter()
+                    .chain(far_lod_enabled().then_some(FAR_LOD_PIPELINE))
+                {
                     gpu.precompile(&ComputeDesc { label, shader: &s, entry });
                 }
             }
@@ -301,13 +233,22 @@ impl GpuTerrain {
                 gpu.create_compute(&ComputeDesc { label, shader: &s, entry })
                     .map_err(|e| e.0)
             });
-            Ok((terrain?, lod?))
+            let (terrain, lod) = (terrain?, lod?);
+            let far = far_lod_enabled()
+                .then(|| {
+                    let (label, entry) = FAR_LOD_PIPELINE;
+                    gpu.create_compute(&ComputeDesc { label, shader: &s, entry })
+                        .map_err(|e| log::warn!("far LOD compute: {e}"))
+                        .ok()
+                })
+                .flatten();
+            Ok((terrain, lod, far, s.hash))
         });
-        let (pipeline, lod_pipeline) = match pipelines {
-            Ok((p, l)) => (Some(p), Some(l)),
+        let (pipeline, lod_pipeline, far_lod_pipeline, lod_shader) = match pipelines {
+            Ok((p, l, far, hash)) => (Some(p), Some(l), far, Some(hash)),
             Err(e) => {
                 log::error!("terrain on the GPU unavailable, generating on the CPU: {e}");
-                (None, None)
+                (None, None, None, None)
             }
         };
         on.store(pipeline.is_some() && enabled(), Ordering::Relaxed);
@@ -315,14 +256,15 @@ impl GpuTerrain {
         GpuTerrain {
             pipeline,
             lod_pipeline,
+            far_lod_pipeline,
             rx,
             queue: VecDeque::new(),
             lod_tx,
+            lod_shader,
             lod_rx,
             lod_queue: VecDeque::new(),
             slots: Vec::new(),
             desc: None,
-            lod_desc: None,
             on,
         }
     }
@@ -340,7 +282,7 @@ impl GpuTerrain {
                 gpu.destroy_buffer(b);
             }
         }
-        for p in [self.pipeline.take(), self.lod_pipeline.take()]
+        for p in [self.pipeline.take(), self.lod_pipeline.take(), self.far_lod_pipeline.take()]
             .into_iter()
             .flatten()
         {
@@ -373,29 +315,23 @@ impl GpuTerrain {
         }
         self.lod_queue.extend(self.lod_rx.try_iter());
         let Some(first) = self.lod_queue.front() else { return };
-        let key = (first.dim, first.seed);
-        if self.lod_desc.as_ref().is_none_or(|d| d.0 != key) {
-            let Some(words) = describe_lod(content(), key.0, key.1) else {
-                self.lod_queue.clear();
-                return;
-            };
-            self.lod_desc = Some((key, words));
-        }
-        let (_, words) = self.lod_desc.as_ref().unwrap();
+        let key = first.description().0;
         let mut batch = Vec::new();
         while batch.len() < LOD_BATCH
             && self
                 .lod_queue
                 .front()
-                .is_some_and(|j| (j.dim, j.seed) == key)
+                .is_some_and(|j| j.description().0 == key)
         {
             batch.push(self.lod_queue.pop_front().unwrap());
         }
         let mut jobs = vec![0i32; batch.len() * JOB_WORDS];
+        log::debug!(target: "load", "lod dispatch {} tiles", batch.len());
         for (i, j) in batch.iter().enumerate() {
             let o = j.key.origin();
             jobs[i * JOB_WORDS..i * JOB_WORDS + 3].copy_from_slice(&[o.x, o.y, j.key.level as i32]);
         }
+        let words = batch[0].description().1;
         let desc = sized(gpu, &mut s.lod_desc, words.len() * 4, usage::STORAGE | usage::HOST, "terrain lod desc");
         if s.lod_desc_key != Some(key) {
             gpu.mapped(desc)[..words.len() * 4].copy_from_slice(bytemuck::cast_slice(words));

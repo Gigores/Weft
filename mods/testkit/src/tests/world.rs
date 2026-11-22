@@ -545,7 +545,7 @@ pub async fn crater_saved(t: T) -> R {
     Ok(())
 }
 
-use base_api::OVERWORLD;
+use base_api::dimensions::OVERWORLD;
 
 /// Testmod edits Mars as from outside: a biome tried before its dust, with its own surface
 /// and boulders, and a rock needle from a feature written in testmod.
@@ -739,10 +739,14 @@ pub async fn growth(t: T) -> R {
     t.check_eq(t.block(cane).await?, "core:air".to_string(), "sugar cane without water breaks off");
     t.set(add(cane, [0, -1, 1]), "water").await?;
     t.set(cane, "sugar_cane").await?;
+    let sapling = add(f, [0, 0, 4]);
+    t.set(add(sapling, [0, -1, 0]), "grass").await?;
+    t.set(sapling, "sapling").await?;
     t.op("skip 199000").await?;
     t.secs(0.5).await?;
     t.check_eq(t.block(add(farm, [0, 1, 0])).await?, "base:wheat[age=7]".to_string(), "wheat after a jump of 2.5 hours");
     t.check_eq(t.block(add(cane, [0, 2, 0])).await?, "base:sugar_cane".to_string(), "sugar cane after the jump");
+    t.check(t.block(sapling).await?.starts_with("base:oak_log"), "the sapling grew into an oak");
     // Far away the cane's area unloads; time passes; coming back, it has grown.
     let cane2 = add(f, [-4, 0, 0]);
     t.set(add(cane2, [0, -1, -1]), "water").await?;
@@ -862,6 +866,7 @@ pub async fn persistence(t: T) -> R {
     t.op("after 120").await?;
     t.op("after 120 dim").await?;
     t.op("after 120 block").await?;
+    t.op(&format!("after 120 block {skiff}")).await?;
     // A world's setting (a game rule) goes with the world.
     t.cmd("/rule testkit:count_marks 1").await?;
 
@@ -887,12 +892,12 @@ pub async fn persistence(t: T) -> R {
     let mut now = rings;
     for _ in 0..40 {
         now = t.op("rings").await?.parse().unwrap_or(0);
-        if now >= rings + 3 {
+        if now >= rings + 4 {
             break;
         }
         t.secs(0.25).await?;
     }
-    t.check_eq(now, rings + 3, "the timers saved with the player, the dimension and a block fired after the reload");
+    t.check_eq(now, rings + 4, "timers on the player, dimension, terrain cell and body cell survived the reload");
     let rule = t.cmd("/rule testkit:count_marks").await?;
     t.check(rule.contains("true"), format!("the world's setting after reload: {rule}"));
     t.cmd("/rule testkit:count_marks 0").await?;

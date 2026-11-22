@@ -116,7 +116,7 @@ fn blocks(_r: &mut Registry) {
 /// Gray tooltip with `item.examplemod.<name>.tooltip`, for more tooltip options check `mods/base/assets/lang/en_us.lang`
 fn items(r: &mut Registry) {
     // Food configures the new item's component and eating callback.
-    // use base_api::{Food, FoodItem};
+    // use base_api::components::{Food, FoodItem};
     // static SNACK: Item = Item::named("snack");
     // r.item(&SNACK).food(Food { hunger: 3, saturation: 1.8 });
     r.item(&EXAMPLE_ITEM).tab(&INGREDIENTS).tag("gems/example");
@@ -252,7 +252,11 @@ fn client(_r: &mut Registry) {
     // static ADJUST: Key = Key::named("adjust");
     // r.key(&ADJUST, "wheel_up").while_held(&DASH);
     // r.client_frame(|c| { let _amount = c.key(&ADJUST).amount; });
-    // r.menu(&ABOUT).screen(|ui| ui.panel("background", S::column().pad(8.0), |ui| ui.text("examplemod.about")));
+    // static WINDOW: std::sync::Mutex<[f32; 2]> = std::sync::Mutex::new([0.25, 0.75]);
+    // r.menu(&ABOUT).screen(|ui| ui.panel("background", S::column().pad(8.0), |ui| {
+    //     ui.text("examplemod.about");
+    //     ui.range_slider(S::row(), |_| *WINDOW.lock().unwrap(), |_, handle, position| WINDOW.lock().unwrap()[handle] = position);
+    // }));
     // r.hud_element(&MANA, hud_anchor::HOTBAR_RIGHT, 2, |ui| ui.text_bind(|c, out| { /* ... */ }));
     // static TARGET_INFO: HudElement = HudElement::named("base:target_info");
     // r.screen_part(&TARGET_INFO, "details", 0, |ui| {

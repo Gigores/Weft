@@ -15,6 +15,7 @@
 //! chat /give stone 10
 //! say_config testmod:x  # a config's value as this client has it, into the chat
 //! view 32             # view distance, for measuring: tests and scripts start at 12
+//! clouds 6144         # cloud render distance in blocks, 0 to hide them
 //! vsync off           # the same for vsync
 //! occlusion off       # and for occlusion culling, to compare
 //! shot name.png       # into run/screenshots (or --shot-dir)
@@ -100,6 +101,7 @@ pub async fn run(t: T, src: String) -> R {
             }
             // `view 64 vsync off`-like settings, past what `same_conditions` fixed.
             "view" => weft_sdk::settings::VIEW_DISTANCE.set(rest.parse().map_err(|_| "view: a number")?),
+            "clouds" => weft_sdk::settings::CLOUD_DISTANCE.set(rest.parse().map_err(|_| "clouds: a distance in blocks")?),
             "vsync" => weft_sdk::settings::VSYNC.set(rest == "on"),
             "occlusion" => {
                 static OCCLUSION: weft_sdk::Config<bool> = weft_sdk::Config::named("core:occlusion_culling");

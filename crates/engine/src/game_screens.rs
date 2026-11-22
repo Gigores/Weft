@@ -492,6 +492,10 @@ impl Screen for Chat {
             let stem = st.stem.get_or_insert_with(|| st.text.clone()).clone();
             let comp = st.completion.as_ref().unwrap();
             let text = format!("{}{}", &stem[..comp.from.min(stem.len())], comp.suggestions[st.selected.min(n - 1)]);
+            if n == 1 && text != stem {
+                set(st, text, ctx);
+                return;
+            }
             st.text = text.clone();
             ctx.set_input("chat", text);
             ctx.requests.push(Request::Rebuild);

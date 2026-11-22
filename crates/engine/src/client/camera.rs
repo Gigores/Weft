@@ -42,6 +42,7 @@ pub struct Cameras {
     blend: Option<(Camera, f32, f32, u32)>,
     /// What this frame shows.
     pub shown: Camera,
+    pub(super) lod_fov: f32,
     /// An ASK mode waiting for the server.
     asked: Option<u32>,
 }
@@ -60,6 +61,7 @@ impl Default for Cameras {
             first: true,
             blend: None,
             shown: Camera { pos: DVec3::ZERO, yaw: 0.0, pitch: 0.0, fov: 70.0, bob: (glam::Vec3::ZERO, 0.0, 0.0) },
+            lod_fov: 70.0,
             asked: None,
         }
     }
@@ -259,6 +261,7 @@ impl Client {
             first: first as u32,
             anchor,
             out: pose,
+            lod_fov_scale: 1.0,
         };
         match (m.call, cams.mode) {
             (Some((owner, cb)), _) => {
@@ -327,14 +330,16 @@ impl Client {
             pos,
             yaw: pose.yaw,
             pitch: pose.pitch,
-            fov: if effects { eye.fov } else { eye.fov / self.player.fov_mul / self.inside_fov() } * pose.fov,
+            fov: self.base_camera_fov() * self.player.zoom * pose.fov,
             bob: (glam::Vec3::ZERO, pose.roll, 0.0),
         };
         if effects || m.has(cf::BOB) {
-            let bob = self.bobbed(cam).bob;
+            let bob = self.bobbed(cam, self.camera_bob).bob;
             cam.bob = (bob.0, bob.1 + pose.roll, bob.2);
         }
         let cams = &mut self.cameras;
+        // Terrain follows the current scope state even during a visual blend from a scoped pose.
+        cams.lod_fov = cam.fov * args.lod_fov_scale;
         if let Some((from, t, secs, easing)) = &mut cams.blend {
             *t += dt;
             let k = ease(*easing, *t / *secs);
@@ -352,5 +357,9 @@ impl Client {
             }
         }
         cams.shown = cam;
+    }
+
+    pub(super) fn base_camera_fov(&self) -> f32 {
+        if self.camera_has(cf::EFFECTS) { self.fov * self.player.fov_mul * self.inside_fov() } else { self.fov }
     }
 }

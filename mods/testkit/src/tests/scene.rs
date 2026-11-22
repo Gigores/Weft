@@ -283,16 +283,19 @@ async fn lava_kills(t: T, o: [i32; 3]) -> R {
     Ok(())
 }
 
-/// The test mod's generator powers its electric furnace through cables.
+/// A conducting furnace draws power and connects the next furnace.
 async fn energy_grid(t: T, g: [i32; 3]) -> R {
     t.set(g, "testmod:generator").await?;
     t.set(add(g, [-1, 0, 0]), "testmod:cable").await?;
-    t.set(add(g, [-2, 0, 0]), "testmod:cable").await?;
-    let e = add(g, [-3, 0, 0]);
-    t.set(e, "testmod:electric_furnace").await?;
+    let furnaces = [add(g, [-2, 0, 0]), add(g, [-3, 0, 0])];
+    for furnace in furnaces {
+        t.set(furnace, "testmod:electric_furnace").await?;
+        t.op(&format!("insert {} iron_ore 2", at(furnace))).await?;
+    }
     t.op(&format!("insert {} coal 4", at(g))).await?;
-    t.op(&format!("insert {} iron_ore 2", at(e))).await?;
-    t.check_eq(t.wait_slot(&at(e), 1, 20.0).await?.0, "base:iron_ingot".into(), "electric furnace output");
+    for furnace in furnaces {
+        t.check_eq(t.wait_slot(&at(furnace), 1, 20.0).await?.0, "base:iron_ingot".into(), "electric furnace output");
+    }
     Ok(())
 }
 

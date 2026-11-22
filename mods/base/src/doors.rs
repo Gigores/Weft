@@ -2,24 +2,35 @@
 
 use weft_sdk::*;
 
-pub static OAK_DOOR: Block = Block::named("oak_door");
+pub use base_api::blocks::OAK_DOOR;
 
 pub fn register(r: &mut Registry) {
     r.block(&OAK_DOOR)
         .sound_group("wood")
         .facing(Facings::HORIZONTAL, Toward::Player)
         .prop("open", ["false", "true"])
-        .cells(&[[0, 1, 0]])
+        .prop("hinge", ["right", "left"])
+        .placement(|place, props| {
+            // The front points toward the player, so its clockwise side is the player's left.
+            let left = props.facing().clockwise().offset();
+            let hit = place.hit();
+            let side = (hit.x - 0.5) * f64::from(left.x) + (hit.z - 0.5) * f64::from(left.z);
+            props.set("hinge", if side > 0.0 { "left" } else { "right" });
+        })
         .states(|p, s| {
-            // Shut across the side toward the player, open along its left. One picture for the
-            // whole door, 16 by 32 (`door_oak`), which is the left half of the square it is put in.
-            let (min, max) = if p.is("open", "true") { ([0.0; 3], [3.0, 32.0, 16.0]) } else { ([0.0; 3], [16.0, 32.0, 3.0]) };
+            let (open, left) = (p.is("open", "true"), p.is("hinge", "left"));
+            let (min, max) = match (open, left) {
+                (false, _) => ([0.0; 3], [16.0, 32.0, 3.0]),
+                (true, false) => ([0.0; 3], [3.0, 32.0, 16.0]),
+                (true, true) => ([13.0, 0.0, 0.0], [16.0, 32.0, 16.0]),
+            };
             let size = [max[0] - min[0], max[1], max[2] - min[2]];
-            // Across and up of a face by its axis (x faces: z by y, y faces: x by z, z faces: x by
-            // y), half a unit of the square a pixel.
+            // Keep the handle on the free edge on both faces of the leaf.
+            let reverse = if open { Dir::East } else { Dir::North };
             let face = |f: usize| {
                 let (w, h) = [(size[2], size[1]), (size[0], size[2]), (size[0], size[1])][f / 2];
-                ("door_oak", [0.0, 0.0, w / 2.0, h / 2.0])
+                let [u0, u1] = if left ^ (f == reverse.face() as usize) { [w / 2.0, 0.0] } else { [0.0, w / 2.0] };
+                ("door_oak", [u0, 0.0, u1, h / 2.0])
             };
             s.cutout()
                 .model_box_faces(min, max, std::array::from_fn(face))
@@ -37,5 +48,5 @@ pub fn register(r: &mut Registry) {
             e.world().prop_set(e.pos(), "open", open);
         })
         .tab(&crate::tabs::REDSTONE);
-    r.shaped(&base_api::CRAFTING, "oak_door", 3, &["pp", "pp", "pp"], &[('p', "oak_planks")]);
+    r.shaped(&base_api::recipes::CRAFTING, "oak_door", 3, &["pp", "pp", "pp"], &[('p', "oak_planks")]);
 }

@@ -15,7 +15,75 @@ use crate::abi::{self, ItemStack, Slice, Str};
 use crate::abi::{BlockPos, Vec3};
 use crate::{ClientView, Key, Menu, Registry, Value, WithComponents, World, callback, host};
 
+pub use abi::MusicSource;
 pub use abi::{ClientState, client_flags};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MusicState {
+    Stopped,
+    Playing,
+    Paused,
+    Error,
+}
+
+#[derive(Clone, Debug)]
+pub struct MusicPlayback {
+    pub track: String,
+    pub position: f64,
+    pub duration: f64,
+    pub volume: f32,
+    pub state: MusicState,
+}
+
+#[derive(Clone, Debug)]
+pub struct MusicTrack {
+    pub file: String,
+    /// Seconds, or zero when the duration is unknown.
+    pub duration: f64,
+}
+
+impl ClientView {
+    /// File names in the client's music folder, as of the last `refresh_music`.
+    pub fn music_tracks(&self) -> Vec<String> {
+        (0..).map_while(|index| self.music_track(index)).collect()
+    }
+
+    /// Name of one file in the client's music folder.
+    pub fn music_track(&self, index: u32) -> Option<String> {
+        self.music_track_info(index).map(|track| track.file)
+    }
+
+    /// Name and duration of one file, as of the last refresh.
+    pub fn music_track_info(&self, index: u32) -> Option<MusicTrack> {
+        let mut raw = std::mem::MaybeUninit::<abi::MusicTrack>::uninit();
+        let raw = unsafe {
+            (host().client_music_track)(self.client().raw, index, raw.as_mut_ptr());
+            raw.assume_init()
+        };
+        (raw.file.len != 0).then(|| MusicTrack { file: unsafe { raw.file.as_str().to_owned() }, duration: raw.duration })
+    }
+
+    /// Local playback at this block. Position and duration are seconds, volume is 0..1.
+    pub fn music_playback(&self, source: MusicSource) -> MusicPlayback {
+        let mut raw = std::mem::MaybeUninit::<abi::MusicStatus>::uninit();
+        let raw = unsafe {
+            (host().client_music_status)(self.client().raw, source, raw.as_mut_ptr());
+            raw.assume_init()
+        };
+        MusicPlayback {
+            track: unsafe { raw.track.as_str().to_owned() },
+            position: raw.position,
+            duration: raw.duration,
+            volume: raw.volume,
+            state: match raw.state {
+                abi::local_music::PLAYING => MusicState::Playing,
+                abi::local_music::PAUSED => MusicState::Paused,
+                abi::local_music::ERROR => MusicState::Error,
+                _ => MusicState::Stopped,
+            },
+        }
+    }
+}
 
 /// The local client during a client callback. Only valid for the duration of that callback.
 #[derive(Clone, Copy)]
@@ -38,6 +106,43 @@ fn abi_str(x: &str) -> Str {
 }
 
 impl Client {
+    fn music_op(&self, source: MusicSource, op: u32, name: &str, value: f64) -> bool {
+        unsafe { (host().client_music)(self.raw, source, op, Str::new(name), value) != 0 }
+    }
+
+    /// Rescans the client's local music folder and updates open UI.
+    pub fn refresh_music(&self) -> bool {
+        self.music_op(MusicSource::default(), abi::local_music::REFRESH, "", 0.0)
+    }
+
+    /// Opens the client's local music folder in the system file manager.
+    pub fn open_music_folder(&self) -> bool {
+        self.music_op(MusicSource::default(), abi::local_music::OPEN_FOLDER, "", 0.0)
+    }
+
+    /// Streams a listed file from a block on this client, replacing its previous local track.
+    /// The audio file stays on this client.
+    pub fn play_music(&self, source: MusicSource, file: &str) -> bool {
+        self.music_op(source, abi::local_music::PLAY, file, 0.0)
+    }
+
+    pub fn toggle_music_pause(&self, source: MusicSource) -> bool {
+        self.music_op(source, abi::local_music::TOGGLE_PAUSE, "", 0.0)
+    }
+
+    pub fn stop_music(&self, source: MusicSource) -> bool {
+        self.music_op(source, abi::local_music::STOP, "", 0.0)
+    }
+
+    /// Seeks to the given fraction of the current track, from 0 to 1.
+    pub fn seek_music(&self, source: MusicSource, fraction: f32) -> bool {
+        self.music_op(source, abi::local_music::SEEK, "", f64::from(fraction))
+    }
+
+    pub fn set_music_volume(&self, volume: f32) -> bool {
+        self.music_op(MusicSource::default(), abi::local_music::VOLUME, "", f64::from(volume))
+    }
+
     pub(crate) fn from_raw(raw: *mut abi::ClientCtx) -> Client {
         Client { raw }
     }
@@ -265,9 +370,8 @@ impl Client {
         self.op(abi::client_op::CLOSE_SCREEN, "", 0.0);
     }
 
-    /// Sorts the open menu's storage: slot `slot`'s group, or with `None` what the menu is
-    /// opened on (a chest), else the player's main inventory. Items of a kind come together,
-    /// stacked, in the order they were registered.
+    /// Sorts the group containing `slot`. With `None`, sorts each enabled group of the open
+    /// container, falling back to the player's main storage. Stacks stay within their group and slot limit.
     pub fn menu_sort(&self, slot: Option<u32>) -> bool {
         self.op(abi::client_op::MENU_SORT, "", slot.map_or(-1.0, |s| s as f64)) != 0
     }

@@ -30,7 +30,7 @@ An entity category being registered (`Registry::entity_category`).
 - <a id="EntityBuilder-attach_with"></a>`.attach_with<T: Value>(component: &Component<T>, value: T)`: `attach` with another starting value. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L998)
 - <a id="EntityBuilder-attach_storage"></a>`.attach_storage(storage: &Storage)`: Every entity of the kind carries `storage` (declared with `r.storage`), empty at first. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1002)
 - <a id="EntityBuilder-solid"></a>`.solid()`: A solid body: others stand on it and ride along, bump into it and get pushed by it (platforms, boats, lifts). Not pushed around itself. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1010)
-- <a id="EntityBuilder-invulnerable"></a>`.invulnerable()`: Takes no damage (no hurt flash, health stays); `/clear` and the void still remove it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1014)
+- <a id="EntityBuilder-invulnerable"></a>`.invulnerable()`: Takes no damage (no hurt flash, health stays); `/clear entity` and the void still remove it. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1014)
 - <a id="EntityBuilder-unpushable"></a>`.unpushable()`: Neither pushes nor is pushed by other entities (ghosts, projectiles). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1018)
 - <a id="EntityBuilder-kinematic"></a>`.kinematic()`: Moved exactly by the velocity mod logic gives it (`entity_modify`), through blocks, no gravity: lifts, airships, contraptions. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1023)
 - <a id="EntityBuilder-hazard"></a>`.hazard(h: crate::Hazard)`: What it does to entities: itself (`Hazard::own`) or what it squeezes (`Hazard::crushed`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1027)
@@ -99,7 +99,7 @@ An entity effect being registered: drawn by `shaders/entity_effect/<its name>.wg
 
 ## EntityKind
 
-- <a id="EntityKind-loot"></a>`.loot() -> &'static LootTable`: What it drops, for `Registry::edit`: `r.edit(base::ZOMBIE.loot()).pool(..)`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L205)
+- <a id="EntityKind-loot"></a>`.loot() -> &'static LootTable`: What it drops, for `Registry::edit`: `r.edit(base_api::entities::ZOMBIE.loot()).pool(..)`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/content.rs#L205)
 
 ## EntityModify
 
@@ -122,8 +122,9 @@ Where a rider gets off.
 
 - <a id="Exit-nearest"></a>`.nearest(reach: f64) -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L68)
 - <a id="Exit-offset"></a>`.offset(at: impl Into<Vec3>) -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L71)
-- <a id="Exit-stay"></a>`.stay() -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L74)
-- <a id="Exit-call"></a>`.call(f: impl Fn(&World, u64, u64, Vec3) -> Vec3 + Send + Sync + 'static) -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L77)
+- <a id="Exit-stay"></a>`.stay() -> Exit`: Get off on the deck at the seat, looking up by at most half a block. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L75)
+- <a id="Exit-stay_on_deck"></a>`.stay_on_deck(max_rise: f64) -> Exit`: Get off on a block-built deck at the seat, with a custom upward search distance in blocks. If no deck is in reach, get off where the rider sat. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L80)
+- <a id="Exit-call"></a>`.call(f: impl Fn(&World, u64, u64, Vec3) -> Vec3 + Send + Sync + 'static) -> Exit` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L83)
 
 ## GameModeBuilder
 
@@ -153,16 +154,17 @@ A game mode being registered: survival's rules unless told otherwise.
 
 ## Hitboxes
 
-What hits land on, part by part (`EntityBuilder::hitboxes`): boxes in pixels (1/16 block, its feet at 0, -Z its front, -X its right) at the kind's size; one made bigger is hit bigger. Rays, arrows and blows tell the part they hit (`RayHit::part`, `Damage::part`, the `part` a chain step reads in its query). They go with the body, a head with the look, arms and legs swing as it walks: run and an arrow may pass between them. Not the model's boxes: how a mob looks never changes where it can be hit.
+What hits land on, part by part (`EntityBuilder::hitboxes`): boxes in pixels (1/16 block, its feet at 0, -Z its front, -X its right) at the kind's size; one made bigger is hit bigger. Rays, arrows and blows tell the part they hit (`RayHit::part`, `Damage::part`, the `part` a chain step reads in its query). A box bound to a bone follows the registered model's base pose on the server and client. Its dimensions are authored independently of the model's mesh.
 
-- <a id="Hitboxes-new"></a>`.new() -> Hitboxes` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2328)
-- <a id="Hitboxes-part"></a>`.part(name: &str, min: [f32`: A part going with the body. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2338)
-- <a id="Hitboxes-head"></a>`.head(name: &str, min: [f32`: A head: it turns with the look about `pivot`, its neck. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2342)
-- <a id="Hitboxes-limb"></a>`.limb(name: &str, min: [f32`: A leg or an arm: it swings about `pivot` as it walks, `swing` radians at a full stride, `phase` radians after the beat (`PI` the other half of the step). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2347)
-- <a id="Hitboxes-humanoid"></a>`.humanoid() -> Hitboxes`: Two legs, two arms, a body and a head, 32 pixels tall: the player's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2351)
-- <a id="Hitboxes-quadruped"></a>`.quadruped() -> Hitboxes`: A body on four legs with a head ahead, 25 pixels tall: a cow's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2362)
-- <a id="Hitboxes-reaching"></a>`.reaching(mut self)`: Its arms held out ahead, not swinging, as a zombie's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2373)
-- <a id="Hitboxes-slim"></a>`.slim(px: f32)`: Arms and legs `px` pixels thick, as a skeleton's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2388)
+- <a id="Hitboxes-new"></a>`.new() -> Hitboxes` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2346)
+- <a id="Hitboxes-part"></a>`.part(name: &str, min: [f32`: A part going with the body. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2356)
+- <a id="Hitboxes-bone"></a>`.bone(name: &str, bone: &str, min: [f32`: A box in rest-pose model pixels that follows a bone of the registered entity model. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2364)
+- <a id="Hitboxes-head"></a>`.head(name: &str, min: [f32`: A head: it turns with the look about `pivot`, its neck. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2368)
+- <a id="Hitboxes-limb"></a>`.limb(name: &str, min: [f32`: A leg or an arm: it swings about `pivot` as it walks, `swing` radians at a full stride, `phase` radians after the beat (`PI` the other half of the step). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2373)
+- <a id="Hitboxes-humanoid"></a>`.humanoid() -> Hitboxes`: Two legs, two arms, a body and a head, 32 pixels tall: the player's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2377)
+- <a id="Hitboxes-quadruped"></a>`.quadruped() -> Hitboxes`: A body on four legs with a head ahead, 25 pixels tall: a cow's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2388)
+- <a id="Hitboxes-reaching"></a>`.reaching(mut self)`: Its arms held out ahead, not swinging, as a zombie's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2399)
+- <a id="Hitboxes-slim"></a>`.slim(px: f32)`: Arms and legs `px` pixels thick, as a skeleton's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L2414)
 
 ## Looks
 
@@ -220,10 +222,10 @@ How a projectile flies (`EntityBuilder::projectile`): vanilla's arrow unless sai
 
 What riders of a kind may do, each a test of the world, the mount and the rider, so it can hang on anything (only on the ground, only by day, only its owner). A rule not given lets it.
 
-- <a id="RiderRules-new"></a>`.new() -> RiderRules` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L182)
-- <a id="RiderRules-hits"></a>`.hits(f: impl Fn(&World, u64, u64) -> bool + Send + Sync + 'static)`: Whether a rider may hit (`|w, mount, rider| ..`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L186)
-- <a id="RiderRules-builds"></a>`.builds(f: impl Fn(&World, u64, u64) -> bool + Send + Sync + 'static)`: Whether a rider may place and break blocks. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L191)
-- <a id="RiderRules-hurt_reaches_riders"></a>`.hurt_reaches_riders(share: f32)`: Share of what hurts the mount that hurts each rider too (a blast under a boat), 0 for none. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L197)
+- <a id="RiderRules-new"></a>`.new() -> RiderRules` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L188)
+- <a id="RiderRules-hits"></a>`.hits(f: impl Fn(&World, u64, u64) -> bool + Send + Sync + 'static)`: Whether a rider may hit (`|w, mount, rider| ..`). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L192)
+- <a id="RiderRules-builds"></a>`.builds(f: impl Fn(&World, u64, u64) -> bool + Send + Sync + 'static)`: Whether a rider may place and break blocks. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L197)
+- <a id="RiderRules-hurt_reaches_riders"></a>`.hurt_reaches_riders(share: f32)`: Share of what hurts the mount that hurts each rider too (a blast under a boat), 0 for none. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L203)
 
 ## Seat
 
@@ -271,8 +273,8 @@ Where a natural spawn stands (`SpawnBuilder::place`).
 
 How a player's keys move a mount: called on that player's client each tick with its keys and the mount as it is, giving what the mount does. `steer::*` are the usual ones; `and` puts two together (a walk with a jump).
 
-- <a id="Steering-new"></a>`.new(f: impl Fn(&Keys, &EntityState) -> Steer + Send + Sync + 'static) -> Steering`: Yours from scratch. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L89)
-- <a id="Steering-and"></a>`.and(other: Steering) -> Steering`: Both: the first's movement and facing unless it gives none, the higher jump, flying if either flies. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L94)
+- <a id="Steering-new"></a>`.new(f: impl Fn(&Keys, &EntityState) -> Steer + Send + Sync + 'static) -> Steering`: Yours from scratch. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L95)
+- <a id="Steering-and"></a>`.and(other: Steering) -> Steering`: Both: the first's movement and facing unless it gives none, the higher jump, flying if either flies. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/riding.rs#L100)
 
 ## Trigger
 

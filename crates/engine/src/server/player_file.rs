@@ -3,13 +3,20 @@
 use super::*;
 use weft_abi::entry_kind as ek;
 
+pub(super) struct Arrival {
+    pub data: PlayerData,
+    clock: u64,
+    started: Instant,
+    pub ready: bool,
+}
+
 impl Server {
-    pub(super) fn join(&mut self, c: &'static Content, pi: usize, name: String, key: String) {
+    pub(super) fn prepare_join(&mut self, c: &'static Content, pi: usize, name: String, key: String) {
         let key = if key.is_empty() { name.clone() } else { key };
         if self
             .players
             .iter()
-            .any(|p| p.joined && p.identity.key == key)
+            .any(|p| p.streams_world() && p.identity.key == key)
         {
             self.players[pi]
                 .conn
@@ -32,7 +39,7 @@ impl Server {
             .as_ref()
             .and_then(|s| load_player(c, &s.lock(), &key, |dim| self.dims[dim as usize].time));
         let spawn = || (c.spawn_dim, self.dims[c.spawn_dim as usize].spawn_point(c));
-        let PlayerData { dim, mut entity, inventory, components, deaths } = saved.unwrap_or_else(|| {
+        let mut data = saved.unwrap_or_else(|| {
             let (dim, pos) = spawn();
             let mut entity = Entity::new(0, c.game.player_kind, pos, -1.0);
             entity.mode = self
@@ -41,72 +48,24 @@ impl Server {
                 .map_or(GameMode::SURVIVAL, |s| s.lock().meta.game_mode);
             PlayerData { dim: Some(dim), entity, inventory: None, components: Vec::new(), deaths: 0 }
         });
-        let dim = match dim {
+        let dim = match data.dim {
             Some(d) if d != c.void_dim || c.spawn_dim == c.void_dim => d,
             _ => {
                 let (d, pos) = spawn();
-                entity.pos = pos;
+                data.entity.pos = pos;
                 log::warn!("player {name} was in a dimension that is not there now, placed at the spawn");
                 d
             }
         };
-        let pos = entity.pos;
-        let r = self.dims[dim as usize].ensure_region(c, pos);
-        let id = r.new_id();
-        let mut e = entity;
-        e.id = id;
-        e.kind = c.game.player_kind;
-        e.player = true;
-        let look = [e.yaw, e.pitch];
-        let flying = e.flying;
-        // The first connection is the one playing on this machine, the world's owner, with
-        // commands if the world was made with cheats.
-        let cheats = self.storage.as_ref().is_none_or(|s| s.lock().meta.cheats);
-        let permission = if pi == 0 && !self.cfg.dedicated && cheats {
-            abi::permission::OWNER
-        } else {
-            self.storage
-                .as_ref()
-                .and_then(|s| s.lock().meta.ops.iter().find(|o| o.0 == key).map(|o| o.1))
-                .unwrap_or(abi::permission::EVERYONE)
-        };
-        e.permission = permission;
-        let identity = std::sync::Arc::new(super::PlayerIdentity { name, key });
-        self.identities.write().insert(id, identity.clone());
-        e.selected = e
-            .selected
-            .min(c.game.player_layout.hotbar.saturating_sub(1));
-        let selected = e.selected;
-        r.entities.insert_with(c, e, inventory, components);
-        r.keep_sources(c, id);
-        // Known only now that the modifiers are back; a new player (no saved health) starts full.
-        let max = r.max_health(c, id);
-        let mut dead = false;
-        if let Some(e) = r.entities.get_mut(id) {
-            if e.health < 0.0 {
-                e.health = max;
-            }
-            dead = !e.alive();
-        }
-        r.emit_engine(c, abi::event::PLAYER_JOINED, &abi::PlayerEvent { player: id });
+        let pos = data.entity.pos;
+        let look = [data.entity.yaw, data.entity.pitch];
         let p = &mut self.players[pi];
-        p.identity = identity;
-        p.joined = true;
+        p.identity = Arc::new(PlayerIdentity { name, key });
         p.dim = dim;
-        p.entity = id;
-        p.last_place = (None, pos);
-        p.deaths = deaths;
-        p.first_sync = true;
-        p.glow_sent = false;
-        log::info!("{} joined", p.identity.name);
-        let line = Msg::new("multiplayer.joined", vec![Arg::Text(p.identity.name.clone())]);
-        for q in self.players.iter_mut().filter(|q| q.joined) {
-            q.conn
-                .send(ToClient::Show(crate::net::Shown::chat(line.clone())));
-        }
-        let p = &mut self.players[pi];
+        p.arrival = Some(Arrival { data, clock: self.dims[dim as usize].time, started: Instant::now(), ready: false });
+        log::debug!(target: "load", "streaming spawn for {} before joining", p.identity.name);
         p.conn
-            .send(ToClient::Welcome { player: id, dim, pos, seed: self.cfg.seed, look, selected, flying });
+            .send(ToClient::PrepareJoin { dim, pos, seed: self.cfg.seed, look });
         self.send_lod_columns(pi, dim);
         let p = &mut self.players[pi];
         p.conn.send(ToClient::Edits {
@@ -119,6 +78,105 @@ impl Server {
             all: true,
         });
         p.conn.send(ToClient::Configs(crate::config::synced()));
+    }
+
+    /// Activate after the simulation step, so this tick ends with a welcome and
+    /// the player can begin moving on the next one.
+    pub(super) fn finish_joins(&mut self, c: &'static Content) {
+        for pi in 0..self.players.len() {
+            let p = &mut self.players[pi];
+            let Some(arrival) = &p.arrival else { continue };
+            if p.conn.is_closed() {
+                p.arrival = None;
+            } else if arrival.ready {
+                let arrival = p.arrival.take().unwrap();
+                self.join(c, pi, arrival);
+            } else if (self.cfg.dedicated || pi != 0) && arrival.started.elapsed() >= Duration::from_secs(60) {
+                p.conn
+                    .send(ToClient::Disconnect("world entry timed out".into()));
+                p.conn.close();
+                p.arrival = None;
+            }
+        }
+    }
+
+    fn join(&mut self, c: &'static Content, pi: usize, arrival: Arrival) {
+        let dim = self.players[pi].dim;
+        let PlayerData { mut entity, inventory, mut components, deaths, .. } = arrival.data;
+        let time = self.dims[dim as usize].time;
+        extend::rebase_clock(c, &mut entity, &mut components, time as i64 - arrival.clock as i64);
+        let pos = entity.pos;
+        let r = self.dims[dim as usize].ensure_region(c, pos);
+        let id = r.new_id();
+        let mut e = entity;
+        e.id = id;
+        e.kind = c.game.player_kind;
+        e.player = true;
+        let flying = e.flying;
+        let vel = e.vel;
+        // The first connection is the one playing on this machine, the world's owner, with
+        // commands if the world was made with cheats.
+        let cheats = self.storage.as_ref().is_none_or(|s| s.lock().meta.cheats);
+        let permission = if pi == 0 && !self.cfg.dedicated && cheats {
+            abi::permission::OWNER
+        } else {
+            self.storage
+                .as_ref()
+                .and_then(|s| {
+                    s.lock()
+                        .meta
+                        .ops
+                        .iter()
+                        .find(|o| o.0 == self.players[pi].identity.key)
+                        .map(|o| o.1)
+                })
+                .unwrap_or(abi::permission::EVERYONE)
+        };
+        e.permission = permission;
+        self.identities
+            .write()
+            .insert(id, self.players[pi].identity.clone());
+        e.selected = e
+            .selected
+            .min(c.game.player_layout.hotbar.saturating_sub(1));
+        let selected = e.selected;
+        r.entities.insert_with(c, e, inventory, components);
+        r.keep_sources(c, id);
+        // Known only now that the modifiers are back; a new player (no saved health) starts full.
+        let max = r.max_health(0, c, id);
+        let mut dead = false;
+        if let Some(e) = r.entities.get_mut(id) {
+            if e.health < 0.0 {
+                e.health = max;
+            }
+            dead = !e.alive();
+        }
+        r.emit_engine(0, c, abi::event::PLAYER_JOINED, &abi::PlayerEvent { player: id });
+        let p = &mut self.players[pi];
+        p.joined = true;
+        p.entity = id;
+        p.last_place = (None, pos);
+        p.deaths = deaths;
+        p.first_sync = true;
+        log::info!("{} joined", p.identity.name);
+        p.conn
+            .send(ToClient::Welcome { player: id, vel, selected, flying });
+        let line = Msg::new("multiplayer.joined", vec![Arg::Text(p.identity.name.clone())]);
+        let skin = p.skin.clone();
+        let avatar = p.avatar.clone();
+        for q in self.players.iter_mut().filter(|q| q.joined) {
+            q.conn
+                .send(ToClient::Show(crate::net::Shown::chat(line.clone())));
+            if let Some(skin) = &skin {
+                q.conn
+                    .send(ToClient::Skin { entity: id, skin: (**skin).clone() });
+            }
+            if let Some(avatar) = &avatar {
+                q.conn
+                    .send(ToClient::Avatar { entity: id, avatar: (**avatar).clone() });
+            }
+        }
+        let p = &mut self.players[pi];
         // Left while dead: still dead, as in vanilla.
         if dead {
             p.conn.send(ToClient::Died);

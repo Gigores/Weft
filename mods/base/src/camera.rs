@@ -41,5 +41,8 @@ pub fn register(r: &mut Registry) {
         let blend = 1.0 - (-ZOOM_RESPONSE * a.dt.max(0.0)).exp();
         zoom.fov += (target - zoom.fov) * blend;
         a.out.fov *= zoom.fov;
+        if !held {
+            a.lod_fov_scale /= zoom.fov;
+        }
     });
 }

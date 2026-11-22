@@ -4,6 +4,7 @@
 struct WirePush {
     origin: vec4<i32>,
     frac: vec4<f32>,
+    rotation: vec4<f32>,
 }
 var<immediate> push: WirePush;
 
@@ -49,7 +50,8 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
         default: {}
     }
     let cell = vec3<f32>(q.pos.xyz - push.origin.xyz) - push.frac.xyz;
-    let world = cell + vec3(0.5) + FACE_DIRS[face] * (0.5 - LIFT) + u * (c.x - 0.5) + v * (c.y - 0.5);
+    let local = cell + q.offset.xyz + vec3(0.5) + FACE_DIRS[face] * (0.5 - LIFT) + u * (c.x - 0.5) + v * (c.y - 0.5);
+    let world = quat_vector(push.rotation, local);
     var out: VOut;
     out.clip = scene.view_proj * vec4(world, 1.0);
     out.uv = uv;

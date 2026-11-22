@@ -8,9 +8,9 @@ use std::time::Instant;
 
 use weft_sdk::*;
 
-use crate::items::ARMOR_PIECE;
+use crate::items::*;
 
-pub use base_api::{ADVANCEMENTS, Advancements};
+pub use base_api::components::{ADVANCEMENTS, Advancements};
 
 /// What a player has to do, by what things are rather than which they are: a mod's mob tagged
 /// `hostile` or food tagged `cooked_meat` counts without anything here knowing of it.
@@ -86,7 +86,7 @@ static ALL: [Advancement; 19] = [
 /// Server to the player who made it: the index into `ALL`.
 static MADE: Channel<u32> = Channel::named("advancement_made");
 static CHIME: Sound = Sound::named("ui.advancement");
-static SCREEN: Menu = Menu::named("advancements");
+use base_api::menus::ADVANCEMENTS as SCREEN;
 static OPEN: Key = Key::named("advancements");
 
 const TOAST_SECS: f32 = 5.0;

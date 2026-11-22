@@ -254,20 +254,28 @@ pub async fn inventory_crafting(t: T) -> R {
     t.until("planks in the result", Duration::from_secs(5), |t| t.c().menu_slot(4).item == planks)
         .await?;
     t.check_eq(t.c().menu_slot(4).count, 4, "planks from one log");
+    t.click_ui("slot:0", 1);
+    t.until("two logs in the grid", Duration::from_secs(5), |t| t.c().menu_slot(0).count == 2)
+        .await?;
     t.click_ui("slot:36", 0);
     t.until("cursor empty", Duration::from_secs(5), |t| t.c().cursor_stack().is_empty())
         .await?;
     t.shot("grid").await?;
     t.click_ui("slot:4", 0);
-    t.until("planks on the cursor", Duration::from_secs(5), |t| t.c().cursor_stack().item == planks)
-        .await?;
+    t.frames(3).await?;
+    t.click_ui("slot:4", 0);
+    t.until("two batches of planks on the cursor", Duration::from_secs(5), |t| {
+        let stack = t.c().cursor_stack();
+        stack.item == planks && stack.count == 8
+    })
+    .await?;
     t.click_ui("slot:37", 0);
     t.until("planks in the hotbar", Duration::from_secs(5), |t| t.c().inventory_slot(1).item == planks)
         .await?;
     t.c().menu_close();
     t.no_screen().await?;
-    t.check_eq(t.slot("me", 0).await?, ("base:oak_log".into(), 15, 0), "logs left");
-    t.check_eq(t.slot("me", 1).await?, ("base:oak_planks".into(), 4, 0), "planks made");
+    t.check_eq(t.slot("me", 0).await?, ("base:oak_log".into(), 14, 0), "logs left");
+    t.check_eq(t.slot("me", 1).await?, ("base:oak_planks".into(), 8, 0), "planks made");
     t.sync_inventory().await
 }
 
@@ -783,6 +791,30 @@ pub async fn inventory_hotkeys(t: T) -> R {
         t.check(shown.contains(&id(item)), format!("{item} shown in the trash"));
     }
     t.check(!(0..slots).any(|i| t.c().menu_slot(i).item == id("base:stick")), "the sticks gone for the sand");
+
+    t.op("put me 12 stick 5").await?;
+    t.until("sticks in inventory", Duration::from_secs(5), |t| t.c().menu_slot(12).count == 5)
+        .await?;
+    t.click_ui("slot:12", 1);
+    t.until("half the sticks on the cursor", Duration::from_secs(5), |t| t.c().cursor_stack().count == 3)
+        .await?;
+    let trash = slots - 1;
+    for count in 1..=2 {
+        t.click_ui(&format!("slot:{trash}"), 1);
+        t.until("one stick added to trash", Duration::from_secs(5), |t| {
+            t.c().menu_slot(trash).item == id("base:stick")
+                && t.c().menu_slot(trash).count == count
+                && t.c().cursor_stack().count == 3 - count
+        })
+        .await?;
+    }
+
+    t.click_ui("slot:12", 0);
+    t.frames(3).await?;
+    t.click_ui("slot:12", 0);
+    t.until("whole stack picked up again", Duration::from_secs(5), |t| t.c().cursor_stack().count == 3)
+        .await?;
+    t.check(t.c().menu_slot(12).is_empty(), "the second left click emptied the slot");
     Ok(())
 }
 

@@ -16,7 +16,7 @@ use weft_abi::hud_anchor as a;
 use winit::event::TouchPhase;
 use winit::keyboard::KeyCode;
 
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, PLACEMENT_MODE};
 use crate::ui::Rect;
 
 /// A touch button's action that is no bind: Escape, what pauses and closes.
@@ -44,8 +44,8 @@ pub const STICK: &str = "core:touch.move";
 const PREFIX: &str = "core:touch.";
 
 /// The buttons a phone starts with.
-const DEFAULTS: [(&str, bool); 5] =
-    [(ESCAPE, false), ("core:chat", false), ("core:inventory", false), ("core:sneak", true), ("core:jump", false)];
+const DEFAULTS: [(&str, bool); 6] =
+    [(ESCAPE, false), ("core:chat", false), ("core:inventory", false), ("core:sneak", true), ("core:jump", false), (PLACEMENT_MODE, false)];
 
 /// The buttons, the joystick's side, where they are kept, and a count of changes for the HUD.
 struct Layout {
@@ -110,6 +110,16 @@ pub fn generation() -> u64 {
 /// New buttons; written out at once.
 pub fn set_buttons(buttons: Vec<Button>) {
     edit(|l| l.buttons = buttons);
+    save();
+}
+
+pub fn reset_sizes() {
+    edit(|l| {
+        l.stick = STICK_SIZE;
+        for button in &mut l.buttons {
+            button.size = BUTTON_SIZE;
+        }
+    });
     save();
 }
 
@@ -366,7 +376,10 @@ impl Touches {
                     input.key_down(Key::Mouse(0));
                     Role::Mouse
                 } else if let Some(b) = button {
-                    let keys = keys_of(input, &b.action, true);
+                    if b.action == PLACEMENT_MODE {
+                        input.press_action(PLACEMENT_MODE);
+                    }
+                    let keys = if b.action == PLACEMENT_MODE { Vec::new() } else { keys_of(input, &b.action, true) };
                     if b.toggle && !keys.is_empty() && keys.iter().all(|&k| input.held_key(k)) {
                         keys.iter().rev().for_each(|&k| input.key_up(k));
                     } else {
@@ -545,8 +558,10 @@ impl crate::screens::Screen for TouchButtons {
                         for (i, b) in buttons().into_iter().enumerate() {
                             ui.container(Style::row().gap(6.0).self_align(Align::Stretch), |ui| {
                                 ui.container(Style::default().grow(), |ui| row(ui, &b.action));
-                                let mode = if b.toggle { "touch.switch" } else { "touch.hold" };
-                                button(ui, cx, mode, &[], 80.0, move |c| Self::change(c, |all| all[i].toggle = !all[i].toggle));
+                                if b.action != PLACEMENT_MODE {
+                                    let mode = if b.toggle { "touch.switch" } else { "touch.hold" };
+                                    button(ui, cx, mode, &[], 80.0, move |c| Self::change(c, |all| all[i].toggle = !all[i].toggle));
+                                }
                                 button(ui, cx, "touch.remove", &[], 80.0, move |c| Self::change(c, |all| drop(all.remove(i))));
                             });
                         }

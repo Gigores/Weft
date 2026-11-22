@@ -395,7 +395,7 @@ pub fn load_world(saved: &[(String, f64)]) {
     }
 }
 
-/// Settings the engine itself reads: the client's options, `core:mob_spawning` for worlds, and
+/// Settings the engine itself reads: the client's options, world rules, and
 /// a binding per key (`core:key.<action>`, from `keys`: action and default key); each sound
 /// category adds its volume (`volume`).
 pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
@@ -419,7 +419,9 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:lod_detail", ck::FLOAT, if phone { 2.0 } else { 4.0 }, 1.0, 4.0, 0.5),
         // Blocks clouds float above where their dimension puts them.
         number("core:cloud_height", ck::INT, 0.0, 0.0, 512.0, 16.0),
-        number("core:cloud_distance", ck::INT, if phone { 2048.0 } else { 6144.0 }, 0.0, 8192.0, 16.0),
+        number("core:cloud_distance", ck::INT, if phone { 2048.0 } else { 6144.0 }, 0.0, 32768.0, 16.0).tag("config.logarithmic"),
+        number("core:cloud_impostor_distance", ck::INT, if phone { 1024.0 } else { 2048.0 }, 256.0, 16384.0, 16.0)
+            .tag("config.logarithmic"),
         // Vanilla's: in GUI pixels, and percent of the dark behind the text.
         number("core:chat_width", ck::INT, 320.0, 40.0, 1000.0, 1.0),
         number("core:chat_height", ck::INT, 180.0, 20.0, 1000.0, 1.0),
@@ -428,6 +430,7 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:chat_visibility", ck::CHOICE, 0.0, 0.0, 2.0, 0.0)
             .set(c::CHOICES, ["all", "system", "hidden"].map(String::from).to_vec()),
         number("core:vsync", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
+        number("core:fps_limit", ck::INT, 0.0, 0.0, 500.0, 5.0),
         // Taken at the next start; the others are tried if it can't run.
         number("core:renderer", ck::CHOICE, 0.0, 0.0, 1.0, 0.0).set(c::CHOICES, ["vulkan", "wgpu"].map(String::from).to_vec()),
         number("core:fullscreen", ck::BOOL, 0.0, 0.0, 1.0, 0.0),
@@ -437,6 +440,8 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:fov", ck::FLOAT, 70.0, 30.0, 110.0, 1.0),
         // How much sprinting, flying and speed widen the view, as vanilla's FOV effects.
         number("core:fov_effects", ck::FLOAT, 1.0, 0.0, 1.0, 0.0),
+        // Off, the view doesn't bob walking; the hand and what it holds still do.
+        number("core:camera_bob", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:sensitivity", ck::FLOAT, 1.0, 0.01, 3.0, 0.01),
         number("core:brightness", ck::FLOAT, 0.5, 0.0, 1.0, 0.0),
         number("core:debug_groups", ck::INT, u32::MAX as f64, 0.0, u32::MAX as f64, 1.0),
@@ -464,6 +469,9 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:frustum_culling", ck::BOOL, 1.0, 0.0, 1.0, 0.0),
         number("core:allow_avatars", ck::BOOL, 1.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
         number("core:keep_inventory", ck::BOOL, 0.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
+        rule("core:ship_thrust", ck::FLOAT, 7.0, 0.0, 64.0),
+        rule("core:ship_water_drag", ck::FLOAT, 1.8, 0.0, 16.0),
+        rule("core:ship_water_side_drag", ck::FLOAT, 0.4, 0.0, 2.0),
         // Vanilla's: more than this many pushing on one hurt it (0: never).
         rule("core:max_entity_cramming", ck::INT, 24.0, 0.0, 1000.0),
         // Deaths a player has before staying a spectator (0: no end); 1 is hardcore.
@@ -489,13 +497,15 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
                 "lod_detail",
                 "cloud_height",
                 "cloud_distance",
+                "cloud_impostor_distance",
                 "vsync",
+                "fps_limit",
                 "fullscreen",
                 "renderer",
             ],
         ),
-        ("core:controls", &["sensitivity", "invert_y", "touch_controls", "auto_jump"]),
-        ("core:accessibility", &["fov_effects"]),
+        ("core:controls", &["sensitivity", "invert_y", "auto_jump"]),
+        ("core:accessibility", &["fov_effects", "camera_bob"]),
         ("core:profile", &["skin_model", "first_person_model", "show_avatars"]),
         ("core:chat_settings", &["chat_width", "chat_height", "chat_height_closed", "chat_opacity", "chat_visibility"]),
     ];

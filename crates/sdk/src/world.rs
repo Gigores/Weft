@@ -1,20 +1,21 @@
 use crate::abi::{self, Str};
 use crate::abi::{BlockPos, Vec3};
 use crate::host;
+pub use abi::ShipControls;
 
 /// A dimension as seen from a callback. Only valid for the duration of that callback.
 #[derive(Clone, Copy)]
 pub struct World {
-    raw: *mut abi::WorldCtx,
+    raw: abi::WorldCtx,
 }
 
 impl World {
     pub(crate) fn from_raw(raw: *mut abi::WorldCtx) -> World {
-        World { raw }
+        World { raw: unsafe { *raw } }
     }
 
     pub(crate) fn raw(&self) -> *mut abi::WorldCtx {
-        self.raw
+        std::ptr::from_ref(&self.raw).cast_mut()
     }
 
     pub fn block(&self, pos: impl Into<BlockPos>) -> u32 {
@@ -25,28 +26,45 @@ impl World {
     /// region it runs in, so that is also anything far from the players around it.
     pub fn block_loaded(&self, pos: impl Into<BlockPos>) -> Option<u32> {
         let pos = pos.into();
-        let s = unsafe { (host().block_get)(self.raw, &pos) };
+        let s = unsafe { (host().block_get)(self.raw(), &pos) };
         (s != u32::MAX).then_some(s)
     }
 
     /// The id of this dimension (`Dimension::id`).
     pub fn dimension(&self) -> u32 {
-        unsafe { (host().world_dimension)(self.raw) }
+        unsafe { (host().world_dimension)(self.raw()) }
+    }
+
+    /// The moving body whose local blocks this world view addresses, or `None` in the world frame.
+    pub fn frame(&self) -> Option<u64> {
+        (self.raw.frame != 0).then_some(self.raw.frame)
     }
 
     /// False if the position is not loaded.
     pub fn set_block(&self, pos: impl Into<BlockPos>, state: u32) -> bool {
         let pos = pos.into();
-        unsafe { (host().block_set)(self.raw, &pos, state) != 0 }
+        unsafe { (host().block_set)(self.raw(), &pos, state) != 0 }
     }
 
-    /// The same world for the blocks of moving body `body`, in its own coordinates (block
-    /// (0, 0, 0) centered on its entity): everything about blocks through it (`block`, `set_block`,
-    /// `prop_set`, parts, timers, light, signals) reaches the body's, as in its own blocks'
-    /// callbacks. Meant for one statement, `w.on_body(ship).prop_set(pos, "lit", "true")`, or a
-    /// short scope: while it lives, `w` itself is the body's too. `None` if `body` isn't one.
-    pub fn on_body(&self, body: u64) -> Option<OnBody<'_>> {
-        (unsafe { (host().world_enter_body)(self.raw, body) } != 0).then(|| OnBody { world: *self, _w: std::marker::PhantomData })
+    /// A view in another space's local coordinates. Use a body ID, or zero for the
+    /// dimension's root in this region. Each view keeps its own coordinate system.
+    pub fn in_space(&self, frame: u64) -> Option<World> {
+        (unsafe { (host().world_has_space)(self.raw(), frame) } != 0).then(|| World { raw: abi::WorldCtx { frame, ..self.raw } })
+    }
+
+    /// Converts a point in this view to another loaded space. Frame 0 is the dimension's world.
+    pub fn point_in(&self, frame: u64, point: impl Into<Vec3>) -> Option<Vec3> {
+        self.transform_in(frame, point.into(), false)
+    }
+
+    /// Rotates a direction in this view into another loaded space, without translating it.
+    pub fn vector_in(&self, frame: u64, vector: impl Into<Vec3>) -> Option<Vec3> {
+        self.transform_in(frame, vector.into(), true)
+    }
+
+    fn transform_in(&self, frame: u64, value: Vec3, vector: bool) -> Option<Vec3> {
+        let mut out = Vec3::ZERO;
+        (unsafe { (host().world_transform)(self.raw(), frame, value, u32::from(vector), &mut out) } != 0).then_some(out)
     }
 
     /// Takes `cells` out of the world into a new moving body, whose block (0, 0, 0) is at
@@ -55,19 +73,89 @@ impl World {
     /// `body_move_to` to go somewhere, `body_to_blocks` to be blocks again. Its entity, or 0 if nothing came.
     pub fn body_from_blocks(&self, center: impl Into<BlockPos>, cells: &[BlockPos]) -> u64 {
         let center = center.into();
-        unsafe { (host().body_from_blocks)(self.raw, &center, cells.as_ptr(), cells.len()) }
+        unsafe { (host().body_from_blocks)(self.raw(), &center, cells.as_ptr(), cells.len()) }
+    }
+
+    /// Previews or confirms a controller's connected blocks, or uses a helm already in a body.
+    /// With `tool`, clicks away from a controller select opposite corners and `None` confirms
+    /// the selected volume. Without `tool`, `None` clears the selection.
+    /// See `abi::assembly_result` for the outcome.
+    pub fn assembly_select(&self, player: u64, cell: Option<BlockPos>, tool: bool) -> u32 {
+        let cell = cell.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+        let flags = if tool { abi::assembly_flags::TOOL } else { 0 };
+        unsafe { (host().assembly_select)(self.raw(), player, cell, flags) }
+    }
+
+    /// Assemble a Controller or save the bounds of a mount without opening a player preview.
+    pub fn assemble_controller(&self, player: u64, at: impl Into<BlockPos>) -> u32 {
+        unsafe { (host().assembly_select)(self.raw(), player, &at.into(), abi::assembly_flags::DIRECT) }
+    }
+
+    /// Replace the redstone key bindings on a Controller, keeping the exit key and debug mode.
+    pub fn set_controller_bindings(&self, at: impl Into<BlockPos>, bindings: &[(crate::Dir, &str, u8)]) -> bool {
+        let bindings: Vec<_> = bindings
+            .iter()
+            .map(|&(face, key, level)| abi::ControllerBinding { face: face.face() as u8, key: Str::new(key), level })
+            .collect();
+        unsafe { (host().controller_bindings)(self.raw(), &at.into(), abi::Slice::new(&bindings)) != 0 }
+    }
+
+    /// Program a rotor's signal ranges in the current block frame. A gap is an unmatched signal.
+    pub fn set_rotor_program(&self, at: impl Into<BlockPos>, rules: &[abi::RotorRule], hold: bool) -> bool {
+        unsafe { (host().rotor_program)(self.raw(), &at.into(), abi::Slice::new(rules), hold as u8) != 0 }
+    }
+
+    /// Limit what a mount can assemble. Both corners are inclusive and use the current frame.
+    pub fn set_assembly_bounds(&self, at: impl Into<BlockPos>, min: impl Into<BlockPos>, max: impl Into<BlockPos>) -> bool {
+        unsafe { (host().assembly_bounds)(self.raw(), &at.into(), &min.into(), &max.into()) != 0 }
+    }
+
+    /// Overrides the helm of an active ship. Each axis is clamped to -1..1; `None` gives control
+    /// back to the seated pilot. The override lasts until cleared or the ship is unloaded.
+    /// Returns false for a missing ship or non-finite input.
+    pub fn set_ship_controls(&self, ship: u64, input: Option<ShipControls>) -> bool {
+        let input = input.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+        unsafe { (host().ship_controls)(self.raw(), ship, input) != 0 }
+    }
+
+    /// Cells reached by water in the last ship step, in the coordinate system of `in_space`.
+    /// A dry ship returns an empty list, and an absent or disassembled ship returns `None`.
+    pub fn ship_flooded_cells(&self, ship: u64) -> Option<Vec<BlockPos>> {
+        let read = host().ship_flooded_cells;
+        let count = unsafe { read(self.raw(), ship, std::ptr::null_mut(), 0) };
+        if count == usize::MAX {
+            return None;
+        }
+        let mut cells = Vec::with_capacity(count);
+        let written = unsafe { read(self.raw(), ship, cells.as_mut_ptr(), count) };
+        if written > count {
+            return None;
+        }
+        unsafe { cells.set_len(written) };
+        Some(cells)
     }
 
     /// A moving body goes back into the world at the nearest whole block. What found its
     /// place taken drops.
     pub fn body_to_blocks(&self, entity: u64) {
-        unsafe { (host().body_to_blocks)(self.raw, entity) }
+        unsafe { (host().body_to_blocks)(self.raw(), entity) }
     }
 
     /// A moving body goes to `pos` in exactly `ticks`.
     pub fn body_move_to(&self, entity: u64, pos: impl Into<Vec3>, ticks: u32) {
         let pos = pos.into();
-        unsafe { (host().body_move_to)(self.raw, entity, &pos, ticks) }
+        unsafe { (host().body_move_to)(self.raw(), entity, &pos, ticks) }
+    }
+
+    /// Enables gravity, buoyancy and rigid-body contacts on a free block body.
+    pub fn body_dynamics(&self, body: u64) -> bool {
+        unsafe { (host().body_dynamics)(self.raw(), body) != 0 }
+    }
+
+    /// Adds a force for the next physics step. The application point and direction use the
+    /// body's local axes, as if a thruster were mounted there.
+    pub fn body_force(&self, body: u64, at: impl Into<Vec3>, force: impl Into<Vec3>) -> bool {
+        unsafe { (host().body_force)(self.raw(), body, &at.into(), &force.into()) != 0 }
     }
 
     /// Moves what a piston behind `pos` facing `dir` would push one block that way, the way a
@@ -76,28 +164,28 @@ impl World {
     /// side. False if it can't go.
     pub fn push_blocks(&self, pos: impl Into<BlockPos>, dir: crate::Dir) -> bool {
         let pos = pos.into();
-        unsafe { (host().push_blocks)(self.raw, &pos, dir.face()) != 0 }
+        unsafe { (host().push_blocks)(self.raw(), &pos, dir.face()) != 0 }
     }
 
     /// A moving body falls under its weight and lands as blocks, each where it comes down
     /// if it can stand there, else as its drops: a felled tree, a collapsing roof
     /// (`let id = w.body_from_blocks(base, &cells); w.body_fall(id);`).
     pub fn body_fall(&self, entity: u64) {
-        unsafe { (host().body_fall)(self.raw, entity) }
+        unsafe { (host().body_fall)(self.raw(), entity) }
     }
 
     /// What a comparator reads of the block at `pos` (`signal_read`) may be different now.
     pub fn signal_read_changed(&self, pos: impl Into<BlockPos>) {
         let pos = pos.into();
-        unsafe { (host().signal_read_changed)(self.raw, &pos) }
+        unsafe { (host().signal_read_changed)(self.raw(), &pos) }
     }
 
     pub fn game_time(&self) -> u64 {
-        unsafe { (host().game_time)(self.raw) }
+        unsafe { (host().game_time)(self.raw()) }
     }
 
     pub fn random(&self) -> u64 {
-        unsafe { (host().random)(self.raw) }
+        unsafe { (host().random)(self.raw()) }
     }
 
     /// Uniform in `0..n`.
@@ -112,7 +200,7 @@ impl World {
     /// The strongest redstone power coming into a cell, 0..15.
     pub fn signal(&self, pos: impl Into<BlockPos>) -> u8 {
         let pos = pos.into();
-        unsafe { (host().signal_at)(self.raw, &pos) as u8 }
+        unsafe { (host().signal_at)(self.raw(), &pos) as u8 }
     }
 
     /// The value of property `name` of the block at `pos`: `w.prop(pos, "lit")`.
@@ -167,21 +255,21 @@ impl World {
     pub fn parts(&self, pos: impl Into<BlockPos>) -> Vec<u32> {
         let pos = pos.into();
         let mut out = [0u32; 16];
-        let n = unsafe { (host().part_list)(self.raw, &pos, out.as_mut_ptr(), out.len() as u32) } as usize;
+        let n = unsafe { (host().part_list)(self.raw(), &pos, out.as_mut_ptr(), out.len() as u32) } as usize;
         if n <= out.len() {
             return out[..n].to_vec();
         }
         let mut all = vec![0u32; n];
-        unsafe { (host().part_list)(self.raw, &pos, all.as_mut_ptr(), n as u32) };
+        unsafe { (host().part_list)(self.raw(), &pos, all.as_mut_ptr(), n as u32) };
         all
     }
 
     /// Puts another block in a cell with what is there, whatever its shape; `set_block` would replace
-    /// all of it. Only one thing in a cell can have a block entity, a circuit, light of its own or
-    /// growth: false if there would be two, or the cell isn't loaded.
+    /// all of it. Returns false for a duplicate, an unavailable cell or an occupied neighboring
+    /// cell intersected by the new hitbox.
     pub fn part_add(&self, pos: impl Into<BlockPos>, state: u32) -> bool {
         let pos = pos.into();
-        unsafe { (host().part_add)(self.raw, &pos, state) != 0 }
+        unsafe { (host().part_add)(self.raw(), &pos, state) != 0 }
     }
 
     /// Takes one block out of a cell, the others staying. False if it isn't there.
@@ -192,7 +280,7 @@ impl World {
     /// One block of a cell becomes another state, the others staying. False if it isn't there.
     pub fn part_replace(&self, pos: impl Into<BlockPos>, old: u32, new: u32) -> bool {
         let pos = pos.into();
-        unsafe { (host().part_replace)(self.raw, &pos, old, new) != 0 }
+        unsafe { (host().part_replace)(self.raw(), &pos, old, new) != 0 }
     }
 }
 
@@ -290,25 +378,6 @@ pub fn dimension_from_key(key: u64) -> Option<u32> {
         .map_while(|id| Some((id, name_of(abi::entry_kind::DIMENSION, id))).filter(|n| !n.1.is_empty()))
         .find(|n| abi::fnv(n.1.as_bytes()) == key)
         .map(|n| n.0)
-}
-
-/// A world turned to a body's blocks (`World::on_body`); back to what it was when this goes.
-pub struct OnBody<'a> {
-    world: World,
-    _w: std::marker::PhantomData<&'a World>,
-}
-
-impl std::ops::Deref for OnBody<'_> {
-    type Target = World;
-    fn deref(&self) -> &World {
-        &self.world
-    }
-}
-
-impl Drop for OnBody<'_> {
-    fn drop(&mut self) {
-        unsafe { (host().world_leave_body)(self.world.raw) }
-    }
 }
 
 /// What a block state is besides its components (those: `components_of`): its block, the mod

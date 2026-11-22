@@ -24,7 +24,7 @@ pub fn register(r: &mut Registry) {
     r.packet(&DEPOSIT, |p, ()| deposit(&p.world(), p.player()));
 }
 
-/// What `player` carries in its main inventory, the hotbar aside, into the storage around it
+/// What `player` carries in its main inventory and hotbar into the storage around it
 /// already holding some of the same, as much as fits.
 fn deposit(w: &World, player: u64) {
     let Some(e) = w.entity(player) else { return };
@@ -41,26 +41,36 @@ fn deposit(w: &World, player: u64) {
         }
     }
     if storage.is_empty() {
+        w.hint("storage.base.deposit_no_storage", &[]).to(player);
         return;
     }
-    let main = w.inventory(player).group("main");
-    for i in 0..main.len() {
-        let mut s = main.get(i);
-        if s.is_empty() {
-            continue;
-        }
-        for inv in &storage {
-            let has = (0..inv.len()).any(|k| {
-                let t = inv.get(k);
-                t.item == s.item && t.data == s.data
-            });
-            if has {
-                s = inv.insert(s);
-                if s.is_empty() {
-                    break;
+    let player_inventory = w.inventory(player);
+    let mut moved = false;
+    for group in ["main", "hotbar"]
+        .into_iter()
+        .filter_map(|name| player_inventory.find_group(name))
+    {
+        for i in 0..group.len() {
+            let stack = group.get(i);
+            if stack.is_empty() {
+                continue;
+            }
+            let mut left = stack;
+            for inv in &storage {
+                if (0..inv.len()).any(|k| inv.get(k).stacks_with(&left)) {
+                    left = inv.insert(left);
+                    if left.is_empty() {
+                        break;
+                    }
                 }
             }
+            if left.count < stack.count {
+                group.set(i, left);
+                moved = true;
+            }
         }
-        main.set(i, s);
+    }
+    if !moved {
+        w.hint("storage.base.deposit_no_match", &[]).to(player);
     }
 }
