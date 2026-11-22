@@ -839,7 +839,7 @@ pub fn register(r: &mut Registry) {
         .tab(&crate::tabs::NATURAL);
     let shears = Cond::tool("#tools/shears");
     for (grass, chance) in
-        [(&TALL_GRASS, 0.125), (&SHORT_GRASS, 0.125), (&BLUEGRASS, 0.125), (&CLOVER, 0.125), (&FERN, 0.125), (&TALL_TALL_GRASS, 0.25)]
+        [(&TALL_GRASS, 0.125), (&SHORT_GRASS, 0.125), (&BLUEGRASS, 0.125), (&CLOVER, 0.125), (&FERN, 0.125), (&TALL_TALL_GRASS, 0.25), (&DRYGRASS, 0.062)]
     {
         r.loot(grass)
             .pool(Pool::new().when(shears.clone()).item(grass.name()))
