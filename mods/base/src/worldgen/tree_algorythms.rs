@@ -395,14 +395,7 @@ fn place_spruce(data: &mut TreePlaceData) {
     place_trunk(data, height, &SPRUCE_LOG, &SPRUCE_WOOD, false, false, TrunkLean::no_lurch());
     place_cone_foliage(data, height, SPRUCE_LEAVES.id());
 }
-fn place_palm(data: &mut TreePlaceData) {
-    let height = 6u16 + (data.rng.next() as u16) % 4u16;
-    let lean = TrunkLean::random(&mut data.rng, 30.0);
-    let skeleton = place_trunk(data, height, &PALM_LOG, &PALM_WOOD, false, false, lean);
-    place_palm_foliage(data, skeleton);
-}
-
-fn place_palm_foliage(d: &mut TreePlaceData, skeleton: TreeSkeleton) {
+fn place_palm_foliage(d: &mut TreePlaceData, skeleton: &TreeSkeleton) {
     const FRONDS: [(i32, i32); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
     let (x, mut y, z) = skeleton.top;
     y -= 1;
@@ -421,6 +414,21 @@ fn place_palm_foliage(d: &mut TreePlaceData, skeleton: TreeSkeleton) {
             }
         }
     }
+}
+fn place_palm_coconuts(d: &mut TreePlaceData, skeleton: &TreeSkeleton) {
+    let (x, mut y, z) = skeleton.top;
+    y -= 1;
+    for (dx, dz, dir) in DIRECTIONS {
+        if d.rng.float() >= 0.333 { continue }
+        (d.place)(x + dx, y, z + dz, COCONUT.with(&[("facing", dir)]), false);
+    }
+}
+fn place_palm(data: &mut TreePlaceData) {
+    let height = 6u16 + (data.rng.next() as u16) % 4u16;
+    let lean = TrunkLean::random(&mut data.rng, 30.0);
+    let skeleton = place_trunk(data, height, &PALM_LOG, &PALM_WOOD, false, false, lean);
+    place_palm_foliage(data, &skeleton);
+    place_palm_coconuts(data, &skeleton);
 }
 pub fn register() {
     register_tree("base:oak", place_oak);
