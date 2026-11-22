@@ -111,3 +111,4 @@ pub static CHANTERELLE_MUSHROOM: Block = Block::named("base:chanterelle_mushroom
 pub static TOADSTOOL_MUSHROOM: Block = Block::named("base:toadstool_mushroom");
 pub static DRYADS_SADDLE_MUSHROOM: Block = Block::named("base:dryads_saddle_mushroom");
 pub static MUSHROOMS: [&Block; 3] = [&PORCINI_MUSHROOM, &CHANTERELLE_MUSHROOM, &TOADSTOOL_MUSHROOM];
+pub static COCONUT: Block = Block::named("base:coconut");

@@ -132,6 +132,8 @@ pub fn register(r: &mut Registry) {
     r.item(&DRYADS_SADDLE)
         .tag("mushrooms")
         .tab(&crate::tabs::INGREDIENTS);
+    r.edit(&COCONUT_ITEM)
+        .texture("coconut");
     r.item(Item::generated("leather".into()))
         .tag("materials/leather")
         .tab(&crate::tabs::INGREDIENTS);

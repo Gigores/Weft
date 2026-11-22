@@ -790,6 +790,35 @@ pub fn register(r: &mut Registry) {
         .tab(&crate::tabs::NATURAL)
         .not_solid()
         .hitbox([2.0, 0.0, 2.0], [14.0, 16.0, 14.0]);
+    fn coconut_box(d: Dir) -> ([f32; 3], [f32; 3]) {
+        match d {
+            Dir::Up => ([2.0, 0.0, 2.0], [14.0, 12.0, 14.0]),
+            Dir::Down => ([2.0, 4.0, 2.0], [14.0, 16.0, 14.0]),
+            Dir::East => ([0.0, 2.0, 2.0], [12.0, 14.0, 14.0]),
+            Dir::West => ([4.0, 2.0, 2.0], [16.0, 14.0, 14.0]),
+            Dir::North => ([2.0, 2.0, 4.0], [14.0, 14.0, 16.0]),
+            Dir::South => ([2.0, 2.0, 0.0], [14.0, 14.0, 12.0]),
+        }
+    }
+    r.block(&COCONUT)
+        .sound_group("wood")
+        .texture("coconut_side")
+        .top("coconut_top")
+        .bottom("coconut_bottom")
+        .facing(Facings::ALL, Toward::Face)
+        .default_facing(Dir::Up)
+        .states(|p, s| {
+            let d = p.facing();
+            let (lo, hi) = coconut_box(d);
+            let uv = [2.0, 2.0, 14.0, 14.0];
+            let faces = [("", uv); 6];
+            s.orientation(Orientation::NONE)
+                .needs(d.opposite(), "")
+                .model_box_faces(lo, hi, faces)
+                .hitbox(lo, hi)
+        })
+        .hardness(0.2)
+        .tab(&crate::tabs::NATURAL);
     let shears = Cond::tool("#tools/shears");
     for (grass, chance) in
         [(&TALL_GRASS, 0.125), (&SHORT_GRASS, 0.125), (&BLUEGRASS, 0.125), (&CLOVER, 0.125), (&FERN, 0.125), (&TALL_TALL_GRASS, 0.25)]

@@ -24,3 +24,4 @@ pub static ARROW: Item = Item::named("base:arrow");
 pub static EGG: Item = Item::named("base:egg");
 pub static ASSEMBLY_TOOL: Item = Item::named("base:assembly_tool");
 pub static GRAB_TOOL: Item = Item::named("base:grab_tool");
+pub static COCONUT_ITEM: Item = Item::named("base:coconut");
