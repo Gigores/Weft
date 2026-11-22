@@ -155,7 +155,8 @@ fn place_trunk(
         place_roots(d, log_block, wood_block);
     }
 
-    TreeSkeleton { height: top - y, top: (x, top, z), bottom: (x, y, z), branch_tips }
+    let offset = lean.offset_at(height as i32 - 1);
+    TreeSkeleton { height: top - y, top: (x + offset.0 as i32, top, z + offset.1 as i32), bottom: (x, y, z), branch_tips }
 }
 fn place_cone_foliage(d: &mut TreePlaceData, height: u16, leaves: u32) {
     let (x, y, z) = d.pos;
@@ -397,15 +398,14 @@ fn place_spruce(data: &mut TreePlaceData) {
 fn place_palm(data: &mut TreePlaceData) {
     let height = 6u16 + (data.rng.next() as u16) % 4u16;
     let lean = TrunkLean::random(&mut data.rng, 30.0);
-    let offset = lean.offset_at(height as i32 - 1);
-    let tip = (data.pos.0 + offset.0 as i32, data.pos.1 + height as i32 - 1, data.pos.2 + offset.1 as i32);
-    place_trunk(data, height, &PALM_LOG, &PALM_WOOD, false, false, lean);
-    place_palm_foliage(data, tip);
+    let skeleton = place_trunk(data, height, &PALM_LOG, &PALM_WOOD, false, false, lean);
+    place_palm_foliage(data, skeleton);
 }
 
-fn place_palm_foliage(d: &mut TreePlaceData, tip: (i32, i32, i32)) {
+fn place_palm_foliage(d: &mut TreePlaceData, skeleton: TreeSkeleton) {
     const FRONDS: [(i32, i32); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
-    let (x, y, z) = tip;
+    let (x, mut y, z) = skeleton.top;
+    y -= 1;
     let leaves = PALM_LEAVES.id();
     (d.place)(x, y + 1, z, leaves, false);
     (d.place)(x, y + 2, z, leaves, false);
