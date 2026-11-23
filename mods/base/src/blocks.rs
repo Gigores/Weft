@@ -417,7 +417,7 @@ pub fn register(r: &mut Registry) {
         .random_height_scale(0.85, 1.15)
         .random_yaw(0.0, 90.0)
         .replaceable()
-        .needs_below("#plant_soil")
+        .needs_below("#general_soil")
         .tint_kind(&tints::GRASS)
         .tab(&crate::tabs::NATURAL);
     r.block(&SHORT_GRASS)
@@ -428,7 +428,7 @@ pub fn register(r: &mut Registry) {
         .random_height_scale(0.85, 1.15)
         .random_yaw(0.0, 90.0)
         .replaceable()
-        .needs_below("#plant_soil")
+        .needs_below("#general_soil")
         .tint_kind(&tints::GRASS)
         .tab(&crate::tabs::NATURAL);
     r.block(&TALL_TALL_GRASS)
@@ -439,6 +439,7 @@ pub fn register(r: &mut Registry) {
         // .two_part("half", ["lower", "upper"], |_| Dir::Up)
         // .state_where("half=upper", |s| s.texture("tall_tallgrass_top"))
         // .state_where("half=lower", |s| s.needs_below("#plant_6oil"))
+        .needs_below("#general_soil")
         .tint_kind(&tints::GRASS)
         .tab(&crate::tabs::NATURAL);
     r.block(&BLUEGRASS)

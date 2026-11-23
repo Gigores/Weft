@@ -92,7 +92,7 @@ pub fn decorate(g: &mut Gen) {
             }
             let below = g.read([wx, oy + y as i32 - 1, wz]);
             let coarse_cover = COARSE_DIRT_COVER.on_biome(b).unwrap_or(0.0) as f64;
-            let cactus_cover = CACTI_COVER.on_biome(b).unwrap_or(0.0) as f64;
+            let cactus_cover = GLOBULAR_CACTI_COVER.on_biome(b).unwrap_or(0.0) as f64;
             if coarse_cover > 0.0 && y > 0 && GRASS.is(below) {
                 let patch = fixed::fbm(fixed::seed32(seed, 0xC0A5E), wx * 16, wz * 16, 20 * 16, 3);
                 let value = (patch as f64 / fixed::ONE as f64 + 1.0) * 0.5;
@@ -100,12 +100,15 @@ pub fn decorate(g: &mut Gen) {
                     g.set(x, y - 1, z, COARSE_DIRT.id());
                 }
             }
-             if CACTUS_SOIL.on_block(below) && roll < cactus_cover && y + 2 < 16 {
-                let n = 1 + (h >> 40) % 3;
-                for k in 0..n as usize {
-                    g.set(x, y + k, z, CACTUS.id());
-                }
-             } else if GENERAL_SOIL.on_block(below) {
+             // old tall cacti
+             // if CACTUS_SOIL.on_block(below) && roll < cactus_cover && y + 2 < 16 {
+             //    let n = 1 + (h >> 40) % 3;
+             //    for k in 0..n as usize {
+             //        g.set(x, y + k, z, CACTUS.id());
+             //    }
+            if CACTUS_SOIL.on_block(below) && roll < cactus_cover {
+                g.set(x, y, z, CACTUS.id());
+            } else if GENERAL_SOIL.on_block(below) {
                 let plant = soil_plant(seed, wx, wz, b, h, roll);
                 if TALL_TALL_GRASS.is(plant) {
                     place_tall_grass(g, x, y, z);
