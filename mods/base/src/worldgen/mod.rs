@@ -53,7 +53,7 @@ fn snow_bands() -> Vec<(f64, f64, i32)> {
 
 /// What a biome grows, as data any mod can set on any biome: trees per 5x5 cell (0..1), share of
 /// grass on plantable soil, which trees and flowers (block lists the engine checks), and tags `frozen` (nothing grows, set by
-/// `.frozen(..)`), `dry` (cacti).
+/// `.frozen(..)`).
 
 pub fn register(r: &mut Registry) {
     // Tags say what a biome is (spawning, decoration and mods ask these, not names).
@@ -181,13 +181,21 @@ pub fn register(r: &mut Registry) {
         .set(&TREES, 0.03)
         .set(&TREE_KINDS, TreeKinds::from([("base:spruce", 1)]));
     r.biome(&DESERT)
-        .temperature(0.25..)
+        .temperature(0.15..)
         .humidity(..0.1)
         .surface("sand", "sand", 3)
         .under("sandstone", 1)
         .tint(grass, 0xbfb755)
         .tint(foliage, 0xaea42a)
-        .tag("dry")
+        .set(&CACTI_COVER, 0.01)
+        .tag("hot");
+    r.biome(&DUNES)
+        .temperature(0.30..)
+        .humidity(..0.1)
+        .surface("sand", "sand", 3)
+        .under("sandstone", 1)
+        .tint(grass, 0xbfb755)
+        .tint(foliage, 0xaea42a)
         .tag("hot");
     r.biome(&MOUNTAINS)
         .surface("grass", "dirt", 3)
@@ -298,9 +306,9 @@ pub fn register(r: &mut Registry) {
                 .mask(Expr::temperature().ramp(-0.35, -0.6).not() * (Expr::value(1.0) - Expr::field("base:plains") * Expr::value(0.86))),
         )
         .landform(
-            preset::dunes(4.0, 26.0).mask(
+            preset::dunes(5.0, 30.0).mask(
                 Expr::temperature()
-                    .ramp(0.25, 0.45)
+                    .ramp(0.25, 0.55)
                     .and(Expr::humidity().ramp(0.1, -0.05)),
             ),
         )
@@ -421,10 +429,17 @@ pub fn register(r: &mut Registry) {
                 .field("base:surface_temperature", ..-0.15),
         )
         .rule(
-            BiomeRule::new("desert")
+            BiomeRule::new("dunes")
                 .temperature(..)
                 .humidity(..)
                 .field("base:surface_temperature", 0.25..)
+                .field("base:surface_humidity", ..0.1),
+        )
+        .rule(
+            BiomeRule::new("desert")
+                .temperature(..)
+                .humidity(..)
+                .field("base:surface_temperature", 0.15..)
                 .field("base:surface_humidity", ..0.1),
         )
         .rule(
