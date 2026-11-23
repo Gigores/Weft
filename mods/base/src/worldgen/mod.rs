@@ -188,6 +188,7 @@ pub fn register(r: &mut Registry) {
         .tint(grass, 0xbfb755)
         .tint(foliage, 0xaea42a)
         .set(&GLOBULAR_CACTI_COVER, 0.01)
+        .set(&COLUMNAR_CACTI_COVER, 0.005)
         .set(&SHORT_GRASS_COVER, 0.05)
         .set(&SHORT_DRYGRASS_COVER, 0.2)
         .tag("hot");
