@@ -18,6 +18,12 @@ impl World {
         std::ptr::from_ref(&self.raw).cast_mut()
     }
 
+    /// Moves exact counts between slots in this callback's region, all or none.
+    /// All takes use the original stacks. This lets a batch split, merge or swap them.
+    pub fn move_items(&self, moves: &[crate::ItemMove<crate::InventorySlot>]) -> bool {
+        unsafe { (host().inventory_move)(self.raw(), abi::Slice::new(moves)) != 0 }
+    }
+
     pub fn block(&self, pos: impl Into<BlockPos>) -> u32 {
         self.block_loaded(pos.into()).unwrap_or(0)
     }

@@ -55,18 +55,20 @@ fn deposit(w: &World, player: u64) {
             if stack.is_empty() {
                 continue;
             }
-            let mut left = stack;
+            let Some(from) = group.inventory_slot(i) else { continue };
+            let mut left = stack.count;
             for inv in &storage {
-                if (0..inv.len()).any(|k| inv.get(k).stacks_with(&left)) {
-                    left = inv.insert(left);
-                    if left.is_empty() {
+                if !(0..inv.len()).any(|k| inv.get(k).stacks_with(&stack)) {
+                    continue;
+                }
+                let count = inv.move_in_from(from);
+                if count != 0 {
+                    left -= count;
+                    moved = true;
+                    if left == 0 {
                         break;
                     }
                 }
-            }
-            if left.count < stack.count {
-                group.set(i, left);
-                moved = true;
             }
         }
     }

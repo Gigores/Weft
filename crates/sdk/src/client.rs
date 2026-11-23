@@ -460,6 +460,18 @@ impl Client {
         (unsafe { (host().client_menu)(self.raw, &mut out) } != 0).then_some(out)
     }
 
+    /// Named group in the open menu. `start + index` is the menu slot number.
+    pub fn menu_group(&self, name: &str) -> Option<abi::SlotGroup> {
+        let mut out = abi::SlotGroup::default();
+        (unsafe { (host().client_menu_group)(self.raw, abi_str(name), &mut out) } != 0).then_some(out)
+    }
+
+    /// Requests an atomic batch in this window. True means sent. The server validates exact
+    /// counts, backing slots and filters, then syncs the changed stacks normally.
+    pub fn menu_move(&self, window: u32, moves: &[crate::ItemMove<u32>]) -> bool {
+        unsafe { (host().client_menu_move)(self.raw, window, abi::Slice::new(moves)) != 0 }
+    }
+
     /// Entities the client knows, the local player left out.
     pub fn entities(&self) -> Vec<u64> {
         let mut buf = vec![0u64; 256];
@@ -879,9 +891,12 @@ pub mod screens {
     pub static SOUND: Menu = Menu::named("core:sound");
     pub static HUD_EDITOR: Menu = Menu::named("core:hud_editor");
     pub static DEBUG_OPTIONS: Menu = Menu::named("core:debug_options");
-    /// Every menu's screen, for `Registry::screen_part`: its place `side` is beside any menu,
-    /// `corner` in the top right corner inside its panel (small icon buttons).
+    /// Parts shared by every menu. Use `left` and `side` for the panels to the left and right,
+    /// and `corner` for small buttons inside the top right of the menu.
     pub static MENUS: Menu = Menu::named("core:menus");
+    /// Parts of the built-in recipe viewer. Use `left` and `side` beside the viewer,
+    /// `buttons` in its navigation row, or `entry` below each displayed recipe.
+    pub static RECIPES: Menu = Menu::named("core:recipes");
 }
 
 /// One entity in `Registry::client_entity_frame`.

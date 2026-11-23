@@ -437,6 +437,62 @@ pub fn room_in(current: ItemStack, incoming: ItemStack, limit: u32) -> u32 {
     }
 }
 
+/// Plan all takes against the original contents, then place all stacks. A cycle needs no
+/// spare slot. Nothing touches an inventory until every move has been checked.
+pub fn plan_moves<K: Copy + Eq + std::hash::Hash>(
+    moves: &[weft_abi::ItemMove<K>],
+    get: impl Fn(K) -> ItemStack,
+    limit: impl Fn(K, ItemStack) -> u32,
+) -> Option<Vec<(K, ItemStack)>> {
+    #[derive(Clone, Copy)]
+    struct Change<K> {
+        key: K,
+        before: ItemStack,
+        after: ItemStack,
+    }
+    let mut ids = rustc_hash::FxHashMap::default();
+    let mut changes = Vec::<Change<K>>::new();
+    for &weft_abi::ItemMove { from, to, count } in moves {
+        if count == 0 || from == to {
+            continue;
+        }
+        let [src, _] = [from, to].map(|key| {
+            *ids.entry(key).or_insert_with(|| {
+                let i = changes.len();
+                let before = get(key);
+                changes.push(Change { key, before, after: before });
+                i
+            })
+        });
+        let source = &mut changes[src].after;
+        if source.is_empty() || source.count < count {
+            return None;
+        }
+        source.count -= count;
+        if source.count == 0 {
+            *source = ItemStack::EMPTY;
+        }
+    }
+    for &weft_abi::ItemMove { from, to, count } in moves {
+        if count == 0 || from == to {
+            continue;
+        }
+        let stack = ItemStack { count, ..changes[ids[&from]].before };
+        let Change { key, after, .. } = &mut changes[ids[&to]];
+        if room_in(*after, stack, limit(*key, stack)) < stack.count {
+            return None;
+        }
+        *after = if after.is_empty() { stack } else { ItemStack { count: after.count + stack.count, ..stack } };
+    }
+    Some(
+        changes
+            .into_iter()
+            .filter(|v| v.before != v.after)
+            .map(|v| (v.key, v.after))
+            .collect(),
+    )
+}
+
 /// Eligible slots and how much of the cursor stack to offer each one.
 pub fn drag_slots(slots: &[u32], count: u32, button: u8, mut room: impl FnMut(u32) -> u32) -> (Vec<u32>, u32) {
     let mut seen = rustc_hash::FxHashSet::default();

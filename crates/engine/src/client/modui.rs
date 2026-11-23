@@ -74,8 +74,21 @@ unsafe fn view<'a>(c: *mut abi::ClientCtx) -> Option<&'a Client> {
 
 /// Runs a mod's UI builder callback into `ui`.
 pub fn build(ui: &mut Ui, lang: &Lang, input: Option<&crate::input::Input>, owner: ModId, cb: Callback, client: Option<&Client>) {
+    build_with_recipe(ui, lang, input, owner, cb, client, None);
+}
+
+fn build_with_recipe(
+    ui: &mut Ui,
+    lang: &Lang,
+    input: Option<&crate::input::Input>,
+    owner: ModId,
+    cb: Callback,
+    client: Option<&Client>,
+    recipe: Option<(&str, u32)>,
+) {
     let menu = client.and_then(|c| c.menu.as_ref()).map(|m| m.kind);
-    let mut b = UiBuild { tag: 1, owner, ui, lang, input, depth: 0, menu, recipe: None, client };
+    let mut b =
+        UiBuild { tag: 1, owner, ui, lang, input, depth: 0, menu, recipe: recipe.map(|(kind, index)| (kind.to_owned(), index)), client };
     let mut v = ClientView::new(client);
     let mut args = abi::UiArgs { ui: &mut b as *mut UiBuild as *mut abi::UiCtx, client: v.raw(), data: 0 };
     host::invoke(owner, cb, &mut args);
@@ -87,6 +100,18 @@ pub fn build(ui: &mut Ui, lang: &Lang, input: Option<&crate::input::Input>, owne
 
 /// What mods add to place `area` of `screen`, in order, into the open node.
 pub fn parts(ui: &mut Ui, lang: &Lang, input: Option<&crate::input::Input>, client: Option<&Client>, screen: &str, area: &str) {
+    parts_with_recipe(ui, lang, input, client, screen, area, None);
+}
+
+pub fn parts_with_recipe(
+    ui: &mut Ui,
+    lang: &Lang,
+    input: Option<&crate::input::Input>,
+    client: Option<&Client>,
+    screen: &str,
+    area: &str,
+    recipe: Option<(&str, u32)>,
+) {
     let Some(c) = crate::content::try_content() else { return };
     for p in c
         .game
@@ -94,7 +119,20 @@ pub fn parts(ui: &mut Ui, lang: &Lang, input: Option<&crate::input::Input>, clie
         .iter()
         .filter(|p| p.screen == screen && p.area == area)
     {
-        build(ui, lang, input, p.owner, p.cb, client);
+        build_with_recipe(ui, lang, input, p.owner, p.cb, client, recipe);
+    }
+}
+
+pub unsafe extern "C" fn ui_recipe(u: *mut abi::UiCtx, kind: *mut Str, recipe: *mut u32) -> u32 {
+    unsafe {
+        if u.is_null() || *(u as *const u32) != 1 {
+            return 0;
+        }
+        let b = &*u.cast::<UiBuild>();
+        let Some((name, index)) = &b.recipe else { return 0 };
+        *kind = Str::new(name);
+        *recipe = *index;
+        1
     }
 }
 

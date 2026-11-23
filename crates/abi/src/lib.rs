@@ -2633,6 +2633,32 @@ pub struct Holder {
     pub storage: u32,
 }
 
+/// One physical inventory slot in the callback's region.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InventorySlot {
+    pub holder: Holder,
+    pub frame: u64,
+    pub slot: u32,
+}
+
+/// Move exactly `count` items from an original slot into another slot.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ItemMove<S> {
+    pub from: S,
+    pub to: S,
+    pub count: u32,
+}
+
+impl<S> ItemMove<S> {
+    pub const fn new(from: S, to: S, count: u32) -> Self {
+        Self { from, to, count }
+    }
+}
+
+pub const MAX_ITEM_MOVES: usize = 4096;
+
 pub mod holder {
     /// Nothing: menus without an owner (a crafting table's grid).
     pub const NONE: u32 = 0;
@@ -4315,6 +4341,8 @@ pub struct Host {
     pub inventory_set: unsafe extern "C" fn(world: *mut WorldCtx, holder: *const Holder, slot: u32, stack: ItemStack),
     /// Merges into existing stacks first; returns what did not fit.
     pub inventory_insert: unsafe extern "C" fn(world: *mut WorldCtx, holder: *const Holder, stack: ItemStack) -> ItemStack,
+    pub inventory_move: unsafe extern "C" fn(world: *mut WorldCtx, moves: Slice<ItemMove<InventorySlot>>) -> u32,
+    pub inventory_move_into: unsafe extern "C" fn(world: *mut WorldCtx, from: InventorySlot, to: *const Holder) -> u32,
     pub selected_slot: unsafe extern "C" fn(world: *mut WorldCtx, player: u64) -> u32,
     pub block_entity: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos) -> u64,
     /// Opens `menu` on `holder` (`Holder::NONE` for menus without one). 0 when the holder isn't
@@ -4350,6 +4378,7 @@ pub struct Host {
     pub item_block: unsafe extern "C" fn(item: u32) -> u32,
 
     pub ui_open: unsafe extern "C" fn(ui: *mut UiCtx, node: *const UiNode),
+    pub ui_recipe: unsafe extern "C" fn(ui: *mut UiCtx, kind: *mut Str, recipe: *mut u32) -> u32,
     pub ui_close: unsafe extern "C" fn(ui: *mut UiCtx),
     /// From a text binding: set the translation key and args shown (an empty key with one
     /// argument shows that argument as it is).
@@ -4492,6 +4521,8 @@ pub struct Host {
     pub client_slot: unsafe extern "C" fn(client: *mut ClientCtx, container: u32, slot: u32) -> ItemStack,
     /// The open menu; 0 if none.
     pub client_menu: unsafe extern "C" fn(client: *mut ClientCtx, out: *mut OpenMenu) -> u32,
+    pub client_menu_group: unsafe extern "C" fn(client: *mut ClientCtx, name: Str, out: *mut SlotGroup) -> u32,
+    pub client_menu_move: unsafe extern "C" fn(client: *mut ClientCtx, window: u32, moves: Slice<ItemMove<u32>>) -> u32,
     /// Ids of entities the client knows (the local player not included), returns how many.
     pub client_entities: unsafe extern "C" fn(client: *mut ClientCtx, out: *mut u64, max: usize) -> usize,
     /// Where a UI element of the top screen is, as fractions of the window:

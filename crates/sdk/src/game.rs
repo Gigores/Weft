@@ -630,6 +630,17 @@ pub struct Inventory {
 }
 
 impl Inventory {
+    /// A slot address for `World::move_items`, in this inventory's frame.
+    pub fn slot(&self, index: u32) -> crate::InventorySlot {
+        crate::InventorySlot { holder: self.holder, frame: self.world.frame().unwrap_or(0), slot: index }
+    }
+
+    /// Moves as many items as fit from `from`, merging before using empty slots.
+    /// Returns the number moved. Both inventories must be in this callback's region.
+    pub fn move_in_from(&self, from: crate::InventorySlot) -> u32 {
+        unsafe { (host().inventory_move_into)(self.world.raw(), from, &self.holder) }
+    }
+
     /// Slots, 0 when the holder has no inventory.
     pub fn len(&self) -> u32 {
         unsafe { (host().inventory_len)(self.world.raw(), &self.holder) }
@@ -699,6 +710,13 @@ impl SlotGroup<'_> {
     }
     pub fn rows(&self) -> u32 {
         self.len.div_ceil(self.cols.max(1))
+    }
+    /// Address a physical slot in an inventory group for `World::move_items`.
+    pub fn inventory_slot(&self, i: u32) -> Option<crate::InventorySlot> {
+        match self.of {
+            GroupIn::Inventory(inv) if i < self.len => Some(inv.slot(self.start + i)),
+            _ => None,
+        }
     }
     pub fn get(&self, i: u32) -> ItemStack {
         if i >= self.len {
@@ -2141,6 +2159,10 @@ pub fn recipes_for<'a>(kind: &'a RecipeKind, stacks: &'a [ItemStack]) -> impl It
 }
 
 impl RecipeView {
+    pub(crate) fn at(kind: &str, index: u32) -> Self {
+        Self { kind: kind.to_owned(), index }
+    }
+
     fn info(&self) -> abi::RecipeInfo {
         let mut out = abi::RecipeInfo::default();
         unsafe { (host().recipe_info)(Str::new(&self.kind), self.index, &mut out) };

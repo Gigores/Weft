@@ -142,6 +142,7 @@ impl Server {
             }
             M::ControllerSave { .. } | M::HelmHeld { .. } => e.alive() && !e.mode.has(crate::tag_bits::game_mode::NO_INTERACT),
             M::GrabBody | M::TurnGrab(_) => e.alive() && !e.mode.has(crate::tag_bits::game_mode::NO_INTERACT),
+            M::MenuMove { .. } => e.alive() && !e.mode.has(crate::tag_bits::game_mode::NO_INTERACT),
             M::Move { .. } | M::OpenInventory | M::Click { .. } | M::Drag { .. } | M::CreativeTake { .. } | M::Pick { .. } => e.alive(),
             _ => true,
         }
@@ -536,6 +537,17 @@ impl Server {
                 let p = &mut players[pi];
                 if let (Some(m), Some(r)) = (&mut p.menu, dims[p.dim as usize].entity_region(p.entity)) {
                     menu::click(m, r, c, p.entity, slot, button, shift);
+                }
+            }
+            ToServer::MenuMove { window, moves } => {
+                let Server { players, dims, .. } = self;
+                let p = &mut players[pi];
+                if p.window == window
+                    && moves.len() <= weft_abi::MAX_ITEM_MOVES
+                    && let (Some(m), Some(r)) = (&mut p.menu, dims[p.dim as usize].entity_region(p.entity))
+                    && !menu::out_of_reach(m, r, p.entity)
+                {
+                    menu::move_items(m, r, c, p.entity, &moves);
                 }
             }
             ToServer::CreativeTake { item, button } => {

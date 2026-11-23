@@ -617,6 +617,31 @@ pub unsafe extern "C" fn client_menu(c: *mut abi::ClientCtx, out: *mut abi::Open
     }
 }
 
+pub unsafe extern "C" fn client_menu_group(c: *mut abi::ClientCtx, name: Str, out: *mut abi::SlotGroup) -> u32 {
+    unsafe {
+        let Some(m) = client(c).and_then(|cl| cl.menu.as_ref()) else { return 0 };
+        let game = &crate::content::content().game;
+        let Some((group, start, len)) = game.menus[m.kind as usize].group(&game.player_layout, name.as_str()) else { return 0 };
+        *out = abi::SlotGroup { start, len, cols: group.span(&game.player_layout).2 };
+        1
+    }
+}
+
+pub unsafe extern "C" fn client_menu_move(c: *mut abi::ClientCtx, window: u32, moves: abi::Slice<abi::ItemMove<u32>>) -> u32 {
+    if moves.len == 0 || moves.len > abi::MAX_ITEM_MOVES {
+        return 0;
+    }
+    unsafe {
+        let Some(g) = run(c).and_then(|r| r.game.as_mut()) else { return 0 };
+        if !g.client.menu.as_ref().is_some_and(|m| m.window == window) {
+            return 0;
+        }
+        g.client
+            .send(crate::net::ToServer::MenuMove { window, moves: moves.as_slice().to_vec() });
+        1
+    }
+}
+
 pub unsafe extern "C" fn client_entities(c: *mut abi::ClientCtx, out: *mut u64, max: usize) -> usize {
     unsafe {
         let Some(cl) = client(c) else { return 0 };

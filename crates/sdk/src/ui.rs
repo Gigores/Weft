@@ -350,6 +350,12 @@ impl Ui {
     pub(crate) fn from_raw(ui: *mut abi::UiCtx, client: *mut abi::ClientCtx) -> Ui {
         Ui { raw: ui, client: ClientView { raw: client } }
     }
+
+    /// The recipe currently being built, in a recipe layout or an `entry` part of the viewer.
+    pub fn recipe(&self) -> Option<crate::RecipeView> {
+        let (mut kind, mut recipe) = (Str::new(""), 0);
+        unsafe { ((host().ui_recipe)(self.raw, &mut kind, &mut recipe) != 0).then(|| crate::RecipeView::at(kind.as_str(), recipe)) }
+    }
 }
 
 pub(crate) fn ui_cb(f: impl Fn(&mut Ui) + Send + Sync + 'static) -> abi::Callback {

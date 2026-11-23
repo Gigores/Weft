@@ -2053,6 +2053,49 @@ pub async fn inventory_tools(t: T) -> R {
         n
     };
     t.check_eq(dirt, 15, "all the dirt in the chest");
+    let window = t.c().menu().ok_or("no chest menu")?.window;
+    let chest = t
+        .c()
+        .menu_group("chest")
+        .ok_or("no chest slot group")?
+        .start;
+    t.op(&format!("put {at} 20 dirt 10")).await?;
+    t.op(&format!("put {at} 23 stick 4")).await?;
+    let split = |count, to| ItemMove::new(chest + 20, chest + to, count);
+    t.check(t.c().menu_move(window, &[split(3, 21), split(7, 23)]), "sent a split with an incompatible destination");
+    t.secs(0.25).await?;
+    t.check_eq(t.slot(&at, 20).await?.1, 10, "a rejected batch leaves its source intact");
+    t.check_eq(t.slot(&at, 21).await?.1, 0, "a rejected batch leaves even the valid destination intact");
+    t.check(t.c().menu_move(window, &[split(3, 21), split(7, 22)]), "sent an exact split");
+    t.until("both branches of the split", Duration::from_secs(3), |t| {
+        t.c().menu_slot(chest + 21).count == 3 && t.c().menu_slot(chest + 22).count == 7
+    })
+    .await?;
+    t.check_eq(t.slot(&at, 20).await?.1, 0, "the exact split emptied the source");
+    t.check(
+        t.c()
+            .menu_move(window, &[ItemMove::new(chest + 22, chest + 23, 7), ItemMove::new(chest + 23, chest + 22, 4)]),
+        "sent a swap in one batch",
+    );
+    t.until("both sides of the swap", Duration::from_secs(3), |t| {
+        t.c().menu_slot(chest + 22).count == 4 && t.c().menu_slot(chest + 23).count == 7
+    })
+    .await?;
+    t.check_eq(t.slot(&at, 22).await?.0, "base:stick".into(), "the swap uses stacks from the start of the batch");
+    let main = t
+        .c()
+        .menu_group(INVENTORY_GROUP)
+        .ok_or("no player main slot group")?
+        .start;
+    t.check(
+        t.c()
+            .menu_move(window, &[ItemMove::new(chest + 22, main + 1, 1)]),
+        "sent a move from chest to player",
+    );
+    t.until("both inventories updated", Duration::from_secs(3), |t| {
+        t.c().menu_slot(chest + 22).count == 3 && t.c().menu_slot(main + 1).count == 3
+    })
+    .await?;
     t.c().menu_close();
     t.no_screen().await?;
     t.op(&format!("menu testmod:shelves {at}")).await?;

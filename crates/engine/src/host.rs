@@ -77,6 +77,8 @@ pub static HOST: Host = Host {
     inventory_get,
     inventory_set,
     inventory_insert,
+    inventory_move,
+    inventory_move_into,
     selected_slot,
 
     block_entity,
@@ -94,6 +96,7 @@ pub static HOST: Host = Host {
     recipe_consume,
     item_block,
     ui_open: crate::client::modui::ui_open,
+    ui_recipe: crate::client::modui::ui_recipe,
     ui_close: crate::client::modui::ui_close,
     ui_text: crate::client::modui::ui_text,
     client_player: crate::client::modui::client_player,
@@ -155,6 +158,8 @@ pub static HOST: Host = Host {
     client_light: crate::app::api::client_light,
     client_slot: crate::app::api::client_slot,
     client_menu: crate::app::api::client_menu,
+    client_menu_group: crate::app::api::client_menu_group,
+    client_menu_move: crate::app::api::client_menu_move,
     client_entities: crate::app::api::client_entities,
     client_ui_rect: crate::app::api::client_ui_rect,
     client_draw: crate::app::api::client_draw,
@@ -1171,6 +1176,17 @@ unsafe extern "C" fn inventory_insert(w: *mut abi::WorldCtx, h: *const abi::Hold
             None => stack,
         }
     }
+}
+
+unsafe extern "C" fn inventory_move(w: *mut abi::WorldCtx, moves: abi::Slice<abi::ItemMove<abi::InventorySlot>>) -> u32 {
+    if moves.len > abi::MAX_ITEM_MOVES {
+        return 0;
+    }
+    unsafe { crate::server::holder::move_items(dim(w), content(), moves.as_slice()) as u32 }
+}
+
+unsafe extern "C" fn inventory_move_into(w: *mut abi::WorldCtx, from: abi::InventorySlot, to: *const abi::Holder) -> u32 {
+    unsafe { crate::server::holder::move_into(dim(w), content(), from, *to, space_id(w)) }
 }
 
 unsafe extern "C" fn selected_slot(w: *mut abi::WorldCtx, player: u64) -> u32 {

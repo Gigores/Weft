@@ -18,6 +18,19 @@ pub mod codec;
 pub mod p2p;
 pub mod screens;
 
+impl Wire for weft_abi::ItemMove<u32> {
+    fn put(&self, w: &mut codec::W) {
+        self.from.put(w);
+        self.to.put(w);
+        self.count.put(w);
+    }
+
+    fn get(r: &mut codec::R) -> Option<Self> {
+        Some(Self::new(u32::get(r)?, u32::get(r)?, u32::get(r)?))
+    }
+}
+impl codec::Item for weft_abi::ItemMove<u32> {}
+
 /// An attack press handled by the held item without an entity target.
 pub const ITEM_ATTACK: u64 = 0;
 
@@ -534,6 +547,8 @@ messages! {
         Interact(u64),
         OpenInventory,
         Click { slot: u32, button: u8, shift: bool },
+        /// Apply one batch of exact-count moves to the menu that was open when it was made.
+        MenuMove { window: u32, moves: Vec<weft_abi::ItemMove<u32>> },
         /// Creative inventory: a full stack of this item onto the menu cursor.
         /// Click on a creative entry: 0 left (stack), 1 right (one), `menu::HOTBAR_SWAP + n` a
         /// number key (a stack into that hotbar slot).

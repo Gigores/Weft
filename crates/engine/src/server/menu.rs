@@ -312,14 +312,7 @@ pub fn close(m: OpenMenu, dim: &mut Dim, c: &'static Content, player: u64) {
 }
 
 fn fits(c: &Content, s: &SlotRef, item: u32) -> bool {
-    if s.flags & sf::LOCKED != 0 || (s.flags & sf::OFF_HAND != 0 && !crate::content::fits_one_hand(c, item)) {
-        return false;
-    }
-    // A stack holding items doesn't go into another one.
-    if matches!(s.owner, Owner::On(Inv { at: At::Stack { .. }, .. })) && holder::item_slots(c, item) > 0 {
-        return false;
-    }
-    s.group.accepts(item, c.item_fluid.contains_key(&item))
+    holder::fits(c, s.flags, matches!(s.owner, Owner::On(Inv { at: At::Stack { .. }, .. })), Some(s.group), item)
 }
 
 /// Most of `stack` slot `s` holds.
@@ -329,7 +322,93 @@ fn cap(c: &Content, s: &SlotRef, stack: &ItemStack) -> u32 {
 
 /// Whether a player may take items out of `s` by hand.
 fn takeable(s: &SlotRef) -> bool {
-    s.flags & (sf::INPUT | sf::LOCKED | sf::LIQUID) == 0
+    holder::takeable(s.flags)
+}
+
+fn live_slot(m: &OpenMenu, dim: &Dim, c: &Content, player: u64, slot: &SlotRef) -> bool {
+    let len = match slot.owner {
+        Owner::Temp => m.temp.len() as u32,
+        Owner::Player => holder::len(dim, c, Inv::own(At::Entity(player))),
+        Owner::On(inv) => holder::len(dim, c, inv),
+        Owner::Trash => 0,
+    };
+    slot.index < len
+}
+
+pub fn move_items(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, moves: &[abi::ItemMove<u32>]) -> bool {
+    let crafting_result = grid_of(c, m).map(|g| g.out);
+    let mut aliases = rustc_hash::FxHashMap::default();
+    let mut outputs = Vec::new();
+    for &abi::ItemMove { from, to, count } in moves {
+        let (Some(a), Some(b)) = (m.slots.get(from as usize), m.slots.get(to as usize)) else { return false };
+        if count == 0 || from == to {
+            continue;
+        }
+        let output = a.flags & sf::OUTPUT != 0;
+        if !takeable(a)
+            || crafting_result == Some(from)
+            || b.flags & (sf::OUTPUT | sf::LIQUID) != 0
+            || !live_slot(m, dim, c, player, a)
+            || !live_slot(m, dim, c, player, b)
+        {
+            return false;
+        }
+        for (index, slot) in [(from, a), (to, b)] {
+            if aliases
+                .insert((slot.owner.backing(player), slot.index), index)
+                .is_some_and(|prior| prior != index)
+            {
+                return false;
+            }
+        }
+        if output && !outputs.contains(&from) {
+            outputs.push(from);
+        }
+    }
+    if aliases.keys().any(|&(owner, _)| match owner {
+        Owner::On(inv) => inv
+            .carrier()
+            .is_some_and(|(parent, slot)| aliases.contains_key(&(Owner::On(parent).backing(player), slot))),
+        _ => false,
+    }) {
+        return false;
+    }
+    let Some(changes) = crate::stack::plan_moves(
+        moves,
+        |i| get(m, dim, player, i),
+        |i, stack| {
+            let slot = &m.slots[i as usize];
+            if fits(c, slot, stack.item) { cap(c, slot, &stack) } else { 0 }
+        },
+    ) else {
+        return false;
+    };
+    apply_slot_changes(m, dim, c, player, changes, outputs);
+    true
+}
+
+fn apply_slot_changes(
+    m: &mut OpenMenu,
+    dim: &mut Dim,
+    c: &'static Content,
+    player: u64,
+    mut changes: Vec<(u32, ItemStack)>,
+    outputs: Vec<u32>,
+) {
+    if changes.is_empty() {
+        return;
+    }
+    changes.sort_unstable_by_key(|&(i, _)| i);
+    for &(i, stack) in &changes {
+        set(m, dim, player, i, stack);
+    }
+    for slot in outputs {
+        took(m, dim, c, player, slot, 1);
+    }
+    show_craft(m, dim, c, player);
+    for (i, _) in changes {
+        call(m, dim, c, player, i, |d| d.on_change);
+    }
 }
 
 fn can_replace(c: &Content, s: &SlotRef, old: ItemStack, new: ItemStack) -> bool {
@@ -440,41 +519,46 @@ fn sort(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, slot:
     }
 }
 
-fn sort_group(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, mut slots: Vec<u32>) {
+fn sort_group(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: u64, slots: Vec<u32>) {
     let Some(&first) = slots.first() else { return };
+    if !slots
+        .iter()
+        .all(|&i| live_slot(m, dim, c, player, &m.slots[i as usize]))
+    {
+        return;
+    }
     let mut stacks: Vec<_> = slots
         .iter()
-        .map(|&i| get(m, dim, player, i))
-        .filter(|s| !s.is_empty())
+        .map(|&i| (i, get(m, dim, player, i)))
+        .filter(|(_, s)| !s.is_empty())
         .collect();
-    stacks.sort_by_key(|s| (s.item, s.data));
-    let mut packed = Vec::with_capacity(stacks.len());
-    for same in stacks.chunk_by(|a, b| (a.item, a.data) == (b.item, b.data)) {
-        let stack = same[0];
-        let limit = u64::from(cap(c, &m.slots[first as usize], &stack));
-        let mut count: u64 = same.iter().map(|s| u64::from(s.count)).sum();
-        // A mod may have lowered the limit since these stacks were stored.
-        if count.div_ceil(limit) > (slots.len() - packed.len()) as u64 {
+    stacks.sort_by_key(|(_, s)| (s.item, s.data));
+    let mut destinations = slots.into_iter();
+    let mut moves = Vec::new();
+    for same in stacks.chunk_by(|a, b| a.1.stacks_with(&b.1)) {
+        let limit = cap(c, &m.slots[first as usize], &same[0].1);
+        if limit == 0 {
             return;
         }
-        while count != 0 {
-            let n = count.min(limit);
-            packed.push(ItemStack { count: n as u32, ..stack });
-            count -= n;
+        let mut dst = 0;
+        let mut room = 0;
+        for &(src, stack) in same {
+            let mut left = stack.count;
+            while left != 0 {
+                if room == 0 {
+                    let Some(next) = destinations.next() else { return };
+                    dst = next;
+                    room = limit;
+                }
+                let count = left.min(room);
+                moves.push(abi::ItemMove::new(src, dst, count));
+                left -= count;
+                room -= count;
+            }
         }
     }
-    let mut packed = packed.into_iter();
-    slots.retain(|&i| {
-        let stack = packed.next().unwrap_or(ItemStack::EMPTY);
-        if get(m, dim, player, i) == stack {
-            return false;
-        }
-        set(m, dim, player, i, stack);
-        true
-    });
-    // Callbacks see the finished group.
-    for i in slots {
-        changed(m, dim, c, player, i);
+    if let Some(changes) = crate::stack::plan_moves(&moves, |i| get(m, dim, player, i), |i, stack| cap(c, &m.slots[i as usize], &stack)) {
+        apply_slot_changes(m, dim, c, player, changes, Vec::new());
     }
 }
 

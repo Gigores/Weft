@@ -423,6 +423,7 @@ mod tests {
             },
             ToServer::UseItem,
             ToServer::Click { slot: 7, button: 1, shift: true },
+            ToServer::MenuMove { window: 2, moves: vec![weft_abi::ItemMove::new(0, 1, 3), weft_abi::ItemMove::new(0, 2, 7)] },
             ToServer::Drag { slots: vec![3, 4, 9], button: 0 },
             ToServer::Chat("/give stone 5".into()),
             ToServer::Gizmos(vec!["regions".into(), "mymod:pipes".into()]),

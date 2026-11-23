@@ -115,9 +115,10 @@ fn creative_panel(ui: &mut Ui, cx: &BuildCx, search: &Rc<RefCell<String>>, tab: 
     });
 }
 
-/// The place name of every menu's screen (`Registry::screen_part`): its areas `side` (beside the
-/// menu) and `corner` (in the top right corner inside its panel).
+/// The place name shared by every menu screen.
 pub const MENUS: &str = "core:menus";
+
+const RECIPES: &str = "core:recipes";
 
 /// Whether mods add anything to these places (screen, area).
 fn has_parts(places: &[(&str, &str)]) -> bool {
@@ -128,6 +129,16 @@ fn has_parts(places: &[(&str, &str)]) -> bool {
             .iter()
             .any(|p| p.screen == *s && p.area == *a)
     })
+}
+
+fn side_parts(ui: &mut Ui, cx: &BuildCx, places: &[(&str, &str)]) {
+    if has_parts(places) {
+        ui.container(Style::default().gap(4.0), |ui| {
+            for &(screen, area) in places {
+                crate::screens::parts(ui, cx, screen, area);
+            }
+        });
+    }
 }
 
 /// The status effects shown and their levels.
@@ -224,6 +235,7 @@ impl Screen for MenuScreen {
                     effects_panel(ui, cx);
                 }
                 if let Some(def) = c.game.menus.get(self.kind as usize) {
+                    side_parts(ui, cx, &[(def.name.as_str(), "left"), (MENUS, "left")]);
                     if let Some((by, cb)) = def.screen {
                         let first = ui.nodes.len();
                         modui::build(ui, cx.lang, Some(cx.input), by, cb, cx.client);
@@ -255,15 +267,7 @@ impl Screen for MenuScreen {
                             }
                         }
                     }
-                    // What mods add beside a menu: this one's place, then every menu's.
-                    let places = [(def.name.as_str(), "side"), (MENUS, "side")];
-                    if has_parts(&places) {
-                        ui.container(Style::default().gap(4.0), |ui| {
-                            for (screen, area) in places {
-                                crate::screens::parts(ui, cx, screen, area);
-                            }
-                        });
-                    }
+                    side_parts(ui, cx, &[(def.name.as_str(), "side"), (MENUS, "side")]);
                 }
             });
         });
@@ -657,15 +661,19 @@ fn kind_icon(kind: &str) -> u32 {
 
 impl Screen for RecipeView {
     fn name(&self) -> &str {
-        "core:recipes"
+        RECIPES
     }
 
-    fn pointer(&mut self, _cursor: glam::Vec2, _ui: &mut Ui, ctx: &mut Ctx, _hud: &mut crate::hud::Hud) -> bool {
-        if ctx.input.scroll() == 0.0 {
+    fn pointer(&mut self, cursor: glam::Vec2, ui: &mut Ui, ctx: &mut Ctx, _hud: &mut crate::hud::Hud) -> bool {
+        let scroll = ctx.input.scroll();
+        if scroll == 0.0 {
             return false;
         }
-        let steps = ctx.input.scroll().abs().round().max(1.0) as isize;
-        Self::turn(&self.state, self.pages, -ctx.input.scroll().signum() as isize * steps, ctx);
+        if ui.scroll_at(cursor, scroll) {
+            return true;
+        }
+        let steps = scroll.abs().round().max(1.0) as isize;
+        Self::turn(&self.state, self.pages, -scroll.signum() as isize * steps, ctx);
         true
     }
 
@@ -690,7 +698,7 @@ impl Screen for RecipeView {
         self.pages = pages;
         self.state.set((tab, page));
         ui.root_style(Style::default().stretch());
-        ui.panel("overlay", Style::default().grow().center().pad(10.0).gap(6.0), |ui| {
+        let body = |ui: &mut Ui| {
             label(ui, cx, title, &args, "title");
             if found.is_empty() {
                 label(ui, cx, "recipes.none", &[], "dim");
@@ -717,7 +725,11 @@ impl Screen for RecipeView {
                 }
             });
             if let Some((kind, list)) = found.get(tab) {
-                let p = ui.panel("panel", Style::default().pad(7.0).gap(10.0).min_w(220.0), |ui| {
+                let mut style = Style::default().pad(7.0).gap(10.0).min_w(220.0);
+                if has_parts(&[(RECIPES, "entry")]) {
+                    style = Style { max_h: room, ..style.scroll() };
+                }
+                let p = ui.panel("panel", style, |ui| {
                     ui.container(Style::row().gap(4.0), |ui| {
                         for &station in content()
                             .game
@@ -753,8 +765,20 @@ impl Screen for RecipeView {
                 ui.set_id(next, "page_next");
                 ui.add(Kind::Container { class: None }, Style::default().w(12.0));
                 button(ui, cx, "recipes.tags", &[], 70.0, |c| c.requests.push(Request::Open(Box::new(TagList::default()))));
+                modui::parts(ui, cx.lang, Some(cx.input), cx.client, RECIPES, "buttons");
                 back_button(ui, cx, "menu.back", &[], 70.0, |c| c.requests.push(Request::Close));
             });
+        };
+        ui.panel("overlay", Style::default().grow().center().pad(10.0).gap(6.0), |ui| {
+            if has_parts(&[(RECIPES, "left"), (RECIPES, "side")]) {
+                ui.container(Style::row().gap(4.0).align(crate::ui::Align::Start), |ui| {
+                    side_parts(ui, cx, &[(RECIPES, "left")]);
+                    ui.container(Style::default().center().gap(6.0), body);
+                    side_parts(ui, cx, &[(RECIPES, "side")]);
+                });
+            } else {
+                body(ui);
+            }
         });
     }
 }
@@ -801,6 +825,7 @@ fn recipe_entry(ui: &mut Ui, cx: &BuildCx, kind: &str, index: usize) {
     if let Some((owner, cb)) = def.and_then(|d| d.display.map(|cb| (d.owner, cb))) {
         ui.container(Style::default().gap(2.0), |ui| {
             modui::build_recipe(ui, cx.lang, Some(cx.input), owner, cb, cx.client, kind, index as u32);
+            recipe_parts(ui, cx, kind, index);
         });
         return;
     }
@@ -838,7 +863,12 @@ fn recipe_entry(ui: &mut Ui, cx: &BuildCx, kind: &str, index: usize) {
             let args = info_args(d, r);
             label(ui, cx, d.info.as_deref().unwrap_or(""), &args, "dim");
         }
+        recipe_parts(ui, cx, kind, index);
     });
+}
+
+fn recipe_parts(ui: &mut Ui, cx: &BuildCx, kind: &str, index: usize) {
+    modui::parts_with_recipe(ui, cx.lang, Some(cx.input), cx.client, RECIPES, "entry", Some((kind, index as u32)));
 }
 
 /// The values a kind's info line asks for, from one recipe.

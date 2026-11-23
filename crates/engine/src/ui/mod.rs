@@ -1071,10 +1071,14 @@ impl Ui {
                 return;
             }
             let button = matches!(n.kind, Kind::Button { .. });
-            let interactive =
-                matches!(n.kind, Kind::Input { .. } | Kind::Slider(crate::ui::slider::Slider { enabled: true, .. }) | Kind::Custom { .. })
-                    || n.tooltip.is_some()
-                    || matches!(&n.kind, Kind::Text(t) if !t.layout.links.is_empty());
+            let interactive = matches!(
+                n.kind,
+                Kind::Input { .. }
+                    | Kind::Slider(crate::ui::slider::Slider { enabled: true, .. })
+                    | Kind::Custom { .. }
+                    | Kind::Item { .. }
+            ) || n.tooltip.is_some()
+                || matches!(&n.kind, Kind::Text(t) if !t.layout.links.is_empty());
             // What a button contains (labels, icons) is part of the button, but for another button.
             if (button || interactive && !in_button) && id != 0 {
                 *best = Some(id);
