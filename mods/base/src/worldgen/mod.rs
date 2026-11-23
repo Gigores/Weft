@@ -193,6 +193,19 @@ pub fn register(r: &mut Registry) {
         .set(&SHORT_DRYGRASS_COVER, 0.2)
         .set(&DRY_FERN_COVER, 0.21)
         .tag("hot");
+    r.biome(&GRASSY_DESERT)
+        .temperature(0.1..)
+        .humidity(..0.1)
+        .surface("sand", "sand", 3)
+        .under("sandstone", 1)
+        .tint(grass, 0xbfb755)
+        .tint(foliage, 0xaea42a)
+        .set(&GLOBULAR_CACTI_COVER, 0.01)
+        .set(&COLUMNAR_CACTI_COVER, 0.005)
+        .set(&DRYGRASS_COVER, 0.3)
+        .set(&TALL_GRASS_COVER, 0.375)
+        .set(&DRY_FERN_COVER, 0.21)
+        .tag("hot");
     r.biome(&DUNES)
         .temperature(0.33..)
         .humidity(..0.1)
@@ -445,6 +458,14 @@ pub fn register(r: &mut Registry) {
                 .humidity(..)
                 .field("base:surface_temperature", 0.15..)
                 .field("base:surface_humidity", ..0.1),
+        )
+        .rule(
+            BiomeRule::new("grassy_desert")
+                .temperature(..)
+                .humidity(..)
+                .field("base:surface_temperature", 0.15..)
+                .field("base:surface_humidity", ..0.2)
+                .field("base:weirdness", ..0.6),
         )
         .rule(
             BiomeRule::new("plains")
