@@ -18,6 +18,7 @@ pub static DRYGRASS_COVER: Component<f32> = Component::named("drygrass");
 pub static SHORT_DRYGRASS_COVER: Component<f32> = Component::named("short_drygrass");
 pub static GLOBULAR_CACTI_COVER: Component<f32> = Component::named("globular_cacti_cover");
 pub static COLUMNAR_CACTI_COVER: Component<f32> = Component::named("columnar_cacti_cover");
+pub static DRY_FERN_COVER: Component<f32> = Component::named("dry_fern");
 /// Flowers a biome grows, picked evenly (`"base:dandelion base:rose"` where unset).
 pub static FLOWERS: Component<BlockList> = Component::named("flowers");
 pub static FROZEN: Tag = Tag::named("frozen");

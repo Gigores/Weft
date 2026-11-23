@@ -37,6 +37,8 @@ fn soil_plant(seed: u64, x: i32, z: i32, b: u32, h: u64, roll: f64) -> u32 {
         TALL_TALL_GRASS.id()
     } else if roll < GRASS_COVER.on_biome(b).unwrap_or(0.0) as f64 {
         TALL_GRASS.id()
+    } else if roll < DRY_FERN_COVER.on_biome(b).unwrap_or(0.0) as f64 {
+        BUSH_STEM.id()
     } else {
         0
     }

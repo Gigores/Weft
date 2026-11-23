@@ -191,9 +191,10 @@ pub fn register(r: &mut Registry) {
         .set(&COLUMNAR_CACTI_COVER, 0.005)
         .set(&SHORT_GRASS_COVER, 0.05)
         .set(&SHORT_DRYGRASS_COVER, 0.2)
+        .set(&DRY_FERN_COVER, 0.21)
         .tag("hot");
     r.biome(&DUNES)
-        .temperature(0.30..)
+        .temperature(0.33..)
         .humidity(..0.1)
         .surface("sand", "sand", 3)
         .under("sandstone", 1)
@@ -435,7 +436,7 @@ pub fn register(r: &mut Registry) {
             BiomeRule::new("dunes")
                 .temperature(..)
                 .humidity(..)
-                .field("base:surface_temperature", 0.25..)
+                .field("base:surface_temperature", 0.28..)
                 .field("base:surface_humidity", ..0.1),
         )
         .rule(
