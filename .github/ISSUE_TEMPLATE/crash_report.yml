@@ -1,0 +1,88 @@
+name: Crash report
+description: Weft closes unexpectedly or fails to start.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One crash per issue.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What were you doing when Weft crashed? Include any error message you saw.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproducing
+      description: If you can reproduce the crash, list the steps here.
+
+  - type: textarea
+    id: shots
+    attributes:
+      label: Screenshots or video
+      description: Drag them in here.
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Crash report and log
+      description: |
+        Attach the newest file in `crash-reports/` and `logs/latest.log` from the crashed session, if available. Both are in the game's data folder (`run/` when built from source). See the README for release builds.
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: Build
+      options:
+        - A release
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 26.11.3, or a commit hash
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: OS and GPU
+      placeholder: Windows 11, RTX 3060
+    validations:
+      required: true
+
+  - type: dropdown
+    id: renderer
+    attributes:
+      label: Renderer
+      description: The Renderer setting, or `--renderer`. If you tried both, select Both only if both crashed.
+      options:
+        - Vulkan
+        - wgpu
+        - Both
+        - Don't know
+
+  - type: textarea
+    id: mods
+    attributes:
+      label: Mods and packs
+      description: Anything besides the base game, and resource or shader packs that were on.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I saw the crash myself
+          required: true
+        - label: I looked for an open issue about it
+          required: true
