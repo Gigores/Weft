@@ -106,8 +106,10 @@ pub fn decorate(g: &mut Gen) {
                 let columnar_cactus_cover = COLUMNAR_CACTI_COVER.on_biome(b).unwrap_or(0.0) as f64;
                 if roll < columnar_cactus_cover && y + 3 < 16 {
                     let n = 2 + (h >> 40) % 3;
-                    for k in 0..n as usize {
-                        g.set(x, y + k, z, CACTUS.id());
+                    let mut y = y;
+                    for _ in 0..n as usize {
+                        g.set(x, y, z, CACTUS.id());
+                        y += 1;
                     }
                     continue;
                 } else if roll < cactus_cover {
