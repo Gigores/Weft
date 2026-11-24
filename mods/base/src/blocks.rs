@@ -156,6 +156,7 @@ pub fn register(r: &mut Registry) {
             "base:birch_planks",
             "base:spruce_planks",
             "base:palm_planks",
+            "base:acacia_planks",
         ],
     );
     r.stairs("#has_shapes").tab(&crate::tabs::BUILDING);
@@ -323,10 +324,12 @@ pub fn register(r: &mut Registry) {
     log(r, &BIRCH_LOG, "birch", false);
     log(r, &SPRUCE_LOG, "spruce", false);
     log(r, &PALM_LOG, "palm", false);
+    log(r, &ACACIA_LOG, "acacia", false);
     log(r, &OAK_WOOD, "oak", true);
     log(r, &BIRCH_WOOD, "birch", true);
     log(r, &SPRUCE_WOOD, "spruce", true);
     log(r, &PALM_WOOD, "palm", true);
+    log(r, &ACACIA_WOOD, "acacia", true);
     r.shapes_of("hollow_log", "#logs", "_hollow")
         .sound_group("wood")
         .model_file("hollow_log")
@@ -347,7 +350,7 @@ pub fn register(r: &mut Registry) {
         .signal_blocker()
         .mined_by("shears", tool_tier::HAND)
         .tab(&crate::tabs::NATURAL);
-    for (h, wood) in [(&OAK_PLANKS, "oak"), (&BIRCH_PLANKS, "birch"), (&SPRUCE_PLANKS, "spruce"), (&PALM_PLANKS, "palm")] {
+    for (h, wood) in [(&OAK_PLANKS, "oak"), (&BIRCH_PLANKS, "birch"), (&SPRUCE_PLANKS, "spruce"), (&PALM_PLANKS, "palm"), (&ACACIA_PLANKS, "acacia")] {
         r.block(h)
             .sound_group("wood")
             .texture(&format!("planks_{wood}"))
@@ -368,6 +371,7 @@ pub fn register(r: &mut Registry) {
     leaves(r, &SPRUCE_LEAVES, "leaves_spruce", true);
     leaves(r, &PALM_LEAVES, "leaves_palm", true);
     leaves(r, &BUSH_LEAVES, "raspberry_leaves", false);
+    leaves(r, &ACACIA_LEAVES, "leaves_acacia", true);
     berry_leaves(r, &RASPBERRY_LEAVES, "raspberry_leaves", "raspberry_leaves_berried", &crate::items::RASPBERRY);
     berry_leaves(r, &SNOWBERRY_LEAVES, "raspberry_leaves", "snowberry_leaves_berried", &crate::items::SNOWBERRY);
     // Vanilla numbers: water steps every 5 ticks and reaches 7 blocks, lava every 30 and 3.

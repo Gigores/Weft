@@ -224,6 +224,8 @@ pub fn register(r: &mut Registry) {
         .set(&GLOBULAR_CACTI_COVER, 0.01)
         .set(&COLUMNAR_CACTI_COVER, 0.005)
         .set(&TALL_GRASS_COVER, 0.375)
+        .set(&TREES, 0.025)
+        .set(&TREE_KINDS, TreeKinds::from([("base:oak", 1)]))
         .tag("hot");
     r.biome(&MOUNTAINS)
         .surface("grass", "dirt", 3)
@@ -522,9 +524,9 @@ pub fn register(r: &mut Registry) {
         .density(&TREES)
         .ground("#tree_soil")
         .plan(|s| {
-            if COARSE_DIRT.is(s.read(s.pos().below())) {
-                return;
-            }
+            // if COARSE_DIRT.is(s.read(s.pos().below())) {
+            //     return;
+            // }
             let kinds = TREE_KINDS.on_biome(s.biome());
             let mut rng = Rng(s.random());
             // Biomes that ask for trees without naming kinds grow oaks, as they always did.
