@@ -1,6 +1,6 @@
 name: Crash report
 description: Weft closes unexpectedly or fails to start.
-labels: [bug]
+labels: [crash]
 body:
   - type: markdown
     attributes:
