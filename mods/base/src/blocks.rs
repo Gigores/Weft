@@ -517,6 +517,15 @@ pub fn register(r: &mut Registry) {
             .when(Cond::tool("#tools/shears"))
             .item(LAVENDER.name()),
     );
+    r.block(&CACTUS_FLOWER)
+        .grid_placement()
+        .sound_group("grass")
+        .shares_cell_with("#water")
+        .hardness(0.1)
+        .needs_below("cactus")
+        .tab(&crate::tabs::NATURAL)
+        .not_solid()
+        .hitbox([2.0, 0.0, 2.0], [14.0, 16.0, 14.0]);
     r.block(&CLOVER)
         .sound_group("grass")
         .needs_below("#plant_soil")

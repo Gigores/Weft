@@ -114,3 +114,4 @@ pub static MUSHROOMS: [&Block; 3] = [&PORCINI_MUSHROOM, &CHANTERELLE_MUSHROOM, &
 pub static COCONUT: Block = Block::named("base:coconut");
 pub static DRYGRASS: Block = Block::named("base:drygrass");
 pub static SHORT_DRYGRASS: Block = Block::named("base:short_drygrass");
+pub static CACTUS_FLOWER: Block = Block::named("base:cactus_flower");
