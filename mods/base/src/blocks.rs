@@ -526,6 +526,11 @@ pub fn register(r: &mut Registry) {
         .tab(&crate::tabs::NATURAL)
         .not_solid()
         .hitbox([2.0, 0.0, 2.0], [14.0, 16.0, 14.0]);
+    r.loot(&CACTUS_FLOWER).pool(
+        Pool::new()
+            .when(Cond::tool("#tools/shears"))
+            .item(CACTUS_FLOWER.name()),
+    );
     r.block(&CLOVER)
         .sound_group("grass")
         .needs_below("#plant_soil")
