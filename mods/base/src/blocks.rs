@@ -857,6 +857,26 @@ pub fn register(r: &mut Registry) {
         })
         .hardness(0.2)
         .tab(&crate::tabs::NATURAL);
+    r.block(&PRICKLY_PEAR)
+        .sound_group("cloth")
+        .model_box_faces(
+            [4.0, 0.0, 4.0],
+            [12.0, 11.0, 12.0],
+            [
+                ("opuntia", [0.0, 0.0, 8.0, 10.0]),
+                ("opuntia", [0.0, 0.0, 8.0, 10.0]),
+                ("opuntia", [8.0, 0.0, 16.0, 8.0]),
+                ("opuntia", [8.0, 8.0, 16.0, 16.0]),
+                ("opuntia", [0.0, 0.0, 8.0, 10.0]),
+                ("opuntia", [0.0, 0.0, 8.0, 10.0]),
+            ])
+        .hitbox(
+            [4.0, 0.0, 4.0],
+            [12.0, 11.0, 12.0],
+        )
+        .needs_below("")
+        .hardness(0.2)
+        .tab(&crate::tabs::FOOD);
     let shears = Cond::tool("#tools/shears");
     for (grass, chance) in
         [(&TALL_GRASS, 0.125), (&SHORT_GRASS, 0.125), (&BLUEGRASS, 0.125), (&CLOVER, 0.125), (&FERN, 0.125), (&TALL_TALL_GRASS, 0.25), (&DRYGRASS, 0.062)]

@@ -154,6 +154,10 @@ pub fn register(r: &mut Registry) {
         })
         .remainder(&COCONUT_SHELL)
         .tab(&crate::tabs::FOOD);
+    r.edit(&PRICKLY_PEAR_ITEM)
+        .texture("opuntia")
+        .food(Food { hunger: 3, saturation: 1.5 })
+        .on_use(base_api::components::eat);
     r.item(&COCONUT_SHELL)
         .tab(&crate::tabs::INGREDIENTS);
     r.edit(&COCONUT_ITEM)

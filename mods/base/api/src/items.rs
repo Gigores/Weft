@@ -27,3 +27,4 @@ pub static GRAB_TOOL: Item = Item::named("base:grab_tool");
 pub static COCONUT_ITEM: Item = Item::named("base:coconut");
 pub static COCONUT_HALF: Item = Item::named("base:coconut_half");
 pub static COCONUT_SHELL: Item = Item::named("base:coconut_shell");
+pub static PRICKLY_PEAR_ITEM: Item = Item::named("base:prickly_pear");

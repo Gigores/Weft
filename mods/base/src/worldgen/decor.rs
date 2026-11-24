@@ -114,6 +114,9 @@ pub fn decorate(g: &mut Gen) {
                     continue;
                 } else if roll < cactus_cover {
                     g.set(x, y, z, CACTUS.id());
+                    if (h >> 50) % 4 == 1 {
+                        g.set(x, y + 1, z, CACTUS_FLOWER.id());
+                    }
                     continue;
                 }
             }

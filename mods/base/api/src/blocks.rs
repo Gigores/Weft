@@ -115,3 +115,4 @@ pub static COCONUT: Block = Block::named("base:coconut");
 pub static DRYGRASS: Block = Block::named("base:drygrass");
 pub static SHORT_DRYGRASS: Block = Block::named("base:short_drygrass");
 pub static CACTUS_FLOWER: Block = Block::named("base:cactus_flower");
+pub static PRICKLY_PEAR: Block = Block::named("base:prickly_pear");
