@@ -111,13 +111,13 @@ pub fn decorate(g: &mut Gen) {
                         g.set(x, y + dy, z, CACTUS.id());
                         dy += 1;
                     }
-                    if dy >= 4 && (h >> 50) % 6 == 1 {
+                    if dy >= 4 && (h >> 50) % 6 == 1 && y + dy < 16 {
                         g.set(x, y + dy, z, PRICKLY_PEAR.id());
                     }
                     continue;
                 } else if roll < cactus_cover {
                     g.set(x, y, z, CACTUS.id());
-                    if (h >> 50) % 4 == 1 {
+                    if y + 1 < 16 && (h >> 50) % 4 == 1 {
                         g.set(x, y + 1, z, CACTUS_FLOWER.id());
                     }
                     continue;
