@@ -225,7 +225,7 @@ pub fn register(r: &mut Registry) {
         .set(&COLUMNAR_CACTI_COVER, 0.005)
         .set(&TALL_GRASS_COVER, 0.375)
         .set(&TREES, 0.025)
-        .set(&TREE_KINDS, TreeKinds::from([("base:oak", 1)]))
+        .set(&TREE_KINDS, TreeKinds::from([("base:oak", 1), ("base:acacia", 3)]))
         .tag("hot");
     r.biome(&MOUNTAINS)
         .surface("grass", "dirt", 3)

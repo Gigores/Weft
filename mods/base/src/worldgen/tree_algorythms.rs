@@ -12,7 +12,7 @@ use weft_sdk::noise::*;
 
 struct TreeSkeleton {
     height: i32,
-    top: (i32, i32, i32),
+    top: Option<(i32, i32, i32)>,
     bottom: (i32, i32, i32),
     branch_tips: Vec<(i32, i32, i32)>,
 }
@@ -156,7 +156,7 @@ fn place_trunk(
     }
 
     let offset = lean.offset_at(height as i32 - 1);
-    TreeSkeleton { height: top - y, top: (x + offset.0 as i32, top, z + offset.1 as i32), bottom: (x, y, z), branch_tips }
+    TreeSkeleton { height: top - y, top: Some((x + offset.0 as i32, top, z + offset.1 as i32)), bottom: (x, y, z), branch_tips }
 }
 fn place_cone_foliage(d: &mut TreePlaceData, height: u16, leaves: u32) {
     let (x, y, z) = d.pos;
@@ -172,7 +172,7 @@ fn place_cone_foliage(d: &mut TreePlaceData, height: u16, leaves: u32) {
         }
     }
 }
-fn place_foliage(skeleton: &TreeSkeleton, d: &mut TreePlaceData, _height: u16, leaves: u32) {
+fn place_foliage(skeleton: &TreeSkeleton, d: &mut TreePlaceData, _height: u16, leaves: u32, branch_leaves_base: (f32, f32)) {
     fn leaf_kept(rx: f32, ry: f32, rz: f32, dx: i32, dy: i32, dz: i32, wx: i32, wy: i32, wz: i32, salt: u64) -> bool {
         let q = (dx as f32 / rx).powi(2) + (dy as f32 / ry).powi(2) + (dz as f32 / rz).powi(2);
         if q > 1.0 {
@@ -190,22 +190,10 @@ fn place_foliage(skeleton: &TreeSkeleton, d: &mut TreePlaceData, _height: u16, l
         let coarse = unit(hash(salt ^ 0xBEEF, (wx / 2) as i64, (wy / 2) as i64, (wz / 2) as i64)) as f32;
         fine < keep || coarse < 0.20
     }
-    let (x, y, z) = skeleton.top;
-    let rx = skeleton.height as f32 * 0.66 + d.rng.float() - 0.5;
-    let ry = rx * 0.75;
-    let rz = rx;
-    let salt = hash(0x1EAF, x as i64, y as i64, z as i64);
-    for (dx, dy, dz) in sphere(rx) {
-        let bx = x + dx;
-        let by = y + dy;
-        let bz = z + dz;
-        if leaf_kept(rx, ry, rz, dx, dy, dz, bx, by, bz, salt) {
-            (d.place)(bx, by, bz, leaves, false);
-        }
-    }
     for (x, y, z) in &skeleton.branch_tips {
-        let rx = 2.0 + d.rng.float();
-        let ry = rx * 0.75;
+        let salt = hash(0x1EAF, *x as i64, *y as i64, *z as i64);
+        let rx = branch_leaves_base.0 + d.rng.float();
+        let ry = rx * branch_leaves_base.1;
         let rz = rx;
         for (dx, dy, dz) in sphere(rx) {
             let bx = x + dx;
@@ -214,6 +202,19 @@ fn place_foliage(skeleton: &TreeSkeleton, d: &mut TreePlaceData, _height: u16, l
             if leaf_kept(rx, ry, rz, dx, dy, dz, bx, by, bz, salt) {
                 (d.place)(bx, by, bz, leaves, false);
             }
+        }
+    }
+    let Some((x, y, z)) = skeleton.top else { return };
+    let salt = hash(0x1EAF, x as i64, y as i64, z as i64);
+    let rx = skeleton.height as f32 * 0.66 + d.rng.float() - 0.5;
+    let ry = rx * 0.75;
+    let rz = rx;
+    for (dx, dy, dz) in sphere(rx) {
+        let bx = x + dx;
+        let by = y + dy;
+        let bz = z + dz;
+        if leaf_kept(rx, ry, rz, dx, dy, dz, bx, by, bz, salt) {
+            (d.place)(bx, by, bz, leaves, false);
         }
     }
 }
@@ -227,7 +228,8 @@ fn moss_on_side(side: Dir) -> u32 {
 /// Doesnt work with leaned trunks
 fn decorate_trunk(skeleton: &TreeSkeleton, d: &mut TreePlaceData) {
     let mossy = d.rng.float() < 0.25;
-    for y in skeleton.bottom.1..skeleton.top.1 {
+    let Some((_, y, _)) = skeleton.top else { return };
+    for y in skeleton.bottom.1..y {
         if d.rng.float() >= 0.5 {
             continue;
         }
@@ -370,7 +372,7 @@ fn place_oak_impl(data: &mut TreePlaceData, allow_stump: bool) {
         return;
     }
     let skeleton = place_trunk(data, height, LOG, WOOD, true, ALLOW_ROOTS, TrunkLean::no_lurch());
-    place_foliage(&skeleton, data, height, OAK_LEAVES.id());
+    place_foliage(&skeleton, data, height, OAK_LEAVES.id(), (2.0, 0.75));
     decorate_trunk(&skeleton, data);
 }
 fn place_oak(data: &mut TreePlaceData) {
@@ -387,7 +389,7 @@ fn place_birch(data: &mut TreePlaceData) {
         return;
     }
     let skeleton = place_trunk(data, height, LOG, WOOD, true, ALLOW_ROOTS, TrunkLean::no_lurch());
-    place_foliage(&skeleton, data, height, BIRCH_LEAVES.id());
+    place_foliage(&skeleton, data, height, BIRCH_LEAVES.id(), (2.0, 0.75));
     decorate_trunk(&skeleton, data);
 }
 fn place_spruce(data: &mut TreePlaceData) {
@@ -397,7 +399,7 @@ fn place_spruce(data: &mut TreePlaceData) {
 }
 fn place_palm_foliage(d: &mut TreePlaceData, skeleton: &TreeSkeleton) {
     const FRONDS: [(i32, i32); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
-    let (x, mut y, z) = skeleton.top;
+    let Some((x, mut y, z)) = skeleton.top else { return };
     y -= 1;
     let leaves = PALM_LEAVES.id();
     (d.place)(x, y + 1, z, leaves, false);
@@ -416,7 +418,7 @@ fn place_palm_foliage(d: &mut TreePlaceData, skeleton: &TreeSkeleton) {
     }
 }
 fn place_palm_coconuts(d: &mut TreePlaceData, skeleton: &TreeSkeleton) {
-    let (x, mut y, z) = skeleton.top;
+    let Some((x, mut y, z)) = skeleton.top else { return };
     y -= 1;
     for (dx, dz, dir) in DIRECTIONS {
         if d.rng.float() >= 0.333 { continue }
@@ -430,11 +432,50 @@ fn place_palm(data: &mut TreePlaceData) {
     place_palm_foliage(data, &skeleton);
     place_palm_coconuts(data, &skeleton);
 }
+fn place_trunk_branchy(d: &mut TreePlaceData, height: u16, log_block: &Block, wood_block: &Block, allow_roots: bool) -> TreeSkeleton {
+    let (x, y, z) = d.pos;
+    let log = log_block.id();
+    let mut branch_tips: Vec<(i32, i32, i32)> = Vec::new();
+    let (mut dx, mut dz) = (0, 0);
+    let place_branch = |d: &mut TreePlaceData, branch_tips: &mut Vec<(i32, i32, i32)>, x: i32, y: i32, z: i32, length: i32| {
+        let (dx, dz, _) = random_direction(&mut d.rng);
+        for dy in 0..length {
+            (d.place)(x + dx * dy, y + dy, z + dz * dy, log, true);
+        }
+        branch_tips.push((x + dx * length, y + length, z + dz * length));
+    };
+    let mut moved = false;
+    for dy in 0..(height as i32 - 3) {
+        let (bx, by, bz) = (x + dx, y + dy, z + dz);
+        (d.place)(bx, by, bz, log, true);
+        if dy >= height as i32 / 3 {
+            if d.rng.float() < 0.3 {
+                place_branch(d, &mut branch_tips, bx, by, bz, height as i32 - dy - 1);
+            } else if !moved && d.rng.float() < 0.2 {
+                let mv = random_direction(&mut d.rng);
+                dx += mv.0;
+                dz += mv.1;
+                moved = true;
+            }
+        }
+    }
+    place_branch(d, &mut branch_tips, x, y + height as i32 - 3, z, 3);
+    if allow_roots {
+        place_roots(d, log_block, wood_block);
+    }
+    TreeSkeleton { height: height as i32, top: None, bottom: d.pos, branch_tips }
+}
+fn place_acacia(data: &mut TreePlaceData) {
+    let height = 6u16 + (data.rng.next() as u16) % 4u16;
+    let skeleton = place_trunk_branchy(data, height, &ACACIA_LOG, &ACACIA_WOOD, true);
+    place_foliage(&skeleton, data, height, ACACIA_LEAVES.id(), (4.0, 0.4));
+}
 pub fn register() {
     register_tree("base:oak", place_oak);
     register_tree("base:birch", place_birch);
     register_tree("base:spruce", place_spruce);
     register_tree("base:palm", place_palm);
+    register_tree("base:acacia", place_acacia);
 }
 /// Places a tree into a live world (saplings). Checks for room first.
 pub fn grow_tree(w: World, p: [i32; 3]) {
