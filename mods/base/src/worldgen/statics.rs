@@ -41,6 +41,7 @@ pub static BEACH: Biome = Biome::named("beach");
 pub static DEEP_CAVES: Biome = Biome::named("deep_caves");
 pub static DUNES: Biome = Biome::named("dunes");
 pub static GRASSY_DESERT: Biome = Biome::named("grassy_desert");
+pub static SEMIDESERT: Biome = Biome::named("semidesert");
 
 pub static PLANT_SOIL: Tag = Tag::named("plant_soil");
 pub static CACTUS_SOIL: Tag = Tag::named("cactus_soil");

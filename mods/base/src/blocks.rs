@@ -908,7 +908,7 @@ pub fn register(r: &mut Registry) {
     r.tag("sugar_cane_soil", &["#sand"]);
     r.tag("sugar_cane_soil", &["sugar_cane"]);
     r.tag("cactus_soil", &["#sand"]);
-    r.tag("cactus_soil", &["cactus"]);
+    r.tag("cactus_soil", &["cactus", "coarse_dirt"]);
     r.tag("crop_soil", &["farmland"]);
     r.tag("grass_spreads_to", &["dirt"]);
     r.tag("animal_spawn", &["grass"]);

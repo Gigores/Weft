@@ -214,6 +214,17 @@ pub fn register(r: &mut Registry) {
         .tint(grass, 0xbfb755)
         .tint(foliage, 0xaea42a)
         .tag("hot");
+    r.biome(&SEMIDESERT)
+        .temperature(0.1..)
+        .humidity(..0.1)
+        .surface("coarse_dirt", "coarse_dirt", 4)
+        .under("dirt", 1)
+        .tint(grass, 0xbfb755)
+        .tint(foliage, 0xaea42a)
+        .set(&GLOBULAR_CACTI_COVER, 0.01)
+        .set(&COLUMNAR_CACTI_COVER, 0.005)
+        .set(&TALL_GRASS_COVER, 0.375)
+        .tag("hot");
     r.biome(&MOUNTAINS)
         .surface("grass", "dirt", 3)
         .tint(grass, 0x8ab689)
@@ -466,6 +477,11 @@ pub fn register(r: &mut Registry) {
                 .field("base:surface_temperature", 0.15..)
                 .field("base:surface_humidity", ..0.2)
                 .field("base:weirdness", ..0.6),
+        )
+        .rule(
+            BiomeRule::new("semidesert")
+                .field("base:surface_temperature", 0.0..)
+                .field("base:surface_humidity", ..0.3)
         )
         .rule(
             BiomeRule::new("plains")
