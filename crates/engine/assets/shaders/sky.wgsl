@@ -134,8 +134,7 @@ fn atmosphere_limit(dir: vec3<f32>, depth: f32) -> f32 {
     let slope = (scene.view_proj * vec4(dir, 0.0)).w;
     // Infinite reverse Z, with the optional translation from camera bobbing.
     let at_origin = scene.view_proj[3];
-    let limit = (at_origin.z - depth * at_origin.w) / max(depth * slope, 1e-8);
-    return select(limit, min(limit, scene.params.y), scene.environment.w >= 1.0);
+    return (at_origin.z - depth * at_origin.w) / max(depth * slope, 1e-8);
 }
 
 fn atmosphere_at(s: Sky, dir: vec3<f32>, depth: f32, pixel: vec2<f32>) -> vec4<f32> {
@@ -149,7 +148,7 @@ fn vs_atmosphere(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u3
     let s = sky[ii];
     let slab = max(0.0, max(s.extra.z, -s.extra.z - s.extra.y));
     let wet = max(s.axes[0].w, s.axes[1].w) > 0.0;
-    let closest = select(slab, min(36.0, slab), wet);
+    let closest = select(slab, min(RAIN_NEAR, slab), wet);
     // Use the smallest forward component over the viewport, so the depth test can
     // reject opaque geometry only when it is in front of every possible effect.
     let m = mat(sky[0]);
@@ -295,9 +294,8 @@ fn cache_rain_media(@builtin(global_invocation_id) id: vec3<u32>) {
     let s = scene.cloud;
     let reach = min(1536.0, scene.environment.z);
     let ceiling = rain_ceiling(s);
-    var enter = 36.0;
-    var leave = select(reach, min(reach, scene.params.y), scene.environment.w >= 1.0);
-    leave = rain_visible_range(p, size, leave);
+    var enter = RAIN_NEAR;
+    var leave = rain_visible_range(p, size, reach);
     if dir.y > 0.0 {
         leave = min(leave, ceiling / dir.y);
     } else if dir.y < 0.0 {
@@ -431,15 +429,12 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         dir = mat(sky[0]) * in.at;
     }
     dir = normalize(dir);
-    let mist = scene.environment.w;
     if s.ids.y == SKY_GRADIENT {
-        let c = gradient(dir, s);
-        return vec4(mix(c.rgb, scene.fog_color.rgb * c.a, mist), c.a);
+        return gradient(dir, s);
     }
     if s.ids.y == SKY_GLOW {
         let c = glow(dir, s);
-        let a = c.a * (1.0 - mist);
-        return vec4(c.rgb * a, a);
+        return vec4(c.rgb * c.a, c.a);
     }
     let local = dir * mat(s);
     var uv = in.uv;
@@ -453,6 +448,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         albedo = textureSampleLevel(textures[s.ids.x], nearest_clamp, uv, 0.0);
     }
     let c = sky_shade(s.ids.z, SkyPixel(dir, local, uv, albedo, vec4(s.color.rgb, 1.0), scene.params.z, scene.params.w));
-    let a = c.a * s.color.a * (1.0 - mist);
+    let a = c.a * s.color.a;
     return vec4(c.rgb * a, select(a, 0.0, s.ids.w != 0u));
 }

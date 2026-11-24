@@ -367,10 +367,9 @@ fn through_world_atmosphere(color: vec4<f32>, rel: vec3<f32>, pixel: vec2<f32>) 
     if scene.atmosphere_extent.x != 0u {
         let dist = length(rel);
         let dir = rel / max(dist, 0.000001);
-        let limit = select(dist, min(dist, scene.params.y), scene.environment.w >= 1.0);
         let s = scene.cloud;
-        let exact_cloud = trace_cloud(s, dir, limit, scene);
-        let resolved = resolve_rain(s, dir, limit, exact_cloud, scene, pixel);
+        let exact_cloud = trace_cloud(s, dir, dist, scene);
+        let resolved = resolve_rain(s, dir, dist, exact_cloud, scene, pixel);
         return vec4(resolved.rgb + color.rgb * (1.0 - resolved.a), color.a);
     }
     return through_cloud(color, rel, scene);

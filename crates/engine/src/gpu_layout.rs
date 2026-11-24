@@ -637,7 +637,7 @@ gpu_struct! {
         /// dimension without sky light). For shader packs' shadows; follows the day, whatever
         /// bodies mods put in the sky.
         pub sun: [f32; 4],
-        /// x solar sky-light multiplier, yz cloud fog start/end in blocks, w local rain mist.
+        /// x solar sky-light multiplier, yz cloud fog start/end in blocks, w reserved.
         pub environment: [f32; 4],
         /// The cloud layer visible this frame, with zero opacity when absent.
         pub cloud: GpuSky,

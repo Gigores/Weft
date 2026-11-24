@@ -14,8 +14,6 @@ use weft_abi::{
     environment::{EnvironmentLayer as Layer, EnvironmentOverlay as Overlay, EnvironmentValues as Values},
 };
 
-const RAIN_MIST: &str = "core:rain_mist";
-
 #[derive(Default)]
 pub struct Environment {
     pub local: FxHashMap<String, Layer>,
@@ -28,7 +26,6 @@ pub struct Environment {
     pub overlays: Vec<sky::Overlay>,
     pub post: Vec<(String, f32)>,
     pub sky: FxHashMap<String, f32>,
-    pub(super) rain_mist: f32,
 }
 
 struct Active {
@@ -218,32 +215,6 @@ impl Client {
         weather.values.cloud_dark = self.look.cloud_dark;
         env.contribute("weather".into(), weather, 1.0);
 
-        let preset = &c.game.weathers[self.weather_id as usize];
-        if preset.falls() && preset.look.falls > 0.0 {
-            let eye = cam.pos.floor().as_ivec3();
-            let precipitation = self
-                .world
-                .biome_at(eye)
-                .and_then(|biome| c.biome_precipitation.get(biome as usize))
-                .copied()
-                .unwrap_or(0);
-            let outside = self
-                .world
-                .light_loaded(eye)
-                .is_some_and(|light| abi::light::sky(light) == 15);
-            if outside && c.game.precipitations[precipitation as usize].name == "core:rain" {
-                let mut mist = Layer::new(RAIN_MIST.into());
-                mist.priority = -890;
-                mist.fade_in = 1.5;
-                mist.fade_out = 2.5;
-                let distance: f32 = if preset.lightning() { 110.0 } else { 170.0 };
-                mist.values.fog_end = distance.min(view_distance);
-                mist.values.fog_start = mist.values.fog_end * 0.12;
-                let gray = fog.dot(Vec3::new(0.30, 0.59, 0.11));
-                mist.values.fog_color = fog.lerp(Vec3::splat(gray), 0.8).powf(2.2).to_array();
-                env.contribute(RAIN_MIST.into(), mist, 1.0);
-            }
-        }
         let weather_layers = env.layers(c, abi::entry_kind::WEATHER as usize, self.weather_id as u32);
         self.environment_layers(&mut env, &weather_layers, "weather-data", 0, cam.pos);
 
@@ -451,7 +422,6 @@ impl Client {
         post.retain(|(_, weight)| weight.is_finite() && *weight > 0.0);
         env.post = post;
         env.sky = sky_weights;
-        env.rain_mist = env.active.get(RAIN_MIST).map_or(0.0, |mist| mist.weight);
         self.environment = env;
     }
 }

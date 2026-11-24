@@ -22,9 +22,7 @@ fn fog_amount(dist: f32, start: f32, end: f32) -> f32 {
     return (dist - start) / (end - start);
 }
 
-fn rain_mist_amount(dist: f32, view: Scene) -> f32 {
-    return view.environment.w * fog_amount(dist, view.params.x, view.params.y);
-}
+const RAIN_NEAR: f32 = 4.0;
 
 fn cloud_hash(seed: u32, cell: vec2<i32>) -> f32 {
     let v = seed ^ (bitcast<u32>(cell.x) * 0x9e3779b1u) ^ (bitcast<u32>(cell.y) * 0x85ebca77u);
@@ -382,7 +380,7 @@ fn cloud_volume(s: Sky, dir: vec3<f32>, near: f32, far: f32, view: Scene) -> Clo
     }
     let distance = result.optical_distance / max(result.alpha, 0.00001);
     let fog = fog_amount(distance, view.environment.y, view.environment.z);
-    let haze = max(smoothstep(0.0, 1.0, fog), rain_mist_amount(distance, view));
+    let haze = smoothstep(0.0, 1.0, fog);
     let color = mix(result.light / max(result.alpha, 0.00001), view.fog_color.rgb, haze);
     return CloudHit(vec4(color, result.alpha * s.color.a * (1.0 - smoothstep(0.6, 1.0, fog))), result.first, distance);
 }
@@ -451,7 +449,7 @@ fn trace_cloud(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> CloudHit {
         shade = select(1.0, 0.7, dir.y > 0.0);
     }
     let fog = fog_amount(t, view.environment.y, reach);
-    let haze = max(smoothstep(0.0, 1.0, fog), rain_mist_amount(t, view));
+    let haze = smoothstep(0.0, 1.0, fog);
     let color = mix(s.color.rgb * shade, view.fog_color.rgb, haze);
     let alpha = s.color.a * (1.0 - smoothstep(0.6, 1.0, fog));
     return CloudHit(vec4(color, alpha), t, t);
@@ -531,18 +529,17 @@ fn rain_coefficients(s: Sky, dir: vec3<f32>, t: f32, reach: f32, may_show_rainbo
         return vec4(0.0);
     }
     let attach = smoothstep(-18.0, 28.0, top - dir.y * t);
-    let range = smoothstep(36.0, 105.0, t) * (1.0 - smoothstep(reach * 0.55, reach, t));
+    let range = smoothstep(RAIN_NEAR, 72.0, t) * (1.0 - smoothstep(reach * 0.55, reach, t));
     let density = coverage * wetness * attach * range * preset.w * s.color.a;
     let extinction = density * select(0.0075, 0.012, storm);
     let luma = vec3(0.30, 0.59, 0.11);
-    let mist = rain_mist_amount(t, view);
     let gray = mix(dot(preset.rgb, luma) * 0.55, dot(view.fog_color.rgb, luma) * 0.72, 0.58);
     var sunlight = 0.0;
     if extinction > 0.0 && may_show_rainbow {
         sunlight = rain_sunlight(s, origin, at, rel.y);
     }
     // Grayscale, fog color and rainbow weights share the existing four-half cache record.
-    return vec4(gray * (1.0 - mist), mix(0.28 * 0.58, 1.0, mist), sunlight * (1.0 - mist), extinction);
+    return vec4(gray, 0.28 * 0.58, sunlight, extinction);
 }
 
 fn rain_medium(s: Sky, dir: vec3<f32>, t: f32, reach: f32, rainbow: vec3<f32>, view: Scene) -> vec4<f32> {
@@ -609,14 +606,11 @@ fn composite_rain_veil(s: Sky, dir: vec3<f32>, limit: f32, cloud: CloudHit, view
 }
 
 fn trace_atmosphere(s: Sky, dir: vec3<f32>, limit: f32, view: Scene) -> vec4<f32> {
-    // Once local mist is fully present, everything beyond its end already
-    // resolves to the same fog color as the background.
-    let visible_limit = select(limit, min(limit, view.params.y), view.environment.w >= 1.0);
-    let cloud = trace_cloud(s, dir, visible_limit, view);
+    let cloud = trace_cloud(s, dir, limit, view);
     if s.ids.x != 0xffffffffu {
         return cloud.color;
     }
-    return composite_rain_veil(s, dir, visible_limit, cloud, view);
+    return composite_rain_veil(s, dir, limit, cloud, view);
 }
 
 struct AtmosphereFilter {

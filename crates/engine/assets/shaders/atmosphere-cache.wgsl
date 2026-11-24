@@ -61,7 +61,7 @@ fn rain_at_cell(cell: u32, range: f32) -> vec4<f32> {
 }
 
 fn rain_at(view: Scene, pixel: vec2<f32>, range: f32) -> vec4<f32> {
-    if range <= 36.0 {
+    if range <= RAIN_NEAR {
         return vec4(0.0);
     }
     let taps = atmosphere_filter(pixel, vec4(view.atmosphere_extent.xy, RAIN_STRIDE, view.atmosphere_cache.y));
@@ -87,7 +87,7 @@ fn resolve_rain(s: Sky, dir: vec3<f32>, limit: f32, cloud: CloudHit, view: Scene
     }
     let front = min(cloud.optical_distance, limit);
     let rain_end = min(1536.0, select(limit, front, cloud.color.a >= CLOUD_OPAQUE));
-    if rain_end <= 36.0 || min(36.0 * dir.y, rain_end * dir.y) >= rain_ceiling(s) {
+    if rain_end <= RAIN_NEAR || min(RAIN_NEAR * dir.y, rain_end * dir.y) >= rain_ceiling(s) {
         return vec4(cloud.color.rgb * cloud.color.a, cloud.color.a);
     }
     if cloud.color.a >= CLOUD_OPAQUE {
