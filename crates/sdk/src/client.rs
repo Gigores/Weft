@@ -18,6 +18,33 @@ use crate::{ClientView, Key, Menu, Registry, Value, WithComponents, World, callb
 pub use abi::MusicSource;
 pub use abi::{ClientState, client_flags};
 
+/// A client-side PCM source. Pass the current frame callback's client to feed or control it.
+/// Close it when playback is finished. Leaving the world or changing dimension closes it too.
+#[derive(Debug)]
+pub struct SoundStream(u64);
+
+impl SoundStream {
+    /// Queues mono PCM samples in playback order. On overflow the oldest samples are dropped.
+    pub fn push(&self, client: &Client, samples: &[f32]) -> bool {
+        unsafe { (host().client_sound_stream_push)(client.raw, self.0, Slice::new(samples)) != 0 }
+    }
+
+    /// Moves a positional source with its speaker.
+    pub fn set_position(&self, client: &Client, position: Vec3) -> bool {
+        unsafe { (host().client_sound_stream_position)(client.raw, self.0, position) != 0 }
+    }
+
+    /// Applies a low-pass cutoff in Hz and linear gain in addition to world acoustics.
+    pub fn set_filter(&self, client: &Client, cutoff_hz: f32, gain: f32) -> bool {
+        unsafe { (host().client_sound_stream_filter)(client.raw, self.0, cutoff_hz, gain) != 0 }
+    }
+
+    /// Stops playback and releases the source.
+    pub fn close(self, client: &Client) -> bool {
+        unsafe { (host().client_sound_stream_close)(client.raw, self.0) != 0 }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusicState {
     Stopped,
@@ -106,6 +133,16 @@ fn abi_str(x: &str) -> Str {
 }
 
 impl Client {
+    /// Opens a mono PCM stream in the game's mixer at 8,000 to 96,000 samples per second.
+    /// A world position adds stereo spatialization and distance effects. Requires a joined world.
+    pub fn open_sound_stream(&self, category: &crate::SoundCategory, rate: u32, position: Option<Vec3>) -> Option<SoundStream> {
+        let pos = position
+            .as_ref()
+            .map_or(std::ptr::null(), std::ptr::from_ref);
+        let id = unsafe { (host().client_sound_stream_open)(self.raw, category.id(), rate, pos) };
+        (id != 0).then_some(SoundStream(id))
+    }
+
     fn music_op(&self, source: MusicSource, op: u32, name: &str, value: f64) -> bool {
         unsafe { (host().client_music)(self.raw, source, op, Str::new(name), value) != 0 }
     }

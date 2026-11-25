@@ -494,6 +494,50 @@ pub unsafe extern "C" fn client_text(c: *mut abi::ClientCtx, which: u32, index: 
     }
 }
 
+pub unsafe extern "C" fn client_sound_stream_open(c: *mut abi::ClientCtx, category: u32, rate: u32, pos: *const abi::Vec3) -> u64 {
+    let Some(r) = (unsafe { run(c) }).filter(|r| r.game.as_ref().is_some_and(|g| g.client.joined)) else { return 0 };
+    let position = unsafe { pos.as_ref() }.map(|p| glam::DVec3::new(p.x, p.y, p.z));
+    r.audio
+        .as_mut()
+        .and_then(|a| a.open_stream(category, rate, position))
+        .unwrap_or(0)
+}
+
+pub unsafe extern "C" fn client_sound_stream_push(c: *mut abi::ClientCtx, id: u64, samples: abi::Slice<f32>) -> u32 {
+    if samples.len > isize::MAX as usize / size_of::<f32>() || (samples.len != 0 && samples.ptr.is_null()) {
+        return 0;
+    }
+    unsafe {
+        run(c)
+            .and_then(|r| r.audio.as_mut())
+            .is_some_and(|a| a.push_stream(id, samples.as_slice())) as u32
+    }
+}
+
+pub unsafe extern "C" fn client_sound_stream_position(c: *mut abi::ClientCtx, id: u64, pos: abi::Vec3) -> u32 {
+    unsafe {
+        run(c)
+            .and_then(|r| r.audio.as_mut())
+            .is_some_and(|a| a.position_stream(id, glam::DVec3::new(pos.x, pos.y, pos.z))) as u32
+    }
+}
+
+pub unsafe extern "C" fn client_sound_stream_filter(c: *mut abi::ClientCtx, id: u64, cutoff: f32, gain: f32) -> u32 {
+    unsafe {
+        run(c)
+            .and_then(|r| r.audio.as_mut())
+            .is_some_and(|a| a.filter_stream(id, cutoff, gain)) as u32
+    }
+}
+
+pub unsafe extern "C" fn client_sound_stream_close(c: *mut abi::ClientCtx, id: u64) -> u32 {
+    unsafe {
+        run(c)
+            .and_then(|r| r.audio.as_mut())
+            .is_some_and(|a| a.close_stream(id)) as u32
+    }
+}
+
 pub unsafe extern "C" fn client_music(c: *mut abi::ClientCtx, source: abi::MusicSource, op: u32, track: Str, value: f64) -> u32 {
     use abi::local_music as music;
     let Some(r) = (unsafe { run(c) }) else { return 0 };

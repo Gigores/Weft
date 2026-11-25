@@ -23,6 +23,11 @@ use weft_abi::{MusicSource, MusicStatus, Str, local_music as op};
 use crate::assets::Assets;
 use crate::content::content;
 
+mod live;
+
+pub(crate) const STREAM_REACH: f64 = live::REACH;
+const MAX_STREAMS: usize = 32;
+
 /// A sound to play this frame: event id, position (`None` = not positioned), volume, pitch (0 =
 /// the event's random range).
 #[derive(Clone, Copy, Debug)]
@@ -97,6 +102,8 @@ pub struct Audio {
     listener: kira::listener::ListenerHandle,
     listener_position: Option<(u32, DVec3)>,
     voices: Vec<SpatialVoice>,
+    streams: FxHashMap<u64, live::Stream>,
+    next_stream: u64,
     reverb: SendTrackHandle,
     reverb_shape: ReverbHandle,
     environment: TrackHandle,
@@ -352,6 +359,8 @@ impl Audio {
                 listener,
                 listener_position: None,
                 voices: Vec::new(),
+                streams: FxHashMap::default(),
+                next_stream: 1,
                 reverb,
                 reverb_shape,
                 environment,
@@ -480,6 +489,7 @@ impl Audio {
         let next_position = l.map(|l| (l.dim, l.pos));
         if self.listener_position.map(|(dim, _)| dim) != next_position.map(|(dim, _)| dim) {
             self.voices.clear();
+            self.clear_streams();
         }
         let moved = self.listener_position != next_position;
         self.listener_position = next_position;
@@ -618,6 +628,64 @@ impl Audio {
         self.music
             .as_ref()
             .is_some_and(|m| m.state() != kira::sound::PlaybackState::Stopped)
+    }
+
+    pub(crate) fn open_stream(&mut self, category: u32, rate: u32, position: Option<DVec3>) -> Option<u64> {
+        if self.streams.len() >= MAX_STREAMS || !(8_000..=96_000).contains(&rate) || position.is_some_and(|p| !p.is_finite()) {
+            return None;
+        }
+        let ear = self.listener_position?.1;
+        let stream = live::Stream::new(self.groups.get_mut(category as usize)?, &self.listener, ear, rate, position)?;
+        let id = self.next_stream;
+        self.next_stream += 1;
+        self.streams.insert(id, stream);
+        Some(id)
+    }
+
+    pub(crate) fn push_stream(&mut self, id: u64, samples: &[f32]) -> bool {
+        let Some(stream) = self.streams.get(&id) else { return false };
+        if self.active {
+            stream.push(samples);
+        }
+        true
+    }
+
+    pub(crate) fn position_stream(&mut self, id: u64, pos: DVec3) -> bool {
+        let Some(stream) = self
+            .streams
+            .get_mut(&id)
+            .filter(|s| s.pos.is_some() && pos.is_finite())
+        else {
+            return false;
+        };
+        stream.pos = Some(pos);
+        true
+    }
+
+    pub(crate) fn filter_stream(&mut self, id: u64, cutoff: f32, gain: f32) -> bool {
+        let Some(stream) = self
+            .streams
+            .get_mut(&id)
+            .filter(|_| cutoff.is_finite() && gain.is_finite())
+        else {
+            return false;
+        };
+        stream.custom_filter = SourceFilter { cutoff: cutoff.clamp(20.0, 20_000.0), gain: gain.clamp(0.0, 2.0) };
+        true
+    }
+
+    pub(crate) fn close_stream(&mut self, id: u64) -> bool {
+        self.streams.remove(&id).is_some()
+    }
+
+    pub(crate) fn clear_streams(&mut self) {
+        self.streams.clear();
+    }
+
+    pub(crate) fn update_streams(&mut self, listener: DVec3, mut trace: impl FnMut(DVec3) -> [Option<Arrival>; 3]) {
+        for stream in self.streams.values_mut() {
+            stream.update(listener, &mut trace);
+        }
     }
 
     pub fn play(&mut self, assets: &Assets, p: Play) {

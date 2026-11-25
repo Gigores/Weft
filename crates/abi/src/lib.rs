@@ -4596,6 +4596,11 @@ pub struct Host {
     pub client_op: unsafe extern "C" fn(client: *mut ClientCtx, op: u32, text: Str, num: f64) -> u64,
     /// Texts the client knows, see `client_text`. Valid until the next call.
     pub client_text: unsafe extern "C" fn(client: *mut ClientCtx, which: u32, index: u32) -> Str,
+    pub client_sound_stream_open: unsafe extern "C" fn(client: *mut ClientCtx, category: u32, rate: u32, pos: *const Vec3) -> u64,
+    pub client_sound_stream_push: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, samples: Slice<f32>) -> u32,
+    pub client_sound_stream_position: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, pos: Vec3) -> u32,
+    pub client_sound_stream_filter: unsafe extern "C" fn(client: *mut ClientCtx, id: u64, cutoff: f32, gain: f32) -> u32,
+    pub client_sound_stream_close: unsafe extern "C" fn(client: *mut ClientCtx, id: u64) -> u32,
     pub client_music: unsafe extern "C" fn(client: *mut ClientCtx, source: MusicSource, op: u32, track: Str, value: f64) -> u32,
     pub client_music_status: unsafe extern "C" fn(client: *mut ClientCtx, source: MusicSource, out: *mut MusicStatus),
     pub client_music_track: unsafe extern "C" fn(client: *mut ClientCtx, index: u32, out: *mut MusicTrack),

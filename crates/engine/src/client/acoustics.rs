@@ -148,7 +148,6 @@ impl Soundscape {
     ) {
         let now = Instant::now();
         let c = content();
-        let cells = SeenCells { world: liquids.world, air_if_missing: true };
         let mut listener_liquid = None;
         let mut bounce_checks = REFLECTION_CHECKS;
         let mut routed = 0usize;
@@ -168,29 +167,21 @@ impl Soundscape {
             if travel - age > SCHEDULE_AHEAD {
                 return false;
             }
-            let blocked = obstruction(c, &cells, listener, source, DIRECT_REACH);
-            let mut direct = Arrival { pos: source, distance, gain: 1.0, cutoff: 20_000.0 };
-            if blocked.is_some() {
-                direct.gain = 0.045f32.max(def.through_walls);
-                direct.cutoff = 420.0 + def.through_walls * 800.0;
-            }
-            let mut paths = [direct; 3];
-            let mut count = 1;
-            if distance <= PROBE_REACH * 2.0 && volume >= 0.12 && bounce_checks != 0 {
-                count += reflections(c, &cells, &self.walls, source, listener, distance, reach, &mut bounce_checks, &mut paths[1..]);
-            }
-            if let Some(liquid) = liquids.at_source(source, listener) {
-                let at_listener = *listener_liquid.get_or_insert_with(|| liquids.at(listener));
-                let filter = SourceFilter::from_liquid(liquid, at_listener);
-                for path in &mut paths[..count] {
-                    path.gain *= filter.gain;
-                    path.cutoff = path.cutoff.min(filter.cutoff);
-                }
-            }
-            let direct = paths[0];
+            let (arrivals, count) = paths(
+                &self.walls,
+                &liquids,
+                listener,
+                source,
+                reach,
+                def.through_walls,
+                volume >= 0.12,
+                &mut bounce_checks,
+                &mut listener_liquid,
+            );
+            let direct = arrivals[0];
             log::trace!(target: "acoustics::paths", "{} at {:.1} blocks: gain {:.3}, cutoff {:.0}, {} reflections, arrival {:.3}s (age {:.3}s)",
                 def.name, distance, direct.gain, direct.cutoff, count - 1, travel, age);
-            audio.play_paths(assets, p, age, &paths[..count]);
+            audio.play_paths(assets, p, age, &arrivals[..count]);
             routed += 1;
             true
         };
@@ -202,11 +193,55 @@ impl Soundscape {
                     .push(Emission { play, received: now, age_at_receipt: 0.0 });
             }
         }
+        audio.update_streams(listener, |source| {
+            let reach = crate::audio::STREAM_REACH;
+            if source.distance_squared(listener) >= reach * reach {
+                return [None; 3];
+            }
+            let (arrivals, count) =
+                paths(&self.walls, &liquids, listener, source, reach, 0.045, true, &mut bounce_checks, &mut listener_liquid);
+            std::array::from_fn(|i| (i < count).then_some(arrivals[i]))
+        });
         if routed != 0 {
             log::debug!(target: "acoustics::cost", "{routed} positional sounds in {} us ({} reflection checks)",
                 now.elapsed().as_micros(), REFLECTION_CHECKS - bounce_checks);
         }
     }
+}
+
+fn paths(
+    walls: &[Wall],
+    liquids: &LiquidSampler<'_>,
+    listener: DVec3,
+    source: DVec3,
+    reach: f64,
+    through_walls: f32,
+    reflect: bool,
+    bounce_checks: &mut usize,
+    listener_liquid: &mut Option<Option<u16>>,
+) -> ([Arrival; 3], usize) {
+    let c = content();
+    let cells = SeenCells { world: liquids.world, air_if_missing: true };
+    let distance = source.distance(listener);
+    let mut direct = Arrival { pos: source, distance, gain: 1.0, cutoff: 20_000.0 };
+    if obstruction(c, &cells, listener, source, DIRECT_REACH).is_some() {
+        direct.gain = 0.045f32.max(through_walls);
+        direct.cutoff = 420.0 + through_walls * 800.0;
+    }
+    let mut paths = [direct; 3];
+    let mut count = 1;
+    if distance <= PROBE_REACH * 2.0 && reflect && *bounce_checks != 0 {
+        count += reflections(c, &cells, walls, source, listener, distance, reach, bounce_checks, &mut paths[1..]);
+    }
+    if let Some(liquid) = liquids.at_source(source, listener) {
+        let at_listener = *listener_liquid.get_or_insert_with(|| liquids.at(listener));
+        let filter = SourceFilter::from_liquid(liquid, at_listener);
+        for path in &mut paths[..count] {
+            path.gain *= filter.gain;
+            path.cutoff = path.cutoff.min(filter.cutoff);
+        }
+    }
+    (paths, count)
 }
 
 fn reflectivity(c: &Content, hit: Hit) -> f32 {

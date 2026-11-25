@@ -40,6 +40,24 @@ from `held` and `held_ticks`; frame amounts are not sent to the server.
 - particles and screen effects from shader snippets in `assets/shaders`
 - sounds with `r.sound(..).category(..)` (every category gets its own volume slider), music
 
+## Live sound
+
+Open one mono stream per source from a client frame hook. The game places
+positional sources in the stereo mix and applies the category volume and
+world acoustics.
+
+```rust
+let stream = client.open_sound_stream(&VOICE, 48_000, Some(speaker_pos))?;
+stream.push(client, &samples);
+stream.set_position(client, speaker_pos);
+stream.close(client);
+```
+
+Keep the handle between frames while the source is active. Feed decoded
+`f32` samples in playback order. A stream plays silence when its queue runs
+dry and drops the oldest samples if the queue fills. The game closes open
+streams on leaving the world or changing dimension.
+
 ## Settings
 
 settings that show up in Mod Settings by themselves (`r.config(&SPARKS).bool(true)`); the player's own by default, `.server()` for the server's value (sent to its players on every change), `.world()` for one saved with the world. The engine's settings are the same kind of thing (`settings::FOV`, `settings::LANGUAGE`, key bindings `core:key.<action>`, all in `config/core.txt`): set one and the client applies it
