@@ -34,9 +34,10 @@ impl Grid {
     pub fn cube_loaded(&mut self, c: &Content, pos: IVec3, cube: &Cube) {
         // A machine arriving next to cables that are here already belongs to their network.
         if !self.conductors.is_empty()
-            && cube.palette().iter().any(|&s| {
-                c.game.has_block_data(c.states[s as usize].block)
-            })
+            && cube
+                .palette()
+                .iter()
+                .any(|&s| c.game.has_block_data(c.states[s as usize].block))
         {
             self.dirty = true;
         }
@@ -88,7 +89,10 @@ impl Grid {
             let mut stack = vec![start];
             let mut ends: Vec<u64> = Vec::new();
             while let Some(p) = stack.pop() {
-                let powered = |cell| e.block_ids(frame, cell).filter(|id| e.comps.contains_key(&(*id, c.game.energy)));
+                let powered = |cell| {
+                    e.block_ids(frame, cell)
+                        .filter(|id| e.comps.contains_key(&(*id, c.game.energy)))
+                };
                 ends.extend(powered(p));
                 for d in DIRS {
                     let n = p + d;

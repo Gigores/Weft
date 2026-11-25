@@ -1197,7 +1197,14 @@ unsafe extern "C" fn block_instance(w: *mut abi::WorldCtx, pos: *const abi::Bloc
 
 unsafe extern "C" fn block_location(w: *mut abi::WorldCtx, id: u64, out: *mut abi::BlockPos) -> u32 {
     unsafe {
-        let Some(block) = dim(w).entities.blocks.get(&id).filter(|b| b.frame == space_id(w)) else { return 0 };
+        let Some(block) = dim(w)
+            .entities
+            .blocks
+            .get(&id)
+            .filter(|b| b.frame == space_id(w))
+        else {
+            return 0;
+        };
         *out = block.cell.to_array().into();
         1
     }
@@ -1211,7 +1218,9 @@ unsafe extern "C" fn block_instance_state(w: *mut abi::WorldCtx, id: u64, state:
         if state == u32::MAX {
             return part.state;
         }
-        if c.states.get(state as usize).is_some_and(|s| s.block == block.kind)
+        if c.states
+            .get(state as usize)
+            .is_some_and(|s| s.block == block.kind)
             && d.replace_placed(block.frame, c, block.cell, part, state)
         {
             state
@@ -1682,7 +1691,8 @@ unsafe extern "C" fn inventory_group(w: *mut abi::WorldCtx, h: *const abi::Holde
         let entity = match held(w, h) {
             Some(At::Entity(id)) => id,
             Some(At::Block(id)) => {
-                let found = dim(w).block_kind(id)
+                let found = dim(w)
+                    .block_kind(id)
                     .and_then(|block| c.blocks[block as usize].opens)
                     .and_then(|menu| c.game.menus[menu as usize].group(&c.game.player_layout, name.as_str()))
                     .filter(|g| g.0.owner == abi::slot_owner::HOLDER);

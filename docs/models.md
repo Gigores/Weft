@@ -231,6 +231,23 @@ Players can bring a model with no mod at all: `skins/avatar/` holds `avatar.geo.
 
 It is the same as any model: the bone names above make walking, holding and swinging work with no clips, its own clips go over them by name, items go on `mainItem` and `offItem`. No code comes with it, so it can't do any harm: all of it together stays under 512 KB, with limits on bones, boxes, clips and how far it reaches, and what goes past them shows as the usual player. Armor goes on it as on any model (see below). A player can turn others' models off under Model Visibility in Profile, and a world with `core:allow_avatars` off doesn't pass them on.
 
+## Animated parts on placed blocks
+
+A placed block can have a moving part with its own Bedrock bone model. Its regular block mesh can still provide the stationary geometry and collision.
+
+```rust
+static CHEST: Block = Block::named("base:chest");
+r.edit(&CHEST)
+    .animated_part("block/lid", "open")
+    .animate_with_menu();
+```
+
+`animated_part` loads `models/block/lid.geo.json`, `animations/block/lid.animation.json`, and `textures/block/lid.png` from the registering mod. Use pixels for the model, with the origin at the center of the floor of the block. The part follows the block's rotation and the movement of any body it rides.
+
+`animate_with_menu` holds the part at the end of the clip while anyone has a menu open on that block. To drive the same mechanism from code, set `comps::BLOCK_ANIMATION_PROGRESS` through the block's holder. Set it to 0 for the first pose, 1 for the last, or a fraction between them. The client moves toward the target at the speed set by the clip's duration, so it can reverse partway through. The progress target starts at 0 when a block loads.
+
+The animated part is visual. Use the block state's hitbox for collision and selection.
+
 ## Armor and other worn items
 An item shows up on the wearer when it sits in an equipment slot. The slots are declared once, with the bones what is worn there covers and the silhouette of the empty slot, and an item only names its slot:
 ```rust

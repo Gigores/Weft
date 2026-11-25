@@ -1,0 +1,19 @@
+{
+  "textures": {
+    "top": "base:block/chest_top",
+    "side": "base:block/chest_side",
+    "front": "base:block/chest_front"
+  },
+  "elements": [{
+    "from": [1, 0, 1],
+    "to": [15, 14, 15],
+    "faces": {
+      "up": {"texture": "#top"},
+      "down": {"texture": "#top"},
+      "north": {"texture": "#front"},
+      "south": {"texture": "#side"},
+      "east": {"texture": "#side"},
+      "west": {"texture": "#side"}
+    }
+  }]
+}

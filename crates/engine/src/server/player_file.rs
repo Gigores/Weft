@@ -226,7 +226,12 @@ pub(super) fn save_player(s: &Storage, p: &Player, d: &Dim) {
         .map(|((_, comp), bytes)| (*comp, bytes.as_ref()))
         .collect();
     let mut bytes = Vec::new();
-    super::persist::write(c, &mut bytes, &[(super::persist::SaveOwner::Entity(e), d.entities.inventories.get(&p.entity), comps, None)], d.time);
+    super::persist::write(
+        c,
+        &mut bytes,
+        &[(super::persist::SaveOwner::Entity(e), d.entities.inventories.get(&p.entity), comps, None)],
+        d.time,
+    );
     let text = format!(
         "name = {}\ndim = {}\ndeaths = {}\nentity = {}\n",
         p.identity.name,

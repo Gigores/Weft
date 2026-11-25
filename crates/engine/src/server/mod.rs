@@ -129,7 +129,7 @@ pub struct Player {
     announced: FxHashSet<IVec3>,
     to_send_far: Vec<IVec3>,
     known: FxHashSet<u64>,
-    known_blocks: FxHashMap<u64, crate::net::BlockView>,
+    known_blocks: FxHashMap<u64, (crate::net::BlockView, bool)>,
     joined: bool,
     arrival: Option<player_file::Arrival>,
     sent_cracks: Vec<crate::net::Crack>,
@@ -944,11 +944,7 @@ impl Server {
                 .map(|b| String::from_utf8_lossy(b).into_owned())
                 .unwrap_or_default(),
         };
-        let block = if block != 0 {
-            block
-        } else {
-            r.block_part(owner, c).map_or(0, |(_, part)| part.state)
-        };
+        let block = if block != 0 { block } else { r.block_part(owner, c).map_or(0, |(_, part)| part.state) };
         p.conn
             .send(ToClient::OpenMenu { kind, window: p.window, slots: m.slots.len() as u32, owner, block, name });
         p.menu = Some(m);
@@ -1496,7 +1492,10 @@ pub(super) fn serialize_tree(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
     if !owners.is_empty() {
         for (&(id, comp), bytes) in &d.entities.comps {
             if owners.contains(&id) {
-                components.entry(id).or_default().push((comp, bytes.as_ref()));
+                components
+                    .entry(id)
+                    .or_default()
+                    .push((comp, bytes.as_ref()));
             }
         }
     }

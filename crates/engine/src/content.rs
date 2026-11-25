@@ -2063,8 +2063,16 @@ pub fn freeze(
             errors.push(format!("{}: {pattern} matches no tag or component", mod_name(m)));
         }
     }
-    let crate::blocks::Blocks { mut states, mut block_defs, opens_names, block_names, instance_data, rules: raw_rules, hazards: raw_hazards, .. } =
-        block_tables;
+    let crate::blocks::Blocks {
+        mut states,
+        mut block_defs,
+        opens_names,
+        block_names,
+        instance_data,
+        rules: raw_rules,
+        hazards: raw_hazards,
+        ..
+    } = block_tables;
     let ItemTables { mut item_defs, item_names, .. } = item_tables;
     let BiomeTables { biome_defs, biome_rules, biome_names, .. } = biome_tables;
     let DimTables { mut dim_defs, dim_names, spawn_dim, void_dim, .. } = dim_tables;

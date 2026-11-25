@@ -153,7 +153,8 @@ pub fn register(r: &mut Registry) {
     r.entity_effect(&LIT).unseen().light_rgb(0, 15, 0);
     r.block(&PEDESTAL)
         .texture("varied")
-        .inventory(1).shown_slots(&[0])
+        .inventory(1)
+        .shown_slots(&[0])
         .no_item();
     r.storage(&STASH, 54);
     // What an edit sets wins, the rest stays; the testmod ones load after or before this mod
@@ -646,7 +647,9 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(String::new())
     }),
     ("group", "@owner <name:word>", |w, cmd, _, _| {
-        let g = w.inventory(inventory_owner(w, cmd)?).group(word(cmd, "name")?);
+        let g = w
+            .inventory(inventory_owner(w, cmd)?)
+            .group(word(cmd, "name")?);
         Ok(format!("{} {}", g.len(), (0..g.len()).filter(|&i| !g.get(i).is_empty()).count()))
     }),
     ("sblock", "<id:int> <pos:pos> [block:block]", |w, cmd, _, _| {
@@ -683,17 +686,30 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(String::new())
     }),
     ("block_instance", "<pos:pos> [body:int]", |w, cmd, _, _| {
-        let local = w.in_space(int(cmd, "body").unwrap_or(0)).ok_or("space missing")?;
+        let local = w
+            .in_space(int(cmd, "body").unwrap_or(0))
+            .ok_or("space missing")?;
         let id = local.block_instance(pos(cmd, "pos")?);
         Ok(id.to_string())
     }),
     ("block_pos", "<id:int> [body:int]", |w, cmd, _, _| {
-        let local = w.in_space(int(cmd, "body").unwrap_or(0)).ok_or("space missing")?;
-        let cell = local.block_location(int(cmd, "id")?).ok_or("block instance missing")?;
-        let p = local.point_in(0, cell.center()).ok_or("world space missing")?;
+        let local = w
+            .in_space(int(cmd, "body").unwrap_or(0))
+            .ok_or("space missing")?;
+        let cell = local
+            .block_location(int(cmd, "id")?)
+            .ok_or("block instance missing")?;
+        let p = local
+            .point_in(0, cell.center())
+            .ok_or("world space missing")?;
         Ok(format!("{} {} {}", p.x, p.y, p.z))
     }),
-    ("slot", "@owner <index:int>", |w, cmd, _, _| Ok(stack_text(w.inventory(inventory_owner(w, cmd)?).get(int(cmd, "index")?)))),
+    ("slot", "@owner <index:int>", |w, cmd, _, _| {
+        Ok(stack_text(
+            w.inventory(inventory_owner(w, cmd)?)
+                .get(int(cmd, "index")?),
+        ))
+    }),
     ("put", "@owner <index:int> <item:item> [count:int]", |w, cmd, _, _| {
         w.inventory(inventory_owner(w, cmd)?)
             .set(int(cmd, "index")?, ItemStack::new(id(cmd, "item")?, int(cmd, "count").unwrap_or(1)));
@@ -734,7 +750,9 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(entity.to_string())
     }),
     ("drop_stack", "@owner <index:int> <pos:pos>", |w, cmd, _, _| {
-        let stack = w.inventory(inventory_owner(w, cmd)?).get(int(cmd, "index")?);
+        let stack = w
+            .inventory(inventory_owner(w, cmd)?)
+            .get(int(cmd, "index")?);
         let p = pos(cmd, "pos")?;
         Ok(w.spawn_item([p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5], stack)
             .to_string())

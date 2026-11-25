@@ -263,7 +263,11 @@ impl DimSet {
                         d.entities.insert_block(c, id, block, inv, comps);
                     } else {
                         let drop_at = old_position.unwrap_or_else(|| {
-                            if d.has_space(block.frame) { d.space_pose(block.frame).to_world(block.center()) } else { pos.as_dvec3() * 16.0 }
+                            if d.has_space(block.frame) {
+                                d.space_pose(block.frame).to_world(block.center())
+                            } else {
+                                pos.as_dvec3() * 16.0
+                            }
                         });
                         for stack in inv.into_iter().flatten() {
                             d.spawn_item(0, c, drop_at, stack);
@@ -275,7 +279,9 @@ impl DimSet {
             };
             let id = e.id;
             if d.entities.contains_owner(id)
-                || e.mount.is_some() && e.frame.is_some_and(|parent| !d.bodies.contains_key(&parent))
+                || e.mount.is_some()
+                    && e.frame
+                        .is_some_and(|parent| !d.bodies.contains_key(&parent))
             {
                 continue;
             }

@@ -833,10 +833,7 @@ unsafe fn with_entity<T>(
         if entity == g.client.player_id {
             return Some(f(&g.client, &g.client.me));
         }
-        g.client
-            .entities
-            .get(&entity)
-            .map(|e| f(&g.client, e))
+        g.client.entities.get(&entity).map(|e| f(&g.client, e))
     }
 }
 
@@ -900,7 +897,9 @@ pub unsafe extern "C" fn client_displayed(c: *mut abi::ClientCtx, entity: u64, s
             stacks.len()
         };
         if source == abi::display_source::SHOWN
-            && let Some(block) = run(c).and_then(|r| r.game.as_ref()).and_then(|g| g.client.showing_blocks.get(&entity))
+            && let Some(block) = run(c)
+                .and_then(|r| r.game.as_ref())
+                .and_then(|g| g.client.showing_blocks.get(&entity))
         {
             return copy(&block.shown);
         }

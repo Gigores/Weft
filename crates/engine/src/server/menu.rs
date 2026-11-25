@@ -273,7 +273,9 @@ pub fn out_of_reach(m: &OpenMenu, dim: &Dim, player: u64) -> bool {
         && m.on_block
     {
         return dim.block_position(id).is_none_or(|pos| {
-            dim.entities.get(player).is_none_or(|p| p.pos.distance_squared(pos) > 8.5 * 8.5)
+            dim.entities
+                .get(player)
+                .is_none_or(|p| p.pos.distance_squared(pos) > 8.5 * 8.5)
         });
     }
     false

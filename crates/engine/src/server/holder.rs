@@ -25,8 +25,14 @@ pub fn resolve(d: &Dim, space_id: u64, h: &abi::Holder) -> Option<At> {
             .get(h.entity)
             .filter(|e| !e.removed)
             .map(|_| At::Entity(h.entity)),
-        abi::holder::BLOCK => d.anchored(space_id, crate::world::ivec(h.pos)).map(At::Block),
-        abi::holder::BLOCK_ID => d.entities.blocks.contains_key(&h.entity).then_some(At::Block(h.entity)),
+        abi::holder::BLOCK => d
+            .anchored(space_id, crate::world::ivec(h.pos))
+            .map(At::Block),
+        abi::holder::BLOCK_ID => d
+            .entities
+            .blocks
+            .contains_key(&h.entity)
+            .then_some(At::Block(h.entity)),
         abi::holder::HELD if d.entities.contains_owner(h.entity) => d
             .entities
             .inventories
@@ -184,7 +190,8 @@ pub fn insert(d: &mut Dim, c: &Content, inv: Inv, stack: ItemStack) -> ItemStack
         (At::Block(id), 0) => {
             let Some(list) = d.entities.inventories.get_mut(&id) else { return stack };
             let rest = stack::insert_into(
-                stack, 0..list.len(),
+                stack,
+                0..list.len(),
                 |i, value| {
                     if let Some(value) = value {
                         list[i] = value;
@@ -237,7 +244,10 @@ fn slot_group<'a>(d: &Dim, c: &'a Content, (inv, slot): Slot) -> Option<&'a crat
     let block = match inv.at {
         At::Entity(id) if d.entities.get(id).is_some_and(|entity| entity.player) => {
             return layout.storage_at(slot).or_else(|| {
-                layout.equipment.get(slot.checked_sub(layout.worn.start)? as usize).map(|part| &part.group)
+                layout
+                    .equipment
+                    .get(slot.checked_sub(layout.worn.start)? as usize)
+                    .map(|part| &part.group)
             });
         }
         At::Block(id) => d.block_kind(id)?,

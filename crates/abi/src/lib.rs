@@ -1246,6 +1246,10 @@ pub mod comp {
         pub const INSTANCE_DATA: &str = "block.instance_data";
         pub const INSTANCE_ATTACH: &str = "block.instance_attach";
         pub const INSTANCE_SLOTS: &str = "block.instance_slots";
+        pub const INSTANCE_MODEL: &str = "block.instance_model";
+        pub const INSTANCE_CLIP: &str = "block.instance_clip";
+        pub const ANIMATE_MENU: &str = "block.animate_menu";
+        pub const ANIMATION_PROGRESS: &str = "core:block_animation_progress";
         pub const INSTANCE_SHOWN: &str = "block.instance_shown";
         /// Mass per full block relative to a block of water (`f32`).
         pub const DENSITY: &str = "density";

@@ -597,6 +597,8 @@ const MAX_BUDGET: f64 = 0.005;
 pub(crate) struct ClientBlock {
     pub view: crate::net::BlockView,
     pub shown: Vec<ItemStack>,
+    animation_target: f32,
+    animation_pose: Option<f32>,
 }
 
 pub struct Client {
@@ -2836,6 +2838,11 @@ impl Client {
         if let Some(block) = self.showing_blocks.get_mut(&id) {
             if comp == shown {
                 block.shown = Vec::<ItemStack>::from_bytes(bytes).unwrap_or_default();
+            } else if Some(comp) == c.components.id(weft_abi::comp::block::ANIMATION_PROGRESS) {
+                block.animation_target = f32::from_bytes(bytes)
+                    .filter(|v| v.is_finite())
+                    .unwrap_or_default()
+                    .clamp(0.0, 1.0);
             }
             return;
         }
@@ -2983,9 +2990,21 @@ impl Client {
             sources.push(glow::entity_glow(c, e, now, pos, e.body_yaw, stored));
         }
         for (&id, block) in &self.showing_blocks {
-            let own = self.entity_components.get(&(id, light)).and_then(|b| b.as_slice().try_into().ok()).unwrap_or([0; 3]);
-            let color = block.shown.iter().map(|s| c.stack_light(s)).fold(own, glow::brightest);
-            sources.push((self.frame_place(block.view.frame).to_world(block.view.local), color));
+            let own = self
+                .entity_components
+                .get(&(id, light))
+                .and_then(|b| b.as_slice().try_into().ok())
+                .unwrap_or([0; 3]);
+            let color = block
+                .shown
+                .iter()
+                .map(|s| c.stack_light(s))
+                .fold(own, glow::brightest);
+            sources.push((
+                self.frame_place(block.view.frame)
+                    .to_world(block.view.local),
+                color,
+            ));
         }
         let eye = self.player.pos;
         self.world.set_glow(c, eye, sources);
@@ -3555,6 +3574,11 @@ impl Client {
             self.breaking
                 .map(|(f, pos, progress)| entity_render::Crack { pos, progress, place: self.frame_place(f), part: self.breaking_part }),
         );
+        let body_tick = self.anim_tick();
+        let target = self
+            .target
+            .filter(|_| !self.hide_gui)
+            .map(|h| (h, self.frame_place(h.frame)));
         self.entity_render.draw(
             gpu,
             list,
@@ -3562,6 +3586,8 @@ impl Client {
             &cam,
             self.ticks(),
             &self.entities,
+            &mut self.showing_blocks,
+            body_tick,
             me,
             hand,
             textures,
@@ -3569,9 +3595,7 @@ impl Client {
             &|p: IVec3| self.world.biome_at(p),
             &scene,
             scene_buf,
-            self.target
-                .filter(|_| !self.hide_gui)
-                .map(|h| (h, self.frame_place(h.frame))),
+            target,
             self.placement_preview
                 .filter(|(frame, _, _)| self.target.is_some_and(|hit| hit.frame == *frame))
                 .map(|(_, p, part)| (p, part)),

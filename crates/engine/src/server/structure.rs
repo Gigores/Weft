@@ -244,7 +244,9 @@ impl Dim {
             }
             for part in moving {
                 let local = l.part.unwrap_or(part);
-                if let Some(id) = self.entities.anchored_kind(space_id, l.from, c.states[part.state as usize].block, part.offset)
+                if let Some(id) = self
+                    .entities
+                    .anchored_kind(space_id, l.from, c.states[part.state as usize].block, part.offset)
                 {
                     self.entities.unanchor((space_id, l.from), id);
                     anchors.push((l.local, local.offset, id));
@@ -1330,7 +1332,9 @@ impl Dim {
             let Some(main) = source.get(b.local).filter(|&s| s != AIR) else { continue };
             let residents: Vec<_> = source.layout(b.local).residents(main).collect();
             for (i, part) in residents.into_iter().enumerate() {
-                let entity = self.entities.anchored_kind(body, b.local, c.states[part.state as usize].block, part.offset);
+                let entity = self
+                    .entities
+                    .anchored_kind(body, b.local, c.states[part.state as usize].block, part.offset);
                 let signal = self
                     .space(body)
                     .signals
@@ -1689,7 +1693,10 @@ impl Dim {
     /// What bodies gone gave the world goes with them, however they went; ones whose lamps changed
     /// say so.
     pub(super) fn forget_gone_bodies(&mut self, c: &'static Content) {
-        let gone_blocks: Vec<_> = self.entities.blocks_in_body.iter()
+        let gone_blocks: Vec<_> = self
+            .entities
+            .blocks_in_body
+            .iter()
             .filter(|(frame, _)| !self.bodies.contains_key(frame))
             .flat_map(|(_, ids)| ids.iter().copied())
             .collect();

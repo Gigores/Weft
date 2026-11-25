@@ -321,6 +321,8 @@ wire_struct! {
         pub id: u64,
         pub frame: u64,
         pub local: DVec3,
+        pub animation_state: Option<u32>,
+        pub menu_open: bool,
     }
 }
 

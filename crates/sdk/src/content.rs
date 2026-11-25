@@ -2351,6 +2351,20 @@ impl<'a> BlockBuilder<'a> {
         self.set(&SHOWN, slots.to_vec())
     }
 
+    /// Adds a bone model over the block's normal mesh. Its named clip follows
+    /// `comps::BLOCK_ANIMATION_PROGRESS`, from the first to the last keyframe.
+    pub fn animated_part(self, model: &str, clip: &str) -> Self {
+        const MODEL: crate::Component<c::Text> = crate::Component::named(abi::comp::block::INSTANCE_MODEL);
+        const CLIP: crate::Component<c::Text> = crate::Component::named(abi::comp::block::INSTANCE_CLIP);
+        self.set_text(&MODEL, &crate::asset("", model))
+            .set_text(&CLIP, clip)
+            .attach(&crate::comps::BLOCK_ANIMATION_PROGRESS)
+    }
+
+    /// Holds the animated part at the end of its clip while its inventory menu has viewers.
+    pub fn animate_with_menu(self) -> Self {
+        self.tag(abi::comp::block::ANIMATE_MENU)
+    }
 
     /// Using it opens `menu`, with the block as its holder if it has instance data (a furnace), or with temporary slots (a
     /// crafting table). A menu with `.recipes(..)` makes the block a station of those recipes in

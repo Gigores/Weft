@@ -236,8 +236,17 @@ pub(crate) fn freeze(
         let slots = e.or(b::INSTANCE_SLOTS, 0u32);
         let attach = e.or::<Vec<abi::Attach>>(b::INSTANCE_ATTACH, Vec::new());
         let shown = e.or::<Vec<u32>>(b::INSTANCE_SHOWN, Vec::new());
-        if slots != 0 || !attach.is_empty() || !shown.is_empty() || e.has(b::INSTANCE_DATA) {
-            out.instance_data.insert(index, crate::registry::RawBlockData { slots, attach, shown });
+        let animation = e
+            .text(b::INSTANCE_MODEL)
+            .zip(e.text(b::INSTANCE_CLIP))
+            .map(|(model, clip)| crate::registry::BlockAnimation {
+                model: model.to_owned(),
+                clip: clip.to_owned(),
+                menu: e.has(b::ANIMATE_MENU),
+            });
+        if slots != 0 || !attach.is_empty() || !shown.is_empty() || animation.is_some() || e.has(b::INSTANCE_DATA) {
+            out.instance_data
+                .insert(index, crate::registry::RawBlockData { slots, attach, shown, animation });
         }
         out.block_values.push((e.owner, state_values));
         out.opens_names
@@ -418,11 +427,14 @@ fn full_key(props: &[Prop], s: u32) -> String {
 }
 
 /// What only a block as a whole has: its states leave it out.
-const BLOCK_ONLY: [&str; 21] = [
+const BLOCK_ONLY: [&str; 24] = [
     b::INSTANCE_DATA,
     b::INSTANCE_ATTACH,
     b::INSTANCE_SLOTS,
     b::INSTANCE_SHOWN,
+    b::INSTANCE_MODEL,
+    b::INSTANCE_CLIP,
+    b::ANIMATE_MENU,
     b::PROPS,
     b::ON_USE,
     b::ON_NEIGHBOR,

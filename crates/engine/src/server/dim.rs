@@ -413,11 +413,7 @@ impl Dim {
             .entities
             .list
             .iter()
-            .filter(|e| {
-                e.player
-                    || (e.is_body()
-                        && ((now + e.id) % 10 == 0 || !self.entities.comps.contains_key(&(e.id, attributes))))
-            })
+            .filter(|e| e.player || (e.is_body() && ((now + e.id) % 10 == 0 || !self.entities.comps.contains_key(&(e.id, attributes)))))
             .map(|e| e.id)
             .collect::<Vec<_>>()
             .into_iter()
@@ -448,7 +444,14 @@ impl Dim {
             let slots = &c.game.block_data[&b.kind].shown_slots;
             if !slots.is_empty() {
                 let inv = inventories.get(&id);
-                let items: Vec<_> = slots.iter().map(|&s| inv.and_then(|i| i.get(s as usize)).copied().unwrap_or_default()).collect();
+                let items: Vec<_> = slots
+                    .iter()
+                    .map(|&s| {
+                        inv.and_then(|i| i.get(s as usize))
+                            .copied()
+                            .unwrap_or_default()
+                    })
+                    .collect();
                 comps.insert((id, shown), crate::stack::shown_bytes(&items).into());
             }
         }
@@ -579,25 +582,31 @@ impl Dim {
     pub fn anchored(&self, space_id: u64, p: IVec3) -> Option<u64> {
         match self.space(space_id).acting {
             Some((at, part)) if at == p => self.anchored_part(space_id, crate::content::content(), p, part.state),
-            _ => self.get(space_id, p).and_then(|state| {
-                let c = crate::content::content();
-                self.space(space_id).layout(p).residents(state).find_map(|part| {
-                    let kind = c.states[part.state as usize].block;
-                    self.entities.anchored_kind(space_id, p, kind, part.offset)
+            _ => self
+                .get(space_id, p)
+                .and_then(|state| {
+                    let c = crate::content::content();
+                    self.space(space_id)
+                        .layout(p)
+                        .residents(state)
+                        .find_map(|part| {
+                            let kind = c.states[part.state as usize].block;
+                            self.entities.anchored_kind(space_id, p, kind, part.offset)
+                        })
                 })
-            }).or_else(|| {
-                self.space(space_id)
-                    .layout(p)
-                    .covers
-                    .iter()
-                    .find_map(|cover| {
-                        let (owner, part) = cover.owner(p);
-                        let c = crate::content::content();
-                        let kind = c.states[part.state as usize].block;
-                        self.entities
-                            .anchored_kind(space_id, owner, kind, part.offset)
-                    })
-            }),
+                .or_else(|| {
+                    self.space(space_id)
+                        .layout(p)
+                        .covers
+                        .iter()
+                        .find_map(|cover| {
+                            let (owner, part) = cover.owner(p);
+                            let c = crate::content::content();
+                            let kind = c.states[part.state as usize].block;
+                            self.entities
+                                .anchored_kind(space_id, owner, kind, part.offset)
+                        })
+                }),
         }
     }
 
@@ -845,7 +854,14 @@ impl Dim {
         gone.sort_unstable_by_key(|p| (p.x, p.y, p.z));
         for pos in gone {
             let mut inside = inside.remove(&pos).unwrap_or_default();
-            inside.extend(self.entities.blocks_in_cube.get(&pos).into_iter().flatten().copied());
+            inside.extend(
+                self.entities
+                    .blocks_in_cube
+                    .get(&pos)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
             let mut cube = self.space.cubes.remove(&pos).unwrap();
             self.cube_gone(pos);
             self.space.grid.cube_unloaded(pos);
@@ -1337,7 +1353,8 @@ impl Dim {
 
     fn add_block_data(&mut self, frame: u64, c: &Content, cell: IVec3, kind: u32, part: Part) {
         let id = self.new_id();
-        self.entities.insert_block(c, id, super::entity::BlockData { kind, frame, cell, offset: part.offset }, None, Vec::new());
+        self.entities
+            .insert_block(c, id, super::entity::BlockData { kind, frame, cell, offset: part.offset }, None, Vec::new());
     }
 
     pub(crate) fn block_kind(&self, id: u64) -> Option<u32> {
@@ -1349,7 +1366,10 @@ impl Dim {
         if !self.has_space(block.frame) {
             return None;
         }
-        let part = self.space(block.frame).layout(block.cell).residents(self.get(block.frame, block.cell)?)
+        let part = self
+            .space(block.frame)
+            .layout(block.cell)
+            .residents(self.get(block.frame, block.cell)?)
             .find(|part| part.offset == block.offset && c.states[part.state as usize].block == block.kind)?;
         Some((block, part))
     }
@@ -1361,8 +1381,14 @@ impl Dim {
 
     pub fn block_data_fits(&self, c: &Content, block: super::entity::BlockData) -> bool {
         self.has_space(block.frame)
-            && self.entities.anchored_kind(block.frame, block.cell, block.kind, block.offset).is_none()
-            && self.space(block.frame).layout(block.cell).residents(self.get(block.frame, block.cell).unwrap_or(AIR))
+            && self
+                .entities
+                .anchored_kind(block.frame, block.cell, block.kind, block.offset)
+                .is_none()
+            && self
+                .space(block.frame)
+                .layout(block.cell)
+                .residents(self.get(block.frame, block.cell).unwrap_or(AIR))
                 .any(|part| part.offset == block.offset && c.states[part.state as usize].block == block.kind)
     }
 
@@ -1505,7 +1531,9 @@ impl Dim {
                     down.push(super::structure::Carried { local, to: p, state });
                 } else {
                     broke.extend(self.space(id).layout(local).residents(state).map(|part| {
-                        let entity = self.entities.anchored_kind(id, local, c.states[part.state as usize].block, part.offset);
+                        let entity = self
+                            .entities
+                            .anchored_kind(id, local, c.states[part.state as usize].block, part.offset);
                         (p, part.state, entity)
                     }));
                 }
@@ -2602,10 +2630,7 @@ impl Dim {
         };
         for e in &self.entities.list {
             if !e.removed && (!e.player || e.alive()) && !still(e) {
-                by_kind
-                    .entry((0, e.kind))
-                    .or_default()
-                    .push(e.id);
+                by_kind.entry((0, e.kind)).or_default().push(e.id);
             }
         }
         let mut kinds: Vec<(u64, u32)> = by_kind.keys().copied().collect();
@@ -2984,12 +3009,19 @@ impl Dim {
             {
                 by_frame.entry(0).or_default().push(e.id);
             }
-            let mut blocks: Vec<_> = self.entities.system_blocks.iter().copied().filter(|id| {
-                self.entities.comps.contains_key(&(*id, comp)) && only.is_none_or(|o| o.contains_key(id))
-            }).collect();
+            let mut blocks: Vec<_> = self
+                .entities
+                .system_blocks
+                .iter()
+                .copied()
+                .filter(|id| self.entities.comps.contains_key(&(*id, comp)) && only.is_none_or(|o| o.contains_key(id)))
+                .collect();
             blocks.sort_unstable();
             for id in blocks {
-                by_frame.entry(self.entities.blocks[&id].frame).or_default().push(id);
+                by_frame
+                    .entry(self.entities.blocks[&id].frame)
+                    .or_default()
+                    .push(id);
             }
             let mut frames: Vec<u64> = by_frame.keys().copied().collect();
             frames.sort_unstable();
@@ -3004,9 +3036,10 @@ impl Dim {
                     .iter()
                     .map(|id| only.and_then(|o| o.get(id).copied()).unwrap_or(1))
                     .collect();
-                let owners: Vec<abi::Holder> = ids.iter().map(|&id| {
-                    if self.entities.blocks.contains_key(&id) { abi::Holder::block_id(id) } else { abi::Holder::entity(id) }
-                }).collect();
+                let owners: Vec<abi::Holder> = ids
+                    .iter()
+                    .map(|&id| if self.entities.blocks.contains_key(&id) { abi::Holder::block_id(id) } else { abi::Holder::entity(id) })
+                    .collect();
                 let (values, count, ticks) = (bytes.as_mut_ptr(), ids.len() as u32, ticks.as_ptr());
                 if self.active_space(frame) {
                     self.call(frame, owner, cb, |w| abi::SystemArgs {
@@ -4272,9 +4305,15 @@ impl Dim {
                 p.bodies.push((id, st));
             }
         }
-        let instances: Vec<_> = p.cubes.iter()
+        let instances: Vec<_> = p
+            .cubes
+            .iter()
             .filter_map(|(cube, ..)| self.entities.blocks_in_cube.get(cube))
-            .chain(p.bodies.iter().filter_map(|(body, _)| self.entities.blocks_in_body.get(body)))
+            .chain(
+                p.bodies
+                    .iter()
+                    .filter_map(|(body, _)| self.entities.blocks_in_body.get(body)),
+            )
             .flatten()
             .copied()
             .collect();

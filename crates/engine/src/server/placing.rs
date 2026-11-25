@@ -263,15 +263,26 @@ impl Dim {
                 let rel = (at - lo.as_dvec3()).as_vec3();
                 let kind = c.game.entities[e.kind as usize].name.clone();
                 let data = super::serialize(c, self, &[e.id]);
-                parts.entities.push(abi::TemplateEntity { pos: rel.to_array(), kind, data });
+                parts
+                    .entities
+                    .push(abi::TemplateEntity { pos: rel.to_array(), kind, data });
             }
         }
-        for (&id, block) in self.entities.blocks.iter().filter(|(_, block)| block.frame == space_id) {
-            if inside(block.cell) || outside.iter().any(|&(owner, part)| {
-                owner == block.cell && part.offset == block.offset && c.states[part.state as usize].block == block.kind
-            }) {
+        for (&id, block) in self
+            .entities
+            .blocks
+            .iter()
+            .filter(|(_, block)| block.frame == space_id)
+        {
+            if inside(block.cell)
+                || outside.iter().any(|&(owner, part)| {
+                    owner == block.cell && part.offset == block.offset && c.states[part.state as usize].block == block.kind
+                })
+            {
                 let data = super::serialize(c, self, &[id]);
-                parts.data.push(abi::TemplateData { pos: (block.cell - lo).to_array(), data });
+                parts
+                    .data
+                    .push(abi::TemplateData { pos: (block.cell - lo).to_array(), data });
             }
         }
         Some(parts)
@@ -284,12 +295,17 @@ impl Dim {
                 (Some(p), Some(data)) => {
                     let Some((super::persist::SavedOwner::Block { mut block, .. }, inv, comps, _)) =
                         super::persist::read(c, data, self.time).into_iter().next()
-                    else { continue };
+                    else {
+                        continue;
+                    };
                     let (p, part) = Part { state: AIR, offset: e.transform.offset(block.offset) }.owner(p);
                     block.frame = space_id;
                     block.cell = p;
                     block.offset = part.offset;
-                    if let Some(old) = self.entities.anchored_kind(space_id, p, block.kind, block.offset) {
+                    if let Some(old) = self
+                        .entities
+                        .anchored_kind(space_id, p, block.kind, block.offset)
+                    {
                         self.entities.remove(old, UNTOLD);
                     }
                     if self.block_data_fits(c, block) {
@@ -304,7 +320,11 @@ impl Dim {
                     self.fill_slots(owner, stacks);
                 }
                 (None, Some(data)) => {
-                    let Some((super::persist::SavedOwner::Entity(mut saved), inv, comps, _)) = super::persist::read(c, data, self.time).into_iter().next() else { continue };
+                    let Some((super::persist::SavedOwner::Entity(mut saved), inv, comps, _)) =
+                        super::persist::read(c, data, self.time).into_iter().next()
+                    else {
+                        continue;
+                    };
                     saved.id = self.new_id();
                     saved.pos = self.space_pose(space_id).to_world(e.at);
                     saved.frame = None;

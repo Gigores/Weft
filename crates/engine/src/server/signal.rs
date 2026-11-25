@@ -1606,7 +1606,13 @@ impl Dim {
                 .entities
                 .dirty_inv
                 .iter()
-                .filter_map(|id| self.entities.blocks.get(id).filter(|block| block.frame == frame).map(|block| block.cell))
+                .filter_map(|id| {
+                    self.entities
+                        .blocks
+                        .get(id)
+                        .filter(|block| block.frame == frame)
+                        .map(|block| block.cell)
+                })
                 .collect();
             for p in changed {
                 self.space_mut(space_id).signals.read_changed(c, p);

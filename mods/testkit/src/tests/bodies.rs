@@ -76,7 +76,10 @@ pub async fn body_chest(t: T) -> R {
     t.check(chest != "0", "the chest on the skiff owns block data");
     let block_pos = |t: T, body: u64, chest: String| async move {
         let text = t.op(&format!("block_pos {chest} {body}")).await?;
-        let values: Vec<f64> = text.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+        let values: Vec<f64> = text
+            .split_whitespace()
+            .filter_map(|s| s.parse().ok())
+            .collect();
         <[f64; 3]>::try_from(values).map_err(|_| format!("bad block position {text}"))
     };
     t.op(&format!("put {chest} 0 base:cobblestone 7")).await?;

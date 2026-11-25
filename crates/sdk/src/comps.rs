@@ -4,6 +4,8 @@
 
 pub static BLOCKS_ATTACKS: crate::Component<crate::Blocking> = crate::Component::named(crate::abi::comp::BLOCKS_ATTACKS);
 pub static DISABLE_BLOCKING: crate::Component<f32> = crate::Component::named(crate::abi::comp::DISABLE_BLOCKING);
+/// Target position in a placed block's animation clip, from 0 to 1.
+pub static BLOCK_ANIMATION_PROGRESS: crate::Component<f32> = crate::Component::named(crate::abi::comp::block::ANIMATION_PROGRESS);
 pub static CATCH_PROJECTILES: crate::Component<crate::ProjectileCatch> = crate::Component::named(crate::abi::comp::CATCH_PROJECTILES);
 pub static EMBEDDED_PROJECTILES: crate::Component<Vec<crate::EmbeddedProjectile>> =
     crate::Component::named(crate::abi::comp::EMBEDDED_PROJECTILES);

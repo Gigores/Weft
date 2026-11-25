@@ -776,6 +776,7 @@ fn engine_components() -> Vec<RawEntry> {
         (BURNING, "u8", own, vec![0]),
         (abi::comp::LIGHT, "[u8;3]", own, vec![0; 3]),
         (SHOWN, "bytes", shown, Vec::new()),
+        (abi::comp::block::ANIMATION_PROGRESS, "f32", shown, vec![0; 4]),
         (GROUND, "bytes", shown, Vec::new()),
         (abi::environment::COMPONENT, &<Vec<abi::environment::EnvironmentLayer> as abi::data::Data>::schema(), own | cf::SAVE, Vec::new()),
         (WORN, "bytes", shown, Vec::new()),
@@ -2050,13 +2051,24 @@ pub(crate) struct RawBlockData {
     pub slots: u32,
     pub attach: Vec<abi::Attach>,
     pub shown: Vec<u32>,
+    pub animation: Option<BlockAnimation>,
+}
+
+pub struct BlockAnimation {
+    pub model: String,
+    pub clip: String,
+    pub menu: bool,
 }
 
 pub(crate) fn freeze_block_data(
-    g: &mut Game, c: &Components, blocks: &[crate::content::BlockDef], raw: FxHashMap<u32, RawBlockData>, errors: &mut Vec<String>,
+    g: &mut Game,
+    c: &Components,
+    blocks: &[crate::content::BlockDef],
+    raw: FxHashMap<u32, RawBlockData>,
+    errors: &mut Vec<String>,
 ) {
     use crate::components::BLOCK;
-    for (block, RawBlockData { slots, attach, shown }) in raw {
+    for (block, RawBlockData { slots, attach, shown, animation }) in raw {
         let def = &blocks[block as usize];
         if slots >= u32::from(u16::MAX) {
             errors.push(format!("block {}: inventory has too many slots ({slots})", def.name));
@@ -2065,13 +2077,19 @@ pub(crate) fn freeze_block_data(
         let state = def.first_state;
         let mut values = Vec::new();
         for a in attach {
-            let Some(id) = c.id(&a.name).filter(|&id| g.components[id as usize].runtime) else {
+            let Some(id) = c
+                .id(&a.name)
+                .filter(|&id| g.components[id as usize].runtime)
+            else {
                 errors.push(format!("block {}: {} is not a runtime component", def.name, a.name));
                 continue;
             };
             let runtime = &g.components[id as usize];
             let bytes = if a.start.is_empty() {
-                c.bytes(BLOCK, state, id).filter(|bytes| bytes.len() == runtime.size as usize).unwrap_or(&runtime.default).to_vec()
+                c.bytes(BLOCK, state, id)
+                    .filter(|bytes| bytes.len() == runtime.size as usize)
+                    .unwrap_or(&runtime.default)
+                    .to_vec()
             } else {
                 a.start
             };
@@ -2082,7 +2100,16 @@ pub(crate) fn freeze_block_data(
             values.retain(|(existing, _)| *existing != id);
             values.push((id, bytes.into_boxed_slice()));
         }
-        g.block_data.insert(block, BlockDataDef { slots, values, shown_slots: shown });
+        let mut watched: Vec<_> = values
+            .iter()
+            .filter(|(id, _)| g.components[*id as usize].flags & abi::component_flags::SYNC_WATCHERS != 0)
+            .map(|(id, _)| *id)
+            .collect();
+        if !shown.is_empty() && !watched.contains(&g.fields.shown) {
+            watched.push(g.fields.shown);
+        }
+        g.block_data
+            .insert(block, BlockDataDef { slots, values, shown_slots: shown, animation, watched });
     }
 }
 
@@ -2090,6 +2117,8 @@ pub struct BlockDataDef {
     pub slots: u32,
     pub values: Vec<(u32, Box<[u8]>)>,
     pub shown_slots: Vec<u32>,
+    pub animation: Option<BlockAnimation>,
+    pub watched: Vec<u32>,
 }
 
 pub fn freeze_entities(raw: Vec<RawEntry>, mod_name: &dyn Fn(ModId) -> String, errors: &mut Vec<String>) -> Entities {

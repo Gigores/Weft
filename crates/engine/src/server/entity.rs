@@ -604,9 +604,7 @@ impl Entities {
         self.list.push(e);
     }
 
-    pub fn insert_block(
-        &mut self, c: &Content, id: u64, block: BlockData, inv: Option<Vec<ItemStack>>, comps: Vec<(u32, Box<[u8]>)>,
-    ) {
+    pub fn insert_block(&mut self, c: &Content, id: u64, block: BlockData, inv: Option<Vec<ItemStack>>, comps: Vec<(u32, Box<[u8]>)>) {
         let Some(kind) = c.game.block_data.get(&block.kind) else { return };
         if kind.slots > 0 || inv.is_some() {
             let mut inv = inv.unwrap_or_default();
@@ -622,12 +620,14 @@ impl Entities {
         for (comp, value) in comps {
             self.comps.insert((id, comp), value);
         }
-        if !kind.shown_slots.is_empty() || kind.values.iter().any(|(comp, _)| {
-            c.game.components[*comp as usize].flags & weft_abi::component_flags::SYNC_WATCHERS != 0
-        }) {
+        if !kind.watched.is_empty() {
             self.public_blocks.insert(id);
         }
-        if c.game.systems.iter().any(|system| self.comps.contains_key(&(id, system.1))) {
+        if c.game
+            .systems
+            .iter()
+            .any(|system| self.comps.contains_key(&(id, system.1)))
+        {
             self.system_blocks.insert(id);
         }
         self.blocks.insert(id, block);
@@ -635,12 +635,15 @@ impl Entities {
     }
 
     pub(super) fn take_blocks(&mut self, ids: impl IntoIterator<Item = u64>) -> Vec<MovedBlock> {
-        let mut blocks: FxHashMap<_, _> = ids.into_iter().filter_map(|id| {
-            let block = self.detach_block(id)?;
-            let inv = self.inventories.remove(&id);
-            self.dirty_inv.remove(&id);
-            Some((id, (block, inv, Vec::new())))
-        }).collect();
+        let mut blocks: FxHashMap<_, _> = ids
+            .into_iter()
+            .filter_map(|id| {
+                let block = self.detach_block(id)?;
+                let inv = self.inventories.remove(&id);
+                self.dirty_inv.remove(&id);
+                Some((id, (block, inv, Vec::new())))
+            })
+            .collect();
         if blocks.is_empty() {
             return Vec::new();
         }
@@ -654,7 +657,10 @@ impl Entities {
         });
         self.sent.retain(|(id, _), _| !blocks.contains_key(id));
         self.dirty_comp.retain(|(id, _)| !blocks.contains_key(id));
-        blocks.into_iter().map(|(id, (block, inv, comps))| (id, block, inv, comps)).collect()
+        blocks
+            .into_iter()
+            .map(|(id, (block, inv, comps))| (id, block, inv, comps))
+            .collect()
     }
 
     fn detach_block(&mut self, id: u64) -> Option<BlockData> {
@@ -666,11 +672,20 @@ impl Entities {
     }
 
     fn index_block(&mut self, id: u64, block: BlockData) {
-        self.anchors.entry((block.frame, block.cell)).or_default().push(id);
+        self.anchors
+            .entry((block.frame, block.cell))
+            .or_default()
+            .push(id);
         if block.frame == 0 {
-            self.blocks_in_cube.entry(crate::world::cube_of(block.cell)).or_default().insert(id);
+            self.blocks_in_cube
+                .entry(crate::world::cube_of(block.cell))
+                .or_default()
+                .insert(id);
         } else {
-            self.blocks_in_body.entry(block.frame).or_default().insert(id);
+            self.blocks_in_body
+                .entry(block.frame)
+                .or_default()
+                .insert(id);
         }
     }
 
@@ -751,7 +766,11 @@ impl Entities {
     }
 
     pub(super) fn block_ids(&self, frame: u64, cell: IVec3) -> impl Iterator<Item = u64> + '_ {
-        self.anchors.get(&(frame, cell)).into_iter().flatten().copied()
+        self.anchors
+            .get(&(frame, cell))
+            .into_iter()
+            .flatten()
+            .copied()
     }
 
     pub fn anchored_kind(&self, frame: u64, cell: IVec3, kind: u32, offset: IVec3) -> Option<u64> {
@@ -834,7 +853,12 @@ impl Entities {
         }
         if gone.len() != total {
             self.list.retain(|e| !e.removed);
-            self.index = self.list.iter().enumerate().map(|(i, e)| (e.id, i)).collect();
+            self.index = self
+                .list
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.id, i))
+                .collect();
         }
         self.comps.retain(|(e, _), _| !gone.contains(e));
         self.sent.retain(|(e, _), _| !gone.contains(e));

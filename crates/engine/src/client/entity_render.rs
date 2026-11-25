@@ -16,10 +16,10 @@ use crate::model::{self, Drive, role};
 use weft_abi::ItemStack;
 use weft_render::*;
 
-use super::ClientEntity;
 use super::models::{Instance, Models};
 use super::textures::GameTextures;
 use super::world_render::Camera;
+use super::{ClientBlock, ClientEntity};
 use crate::assets::{Assets, decode_png};
 use crate::content::content;
 use crate::gpu_layout::{GpuBox, Scene};
@@ -181,6 +181,7 @@ pub struct EntityRenderer {
     /// Frames drawn, for pose LOD; assets are prepared on changes.
     frame_count: u32,
     preloaded: bool,
+    block_models: FxHashMap<u32, AnimatedBlockModel>,
     pub changed_items: rustc_hash::FxHashSet<u64>,
     /// Stacks whose picture comes next, and the model it is of.
     icons_todo: Vec<(ItemStack, u32)>,
@@ -209,6 +210,16 @@ pub struct EntityRenderer {
     item_generation: u64,
     /// This frame's item instances: (item, instance).
     instances: Vec<(u64, GpuBox)>,
+}
+
+struct AnimatedBlockModel {
+    kind: u32,
+    clips: Box<[u32]>,
+    duration: f32,
+    reach: f32,
+    layer: Instance,
+    first: Vec<Mat4>,
+    last: Vec<Mat4>,
 }
 
 pub const HOOK: crate::shaders::Hook = crate::shaders::Hook {
@@ -266,6 +277,7 @@ impl EntityRenderer {
             gone_pending: Vec::new(),
             frame_count: 0,
             preloaded: false,
+            block_models: FxHashMap::default(),
             changed_items: Default::default(),
             icon_of_model: FxHashMap::default(),
             show_avatars: true,
@@ -675,6 +687,37 @@ impl EntityRenderer {
         let mut changed = std::mem::take(&mut self.changed_items);
         if !self.preloaded {
             changed.extend(entities.keys());
+            self.block_models.clear();
+            for (&block, data) in &c.game.block_data {
+                let Some(animation) = &data.animation else { continue };
+                let Some(kind) = self.models.load_file(assets, &animation.model, None) else {
+                    log::warn!("missing block model {}", animation.model);
+                    continue;
+                };
+                self.load(gpu, assets, &animation.model);
+                let Some(layer) = self.model_layer(kind, FULL_LIGHT, (0, 0.0)) else { continue };
+                let model = &self.models.kinds[kind as usize];
+                let clips = model.action(0, &animation.clip);
+                let Some(&last) = clips.last() else {
+                    log::warn!("block model {} has no clip {}", animation.model, animation.clip);
+                    continue;
+                };
+                let duration = model.anims[last as usize].anim.length.max(0.001);
+                let reach = model.reach / 16.0 + 1.0;
+                let clips: Box<[_]> = clips.into();
+                let mut pose = |progress| {
+                    let mut playing = Clips::default();
+                    self.models.kinds[kind as usize].play(
+                        &mut playing,
+                        &clips,
+                        &Play { drive: Drive::Progress, progress, ..Play::default() },
+                    );
+                    self.models.pose_only(kind, Mat4::IDENTITY, playing.all())
+                };
+                let (first, last) = (pose(0.0), pose(1.0));
+                self.block_models
+                    .insert(block, AnimatedBlockModel { kind, clips, duration, reach, layer, first, last });
+            }
             self.preloaded = true;
         }
         for (id, e) in changed
@@ -735,6 +778,82 @@ impl EntityRenderer {
             glow: self.glows.get(skin).map_or(u32::MAX, |g| g.1),
             ..Default::default()
         })
+    }
+
+    fn pose_block_parts(
+        &mut self,
+        blocks: &mut FxHashMap<u64, ClientBlock>,
+        entities: &FxHashMap<u64, ClientEntity>,
+        body_tick: f64,
+        cam: &Camera,
+        planes: &[Vec4; 4],
+        sun: Option<super::sun_shadow::SunView>,
+        light: &impl Fn(IVec3) -> u32,
+        dt: f32,
+    ) {
+        let c = content();
+        let lit = |p: DVec3| light(p.floor().as_ivec3());
+        for block in blocks.values_mut() {
+            let Some(state) = block
+                .view
+                .animation_state
+                .and_then(|s| c.states.get(s as usize))
+            else {
+                continue;
+            };
+            let Some(model) = self.block_models.get(&state.block) else { continue };
+            let target = if block.view.menu_open { 1.0 } else { block.animation_target };
+            let step = dt / model.duration;
+            let pose = block.animation_pose.get_or_insert(target);
+            *pose += (target - *pose).clamp(-step, step);
+            let place = if block.view.frame == 0 {
+                Transform::default()
+            } else {
+                let Some(body) = entities.get(&block.view.frame) else { continue };
+                body.place_at(body_tick)
+            };
+            let center = place.to_world(block.view.local);
+            let base = (center - cam.pos).as_vec3();
+            let visible = planes
+                .iter()
+                .all(|p| p.dot(base.extend(1.0)) > -model.reach);
+            if !visible && !sun.is_some_and(|s| s.contains(base, model.reach)) {
+                continue;
+            }
+            let layer =
+                if visible { Instance { light: lit(center + place.vector_to_world(DVec3::Y * 0.5)), ..model.layer } } else { model.layer };
+            let axis = |v| Vec3::from_array(state.turn.vector_f(v));
+            let turn = Mat4::from_cols(
+                axis([1.0, 0.0, 0.0]).extend(0.0),
+                axis([0.0, 1.0, 0.0]).extend(0.0),
+                axis([0.0, 0.0, 1.0]).extend(0.0),
+                Vec4::W,
+            );
+            let root = Mat4::from_rotation_translation(place.rotation().as_quat(), base)
+                * turn
+                * Mat4::from_translation(Vec3::NEG_Y * 0.5)
+                * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
+            let end_pose = if *pose == 0.0 {
+                Some(&model.first)
+            } else if *pose == 1.0 {
+                Some(&model.last)
+            } else {
+                None
+            };
+            if let Some(bones) = end_pose {
+                self.models
+                    .add_pose(model.kind, root, bones, layer, !visible);
+                continue;
+            }
+            let mut clips = Clips::default();
+            self.models.kinds[model.kind as usize].play(
+                &mut clips,
+                &model.clips,
+                &Play { drive: Drive::Progress, progress: *pose, ..Play::default() },
+            );
+            self.models
+                .add_clips_in(model.kind, root, (0.0, 0.0), clips.all(), [layer], !visible);
+        }
     }
 
     /// The opaque pixels of a stack's sprites, read the first time it is held or dropped.
@@ -1327,6 +1446,8 @@ impl EntityRenderer {
         cam: &Camera,
         now: u64,
         entities: &FxHashMap<u64, ClientEntity>,
+        blocks: &mut FxHashMap<u64, ClientBlock>,
+        body_tick: f64,
         me: Option<&ClientEntity>,
         hand: Option<Hand>,
         textures: &GameTextures,
@@ -1600,6 +1721,7 @@ impl EntityRenderer {
         let vb = scene_buf;
         let own_index = own_hand.as_ref().map(|o| o.0);
         let (mut firsts, own_first) = self.pose_bones(&posed, aim_root, own_index, hand.as_ref(), steady, dt, moved);
+        self.pose_block_parts(blocks, entities, body_tick, cam, &planes, sun.as_ref().map(|(view, ..)| *view), light, dt);
         let shadow_holder = own_shadow.map(|(owner, hide_hand, shadow)| {
             let holder = posed.len();
             let visible = carried.len();

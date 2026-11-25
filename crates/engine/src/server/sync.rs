@@ -7,6 +7,14 @@ impl Server {
         let mining_now = self.mining_now();
         let settled: Vec<Vec<IVec3>> = self.dims.iter_mut().map(|d| d.take_settled()).collect();
         let moved = self.collect_moves(c);
+        let open_blocks: FxHashSet<u64> = self
+            .players
+            .iter()
+            .filter_map(|p| match p.menu.as_ref()?.on?.at {
+                holder::At::Block(id) => Some(id),
+                _ => None,
+            })
+            .collect();
 
         let mut unsent = 0u64;
         for pi in 0..self.players.len() {
@@ -31,7 +39,7 @@ impl Server {
             let viewer = dim
                 .entity(p.entity)
                 .map_or((DVec3::ZERO, GameMode::SURVIVAL), |e| (e.pos, e.mode));
-            send_entities(c, p, dim, &moved[d], *tick, view.radius, viewer);
+            send_entities(c, p, dim, &moved[d], *tick, view.radius, viewer, &open_blocks);
             send_own_state(c, p, dim);
             let shapes = gizmos_for(p, dim, *tick, viewer.0);
             if !shapes.is_empty() {
@@ -71,12 +79,7 @@ impl Server {
                 r.publish_spaces();
                 r.mirror_fields(c);
                 r.entities.find_changes(&c.game.synced_comps);
-                for e in r
-                    .entities
-                    .list
-                    .iter_mut()
-                    .filter(|e| !e.removed)
-                {
+                for e in r.entities.list.iter_mut().filter(|e| !e.removed) {
                     let now = crate::net::Move {
                         id: e.id,
                         pos: e.pos,
@@ -145,7 +148,13 @@ impl Server {
                     .entities
                     .dirty_inv
                     .iter()
-                    .filter_map(|id| r.entities.blocks.get(id).filter(|block| block.frame == 0).map(|block| cube_of(block.cell)))
+                    .filter_map(|id| {
+                        r.entities
+                            .blocks
+                            .get(id)
+                            .filter(|block| block.frame == 0)
+                            .map(|block| cube_of(block.cell))
+                    })
                     .collect();
                 r.space.modified.extend(anchored);
                 r.entities.dirty_inv.clear();
@@ -238,6 +247,7 @@ fn send_entities(
     tick: u64,
     radius: i32,
     (me, me_mode): (DVec3, GameMode),
+    open_blocks: &FxHashSet<u64>,
 ) {
     let range2 = ((radius * 16) as f64).powi(2);
     let mount = dim
@@ -421,12 +431,19 @@ fn send_entities(
         .collect();
     // Every tick, moving or not: clients show what they see by its timeline, clips included.
     p.conn.send(ToClient::Moves { tick, moves });
-    send_block_views(c, p, dim, &visible, me, range2);
+    send_block_views(c, p, dim, &visible, me, range2, open_blocks);
     p.known = visible;
 }
 
-fn send_block_views(c: &Content, p: &mut Player, dim: &DimSet, bodies: &FxHashSet<u64>, eye: DVec3, range2: f64) {
-    let mut visible = FxHashMap::default();
+fn send_block_views(
+    c: &Content,
+    p: &mut Player,
+    dim: &DimSet,
+    bodies: &FxHashSet<u64>,
+    eye: DVec3,
+    range2: f64,
+    open_blocks: &FxHashSet<u64>,
+) {
     let mut changed = Vec::new();
     let mut shared = Vec::new();
     for reg in &dim.regions {
@@ -437,16 +454,33 @@ fn send_block_views(c: &Content, p: &mut Player, dim: &DimSet, bodies: &FxHashSe
                 continue;
             }
             let local = block.center();
-            if reg.space_pose(block.frame).to_world(local).distance_squared(eye) > range2 {
+            let def = &c.game.block_data[&block.kind];
+            let animation = def.animation.as_ref();
+            let streamed_model = animation.is_some() && (block.frame != 0 || p.sent.contains(&cube_of(block.cell)));
+            if !streamed_model
+                && reg
+                    .space_pose(block.frame)
+                    .to_world(local)
+                    .distance_squared(eye)
+                    > range2
+            {
                 continue;
             }
-            let view = crate::net::BlockView { id, frame: block.frame, local };
-            let old = p.known_blocks.get(&id);
-            if old != Some(&view) {
+            let view = crate::net::BlockView {
+                id,
+                frame: block.frame,
+                local,
+                animation_state: animation.and_then(|_| reg.block_part(id, c).map(|(_, part)| part.state)),
+                menu_open: animation.is_some_and(|a| a.menu) && open_blocks.contains(&id),
+            };
+            let old = p
+                .known_blocks
+                .insert(id, (view, true))
+                .map(|(view, _)| view);
+            if old != Some(view) {
                 changed.push(view);
             }
-            visible.insert(id, view);
-            for &comp in &c.game.watched_comps {
+            for &comp in &def.watched {
                 if old.is_none() || data.dirty_comp.contains(&(id, comp)) {
                     if let Some(value) = data.comps.get(&(id, comp)) {
                         shared.push((id, comp, value.to_vec()));
@@ -455,14 +489,21 @@ fn send_block_views(c: &Content, p: &mut Player, dim: &DimSet, bodies: &FxHashSe
             }
         }
     }
-    let removed: Vec<_> = p.known_blocks.keys().filter(|id| !visible.contains_key(id)).copied().collect();
+    let mut removed = Vec::new();
+    p.known_blocks.retain(|&id, (_, seen)| {
+        let visible = std::mem::take(seen);
+        if !visible {
+            removed.push(id);
+        }
+        visible
+    });
     if !changed.is_empty() || !removed.is_empty() {
-        p.conn.send(ToClient::BlockViews { dim: p.dim, changed, removed });
+        p.conn
+            .send(ToClient::BlockViews { dim: p.dim, changed, removed });
     }
     if !shared.is_empty() {
         p.conn.send(ToClient::SharedComponents(shared));
     }
-    p.known_blocks = visible;
 }
 
 /// What only the player itself hears: pushes, movement numbers, inventory, components, its menu.

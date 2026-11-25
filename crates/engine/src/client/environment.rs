@@ -326,7 +326,8 @@ impl Client {
             } else if let Some(e) = self.entities.get(&owner) {
                 e.pos
             } else if let Some(block) = self.showing_blocks.get(&owner) {
-                self.frame_place(block.view.frame).to_world(block.view.local)
+                self.frame_place(block.view.frame)
+                    .to_world(block.view.local)
             } else {
                 continue;
             };

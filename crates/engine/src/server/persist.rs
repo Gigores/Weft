@@ -129,7 +129,12 @@ pub fn write(c: &Content, out: &mut Vec<u8>, list: &[ToSave<'_>], now: u64) {
                 w.u64(*id);
                 w.str(&c.blocks[block.kind as usize].name);
                 w.u64(block.frame);
-                for coordinate in block.cell.to_array().into_iter().chain(block.offset.to_array()) {
+                for coordinate in block
+                    .cell
+                    .to_array()
+                    .into_iter()
+                    .chain(block.offset.to_array())
+                {
                     w.u32(coordinate as u32);
                 }
                 write_data(c, &mut w, *inv, comps, now);

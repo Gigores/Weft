@@ -333,11 +333,8 @@ impl Server {
                     .iter()
                     .map(|x| r.around(x.0, |p| removed.iter().find(|o| o.0 == p).map(|o| o.1.clone())))
                     .collect();
-                let children = if removed.iter().any(|entry| !entry.2.is_empty()) {
-                    r.entities.structure_children()
-                } else {
-                    Default::default()
-                };
+                let children =
+                    if removed.iter().any(|entry| !entry.2.is_empty()) { r.entities.structure_children() } else { Default::default() };
                 for ((pos, cube, inside), around) in removed.into_iter().zip(around) {
                     let inside = super::entity::Entities::indexed_structure_tree(&inside, &children);
                     if let Some(s) = &storage {

@@ -320,14 +320,22 @@ impl Dim {
             stats.cubes += 1;
             stats.whole += cube.uniform_state().is_some() as usize;
             // Keep the data when a part of the same kind at the same offset survives the edit.
-            let gone: Vec<_> = self.entities.blocks_in_cube.get(&cp).into_iter().flatten().copied()
+            let gone: Vec<_> = self
+                .entities
+                .blocks_in_cube
+                .get(&cp)
+                .into_iter()
+                .flatten()
+                .copied()
                 .filter(|id| {
                     let block = self.entities.blocks[id];
                     let i = crate::world::local_index(block.cell);
-                    !cube.layout(i).residents(cube.get(i)).any(|part| {
-                        part.offset == block.offset && c.states[part.state as usize].block == block.kind
-                    })
-                }).collect();
+                    !cube
+                        .layout(i)
+                        .residents(cube.get(i))
+                        .any(|part| part.offset == block.offset && c.states[part.state as usize].block == block.kind)
+                })
+                .collect();
             for id in gone {
                 self.entities.remove(id, super::dim::UNTOLD);
             }

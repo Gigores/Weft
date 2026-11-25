@@ -661,8 +661,15 @@ fn energy_gizmos(w: &World, owners: &[Holder]) {
     for &owner in owners {
         if let (Some(pos), Some(e)) = (w.block_location(owner.entity), w.component(owner, &ENERGY)) {
             let args = [Arg::Int(e.stored as i64), Arg::Int(e.capacity as i64)];
-            w.draw_text(Some(&ENERGY_GIZMOS), [pos.x as f64 + 0.5, pos.y as f64 + 1.3, pos.z as f64 + 0.5], "testmod.energy_label", &args, 0x60FF60FF, 1.0)
-                .ticks(11);
+            w.draw_text(
+                Some(&ENERGY_GIZMOS),
+                [pos.x as f64 + 0.5, pos.y as f64 + 1.3, pos.z as f64 + 0.5],
+                "testmod.energy_label",
+                &args,
+                0x60FF60FF,
+                1.0,
+            )
+            .ticks(11);
         }
     }
 }
