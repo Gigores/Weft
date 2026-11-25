@@ -72,7 +72,12 @@ fn creative_panel(ui: &mut Ui, cx: &BuildCx, search: &Rc<RefCell<String>>, tab: 
                                 ctx.requests.push(Request::Rebuild);
                             }),
                             |ui| {
-                                ui.add(Kind::Custom { tag: modui::TAG_ICON, data: t.icon as u64 }, Style::default().size(16.0, 16.0));
+                                use crate::content::CreativeTabIcon;
+                                let icon = match &t.icon {
+                                    CreativeTabIcon::Item(item) => Kind::Custom { tag: modui::TAG_ICON, data: *item as u64 },
+                                    CreativeTabIcon::Texture(texture) => Kind::Image { texture: texture.clone(), color: 0xFFFFFFFF },
+                                };
+                                ui.add(icon, Style::default().size(16.0, 16.0));
                             },
                         );
                         if let Kind::Button { selected, .. } = &mut ui.nodes[b].kind {

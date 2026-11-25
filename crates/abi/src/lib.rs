@@ -841,6 +841,7 @@ pub mod comp {
     /// 0xRRGGBB where the biome sets none and on items, white); a key's `DEFAULT` (`str`, the
     /// key by its settings name, `KeyJ`, `mouse3`).
     pub const CREATIVE_TAB_ICON: &str = "creative_tab.icon";
+    pub const CREATIVE_TAB_ICON_TEXTURE: &str = "creative_tab.icon_texture";
     pub const TINT_KIND_DEFAULT: &str = "tint_kind.default";
     pub const KEY_DEFAULT: &str = "key.default";
     /// Attribute modifiers (`[Modifier]`) of a game mode, an item, a pose, an entity kind or

@@ -217,7 +217,10 @@ pub mod attribute {
 pub mod creative_tab {
     use crate::kind::CreativeTab;
     use crate::{Component, Text};
+    /// The item rendered as the tab's icon.
     pub static ICON: Component<Text, CreativeTab> = Component::named(crate::abi::comp::CREATIVE_TAB_ICON);
+    /// A named texture that takes precedence over the item icon.
+    pub static ICON_TEXTURE: Component<Text, CreativeTab> = Component::named(crate::abi::comp::CREATIVE_TAB_ICON_TEXTURE);
 }
 
 /// A tint kind's color where no biome gives one.

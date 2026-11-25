@@ -253,6 +253,7 @@ enum Icon {
     Item(u32),
     /// A texture by its id in `Content::textures`.
     Picture(u32),
+    Texture(String),
 }
 
 /// A picture's icon, if the content has it.
@@ -381,7 +382,14 @@ fn choices(c: &Content, kind: What, list: List, things: &[Thing], cx: &BuildCx) 
         List::Tab => c
             .creative_tabs
             .iter()
-            .map(|t| plain(&t.name, Icon::Item(t.icon), format!("&CreativeTab::named({})", code::quote(&t.name))))
+            .map(|t| {
+                use crate::content::CreativeTabIcon;
+                let icon = match &t.icon {
+                    CreativeTabIcon::Item(item) => Icon::Item(*item),
+                    CreativeTabIcon::Texture(texture) => Icon::Texture(texture.clone()),
+                };
+                plain(&t.name, icon, format!("&CreativeTab::named({})", code::quote(&t.name)))
+            })
             .collect(),
         List::Tool => c
             .tool_classes
@@ -454,6 +462,9 @@ fn icon(ui: &mut Ui, icon: &Icon, side: f32) {
         }
         Icon::Picture(p) => {
             ui.add(Kind::Custom { tag: TAG_PICTURE, data: *p as u64 }, Style::default().size(side, side));
+        }
+        Icon::Texture(texture) => {
+            ui.add(Kind::Image { texture: texture.clone(), color: 0xFFFFFFFF }, Style::default().size(side, side));
         }
     }
 }

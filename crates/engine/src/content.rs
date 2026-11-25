@@ -741,10 +741,14 @@ impl LiquidDef {
     }
 }
 
-/// Its two sides are matchers.
+pub enum CreativeTabIcon {
+    Item(u32),
+    Texture(String),
+}
+
 pub struct CreativeTab {
     pub name: String,
-    pub icon: u32,
+    pub icon: CreativeTabIcon,
     pub items: Vec<u32>,
 }
 
@@ -1830,16 +1834,24 @@ fn creative_tabs(
 ) -> Vec<CreativeTab> {
     fn tab<'a>(tabs: &'a mut Vec<CreativeTab>, name: &str, icon: u32) -> &'a mut CreativeTab {
         let i = tabs.iter().position(|t| t.name == name).unwrap_or_else(|| {
-            tabs.push(CreativeTab { name: name.to_owned(), icon, items: Vec::new() });
+            tabs.push(CreativeTab { name: name.to_owned(), icon: CreativeTabIcon::Item(icon), items: Vec::new() });
             tabs.len() - 1
         });
         &mut tabs[i]
     }
     let (made, _) = tables.bake(raw, abi::entry_kind::CREATIVE_TAB, mod_name, errors, |e, errors| {
-        let icon = e.text(abi::comp::CREATIVE_TAB_ICON).unwrap_or_default();
-        let Some(&icon) = item_names.get(icon) else {
-            errors.push(format!("creative tab {}: unknown icon item {icon}", e.name));
-            return None;
+        let icon = if let Some(texture) = e
+            .text(abi::comp::CREATIVE_TAB_ICON_TEXTURE)
+            .filter(|s| !s.is_empty())
+        {
+            CreativeTabIcon::Texture(texture.to_owned())
+        } else {
+            let item = e.text(abi::comp::CREATIVE_TAB_ICON).unwrap_or_default();
+            let Some(&item) = item_names.get(item) else {
+                errors.push(format!("creative tab {}: unknown icon item {item}", e.name));
+                return None;
+            };
+            CreativeTabIcon::Item(item)
         };
         Some(CreativeTab { name: e.name.clone(), icon, items: Vec::new() })
     });
@@ -1889,8 +1901,11 @@ fn creative_tabs(
         tab(&mut tabs, &name, list[0]).items.extend(list);
     }
     tabs.retain(|t| !t.items.is_empty());
-    for t in tabs.iter_mut().filter(|t| t.icon == 0) {
-        t.icon = t.items[0];
+    for t in tabs
+        .iter_mut()
+        .filter(|t| matches!(t.icon, CreativeTabIcon::Item(0)))
+    {
+        t.icon = CreativeTabIcon::Item(t.items[0]);
     }
     for t in &tabs {
         log::debug!(

@@ -547,7 +547,10 @@ r.edit(&base_api::slots::CHEST).push(&comps::equipment_slot::COVERS, "leftWing".
 ```
 
 ## Creative tab
-`r.creative_tab(&TAB, &ICON)`; blocks and items join with `.tab(&TAB)` (tag `tab/<tab>`). `comps::creative_tab::ICON` (`str`).
+`r.creative_tab(&TAB, &ICON)` uses an item icon. `r.creative_tab_texture(&TAB, "gui/my_tab")`
+uses `textures/gui/my_tab.png` in your mod, with a matching `.anim` for a strip of frames.
+Blocks and items join with `.tab(&TAB)` (tag `tab/<tab>`). The `comps::creative_tab::ICON_TEXTURE`
+component takes precedence over `ICON` when both are set.
 
 ```rust
 r.edit(&base_api::tabs::FOOD).set_text(&comps::creative_tab::ICON, "base:bread");

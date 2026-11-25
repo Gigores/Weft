@@ -1216,6 +1216,14 @@ impl Registry {
             .set_text(&crate::comps::creative_tab::ICON, icon.name())
     }
 
+    /// A creative inventory tab with a texture from `textures/<texture>.png`. A vertical strip
+    /// with a matching `.anim` file plays as an animated icon.
+    pub fn creative_tab_texture(&mut self, tab: &'static CreativeTab, texture: &str) -> CreativeTabBuilder<'_> {
+        let texture = crate::asset("", texture);
+        self.creative_tab_entry(tab)
+            .set_text(&crate::comps::creative_tab::ICON_TEXTURE, &texture)
+    }
+
     fn creative_tab_entry(&mut self, tab: &'static CreativeTab) -> CreativeTabBuilder<'_> {
         CreativeTabBuilder { reg: self, e: crate::entry::Entry::of(tab) }
     }
