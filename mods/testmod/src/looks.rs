@@ -182,8 +182,10 @@ pub fn register(r: &mut Registry) {
         .hardness(0.1);
     r.block(&GLOW_FLOWER)
         .plant()
+        .replaceable()
         .needs_below("#plant_soil")
         .tint_kind(&GLOW);
+    r.loot(&GLOW_FLOWER).pool(Pool::new().item(GLOW_FLOWER.name()));
     r.block(&GLOW_CRYSTAL)
         .hardness(1.5)
         .mined_by("pickaxe", tool_tier::HAND)

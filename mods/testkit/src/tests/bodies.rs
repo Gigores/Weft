@@ -15,7 +15,7 @@ async fn spawn(t: &T, kind: &str, p: [i32; 3]) -> Result<u64, String> {
 }
 
 /// Server position of an entity (`me`: the player as the server last heard).
-async fn pos_of(t: &T, id: &str) -> Result<[f64; 3], String> {
+pub(super) async fn pos_of(t: &T, id: &str) -> Result<[f64; 3], String> {
     let line = t.op(&format!("entity {id}")).await?;
     let v: Vec<f64> = line
         .split_whitespace()
@@ -376,11 +376,9 @@ pub async fn skiff_smooth(t: T) -> R {
     let (mut turns, mut dir, mut jump, mut slip, mut longest, mut before) = (0, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
     let (mut last, mut rel) = (x(&t, skiff), x(&t, idol) - x(&t, skiff));
     let start = std::time::Instant::now();
-    let mut frame = start;
     while start.elapsed().as_secs_f64() < 3.5 {
         t.frames(1).await?;
-        let dt = frame.elapsed().as_secs_f64();
-        frame = std::time::Instant::now();
+        let dt = t.state().dt as f64;
         longest = longest.max(dt);
         let (now, now_rel) = (x(&t, skiff), x(&t, idol) - x(&t, skiff));
         let d = now - last;
@@ -575,9 +573,10 @@ pub async fn skiff_blocks(t: T) -> R {
     }
     t.check(targets.len() == 1, format!("one block looked at while riding ({targets:?})"));
     let (a, sa) = (pos_of(&t, &format!("{id}")).await?, t.op(&sb([0, 1, -1])).await?);
-    t.secs(1.0).await?;
-    let b = pos_of(&t, &format!("{id}")).await?;
-    t.check((b[0] - a[0]).abs() > 2.0 && sa == t.op(&sb([0, 1, -1])).await?, "it flies on with the stone on it");
+    t.until("the skiff flies on", std::time::Duration::from_secs(5), |t| {
+        t.c().entity(id).is_some_and(|e| (e.pos.x - a[0]).abs() > 2.0)
+    }).await?;
+    t.check_eq(t.op(&sb([0, 1, -1])).await?, sa, "the stone still rides on the flying deck");
     // A mod's write, then the player breaks the stone.
     t.check_eq(t.op(&format!("{} base:cobblestone", sb([1, 1, 1]))).await?, "1".to_string(), "a mod sets a block of it");
     t.check_eq(t.op(&sb([1, 1, 1])).await?, "base:cobblestone".to_string(), "and reads it back");

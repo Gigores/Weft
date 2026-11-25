@@ -48,6 +48,20 @@ async fn settle(t: &T) -> R {
     t.secs(0.6).await
 }
 
+async fn traced(t: &T) -> Result<String, String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(12);
+    loop {
+        let result = t.op("traced").await?;
+        if result != "pending" {
+            return Ok(result);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("the redstone trace did not finish".into());
+        }
+        t.secs(0.1).await?;
+    }
+}
+
 async fn run_of_wire(t: &T, f: [i32; 3], from: i32, to: i32, z: i32) -> R {
     for x in from..=to {
         t.set(add(f, [x, 0, z]), &wire(&[DOWN])).await?;
@@ -389,14 +403,14 @@ pub async fn redstone_piston_moves(t: T) -> R {
         let (t, mut last, mut largest) = (t.clone(), t.state().shown.x, 0.0f64);
         async move {
             // What a step has beyond the speed it goes at: a long frame makes a long step too.
-            let mut frame = std::time::Instant::now();
+            let mut before = t.state().dt as f64;
             for _ in 0..frames {
                 t.frames(1).await?;
-                let dt = std::mem::replace(&mut frame, std::time::Instant::now())
-                    .elapsed()
-                    .as_secs_f64();
-                let x = t.state().shown.x;
-                largest = largest.max((x - last).abs() - 10.0 * dt);
+                let state = t.state();
+                let dt = state.dt as f64;
+                let x = state.shown.x;
+                largest = largest.max((x - last).abs() - 10.0 * (dt + before));
+                before = dt;
                 last = x;
             }
             Ok::<_, String>(largest)
@@ -612,7 +626,7 @@ pub async fn redstone_timing(t: T) -> R {
         .await?;
     t.set(add(f, [3, 0, z + 1]), &lever(true)).await?;
     t.secs(0.5).await?;
-    let seen = t.op("traced").await?;
+    let seen = traced(&t).await?;
     let when = |at: [i32; 3], what: &dyn Fn(&str) -> bool| {
         let cell = format!("{},{},{}", at[0], at[1], at[2]);
         seen.lines()
@@ -892,7 +906,7 @@ pub async fn redstone_floater(t: T) -> R {
     t.cmd(&format!("/tp {} {} {}", f[0] as f64 + 2.5, f[1] + y + 2, f[2] as f64 + z as f64 + 0.5))
         .await?;
     t.secs(0.5).await?;
-    let start = t.state().pos.x;
+    let start = super::bodies::pos_of(&t, "me").await?[0];
     // Power to the floater from what comes along.
     // Under the floater, stuck to the slime next to it: it goes along.
     t.set(at(1, -1), "base:redstone_block").await?;
@@ -923,7 +937,7 @@ pub async fn redstone_floater(t: T) -> R {
     t.check(t.block(at(7, 0)).await?.contains("floater"), "the floater with it");
     t.check(t.block(at(8, 1)).await?.contains("stone"), "and the block on the slime");
     t.check(!t.block(at(1, 0)).await?.contains("floater"), "nothing left behind");
-    let now = t.state().pos.x;
+    let now = super::bodies::pos_of(&t, "me").await?[0];
     let slip = (now - start) - (now - start).round();
     t.probe("how far what stood on it slipped", slip.abs() as f32, slip.abs() < 0.02);
     t.probe("how far what stood on it went", (now - start) as f32, (now - start) > 4.0);
@@ -1072,6 +1086,7 @@ pub async fn body_walking(t: T) -> R {
     let pig = t
         .op(&format!("spawn base:pig {} {} {}", f[0] - 6, f[1] + 5, f[2] - 6))
         .await?;
+    t.check_eq(t.op(&format!("brain_edit {pig} core:wander disable")).await?, "true".to_owned(), "the pig takes only the commanded path");
     t.op(&format!("onto {id} 1.0 {pig}")).await?;
     t.secs(0.5).await?;
     let pos = |t: T, id: String| async move {
@@ -1087,12 +1102,11 @@ pub async fn body_walking(t: T) -> R {
     let (b, p) = (pos(t.clone(), id.to_string()).await?, pos(t.clone(), pig.clone()).await?);
     let start_z = p[2] - b[2];
     // Somewhere on the deck.
-    t.op(&format!("navigate {pig} {} {} {}", p[0].floor(), p[1].floor(), p[2].floor() as i32 + 2))
-        .await?;
+    t.check_eq(t.op(&format!("navigate {pig} 0 1 2 {id}")).await?, "1".to_owned(), "started a path on the deck");
     t.secs(3.0).await?;
     let (b, p) = (pos(t.clone(), id.to_string()).await?, pos(t.clone(), pig.clone()).await?);
     t.check(p[1] > b[1] + 0.5, format!("it is still on the deck: {p:?} on {b:?}"));
-    t.probe("how far along the deck it walked", (p[2] - b[2] - start_z) as f32, (p[2] - b[2] - start_z).abs() > 0.8);
+    t.probe("how far along the deck it walked", (p[2] - b[2] - start_z) as f32, p[2] - b[2] - start_z > 0.8);
     Ok(())
 }
 
@@ -1242,13 +1256,13 @@ pub async fn redstone_floater_riders(t: T) -> R {
     t.set(at(0, 0, -1), "base:stone").await?;
     // Something to break on the way, and what it stops at.
     t.set(at(3, -1, -1), "base:stone").await?;
-    t.set(at(3, 0, -1), "base:dandelion").await?;
+    t.set(at(3, 0, -1), "testmod:glow_flower").await?;
     t.set(at(6, 0, -1), "base:obsidian").await?;
     t.frames(4).await?;
     t.set(at(1, 0, -1), "base:lever[attach=west,front=east,power=on]")
         .await?;
     t.secs(3.0).await?;
-    t.check(!t.block(at(3, 0, -1)).await?.contains("dandelion"), "the flower in its way broke");
+    t.check(!t.block(at(3, 0, -1)).await?.contains("glow_flower"), "the flower in its way broke");
     t.check(t.block(at(6, 0, -1)).await?.contains("obsidian"), "what stops it stays");
     let mut stone = Vec::new();
     let mut levers = 0;
@@ -1428,11 +1442,19 @@ pub async fn redstone_rides(t: T) -> R {
     t.set(add(f, [3, y - 1, z]), "base:redstone_block").await?;
     settle(&t).await?;
     t.check(lit(&t, at(2, z)).await?, "the lamp is lit, by the block under it");
+    t.cmd("/tick freeze").await?;
     t.set(at(0, z), "base:redstone_block").await?;
     let mut was_off = false;
     let mut bodies = 0;
-    for _ in 0..30 {
-        t.frames(1).await?;
+    for _ in 0..8 {
+        let before = t.game_time().await?;
+        t.cmd("/tick step 1").await?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while t.game_time().await? == before {
+            if std::time::Instant::now() >= deadline {
+                return Err("the piston test's simulation step did not run".into());
+            }
+        }
         let there = t
             .op(&format!("near {} {} {} 6", f[0] + 2, f[1] + y, f[2] + z))
             .await?;
@@ -1449,6 +1471,7 @@ pub async fn redstone_rides(t: T) -> R {
             was_off |= state.contains("power=off");
         }
     }
+    t.cmd("/tick unfreeze").await?;
     t.check(bodies > 0, "it was seen on its way");
     t.check(!was_off, "the lamp stayed lit on the way");
     t.check(lit(&t, at(3, z)).await?, "and where it got to");
@@ -2177,20 +2200,10 @@ pub async fn redstone_clock(t: T) -> R {
     let torch = add(f, [4, 0, -4]);
     t.op(&format!("rsclock {} {} {} 0", f[0] + 3, f[1], f[2] - 4))
         .await?;
-    let on = |t: &T, p: [i32; 3]| {
-        t.c()
-            .block(p)
-            .is_some_and(|s| state_prop(s, "power") == Some("on"))
-    };
-    let mut flips = 0;
-    let mut was = on(&t, torch);
-    for _ in 0..200 {
-        t.secs(0.02).await?;
-        let now = on(&t, torch);
-        flips += (now != was) as u32;
-        was = now;
-    }
-    t.probe("flips of a clock in four seconds", flips as f32, (4..=12).contains(&flips));
+    let trace = |[x, y, z]: [i32; 3], ticks| format!("trace {x} {y} {z} {x} {y} {z} {ticks}");
+    t.op(&trace(torch, 80)).await?;
+    let flips = traced(&t).await?.lines().count().saturating_sub(1);
+    t.probe("clock transitions over 80 server ticks", flips as f32, (4..=12).contains(&flips));
 
     // A torch on a block and a repeater of the shortest delay: burns out.
     let z = -10;
@@ -2203,14 +2216,8 @@ pub async fn redstone_clock(t: T) -> R {
         t.set(add(f, [x, 0, zz]), &wire(&[DOWN])).await?;
     }
     t.secs(2.5).await?;
-    let mut flips = 0;
-    let mut was = on(&t, quick);
-    for _ in 0..60 {
-        t.secs(0.02).await?;
-        let now = on(&t, quick);
-        flips += (now != was) as u32;
-        was = now;
-    }
+    t.op(&trace(quick, 24)).await?;
+    let flips = traced(&t).await?.lines().count().saturating_sub(1);
     t.check(flips <= 1, format!("a burnt out torch keeps still: {flips} flips"));
     Ok(())
 }

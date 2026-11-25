@@ -451,6 +451,15 @@ fn init(r: &mut Registry) {
         .replaces("#stone_ore_replaceables")
         .replaces_with("basalt", &BASALT_TIN_ORE)
         .exposed(0.5);
+    static LOD_PLAIN: Dimension = Dimension::named("lod_plain");
+    r.terrain(&LOD_PLAIN).stone("base:stone").base_height(7.0);
+    r.dimension(&LOD_PLAIN)
+        .bare()
+        .height_cubes(-1, 4)
+        .sky_above(1)
+        .no_block_updates()
+        .spawn_point(|_| [0, 8, 0].into());
+
     r.terrain(&MARS)
         .stone("basalt")
         .base_height(60.0)

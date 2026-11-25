@@ -26,6 +26,7 @@ pub async fn displayed_stacks(t: T) -> R {
     }
 
     t.flat().await?;
+    t.c().select_slot(0);
     let f = t.feet();
     let carrier: u64 = t
         .op(&format!("spawn testmod:display_carrier {} {} {}", f[0] - 2, f[1], f[2] - 3))

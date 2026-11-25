@@ -458,14 +458,16 @@ type Run = fn(&World, &Command, u64, [i32; 3]) -> Result<String, String>;
 /// parses positions (`~dx`), block, item and entity names, and the answer goes back to the test
 /// that ran it (`Client::run_command`), as `ok ..` or `err ..`.
 const OPS: &[(&str, &str, Run)] = &[
+    ("game_time", "", |w, _, _, _| Ok(w.game_time().to_string())),
     ("last_said", "", |_, _, _, _| Ok(LAST_SAID.lock().unwrap().clone())),
     // Every change in a box for some ticks; `traced` gives what it saw.
     ("traced", "", |_, _, _, _| {
-        Ok(TRACE
-            .lock()
-            .unwrap()
-            .take()
-            .map_or(String::new(), |t| t.lines.join("\n")))
+        let mut trace = TRACE.lock().unwrap();
+        if trace.as_ref().is_some_and(|t| t.left > 0) {
+            Ok("pending".to_owned())
+        } else {
+            Ok(trace.take().map_or_else(String::new, |t| t.lines.join("\n")))
+        }
     }),
     ("trace", "<a:pos> <b:pos> <ticks:int>", |w, cmd, _, _| {
         let (a, b) = (pos(cmd, "a")?, pos(cmd, "b")?);
@@ -997,9 +999,12 @@ const OPS: &[(&str, &str, Run)] = &[
         w.teleport(rider, None, [e.pos.x, e.pos.y + cmd.float("h").unwrap_or(0.0) + 0.05, e.pos.z]);
         Ok(String::new())
     }),
-    ("navigate", "@owner <to:pos>", |w, cmd, _, _| {
+    ("navigate", "@owner <to:pos> [frame:int]", |w, cmd, _, _| {
         let p = pos(cmd, "to")?;
-        Ok((w.navigate(owner(w, cmd)?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5], 1.0) as u32).to_string())
+        let id = owner(w, cmd)?;
+        let frame = cmd.int("frame").unwrap_or(0) as u64;
+        let space = w.in_space(frame).ok_or("navigation space not loaded")?;
+        Ok((space.navigate(id, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5], 1.0) as u32).to_string())
     }),
     ("structure", "<name:word> <r:int>", |w, cmd, _, me| {
         Ok(w.structure_near(word(cmd, "name")?, me, int(cmd, "r")?)

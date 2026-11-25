@@ -134,7 +134,11 @@ pub async fn hud_editor(t: T) -> R {
     t.c().menu_open(&screens::HUD_EDITOR);
     t.screen("core:hud_editor").await?;
     t.frames(3).await?;
-    t.check(t.click_ui("text:Reset all", 0), "reset all");
+    t.check(t.click_ui("id:hud_reset_all", 0), "open the reset confirmation");
+    t.until("the reset confirmation", std::time::Duration::from_secs(2), |t| {
+        t.c().ui_rect("id:hud_confirm_reset").is_some()
+    }).await?;
+    t.check(t.click_ui("id:hud_confirm_reset", 0), "confirm the reset");
     t.secs(0.3).await?;
     t.c().menu_close();
     t.no_screen().await?;
@@ -372,9 +376,15 @@ pub async fn creative_inventory(t: T) -> R {
 pub async fn chat_overflow(t: T) -> R {
     t.world(3).await?;
     for i in 0..40 {
-        t.cmd(&format!("/help line{i}")).await?;
+        t.c().say(&format!("/help line{i}"));
     }
-    t.cmd("/help").await?;
+    t.until("the last command entered chat history", Duration::from_secs(5), |t| {
+        t.c().chat_line(0).contains("line39")
+    }).await?;
+    t.c().say("/help");
+    t.until("the help lines appeared in chat", Duration::from_secs(5), |t| {
+        !t.c().chat_line(0).contains("line39")
+    }).await?;
     t.frames(4).await?;
     weft_sdk::settings::GUI_SCALE.set(4);
     t.frames(2).await?;

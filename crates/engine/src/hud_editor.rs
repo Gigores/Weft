@@ -281,7 +281,8 @@ impl Screen for HudEditor {
                             label(ui, cx, "hud.edit.reset_question", &[], "label");
                             label(ui, cx, "hud.edit.reset_note", &[], "dim");
                             ui.container(Style::row().gap(6.0), |ui| {
-                                button(ui, cx, "hud.edit.reset_all", &[], 84.0, |c| Self::confirm_reset(c, true));
+                                let confirm = button(ui, cx, "hud.edit.reset_all", &[], 84.0, |c| Self::confirm_reset(c, true));
+                                ui.set_id(confirm, "hud_confirm_reset");
                                 back_button(ui, cx, "menu.cancel", &[], 84.0, |c| Self::confirm_reset(c, false));
                             });
                         },

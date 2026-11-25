@@ -208,19 +208,17 @@ pub async fn entity_modify(t: T) -> R {
     let near = t
         .op(&format!("spawn base:pig {} {} {}", f[0] + 1, f[1], f[2] - 3))
         .await?;
+    for pig in [&hit, &near] {
+        t.check_eq(t.op(&format!("brain_edit {pig} core:wander disable")).await?, "true".to_owned(), "the pig stays in the test formation");
+        t.check_eq(t.op(&format!("brain_edit {pig} core:panic disable")).await?, "true".to_owned(), "the pig only moves from the smash");
+    }
     t.secs(0.5).await?;
-    let x = |s: String| {
-        s.split_whitespace()
-            .nth(1)
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(f64::NAN)
-    };
-    let before = x(t.op(&format!("entity {near}")).await?);
+    let before = super::bodies::pos_of(&t, &near).await?[0];
+    let nearby = near.parse::<u64>().map_err(|e| format!("nearby pig: {e}"))?;
     t.op(&format!("hit_falling {hit} 5")).await?;
-    t.secs(0.5).await?;
-    let after = x(t.op(&format!("entity {near}")).await?);
-    t.probe("the pig beside is thrown back", (after - before) as f32, after - before > 0.8);
-    Ok(())
+    t.until("the pig beside is thrown back", Duration::from_secs(3), |t| {
+        t.c().entity(nearby).is_some_and(|e| e.pos.x - before > 0.8)
+    }).await
 }
 
 /// Menus open on a storage a player carries and on far away blocks; a menu for a block without
@@ -494,24 +492,30 @@ pub async fn crater(t: T) -> R {
 /// saved (left behind), and again after reopening; the untouched land around costs nothing.
 pub async fn lod_columns(t: T) -> R {
     t.world(5).await?;
+    let dim = Dimension::lookup("testmod:lod_plain").ok_or("missing LOD test dimension")?;
+    t.cmd("/dim testmod:lod_plain").await?;
+    t.until("the LOD test dimension", Duration::from_secs(10), |t| t.state().dim == dim).await?;
+    t.loaded().await?;
     t.op("mode creative").await?;
+    t.c().set_flying(true);
     let f = t.feet();
     t.check_eq(t.state().lod_columns, 0, "nothing built, nothing sent");
-    t.op(&format!("fill {} {} {} {} {} {} base:stone", f[0] + 4, f[1], f[2] + 4, f[0] + 6, f[1] + 40, f[2] + 6))
+    let tower = t.op(&format!("fill {} {} {} {} {} {} base:stone", f[0] + 4, f[1] + 32, f[2] + 4, f[0] + 6, f[1] + 48, f[2] + 6))
         .await?;
-    t.cmd(&format!("/tp {} 200 {}", f[0] + 3000, f[2])).await?;
+    t.check_eq(tower.trim(), "153", "all tower blocks were placed");
+    t.cmd(&format!("/tp {} {} {}", f[0] + 3000, f[1] + 24, f[2])).await?;
     t.until("the tower's columns sent", Duration::from_secs(30), |t| t.state().lod_columns >= 9)
         .await?;
-    let n = t.state().lod_columns;
-    t.probe("columns sent", n as f32, n < 64);
+    t.check_eq(t.state().lod_columns, 9, "only the tower's columns were sent");
     let name = format!("test-{}", t.name());
     t.c().world_leave();
     t.screen("core:title").await?;
     t.c().world_open(&name, 5);
     t.until("joined again", Duration::from_secs(60), |t| t.flag(client::client_flags::JOINED))
         .await?;
-    t.until("the columns again after reopening", Duration::from_secs(5), |t| t.state().lod_columns >= 9)
+    t.until("the columns again after reopening", Duration::from_secs(10), |t| t.state().dim == dim && t.state().lod_columns >= 9)
         .await?;
+    t.check_eq(t.state().lod_columns, 9, "the tower's columns survived reload");
     Ok(())
 }
 
@@ -1276,14 +1280,6 @@ pub async fn edit_while_loading(t: T) -> R {
 }
 
 async fn edit_while_loading_at(t: &T) -> R {
-    // A stall of the machine can hit one try; behind the whole queue, every try is many seconds late.
-    let first = edit_while_loading_once(t).await?;
-    let ms = if first < 1000.0 { first } else { edit_while_loading_once(t).await? };
-    t.check(ms < 1000.0, format!("shown after {ms:.0} ms"));
-    Ok(())
-}
-
-async fn edit_while_loading_once(t: &T) -> Result<f64, String> {
     t.world(5).await?;
     t.idle().await?;
     t.op("mode spectator").await?;
@@ -1297,7 +1293,9 @@ async fn edit_while_loading_once(t: &T) -> Result<f64, String> {
     // Eye level, three blocks north.
     let f = t.feet();
     let p = add(f, [0, 1, -3]);
-    let gold = |c: [u8; 3]| c[0] > 180 && c[1] > 130 && c[2] < 110;
+    t.look_at(p);
+    t.frames(3).await?;
+    let gold = |c: [u8; 3]| c[0] > c[1] && c[1] > 30 && c[2] < c[1] / 3;
     t.check(!gold(t.pixel(0.53, 0.53).await?), "sky in front before");
     t.c().reload_assets();
     let mut most = 0;
@@ -1310,14 +1308,15 @@ async fn edit_while_loading_once(t: &T) -> Result<f64, String> {
     let backlog = t.state().pending_meshes;
     let start = std::time::Instant::now();
     t.set(p, "gold_block").await?;
-    let mut shown = false;
-    while start.elapsed() < Duration::from_secs(5) && !shown {
-        shown = gold(t.pixel(0.53, 0.53).await?);
+    let mut pixel = t.pixel(0.53, 0.53).await?;
+    while start.elapsed() < Duration::from_secs(5) && !gold(pixel) {
+        pixel = t.pixel(0.53, 0.53).await?;
     }
     let ms = start.elapsed().as_secs_f64() * 1000.0;
-    t.note(format!("placed block shown after {ms:.0} ms with {backlog} meshes waiting"));
-    t.check(shown, "the placed block shows");
-    Ok(ms)
+    t.note(format!("placed block shown after {ms:.0} ms with {backlog} meshes waiting, pixel {pixel:?}"));
+    t.check(gold(pixel), "the placed block shows");
+    t.check(ms < 1000.0, format!("shown after {ms:.0} ms"));
+    Ok(())
 }
 
 /// Terrain the GPU makes is the CPU's to the bit (integer math on both sides): every cube of a

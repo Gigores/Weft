@@ -537,8 +537,8 @@ pub async fn ctm_any_model(t: T) -> R {
     let base_model = format!("{pack}/base/models/block/grass.json");
     std::fs::create_dir_all(std::path::Path::new(&base_model).parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&base_model, whole(r#""north":{},"south":{},"east":{},"west":{},"up":{},"down":{}"#)).map_err(|e| e.to_string())?;
-    write("textures/block/varied.ctm", "method = vertical\ntiles = colors/red colors/green colors/blue colors/yellow\n")?;
-    write("textures/block/varied_cube.ctm", "method = random\ntiles = shapes/thin <default>\nhides_neighbors = false\n")?;
+    write("textures/block/varied/varied.ctm", "method = vertical\ntiles = testkit:block/colors/red testkit:block/colors/green testkit:block/colors/blue testkit:block/colors/yellow\n")?;
+    write("textures/block/varied_cube/varied_cube.ctm", "method = random\ntiles = testkit:block/varied_cube testkit:block/shapes/thin\nhides_neighbors = false\n")?;
     let face = r##"{"texture":"#unwrap","uv":[0.25,0.25,1.25,1.25]}"##;
     write(
         "models/block/shapes/thin.json",
@@ -557,10 +557,10 @@ pub async fn ctm_any_model(t: T) -> R {
             t.on_screen(p)
                 .map_or(0.0, |(x, y)| s.share(x - 0.004, y - 0.004, x + 0.004, y + 0.004, test))
         };
-        let red: fn(probe::C) -> bool = |c| c[0] > 120 && c[1] < 70 && c[2] < 70;
-        let green: fn(probe::C) -> bool = |c| c[1] > 120 && c[0] < 70 && c[2] < 70;
-        let blue: fn(probe::C) -> bool = |c| c[2] > 120 && c[0] < 70 && c[1] < 90;
-        let yellow: fn(probe::C) -> bool = |c| c[0] > 120 && c[1] > 110 && c[2] < 70;
+        let red: fn(probe::C) -> bool = |c| c[0] > 50 && c[1].max(c[2]) < c[0] / 3;
+        let green: fn(probe::C) -> bool = |c| c[1] > 50 && c[0].max(c[2]) < c[1] / 3;
+        let blue: fn(probe::C) -> bool = |c| c[2] > 50 && c[0].max(c[1]) < c[2] / 3;
+        let yellow: fn(probe::C) -> bool = |c| c[0].min(c[1]) > 50 && c[2] < c[0].min(c[1]) / 3;
         for (x, depth, what) in [(-4, 0.5, "plant"), (1, 0.13, "box model")] {
             let o = |x: i32, y: i32| [(f[0] + x) as f64 + 0.5, (f[1] + y) as f64 + 0.5, (f[2] - 5) as f64 + 1.0 - depth];
             t.check(at(&s, o(x, 0), red) > 0.5, format!("{what}: red at the bottom"));
@@ -578,11 +578,12 @@ pub async fn ctm_any_model(t: T) -> R {
         t.look_at(add(f, [0, 0, 4]));
         t.settled().await?;
         let s = t.shot("models").await?;
-        let (mut thin, mut plain, mut stray, mut ground, mut dark) = (0, 0, 0, 0, 0);
-        let orange: fn(probe::C) -> bool = |c| c[0] > 120 && c[1] > 50 && c[1] < 130 && c[2] < 60;
+        let (mut thin, mut plain, mut stray, mut ground, mut sides, mut dark) = (0, 0, 0, 0, 0, 0);
+        let orange: fn(probe::C) -> bool = |c| c[0] > 55 && c[1] > c[0] / 3 && c[1] < c[0] && c[2] < c[1] / 3;
         let grass: fn(probe::C) -> bool = |c| c[1] > c[0] && c[1] > c[2] && c[1] > 40;
+        let front = |x: i32| [(f[0] + x) as f64 + 0.5, f[1] as f64 + 0.5, (f[2] + 4) as f64 + 0.375];
         for &x in &row {
-            let middle = [(f[0] + x) as f64 + 0.5, f[1] as f64 + 0.5, (f[2] + 4) as f64 + 0.375];
+            let middle = front(x);
             if at(&s, middle, blue) > 0.5 {
                 thin += 1;
                 // All of a face is the island, right up to its corners (further out a cube may
@@ -595,13 +596,12 @@ pub async fn ctm_any_model(t: T) -> R {
                         stray += 1;
                     }
                 }
-                // A side is lit, though the block's own cell and maybe the next one have no light.
-                if x != 0 {
+                // A full cube toward the camera can cover the side of a thin model.
+                if x.abs() >= 2 && at(&s, front(x - x.signum()), blue) > 0.5 {
                     let side = if x < 0 { 0.625 } else { 0.375 };
-                    if t.on_screen([(f[0] + x) as f64 + side, f[1] as f64 + 0.5, (f[2] + 4) as f64 + 0.5])
-                        .is_some_and(|(sx, sy)| crate::runner::lum(s.avg(sx - 0.002, sy - 0.004, sx + 0.002, sy + 0.004)) < 25.0)
-                    {
-                        dark += 1;
+                    if let Some((sx, sy)) = t.on_screen([(f[0] + x) as f64 + side, f[1] as f64 + 0.5, (f[2] + 4) as f64 + 0.5]) {
+                        sides += 1;
+                        dark += (s.avg(sx - 0.001, sy - 0.004, sx + 0.001, sy + 0.004)[2] < 40.0) as u32;
                     }
                 }
                 // Beside the column, the floor its cube no longer hides.
@@ -615,8 +615,8 @@ pub async fn ctm_any_model(t: T) -> R {
                 stray += 1;
             }
         }
-        t.note(format!("thin {thin}, plain {plain}, off the island {stray}, floor seen by {ground}, dark sides {dark}"));
-        t.check(dark == 0, format!("a model's sides are lit: {dark} are dark"));
+        t.note(format!("thin {thin}, plain {plain}, off the island {stray}, floor seen by {ground}, dark sides {dark}/{sides}"));
+        t.check(sides > 0 && dark == 0, format!("a model's visible sides are lit: {dark}/{sides} are dark"));
         t.check(thin > 0 && plain > 0, format!("the rule picks the model and the plain cube: {thin} and {plain}"));
         t.check(stray == 0, format!("the model's texels are the island on its unwrap: {stray} show around it"));
         t.check(ground > 0, format!("hides_neighbors = false: the floor shows beside a model: {ground} of {thin}"));

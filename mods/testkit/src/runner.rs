@@ -241,40 +241,29 @@ impl T {
         self.loaded().await
     }
 
-    /// Runs a chat command and returns the reply line(s) the server printed.
+    /// Runs a command and returns the localized reply for this request.
     pub async fn cmd(&self, line: &str) -> Result<String, String> {
-        let before = self.c().chat_line(0);
-        let marker = self.0.borrow().state.frame;
-        self.c().say(line);
-        let mut seen = String::new();
+        let id = self.c().run_command(line);
+        let mut answer = None;
         self.until(&format!("reply to {line}"), Duration::from_secs(10), |t| {
-            let now = t.c().chat_line(0);
-            if now != before || t.state().frame > marker + 600 {
-                seen = now;
-                true
-            } else {
-                false
-            }
-        })
-        .await?;
-        Ok(seen)
+            answer = t.c().command_reply(id);
+            answer.is_some()
+        }).await?;
+        Ok(answer.unwrap_or_default())
     }
 
     /// Runs an operation of the testkit's server half (`/tk <op>`, see `server.rs`) and waits
     /// for its answer.
     pub async fn op(&self, text: &str) -> Result<String, String> {
-        let id = self.c().run_command(&format!("/tk {text}"));
-        let mut answer = None;
-        self.until(&format!("server answer to '{text}'"), Duration::from_secs(10), |t| {
-            answer = t.c().command_reply(id);
-            answer.is_some()
-        })
-        .await?;
-        let a = answer.unwrap_or_default();
+        let a = self.cmd(&format!("/tk {text}")).await?;
         match a.strip_prefix("ok") {
             Some(rest) => Ok(rest.trim().to_string()),
             None => Err(format!("'{text}': {}", a.strip_prefix("err ").unwrap_or(&a))),
         }
+    }
+
+    pub async fn game_time(&self) -> Result<u64, String> {
+        self.op("game_time").await?.parse().map_err(|e| format!("game time: {e}"))
     }
 
     /// The block's name as the server has it (`base:furnace[facing=north,lit=true]`).

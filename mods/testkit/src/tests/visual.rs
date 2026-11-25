@@ -21,14 +21,14 @@ fn avg_around(t: &T, shot: &Shot, p: [f64; 3], r: f32) -> [f32; 3] {
 }
 
 /// Share of pixels that changed in a box between two grabs of the same size.
-fn changed(a: &[u8], b: &[u8], w: u32, h: u32, x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
+fn changed(a: &[u8], b: &[u8], w: u32, h: u32, [x0, y0, x1, y1]: [f32; 4], delta: i32) -> f32 {
     let (ax, ay, bx, by) =
         ((x0 * w as f32) as u32, (y0 * h as f32) as u32, ((x1 * w as f32) as u32).min(w), ((y1 * h as f32) as u32).min(h));
     let (mut n, mut all) = (0.0f32, 0.0f32);
     for y in ay..by {
         for x in ax..bx {
             let i = ((y * w + x) * 4) as usize;
-            n += (0..3).any(|k| (a[i + k] as i32 - b[i + k] as i32).abs() > 40) as u8 as f32;
+            n += (0..3).any(|k| (a[i + k] as i32 - b[i + k] as i32).abs() > delta) as u8 as f32;
             all += 1.0;
         }
     }
@@ -61,7 +61,7 @@ pub async fn tooltips(t: T) -> R {
         let now = t.grab().await?;
         // The tooltip opens to the right of the cursor. Its dark box is close to the panel's
         // color, so only part of the pixels change.
-        let v = changed(&plain, &now, w, h, cx + 0.02, cy - 0.02, cx + 0.15, cy + 0.05);
+        let v = changed(&plain, &now, w, h, [cx + 0.02, cy - 0.02, cx + 0.15, cy + 0.05], 40);
         t.probe(&format!("{name} tooltip drawn"), v, v > 0.05);
         // Lines by what an item is (`tagged.<component>`), numbers from the item itself.
         let line = |c: probe::C| match name {
@@ -254,7 +254,7 @@ pub async fn break_overlay(t: T) -> R {
     t.look_at(ladder);
     t.frames(3).await?;
     let (w, h) = (t.state().window[0], t.state().window[1]);
-    let before = t.grab().await?;
+    let before = t.shot("ladder_clean").await?.px;
     // Mining slowly, so a late picture still finds the button down and the block there.
     t.op("attr_mod me core:mining_speed slow core:add -0.75 0")
         .await?;
@@ -265,12 +265,12 @@ pub async fn break_overlay(t: T) -> R {
     let face = t
         .block_on_screen(ladder, [0.0, 0.0, -0.45])
         .unwrap_or((0.5, 0.5));
-    let v = changed(&before, &cracked, w, h, face.0 - 0.04, face.1 - 0.06, face.0 + 0.04, face.1 + 0.06);
+    let v = changed(&before, &cracked, w, h, [face.0 - 0.04, face.1 - 0.06, face.0 + 0.04, face.1 + 0.06], 20);
     t.probe("cracks on the ladder", v, v > 0.05);
     let above = t
         .block_on_screen(add(wall, [0, 1, 0]), [0.0, 0.0, 0.5])
         .unwrap_or((0.5, 0.2));
-    let v = changed(&before, &cracked, w, h, above.0 - 0.04, above.1 - 0.04, above.0 + 0.04, above.1 + 0.04);
+    let v = changed(&before, &cracked, w, h, [above.0 - 0.04, above.1 - 0.04, above.0 + 0.04, above.1 + 0.04], 20);
     t.probe("none on the wall above it", v, v < 0.02);
     t.secs(1.2).await?;
     t.op("attr_rm me core:mining_speed slow").await?;
@@ -297,7 +297,7 @@ pub async fn break_overlay(t: T) -> R {
     let p = t
         .block_on_screen(next, [0.0, 0.0, 0.5])
         .unwrap_or((0.5, 0.45));
-    let v = changed(&held, &clean, w, h, p.0 - 0.05, p.1 - 0.05, p.0 + 0.05, p.1 + 0.05);
+    let v = changed(&held, &clean, w, h, [p.0 - 0.05, p.1 - 0.05, p.0 + 0.05, p.1 + 0.05], 20);
     t.probe("no cracks on the next block of an instant break", v, v < 0.03);
     Ok(())
 }
@@ -313,7 +313,13 @@ pub async fn multiplayer(t: T) -> R {
     let _ = std::fs::create_dir_all(&dir);
     let ticket = format!("{dir}/ticket.txt");
     let script = format!("{dir}/join.txt");
-    std::fs::write(&ticket, t.c().ticket()).map_err(|e| e.to_string())?;
+    let advertised = t.c().ticket();
+    let (key, _, addresses) = advertised.split_once(';').and_then(|(key, rest)| {
+        rest.split_once(';').map(|(relay, addresses)| (key, relay, addresses))
+    }).ok_or("invalid host ticket")?;
+    let port = addresses.split(',').find_map(|address| address.parse::<std::net::SocketAddrV4>().ok())
+        .ok_or("the host did not advertise an IPv4 port")?.port();
+    std::fs::write(&ticket, format!("{key};;127.0.0.1:{port}")).map_err(|e| e.to_string())?;
     std::fs::write(
         &script,
         format!("join {ticket}\nloaded\nchat hello from the second player\nwait 3\nsay_config testmod:wisp_sparks\nwait 1\nquit\n"),

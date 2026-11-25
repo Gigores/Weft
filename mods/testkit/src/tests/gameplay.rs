@@ -496,10 +496,18 @@ fn off_bed(t: &T, foot: [i32; 3]) -> f64 {
 /// What is on an entity is where a mod can ask, moves when a mod says, and what dangles hangs.
 pub async fn model_bones(t: T) -> R {
     t.flat().await?;
+    t.c().select_slot(0);
     let me = t.c().player();
     let at = |bone: &str| t.c().bone_position(me, bone);
     t.op("put me 0 testmod:lantern").await?;
-    t.secs(2.5).await?;
+    let mut steady = 0.0;
+    t.until("the hanging lantern settles", Duration::from_secs(8), |t| {
+        let aligned = at("hook").zip(at("hanging_lamp")).is_some_and(|(hook, lamp)| {
+            hook.y - lamp.y > 0.5 && (hook.x - lamp.x).abs() + (hook.z - lamp.z).abs() < 0.3
+        });
+        steady = if aligned { steady + t.state().dt } else { 0.0 };
+        steady >= 0.2
+    }).await?;
     t.check(at("no_such_bone").is_none(), "no bone of that name");
     let (hook, lamp) = (at("hook").ok_or("the lantern's hook")?, at("hanging_lamp").ok_or("the lantern's lamp")?);
     t.check(hook.y - lamp.y > 0.5, format!("it hangs from the hand: {hook:?} {lamp:?}"));
@@ -1896,6 +1904,7 @@ pub async fn food(t: T) -> R {
 /// Lava hurts the player, who keeps burning after getting out.
 pub async fn burning(t: T) -> R {
     t.flat().await?;
+    t.cmd("/feed 12").await?;
     let f = t.feet();
     let pool = add(f, [6, -1, 0]);
     t.fill(pool, add(pool, [1, 0, 1]), "lava").await?;
@@ -1905,12 +1914,9 @@ pub async fn burning(t: T) -> R {
         .await?;
     t.c()
         .teleport([f[0] as f64 + 0.5, f[1] as f64, f[2] as f64 + 0.5]);
-    t.secs(0.5).await?;
+    t.until("back on dry ground", Duration::from_secs(5), |t| t.feet() == f).await?;
     let out = t.state().health;
-    t.secs(2.5).await?;
-    let later = t.state().health;
-    t.check(later < out, format!("still burning after leaving lava: health {out} -> {later}"));
-    Ok(())
+    t.until("fire still deals damage after the lava", Duration::from_secs(4), |t| t.state().health < out).await
 }
 
 static ON_FIRE: Component<u8> = Component::named("core:burning");
@@ -2157,7 +2163,7 @@ pub async fn replaced_plants_drop(t: T) -> R {
         if creative {
             t.op("mode creative").await?;
         }
-        t.set(flower, "dandelion").await?;
+        t.set(flower, "testmod:glow_flower").await?;
         t.until("the flower on the client", Duration::from_secs(2), |t| t.c().block(flower).is_some_and(|s| s != 0))
             .await?;
         t.look_at(flower);
@@ -2177,7 +2183,7 @@ pub async fn replaced_plants_drop(t: T) -> R {
             t.check(!near.contains("core:item"), format!("nothing drops in creative: {near}"));
         } else {
             let d = t.op("inv me").await?;
-            t.check(near.contains("core:item") || d.contains("dandelion"), format!("the flower dropped: near '{near}', inventory '{d}'"));
+            t.check(near.contains("core:item") || d.contains("testmod:glow_flower"), format!("the flower dropped: near '{near}', inventory '{d}'"));
         }
         t.set(flower, "air").await?;
         t.secs(0.5).await?;
