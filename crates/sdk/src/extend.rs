@@ -942,13 +942,13 @@ impl LootBuilder<'_> {
     }
 }
 
-/// Every entity of a region that has a component, with the values side by side, and the ticks
-/// each call stands for: 1 normally, more while an entity catches up on time it missed (its
+/// Every placed block and entity of a region that has a component, with the values side by side, and the ticks
+/// each call stands for: 1 normally, more while an owner catches up on time it missed (its
 /// region was unloaded, the world's time jumped). A system worth catching up does the work of
 /// `ticks` ticks at once (a furnace: so many items smelted), anything else may ignore it.
 pub struct SystemBatch<'a, T> {
     world: World,
-    ids: &'a [u64],
+    owners: &'a [abi::Holder],
     values: &'a mut [T],
     ticks: &'a [u32],
 }
@@ -957,8 +957,8 @@ impl<T> SystemBatch<'_, T> {
     pub fn world(&self) -> World {
         self.world
     }
-    pub fn ids(&self) -> &[u64] {
-        self.ids
+    pub fn owners(&self) -> &[abi::Holder] {
+        self.owners
     }
     pub fn values(&mut self) -> &mut [T] {
         self.values
@@ -966,14 +966,14 @@ impl<T> SystemBatch<'_, T> {
     pub fn ticks(&self) -> &[u32] {
         self.ticks
     }
-    /// (entity, its value, ticks to do).
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (u64, &mut T, u32)> {
-        self.ids
+    /// (owner, its value, ticks to do).
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (abi::Holder, &mut T, u32)> {
+        self.owners
             .iter()
             .copied()
             .zip(self.values.iter_mut())
             .zip(self.ticks.iter().copied())
-            .map(|((id, v), t)| (id, v, t))
+            .map(|((owner, v), t)| (owner, v, t))
     }
 }
 
@@ -998,8 +998,7 @@ impl AttributeBuilder<'_> {
 }
 
 impl Registry {
-    /// A system over a per-entity component (`Registry::entity_component`): once per tick and
-    /// region with all values in one slice, no host call per entity.
+    /// A system over a runtime component: one batch per region and space, with all values in a slice.
     pub fn system<T: Value>(&mut self, comp: &crate::Component<T>, f: impl Fn(&mut SystemBatch<T>) + Send + Sync + 'static) {
         let cb = callback(move |a: &mut abi::SystemArgs| {
             if a.stride as usize != size_of::<T>() || a.count == 0 {
@@ -1008,7 +1007,7 @@ impl Registry {
             let n = a.count as usize;
             let mut b = SystemBatch {
                 world: World::from_raw(a.world),
-                ids: unsafe { std::slice::from_raw_parts(a.ids, n) },
+                owners: unsafe { std::slice::from_raw_parts(a.owners, n) },
                 values: unsafe { std::slice::from_raw_parts_mut(a.values as *mut T, n) },
                 ticks: unsafe { std::slice::from_raw_parts(a.ticks, n) },
             };

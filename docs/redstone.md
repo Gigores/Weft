@@ -46,7 +46,7 @@ Solid blocks carry power by default, lamps and other blocks that only take power
 | `repeater` | Full power out the front, 1 to 4 redstone ticks after the back gets any (click to change). A gate pointing into its side locks it |
 | `comparator` | Back against the sides; the other mode subtracts (click to change). Reads how full a container behind it is |
 | `redstone_lamp` | Lit with any power around it. Carries power like any solid block |
-| `piston`, `sticky_piston` | Pushes up to 12 blocks, powered from any side but its front. Breaks what isn't solid, stops at block entities and `.immovable()` blocks. The blocks move as a body, so whoever stands on them rides along smoothly |
+| `piston`, `sticky_piston` | Pushes up to 12 blocks, powered from any side but its front. Breaks what isn't solid, stops at `.immovable()` blocks. The blocks move as a body, so whoever stands on them rides along smoothly |
 | `slime_block` | What a piston moves takes what touches it along, for flying machines. `.sticky()` on any block does the same |
 | `floater` | Moves in the direction of its front arrow. Power from any other side moves it and the connected blocks at its front by half a block per second per power level. Attached parts come along and drop if they hit a solid block. Sneak and right-click with an empty hand to switch between Disassemble and Hold. Hold keeps a floater's platform assembled after it stops. |
 | `thruster` | Pushes an assembled body in the direction of its arrow. The force scales with input power. A thruster offset from the center of mass also turns the body. |

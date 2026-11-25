@@ -1129,8 +1129,8 @@ pub mod comp {
     /// `Host::place` and `/structure`, checked when the game loads. `BLOCKS` (`[TemplateBlock]`)
     /// from its lowest corner, cells it doesn't name left as they are; `SLOTS`
     /// (`[PaletteSlot]`, the blocks its `@slot`s take unless a palette says); `ENTITIES`
-    /// (`[TemplateEntity]`); `LOOT` (`[TemplateLoot]`, what a block entity's inventory is filled
-    /// with when it is placed); `DATA` (`[TemplateData]`, a block entity as it was saved);
+    /// (`[TemplateEntity]`); `LOOT` (`[TemplateLoot]`, what fills a block's inventory when it is
+    /// placed); `DATA` (`[TemplateData]`, saved block data);
     /// `JOINTS` (`[TemplateJoint]`, where pieces of a plan join). A mod's `structures/<path>.json`
     /// (or structgen's `.wst`) is template `<mod>:<path>` by itself; an entry of that name adds to it.
     pub mod template {
@@ -1218,7 +1218,7 @@ pub mod comp {
     /// leaves it to be placed as usual), `ON_SIGNAL` (`SignalArgs`, the power around a
     /// `signal_kind::SINK` changed), `SIGNAL_GATE` (`GateArgs`, a `signal_kind::GATE`'s output),
     /// `SIGNAL_READ` (`SignalReadArgs`, what a comparator behind it reads instead of how full it
-    /// is); `OPENS` (`str`, a menu using it opens, on its block entity if it has one: a station of
+    /// is); `OPENS` (`str`, a menu using it opens, backed by the block's data if present: a station of
     /// the menu's recipe kinds), `SNEAK_USE` (`u32`, `sneak_use`: whether a sneaking player uses it
     /// or what it holds; none: vanilla's, used with empty hands), `SHARES_CELL` (`match`: what may share its cell
     /// though their shapes overlap), `MODEL_FILE` (`str`, `models/block/<path>.json` of the named
@@ -1243,6 +1243,10 @@ pub mod comp {
     /// goes in its component table, per state; its item gets the first state's unless it sets
     /// its own.
     pub mod block {
+        pub const INSTANCE_DATA: &str = "block.instance_data";
+        pub const INSTANCE_ATTACH: &str = "block.instance_attach";
+        pub const INSTANCE_SLOTS: &str = "block.instance_slots";
+        pub const INSTANCE_SHOWN: &str = "block.instance_shown";
         /// Mass per full block relative to a block of water (`f32`).
         pub const DENSITY: &str = "density";
         /// Fraction of a sound's amplitude lost at a reflection (`f32`, 0..1).
@@ -1402,12 +1406,10 @@ pub mod comp {
     /// width and height of the skin `PARTS` are laid out on, 64 by 32), `PARTS` (`[ModelPart]`, its
     /// model in code; a model file, `comp::MODEL`, wins), `BONE_MODELS` (`[BoneModel]`). `CATEGORY`
     /// (`str`, an `entry_kind::ENTITY_CATEGORY`, `core:misc`), `TEMPLATE` (`str`, a moving body built
-    /// of that template, block (0, 0, 0) centered on it), `BLOCK` (`str`, the block it is the block
-    /// entity of: made with its inventory where one is placed, gone with its items when it breaks),
+    /// of that template, block (0, 0, 0) centered on it),
     /// `SEATS` (`[Seat]`, where riders sit, numbered in this order), `ATTACH` (`[Attach]`, components
     /// each one carries, starting as the kind's own value of each), `LIGHT_AT` (`[f32;3]`, where the
-    /// light it gives comes from: blocks from its feet, +Z ahead, turned with it; none: its middle, a
-    /// block entity's block),
+    /// light it gives comes from: blocks from its feet, +Z ahead, turned with it; none: its middle),
     /// `SHOWN_SLOTS` (`[u32]`, slots of its inventory everyone around sees, their items in
     /// `core:shown`: what a pedestal holds; they give their light too). Callbacks: `ON_TICK` (`EntityTickArgs`, every one of the kind in one
     /// call), `ON_INTERACT` (`EntityEventArgs`, a player right clicked one and
@@ -1432,7 +1434,6 @@ pub mod comp {
         pub const BONE_MODELS: &str = "entity.bone_models";
         pub const CATEGORY: &str = "entity.category";
         pub const TEMPLATE: &str = "entity.template";
-        pub const BLOCK: &str = "entity.block";
         pub const SEATS: &str = "entity.seats";
         pub const LIGHT_AT: &str = "entity.light_at";
         pub const SHOWN_SLOTS: &str = "entity.shown_slots";
@@ -1595,7 +1596,7 @@ pub mod comp {
     /// Block: faces the tint applies to (`u8`, a bit per face in -X, +X, -Y, +Y, -Z, +Z order),
     /// from the faces' layers too.
     pub const TINT_FACES: &str = "tint_faces";
-    /// The own name of one stack or block entity (UTF-8), as a player gave it: shown instead of
+    /// The own name of one stack or placed block (UTF-8), as a player gave it: shown instead of
     /// the item's or block's, and carried from the stack to the placed block and back.
     pub const NAME: &str = "core:name";
     /// Entity tag the engine keeps: it never despawns (`entity_state::PERSISTENT`).
@@ -2384,7 +2385,7 @@ pub mod plan_op {
     pub const TEMPLATE: u32 = 4;
     /// An entity of kind `name` at the middle of block `pos`.
     pub const ENTITY: u32 = 5;
-    /// The block entity at `pos` filled from loot table `name` when placed.
+    /// The block inventory at `pos` filled from loot table `name` when placed.
     pub const LOOT: u32 = 6;
 }
 
@@ -2486,12 +2487,12 @@ crate::data! {
 }
 
 crate::data! {
-    /// What the block entity at `pos` holds when placed (`comp::template::LOOT`): loot table `table`.
+    /// What fills the block at `pos` when placed (`comp::template::LOOT`): loot table `table`.
     pub struct TemplateLoot { pub pos: [i32; 3], pub table: alloc::string::String }
 }
 
 crate::data! {
-    /// The block entity at `pos` as it was saved (`comp::template::DATA`): its inventory and
+    /// The block inventory at `pos` as it was saved (`comp::template::DATA`): its inventory and
     /// components, the save's bytes.
     pub struct TemplateData { pub pos: [i32; 3], pub data: alloc::vec::Vec<u8> }
 }
@@ -2614,8 +2615,8 @@ impl ItemStack {
     }
 }
 
-/// What holds an inventory, energy or other per-instance data: an entity, the block entity at a
-/// block, or the stack in one slot of an entity's inventory (a backpack, a battery). The same
+/// What holds an inventory, energy or other per-instance data: an entity, a placed block, or the
+/// stack in one slot of an entity's inventory (a backpack, a battery). The same
 /// calls take any of them. Inventory calls reach its own inventory, or with `storage` set one of
 /// the storages it carries (`comp::component::SLOTS`: a player's ender chest).
 #[repr(C)]
@@ -2664,6 +2665,7 @@ pub mod holder {
     pub const NONE: u32 = 0;
     pub const ENTITY: u32 = 1;
     pub const BLOCK: u32 = 2;
+    pub const BLOCK_ID: u32 = 4;
     pub const HELD: u32 = 3;
 }
 
@@ -2674,6 +2676,10 @@ impl Holder {
         Holder { kind: if id == 0 { holder::NONE } else { holder::ENTITY }, entity: id, ..Holder::NONE }
     }
 
+    /// The same block instance even after it moves to another cell or frame.
+    pub fn block_id(id: u64) -> Holder {
+        Holder { kind: if id == 0 { holder::NONE } else { holder::BLOCK_ID }, entity: id, ..Holder::NONE }
+    }
     pub fn block(pos: BlockPos) -> Holder {
         Holder { kind: holder::BLOCK, pos, ..Holder::NONE }
     }
@@ -2982,7 +2988,7 @@ impl Schema for ShipCollision {
 pub mod force_load {
     /// Let go.
     pub const OFF: u32 = 0;
-    /// Block entities, systems, scheduled ticks and redstone; mobs stand still and
+    /// Block data, systems, scheduled ticks and redstone; mobs stand still and
     /// nothing grows (vanilla's lazy chunks).
     pub const BLOCK_ENTITIES: u32 = 1;
     /// All of it, as near a player.
@@ -3468,7 +3474,7 @@ pub mod entity_effect {
 /// What `Host::entities_near` looks for.
 /// What `Host::entities_in` looks for.
 pub mod entity_filter {
-    /// Only what can be hit: no dropped items, block entities, spectators or the dead.
+    /// Only what can be hit: no dropped items, spectators or the dead.
     pub const TARGETS: u32 = 1;
     /// Any part of its box in the shape, not just its feet.
     pub const TOUCHING: u32 = 2;
@@ -3723,8 +3729,8 @@ pub mod component_flags {
     /// Kept when the player respawns (a bed, advancements, statistics); the others start over
     /// from their defaults.
     pub const KEEP_ON_RESPAWN: u32 = 16;
-    /// Goes from a block entity onto its block's item when the block breaks, and back onto the
-    /// block entity when that item is placed (a battery's charge, a renamed chest's name).
+    /// Goes onto the dropped block item when the block breaks and back onto the placed block
+    /// when that item is used (a battery's charge, a renamed chest's name).
     pub const CARRIED: u32 = 32;
     /// An inventory (`comp::component::SLOTS`), its value one `ItemStack` per slot.
     pub const STORAGE: u32 = 64;
@@ -3814,7 +3820,7 @@ pub const OFF_HAND_SLOT: &str = "core:off_hand";
 pub mod slot_owner {
     /// The menu's own slots, emptied back to the player on close (crafting grids).
     pub const MENU: u32 = 0;
-    /// What the menu opened on: a block entity, an entity, a storage.
+    /// What the menu opened on: a block, an entity, a storage.
     pub const HOLDER: u32 = 1;
     /// The player's inventory from `start`.
     pub const PLAYER: u32 = 2;
@@ -3872,7 +3878,7 @@ pub struct MenuArgs {
     pub world: *mut WorldCtx,
     pub menu: *mut MenuCtx,
     pub player: u64,
-    /// What the menu was opened on (a block entity, a stack in a slot), `Holder::NONE` for the
+    /// What the menu was opened on (a block, a stack in a slot), `Holder::NONE` for the
     /// player's own and menus of no one (a crafting table).
     pub owner: Holder,
     pub slot: u32,
@@ -4344,7 +4350,9 @@ pub struct Host {
     pub inventory_move: unsafe extern "C" fn(world: *mut WorldCtx, moves: Slice<ItemMove<InventorySlot>>) -> u32,
     pub inventory_move_into: unsafe extern "C" fn(world: *mut WorldCtx, from: InventorySlot, to: *const Holder) -> u32,
     pub selected_slot: unsafe extern "C" fn(world: *mut WorldCtx, player: u64) -> u32,
-    pub block_entity: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos) -> u64,
+    pub block_instance: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos) -> u64,
+    pub block_location: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, out: *mut BlockPos) -> u32,
+    pub block_instance_state: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, state: u32) -> u32,
     /// Opens `menu` on `holder` (`Holder::NONE` for menus without one). 0 when the holder isn't
     /// there or has no inventory: the reason is logged and nothing opens.
     pub open_menu: unsafe extern "C" fn(world: *mut WorldCtx, player: u64, menu: u32, holder: *const Holder) -> u32,
@@ -4352,7 +4360,7 @@ pub struct Host {
     /// Group `name` of an open menu: its first menu slot and how many slots it has. 0 if none.
     /// Group `name` of an open menu: its first slot, slot count and columns.
     pub menu_group: unsafe extern "C" fn(menu: *mut MenuCtx, name: Str, out: *mut SlotGroup) -> u32,
-    /// Group `name` of `holder`'s inventory (a block entity's: the `holder` groups of the menu its
+    /// Group `name` of `holder`'s inventory (a block's: the `holder` groups of the menu it
     /// block opens; a player's: its layout): first index and count. 0 if it has no such group.
     pub inventory_group: unsafe extern "C" fn(world: *mut WorldCtx, holder: *const Holder, name: Str, out: *mut SlotGroup) -> u32,
     pub menu_get: unsafe extern "C" fn(menu: *mut MenuCtx, slot: u32) -> ItemStack,
@@ -4400,7 +4408,7 @@ pub struct Host {
     /// or out (negative), respecting capacity and rate limits. Returns what moved (or would, when
     /// `simulate` is non-zero), with the same sign.
     pub energy_move: unsafe extern "C" fn(world: *mut WorldCtx, holder: *const Holder, amount: i64, simulate: u32) -> i64,
-    /// Copies the holder's `comp` (an entity's, a block entity's or a stack's) into `out`, up to
+    /// Copies the holder's `comp` (an entity's, a block's or a stack's) into `out`, up to
     /// `cap` bytes; returns its length, 0 when it has none.
     pub component_get: unsafe extern "C" fn(world: *mut WorldCtx, holder: *const Holder, comp: u32, out: *mut u8, cap: u32) -> u32,
     /// Sets the holder's `comp`, or takes it away with an empty value (stacks only: entities
@@ -4600,10 +4608,9 @@ pub struct Host {
     /// drops its loot when the tool may harvest it and `drops` is non-zero, fires `block_broken`.
     /// 0 if nothing was broken.
     pub break_block: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos, tool: ItemStack, player: u64, drops: u32) -> u32,
-    /// Client: the entity the open menu is on (a block entity, a mob), 0 if none.
+    /// Client: the ID of the block or entity the open menu is on, 0 if none.
     pub client_menu_owner: unsafe extern "C" fn(client: *mut ClientCtx) -> u64,
-    /// A system: once per tick and region `cb` gets `SystemArgs` with every entity that has the
-    /// per-entity component `name` and their values side by side, to change in place.
+    /// A system: once per tick and space `cb` gets the holders of component `name` and their values.
     pub reg_system: unsafe extern "C" fn(reg: *mut Registrar, name: Str, schema: Str, cb: Callback),
     /// The `permission` level a server command asks for (by default `GAME_MASTER`).
     pub reg_command_permission: unsafe extern "C" fn(reg: *mut Registrar, command: Str, level: u32),
@@ -5139,7 +5146,7 @@ pub mod particle {
 pub struct SystemArgs {
     pub world: *mut WorldCtx,
     pub component: u32,
-    pub ids: *const u64,
+    pub owners: *const Holder,
     pub values: *mut u8,
     pub count: u32,
     pub stride: u32,
@@ -5381,7 +5388,7 @@ pub mod action {
     /// the ticket's key.
     pub const FORCE_LOAD: &str = "core:force_load";
     /// `Spawned`. Asked with `entity` made but not yet seen, `cause` (`spawn_cause`), `pos`:
-    /// no, and it never was. Moving blocks and block entities are blocks: their comings and goings
+    /// no, and it never was. Moving blocks are blocks: their comings and goings
     /// are the blocks', neither asked here nor told as `event::ENTITY_REMOVED`.
     pub const SPAWN: &str = "core:spawn";
     /// `EffectChange`. Asked with `entity` about to get effect `cause` at level `amount` for
@@ -5563,7 +5570,7 @@ pub mod attribute {
     pub const FOV: &str = "core:fov";
     /// Whether it may fly, jumping twice (0; 1 in creative): a flying ring is a modifier.
     pub const CAN_FLY: &str = "core:can_fly";
-    /// 1: takes no damage, hunger or air (creative, a block entity, a shield effect) but from
+    /// 1: takes no damage, hunger or air (creative, a shield effect) but from
     /// causes that pierce it (the void); mods read it as `World::outside_survival`.
     pub const INVULNERABLE: &str = "core:invulnerable";
     /// Blocks it falls without harm (3; jump boost raises it, slow falling takes the harm away).
@@ -6299,7 +6306,7 @@ pub mod hud_anchor {
 }
 
 /// Layout of the engine's `energy` entity component. Blocks tagged `conductor` connect the
-/// block entities next to them into a network the engine balances every tick.
+/// blocks with energy storage next to them into a network the engine balances every tick.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Energy {

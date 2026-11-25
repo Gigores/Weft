@@ -319,20 +319,16 @@ impl Dim {
             cube.edits = fill.id;
             stats.cubes += 1;
             stats.whole += cube.uniform_state().is_some() as usize;
-            // Block entities whose block went: gone with it (an explosion takes what they held).
-            let gone: Vec<(IVec3, u64)> = self
-                .entities
-                .anchors
-                .iter()
-                .filter(|((frame, p), _)| {
-                    let i = crate::world::local_index(*p);
-                    *frame == 0
-                        && crate::world::cube_of(*p) == cp
-                        && (cube.get(i) != self.get(0, *p).unwrap_or(u32::MAX) || cube.extras(i) != self.space.extras(*p))
-                })
-                .flat_map(|((_, p), ids)| ids.iter().map(|id| (*p, *id)))
-                .collect();
-            for (_, id) in gone {
+            // Keep the data when a part of the same kind at the same offset survives the edit.
+            let gone: Vec<_> = self.entities.blocks_in_cube.get(&cp).into_iter().flatten().copied()
+                .filter(|id| {
+                    let block = self.entities.blocks[id];
+                    let i = crate::world::local_index(block.cell);
+                    !cube.layout(i).residents(cube.get(i)).any(|part| {
+                        part.offset == block.offset && c.states[part.state as usize].block == block.kind
+                    })
+                }).collect();
+            for id in gone {
                 self.entities.remove(id, super::dim::UNTOLD);
             }
             if emitted {
@@ -368,6 +364,9 @@ impl Dim {
                 self.index_loaded_parts(c, cp, &mut cube);
                 self.space.cubes.insert(cp, Arc::new(cube));
             }
+        }
+        for &cp in &relight {
+            self.add_missing_block_data(0, c, cp);
         }
         stats.apply_ms = start.elapsed().as_secs_f64() * 1000.0;
         let start = std::time::Instant::now();

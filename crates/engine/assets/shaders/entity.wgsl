@@ -14,7 +14,7 @@ struct VOut {
 
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> VOut {
-    return box_vertex(boxes[vi / 36u], vi % 36u);
+    return box_vertex(boxes[vi / 36u], vi % 36u, false);
 }
 
 fn item_box(vi: u32, ii: u32) -> Box {
@@ -33,11 +33,11 @@ fn item_box(vi: u32, ii: u32) -> Box {
 
 @vertex
 fn vs_item(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
-    return box_vertex(item_box(vi, ii), vi % 36u);
+    return box_vertex(item_box(vi, ii), vi % 36u, false);
 }
 
 // `v`: the vertex within the box, 6 per face.
-fn box_vertex(b: Box, v: u32) -> VOut {
+fn box_vertex(b: Box, v: u32, shadow: bool) -> VOut {
     let face = v / 6u;
     let c = TRI[v % 6u];
     var p = CORNERS[face * 4u + c];
@@ -48,7 +48,7 @@ fn box_vertex(b: Box, v: u32) -> VOut {
     let local = vec4(p, 1.0);
     let world = vec3(dot(b.rows[0], local), dot(b.rows[1], local), dot(b.rows[2], local));
     var out: VOut;
-    out.clip = scene.view_proj * vec4(world, 1.0);
+    out.clip = select(scene.view_proj * vec4(world, 1.0), scene.sun_view * vec4(world, 1.0), shadow);
     out.dist = length(world);
     let uv = UVS[c];
     out.mode = b.ids.y;
@@ -113,9 +113,31 @@ fn box_vertex(b: Box, v: u32) -> VOut {
 // player collides with comes closer than ~0.2 blocks, depth 0.3) but still sorted within itself.
 @vertex
 fn vs_hand_item(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
-    var out = box_vertex(item_box(vi, ii), vi % 36u);
+    var out = box_vertex(item_box(vi, ii), vi % 36u, false);
     out.clip.z = (0.5 + 0.5 * out.clip.z / out.clip.w) * out.clip.w;
     return out;
+}
+
+struct SunItemOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) layer: u32,
+}
+
+@vertex
+fn vs_sun_item(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SunItemOut {
+    if boxes[ii].ids.w != 0u {
+        return SunItemOut(vec4(0.0, 0.0, 0.0, 1.0), vec2(0.0), 0u);
+    }
+    let b = box_vertex(item_box(vi, ii), vi % 36u, true);
+    return SunItemOut(b.clip, b.uv, b.layer);
+}
+
+@fragment
+fn fs_sun_item(in: SunItemOut) {
+    if textureSampleLevel(textures[in.layer], nearest_clamp, in.uv, 0.0).a < 0.5 {
+        discard;
+    }
 }
 
 fn fog(in: VOut, rgb: vec3<f32>) -> vec3<f32> {

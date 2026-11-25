@@ -129,6 +129,7 @@ pub struct Player {
     announced: FxHashSet<IVec3>,
     to_send_far: Vec<IVec3>,
     known: FxHashSet<u64>,
+    known_blocks: FxHashMap<u64, crate::net::BlockView>,
     joined: bool,
     arrival: Option<player_file::Arrival>,
     sent_cracks: Vec<crate::net::Crack>,
@@ -551,6 +552,7 @@ impl Server {
                 announced: FxHashSet::default(),
                 to_send_far: Vec::new(),
                 known: FxHashSet::default(),
+                known_blocks: FxHashMap::default(),
                 joined: false,
                 arrival: None,
                 sent_rate: 0,
@@ -945,11 +947,7 @@ impl Server {
         let block = if block != 0 {
             block
         } else {
-            r.entities
-                .get(owner)
-                .and_then(|e| e.anchor)
-                .and_then(|a| r.get(0, a))
-                .unwrap_or(0)
+            r.block_part(owner, c).map_or(0, |(_, part)| part.state)
         };
         p.conn
             .send(ToClient::OpenMenu { kind, window: p.window, slots: m.slots.len() as u32, owner, block, name });
@@ -1018,6 +1016,9 @@ impl Server {
                         .entry(cube_of(e.pos.floor().as_ivec3()))
                         .or_default()
                         .push(e.id);
+                }
+                for (&cube, ids) in &r.entities.blocks_in_cube {
+                    roots.entry(cube).or_default().extend(ids);
                 }
                 cubes.extend(roots.keys().copied());
                 cubes.sort_unstable_by_key(|p| (p.x, p.y, p.z));
@@ -1180,6 +1181,7 @@ impl Server {
             p.sync_range = None;
             p.vis = None;
             p.known.clear();
+            p.known_blocks.clear();
         }
         p.last_place = (None, pos);
         p.teleported = Some(pos);
@@ -1277,7 +1279,7 @@ impl Server {
         let me = &self.players[pi];
         let mut found: Vec<(u32, u64, f64)> = Vec::new();
         let mut consider = |dim: u32, e: &Entity| {
-            // Block entities and virtual ones are parts of things, not things to point at.
+            // Selectors only see entities present in the world.
             if !e.in_world() {
                 return;
             }
@@ -1414,6 +1416,7 @@ impl Server {
         let Some((mut e, inv, mut comps)) = from.entities.take(id) else { return };
         // The blocks of a structure travel with its entity.
         let structure = from.bodies.remove(&id);
+        let blocks = from.entities.take_blocks(attached.iter().copied());
         let on_it: Vec<_> = attached
             .into_iter()
             .skip(1)
@@ -1429,6 +1432,10 @@ impl Server {
             // It says what it gives all over again, where it is now.
             (s.cell, s.in_touch) = (None, false);
             r.bodies.insert(id, s);
+        }
+        for (id, block, inv, mut comps) in blocks {
+            extend::rebase_component_clock(c, &mut comps, by);
+            r.entities.insert_block(c, id, block, inv, comps);
         }
         for ((mut b, inv, mut comps), structure) in on_it {
             let id = b.id;
@@ -1484,22 +1491,28 @@ pub(super) fn serialize(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
 }
 
 pub(super) fn serialize_tree(c: &Content, d: &Dim, ids: &[u64]) -> Vec<u8> {
-    serialize_indexed(c, d, ids, |id| {
-        d.entities
-            .comps
-            .iter()
-            .filter(|((eid, _), _)| *eid == id)
-            .map(|((_, k), v)| (*k, &v[..]))
-            .collect()
-    })
+    let owners: FxHashSet<_> = ids.iter().copied().collect();
+    let mut components: FxHashMap<_, Vec<_>> = FxHashMap::default();
+    if !owners.is_empty() {
+        for (&(id, comp), bytes) in &d.entities.comps {
+            if owners.contains(&id) {
+                components.entry(id).or_default().push((comp, bytes.as_ref()));
+            }
+        }
+    }
+    serialize_indexed(c, d, ids, |id| components.remove(&id).unwrap_or_default())
 }
 
 fn serialize_indexed<'a>(c: &Content, d: &'a Dim, ids: &[u64], mut components: impl FnMut(u64) -> Vec<(u32, &'a [u8])>) -> Vec<u8> {
     let list: Vec<persist::ToSave> = ids
         .iter()
         .filter_map(|&id| {
-            let e = d.entities.get(id)?;
-            Some((e, d.entities.inventories.get(&id), components(id), d.bodies.get(&id).map(Box::as_ref)))
+            let owner = if let Some(e) = d.entities.get(id) {
+                persist::SaveOwner::Entity(e)
+            } else {
+                persist::SaveOwner::Block(id, *d.entities.blocks.get(&id)?)
+            };
+            Some((owner, d.entities.inventories.get(&id), components(id), d.bodies.get(&id).map(Box::as_ref)))
         })
         .collect();
     let mut out = Vec::new();

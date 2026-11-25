@@ -992,7 +992,7 @@ fn element<T: Data, K>(list: &Component<Vec<T>, K>, item: &T, op: u32, anchor: &
     Pending::value(list.name(), c::schema_of::<T>(), abi::data::bytes_of(item)).as_op(op, anchor)
 }
 
-/// What carries items: entity kinds (block entities among them) and item stacks.
+/// What carries items: entity kinds and item stacks.
 pub trait Holds: WithComponents {
     /// Each one carries an inventory of `slots` (`w.inventory(holder)`): an entity's, a block
     /// entity's (`w.inventory(pos)`, a menu's `Slots::holder()` groups), a stack's (a backpack,
@@ -1144,13 +1144,12 @@ impl Registry {
     /// Registers `handle` from scratch over what other mods registered as it, nothing of theirs
     /// staying: `r.replace(&base_api::blocks::TORCH).texture("blue_torch")`. Of several mods replacing one
     /// thing, the last in load order wins. A block's item is replaced too (`.no_item()` leaves
-    /// theirs), its loot table only with `.drops*`, its block entity only with `.entity`.
+    /// theirs), its loot table only with `.drops*`, its per-block data follows its definition.
     pub fn replace<K: kind::Builds>(&mut self, handle: &'static Handle<K>) -> K::Builder<'_> {
         K::builder(self, handle, abi::entry_mode::REPLACE)
     }
 
-    /// As if nobody had registered `handle` (a block takes its item along, not its loot table or
-    /// block entity).
+    /// As if nobody had registered `handle`. Removing a block also removes its associated item.
     pub fn remove<K: kind::Kind>(&mut self, handle: &Handle<K>) {
         let mut e = crate::entry::Entry::of(handle);
         e.mode = abi::entry_mode::REMOVE;
@@ -1183,7 +1182,6 @@ impl Registry {
             signal: None,
             placement: None,
             merge: None,
-            entity: None,
             neighbor_fns: Vec::new(),
         }
     }
@@ -1890,7 +1888,6 @@ impl<'a> State<'a> {
 }
 
 type BlockLook = Box<dyn for<'r> FnOnce(BlockBuilder<'r>) -> BlockBuilder<'r>>;
-type EntityLook = Box<dyn for<'r> FnOnce(crate::EntityBuilder<'r>) -> crate::EntityBuilder<'r>>;
 type StateLook = Box<dyn for<'s> FnOnce(State<'s>) -> State<'s>>;
 
 /// A block being registered or changed (`r.edit(&X)`: what it sets goes on every state on top of
@@ -1940,8 +1937,6 @@ pub struct BlockBuilder<'a> {
     signal: Option<SignalBuild>,
     placement: Option<std::sync::Arc<dyn Fn(&Place, &mut Props) + Send + Sync>>,
     merge: Option<Box<dyn Fn(&Place, &mut Props) + Send + Sync>>,
-    /// Its block entity's kind, `entity`.
-    entity: Option<EntityLook>,
     /// What its `on_neighbor` does, `joins` and `derived` included, run in order.
     neighbor_fns: Vec<NeighborFn>,
 }
@@ -2326,16 +2321,38 @@ impl<'a> BlockBuilder<'a> {
         )
     }
 
-    /// Each placed block gets a block entity, an invisible entity of a kind named like the block
-    /// that comes and goes with it: data of its own (`e.attach(..)`, ticked by a system), a
-    /// model, items (`e.inventory(27)`). Doesn't make it usable: that is `opens` or `on_use`.
-    /// `.entity(|e| e.attach(&SPEED))`. Its items drop when it breaks.
-    pub fn entity(mut self, f: impl for<'r> FnOnce(crate::EntityBuilder<'r>) -> crate::EntityBuilder<'r> + 'static) -> Self {
-        self.entity = Some(Box::new(f));
-        self
+    /// The number of inventory slots carried by each placed block of this kind.
+    pub fn inventory(self, slots: u32) -> Self {
+        const SLOTS: crate::Component<u32> = crate::Component::named(abi::comp::block::INSTANCE_SLOTS);
+        self.set(&SLOTS, slots)
     }
 
-    /// Using it opens `menu`, on its block entity if it has one (a furnace), else on nothing (a
+    /// The component is stored individually on each placed block.
+    pub fn attach<T: crate::component::Value>(self, component: &crate::Component<T>) -> Self {
+        self.attach_value(component.name(), Vec::new())
+    }
+
+    pub fn attach_with<T: crate::component::Value>(self, component: &crate::Component<T>, value: T) -> Self {
+        self.attach_value(component.name(), crate::component::value_bytes(&value))
+    }
+
+    pub fn attach_storage(self, storage: &crate::Storage) -> Self {
+        self.attach_value(storage.name(), Vec::new())
+    }
+
+    fn attach_value(self, name: &str, start: Vec<u8>) -> Self {
+        const ATTACH: crate::Component<Vec<abi::Attach>> = crate::Component::named(abi::comp::block::INSTANCE_ATTACH);
+        self.push(&ATTACH, abi::Attach { name: name.to_string(), start })
+    }
+
+    /// Items in these slots are visible to nearby players, including the light they emit.
+    pub fn shown_slots(self, slots: &[u32]) -> Self {
+        const SHOWN: crate::Component<Vec<u32>> = crate::Component::named(abi::comp::block::INSTANCE_SHOWN);
+        self.set(&SHOWN, slots.to_vec())
+    }
+
+
+    /// Using it opens `menu`, with the block as its holder if it has instance data (a furnace), or with temporary slots (a
     /// crafting table). A menu with `.recipes(..)` makes the block a station of those recipes in
     /// the recipe viewer.
     pub fn opens(self, menu: &crate::Menu) -> Self {
@@ -2470,7 +2487,7 @@ impl<'a> BlockBuilder<'a> {
     pub fn signal_floater(mut self, breaks: bool) -> Self {
         let flags = if breaks { abi::signal_flags::BREAKS } else { 0 };
         self.signal = Some(SignalBuild { flags, ..SignalBuild::default() });
-        self.entity.get_or_insert_with(|| Box::new(|e| e));
+        self = self.tag(abi::comp::block::INSTANCE_DATA);
         self.signal_props(abi::signal_kind::FLOATER, 3, false, false)
             .prop("mode", ["disassemble", "hold"])
     }
@@ -2486,7 +2503,7 @@ impl<'a> BlockBuilder<'a> {
     pub fn signal_body_mount(mut self, rotates: bool) -> Self {
         let flags = if rotates { abi::signal_flags::ROTATES } else { 0 };
         self.signal = Some(SignalBuild { flags, ..SignalBuild::default() });
-        self.entity.get_or_insert_with(|| Box::new(|e| e));
+        self = self.tag(abi::comp::block::INSTANCE_DATA);
         self = self.signal_props(abi::signal_kind::BODY_MOUNT, 3, false, false);
         if rotates {
             self = self.prop("mode", ["disassemble", "hold"]);
@@ -2497,7 +2514,7 @@ impl<'a> BlockBuilder<'a> {
     /// assembles the carriage, which then travels along the rails under load.
     pub fn signal_guide(mut self) -> Self {
         self.signal = Some(SignalBuild { flags: abi::signal_flags::SLIDES, ..SignalBuild::default() });
-        self.entity.get_or_insert_with(|| Box::new(|e| e));
+        self = self.tag(abi::comp::block::INSTANCE_DATA);
         self.signal_props(abi::signal_kind::BODY_MOUNT, 3, false, false)
     }
 
@@ -2508,7 +2525,7 @@ impl<'a> BlockBuilder<'a> {
     /// A controller that assembles a free, buoyant body and provides its steering seat.
     pub fn body_helm(mut self) -> Self {
         self.signal = Some(SignalBuild { flags: abi::signal_flags::HELM, ..SignalBuild::default() });
-        self.entity.get_or_insert_with(|| Box::new(|e| e));
+        self = self.tag(abi::comp::block::INSTANCE_DATA);
         self.signal_props(abi::signal_kind::BODY_MOUNT, 0, false, false)
     }
     /// Mass per cubic block for a freely moving body, in units of water density.
@@ -2585,7 +2602,7 @@ impl<'a> BlockBuilder<'a> {
 }
 
 impl BlockBuilder<'_> {
-    /// Its properties, the parts of its states, its callbacks, and its item, loot and block entity.
+    /// Its properties, state variants, callbacks, item, loot, and per-instance data.
     fn finish(&mut self) {
         if std::thread::panicking() {
             return;
@@ -2712,11 +2729,6 @@ impl BlockBuilder<'_> {
         }
         let (name, mode) = (self.e.name.clone(), self.e.mode);
         let edit = mode == abi::entry_mode::EDIT;
-        if let Some(f) = self.entity.take() {
-            // Its block entity is edited or replaced with it.
-            self.reg
-                .block_entity(Block::generated(name.clone()), mode, f);
-        }
         let texture = std::mem::take(&mut self.item_texture);
         match (edit, self.item) {
             // An edit leaves the block's item as it is, but for what it says of it.
@@ -3259,7 +3271,7 @@ impl TemplateBuilder<'_> {
             abi::TemplateEntity { pos: [p.x as f32, p.y as f32, p.z as f32], kind: kind.name().to_string(), data: Vec::new() },
         )
     }
-    /// The block entity at `pos` (a chest) filled from loot table `table` whenever it is placed.
+    /// The block inventory at `pos` (a chest) filled from loot table `table` whenever it is placed.
     pub fn loot(self, pos: impl Into<BlockPos>, table: &crate::LootTable) -> Self {
         let p = pos.into();
         self.push(&crate::comps::template::LOOT, abi::TemplateLoot { pos: [p.x, p.y, p.z], table: table.name().to_string() })

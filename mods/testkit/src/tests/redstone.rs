@@ -739,28 +739,15 @@ pub async fn redstone_moves_chest(t: T) -> R {
     t.set(chest, "base:chest").await?;
     t.set(piston, "base:piston[facing=east]").await?;
     t.frames(5).await?;
-    let list = t
-        .op(&format!("near {} {} {} 2", chest[0], chest[1], chest[2]))
-        .await?;
-    let id = list
-        .split_whitespace()
-        .find(|e| e.contains("chest"))
-        .and_then(|e| e.split(':').next())
-        .ok_or(format!("no chest among {list}"))?
-        .to_string();
+    let id = t.op(&format!("block_instance {} {} {}", chest[0], chest[1], chest[2])).await?;
+    t.check(id != "0", "the chest owns block data");
     t.op(&format!("put {id} 0 base:cobblestone 9")).await?;
     let powered = add(f, [2, 0, z]);
     t.set(powered, &lever(true)).await?;
     settle(&t).await?;
     t.check(t.block(to).await?.contains("chest"), "it moved");
-    let list = t
-        .op(&format!("near {} {} {} 2", to[0], to[1], to[2]))
-        .await?;
-    t.check(
-        list.split_whitespace()
-            .any(|e| e.starts_with(&format!("{id}:"))),
-        format!("it is the same one: {id} among {list}"),
-    );
+    let at_destination = t.op(&format!("block_instance {} {} {}", to[0], to[1], to[2])).await?;
+    t.check_eq(at_destination, id.clone(), "the same block instance moved");
     let (name, count, _) = t.slot(&id, 0).await?;
     t.check(name.contains("cobblestone") && count == 9, format!("with what it held: {name} {count}"));
     t.check_eq(

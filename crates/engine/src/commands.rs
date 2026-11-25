@@ -589,7 +589,6 @@ fn entry_names(c: &Content, kind: u32, partial: &str) -> Vec<String> {
             .catalog
             .ids(kind)
             .iter()
-            .filter(|(_, id)| kind != ek::ENTITY || !c.game.is_block_entity(**id))
             .map(|(n, _)| n),
         partial,
     )

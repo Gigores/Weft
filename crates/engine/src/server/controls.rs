@@ -27,8 +27,7 @@ fn default_for(c: &Content, state: u32) -> Option<Settings> {
 
 impl Dim {
     pub(super) fn guide_settings(&self, c: &Content, frame: u64, at: IVec3) -> Guide {
-        self.entities
-            .anchored(frame, at)
+        self.anchored(frame, at)
             .and_then(|id| self.controller_settings(c, id))
             .and_then(|s| match s {
                 Settings::Guide(g) => Some(g),
@@ -42,7 +41,7 @@ impl Dim {
     }
 
     pub(super) fn rotor_program(&self, c: &Content, frame: u64, at: IVec3) -> Option<Rotor> {
-        match self.controller_settings(c, self.entities.anchored(frame, at)?)? {
+        match self.controller_settings(c, self.anchored(frame, at)?)? {
             Settings::Rotor(rotor) if !rotor.rules.is_empty() => Some(rotor),
             _ => None,
         }
@@ -153,13 +152,8 @@ impl Dim {
             return;
         }
         let Some(mut settings) = Settings::from_bytes(bytes) else { return };
-        let Some((frame, at)) = self
-            .entities
-            .get(controller)
-            .and_then(|e| Some((e.block_frame(), e.anchor?)))
-        else {
-            return;
-        };
+        let Some(block) = self.entities.blocks.get(&controller) else { return };
+        let (frame, at) = (block.frame, block.cell);
         let Some(e) = self.entities.get(player) else { return };
         if e.mode != GameMode::CREATIVE
             && let Settings::Helm(profile) = &mut settings
@@ -199,7 +193,7 @@ impl Dim {
         }
         let pilot = self
             .active_helm(c, mount)
-            .and_then(|(at, _)| self.entities.anchored(mount, at))
+            .and_then(|(at, _)| self.anchored(mount, at))
             .map(|controller| {
                 let profile = match self.controller_settings(c, controller) {
                     Some(Settings::Helm(profile)) => profile,
@@ -241,7 +235,7 @@ impl Dim {
 
     pub(super) fn update_helm_outputs(&mut self, c: &Content, mount: u64, at: Option<IVec3>) {
         let rider = self.rider_in(mount, 0);
-        let controller = at.and_then(|at| self.entities.anchored(mount, at));
+        let controller = at.and_then(|at| self.anchored(mount, at));
         if let Some(player) = rider
             && self
                 .entities

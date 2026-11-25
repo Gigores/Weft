@@ -94,6 +94,13 @@ pub fn encode_mods(m: &[AttrMod]) -> Box<[u8]> {
 /// An entity going to a dimension whose clock is `by` ticks ahead: what it keeps by world time
 /// (its effects' ends, its modifiers' ends, when its keys went down) is as far from now there.
 pub(super) fn rebase_clock(c: &Content, e: &mut super::entity::Entity, comps: &mut [(u32, Box<[u8]>)], by: i64) {
+    rebase_component_clock(c, comps, by);
+    for k in &mut e.keys {
+        k.1 = k.1.saturating_add_signed(by);
+    }
+}
+
+pub(super) fn rebase_component_clock(c: &Content, comps: &mut [(u32, Box<[u8]>)], by: i64) {
     crate::world::rebase_effects(comps, c.game.fields.effect, by);
     for (_, v) in comps
         .iter_mut()
@@ -104,9 +111,6 @@ pub(super) fn rebase_clock(c: &Content, e: &mut super::entity::Entity, comps: &m
             .map(|m| AttrMod { until: if m.until == 0 { 0 } else { m.until.saturating_add_signed(by).max(1) }, ..m })
             .collect();
         *v = encode_mods(&mods);
-    }
-    for k in &mut e.keys {
-        k.1 = k.1.saturating_add_signed(by);
     }
 }
 

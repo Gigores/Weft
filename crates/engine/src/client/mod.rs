@@ -15,9 +15,11 @@ pub mod particles;
 mod receive;
 pub mod sky;
 mod structure_effects;
+mod sun_shadow;
 pub mod terrain;
 pub mod terrain_gpu;
 pub mod textures;
+mod visual_clock;
 pub(crate) mod wake;
 pub mod weather;
 pub mod wires;
@@ -100,6 +102,7 @@ pub struct LocalPlayer {
 
 pub struct ClientEntity {
     pub kind: u32,
+    pub hidden_mode: bool,
     helm: Option<IVec3>,
     /// What it rides and in which seat: it is drawn there.
     pub vehicle: Option<(u64, u8)>,
@@ -348,6 +351,7 @@ impl ClientEntity {
     pub fn new(kind: u32, pos: DVec3, yaw: f32, pitch: f32) -> ClientEntity {
         ClientEntity {
             kind,
+            hidden_mode: false,
             helm: None,
             pos,
             target: pos,
@@ -590,6 +594,11 @@ const FRAME_TARGET: f64 = 0.016;
 const MIN_BUDGET: f64 = 0.002;
 const MAX_BUDGET: f64 = 0.005;
 
+pub(crate) struct ClientBlock {
+    pub view: crate::net::BlockView,
+    pub shown: Vec<ItemStack>,
+}
+
 pub struct Client {
     conn: ClientConn,
     skin: Option<crate::net::Skin>,
@@ -625,14 +634,19 @@ pub struct Client {
     drawn_frames: FxHashSet<u64>,
     landings: FxHashMap<u64, receive::Landing>,
     start: Instant,
-    /// Ticks counted since the server last said the time (`Scene` ticks).
+    /// Ticks counted since the server last said the time.
     since_time: f64,
+    visual_clock: visual_clock::VisualClock,
     /// Ticks a second the server runs at.
     tick_rate: f64,
     /// Particle kind per block state shown around the player (`ambient`), `u32::MAX` none.
     ambient_kinds: Option<Vec<(Vec<u32>, Option<u32>)>>,
     /// The frame's `Scene`, one buffer per frame in flight.
     scene_bufs: Vec<BufferId>,
+    sun_shadow: Option<sun_shadow::SunShadow>,
+    sun_draws: CommandList,
+    sun_far_draws: CommandList,
+    sun_far_views: [Vec<(BufferId, u32)>; 2],
     pub target: Option<Hit>,
     pub target_entity: Option<u64>,
     pub selected: usize,
@@ -676,8 +690,7 @@ pub struct Client {
     /// Brightness setting, 0 moody .. 1 bright.
     pub brightness: f32,
     pub entities: FxHashMap<u64, ClientEntity>,
-    /// Block entities that show items (`registry::SHOWN`): not drawn or hit, only lit by.
-    pub showing_blocks: FxHashMap<u64, ClientEntity>,
+    pub(crate) showing_blocks: FxHashMap<u64, ClientBlock>,
     pub inventory: Vec<ItemStack>,
     pub max_health: f32,
     pub mode: GameMode,
@@ -1019,9 +1032,14 @@ impl Client {
             landings: FxHashMap::default(),
             start: Instant::now(),
             since_time: 0.0,
+            visual_clock: visual_clock::VisualClock::default(),
             tick_rate: crate::world::TPS as f64,
             ambient_kinds: None,
             scene_bufs: Vec::new(),
+            sun_shadow: None,
+            sun_draws: CommandList::default(),
+            sun_far_draws: CommandList::default(),
+            sun_far_views: Default::default(),
             target: None,
             target_entity: None,
             selected: 0,
@@ -1271,6 +1289,7 @@ impl Client {
             | if m.has(crate::tag_bits::camera::NO_INTERACT) { k::HANDS } else { 0 };
         let input = &*input;
         let was_joined = self.joined;
+        self.visual_clock.advance(dt);
         self.take_messages(dt);
         // The frame that receives the welcome may include time spent loading.
         let dt = if !was_joined && self.joined { 0.0 } else { dt };
@@ -2814,6 +2833,12 @@ impl Client {
                 self.environment.remote.insert(id, layers);
             }
         }
+        if let Some(block) = self.showing_blocks.get_mut(&id) {
+            if comp == shown {
+                block.shown = Vec::<ItemStack>::from_bytes(bytes).unwrap_or_default();
+            }
+            return;
+        }
         let now = self.ticks();
         let arriving = self.arriving_tick();
         let hp = (comp == health)
@@ -2826,10 +2851,7 @@ impl Client {
             self.entity_render.changed_items.insert(id);
         }
         let mine = id == self.player_id;
-        let other = self
-            .entities
-            .get_mut(&id)
-            .or(self.showing_blocks.get_mut(&id));
+        let other = self.entities.get_mut(&id);
         let Some(e) = (if mine { Some(&mut self.me) } else { other }) else { return };
         if let Some(hp) = &hp {
             // Lower health out of a lower maximum, or on joining, isn't a hit.
@@ -2944,10 +2966,7 @@ impl Client {
         let (now, light) = (self.ticks(), c.ids.light.unwrap_or(u32::MAX));
         let mut sources = Vec::new();
         let mine = (!self.mode.has(crate::tag_bits::game_mode::HIDDEN) && !self.dead).then_some((&self.player_id, &self.me));
-        let all = mine
-            .into_iter()
-            .chain(self.entities.iter())
-            .chain(&self.showing_blocks);
+        let all = mine.into_iter().chain(self.entities.iter());
         let hidden = |e: &ClientEntity| {
             e.effects.iter().any(|f| {
                 f.until > now
@@ -2962,6 +2981,11 @@ impl Client {
                 .map(Vec::as_slice);
             let pos = if *id == self.player_id { self.player.pos } else { e.pos };
             sources.push(glow::entity_glow(c, e, now, pos, e.body_yaw, stored));
+        }
+        for (&id, block) in &self.showing_blocks {
+            let own = self.entity_components.get(&(id, light)).and_then(|b| b.as_slice().try_into().ok()).unwrap_or([0; 3]);
+            let color = block.shown.iter().map(|s| c.stack_light(s)).fold(own, glow::brightest);
+            sources.push((self.frame_place(block.view.frame).to_world(block.view.local), color));
         }
         let eye = self.player.pos;
         self.world.set_glow(c, eye, sources);
@@ -3152,6 +3176,16 @@ impl Client {
         for b in self.scene_bufs.drain(..) {
             gpu.destroy_buffer(b);
         }
+        for (buffer, _) in self
+            .sun_far_views
+            .iter_mut()
+            .flat_map(|buffers| buffers.drain(..))
+        {
+            gpu.destroy_buffer(buffer);
+        }
+        if let Some(shadow) = self.sun_shadow.take() {
+            shadow.destroy(gpu);
+        }
         self.render.destroy(gpu);
         self.entity_render.destroy(gpu);
         self.particles.destroy(gpu);
@@ -3164,7 +3198,7 @@ impl Client {
 
     /// Simulation daylight used by conditions and prediction, independent of perception overrides.
     pub fn daylight(&self) -> f32 {
-        content().dims[self.world.dim as usize].daylight(self.world.time) * (1.0 - self.look.darkness)
+        content().dims[self.world.dim as usize].daylight_at(self.smooth_time()) * (1.0 - self.look.darkness)
     }
 
     /// Blend the weather at the camera and play its ambient sound.
@@ -3208,8 +3242,7 @@ impl Client {
 
     /// Game ticks now, with the fraction of the current one.
     fn smooth_time(&self) -> f64 {
-        let fraction = if self.since_time < crate::world::TPS as f64 { self.accum.clamp(0.0, STEP) * self.tick_rate } else { 0.0 };
-        self.world.time as f64 + self.since_time + fraction
+        self.visual_clock.time
     }
 
     /// The frame as every world pass sees it (`gpu_layout::Scene`).
@@ -3250,19 +3283,25 @@ impl Client {
             rain_cover: [0.0; 4],
             lightning_start,
             lightning_end,
+            sun_view: [[0.0; 4]; 4],
+            sun_far_view: [[0.0; 4]; 4],
+            sun_grid: [0.0; 4],
+            sun_far_other_view: [[0.0; 4]; 4],
+            sun_far_blend: [0.0; 4],
         }
     }
 
-    /// Toward the sun: it rises in +x, is highest at noon and leans a little south so that
-    /// shadows are never straight down.
+    /// Toward the glowing body that lights the sky, including its configured orbit.
     fn sun(&self) -> [f32; 4] {
-        let d = &content().dims[self.world.dim as usize];
-        if !d.sky_light {
-            return [0.0, 1.0, 0.0, 0.0];
+        let time = self.smooth_time();
+        if let Some((direction, opacity)) = sky::sun_vector(self.world.dim as usize, time, &self.environment.sky) {
+            let values = &self.environment.values;
+            return direction
+                .extend(direction.y.max(0.0) * values.sunlight * values.sky_opacity * opacity)
+                .to_array();
         }
-        let a = d.day_turn(self.world.time as f64) * std::f64::consts::TAU;
-        let v = Vec3::new(a.cos() as f32, a.sin() as f32, 0.35).normalize();
-        [v.x, v.y, v.z, v.y.max(0.0) * self.environment.values.sunlight]
+        let a = content().dims[self.world.dim as usize].day_turn(time) * std::f64::consts::TAU;
+        [a.cos() as f32, a.sin() as f32, 0.0, 0.0]
     }
 
     /// `list` goes in the world's pass, `early` before it.
@@ -3305,6 +3344,66 @@ impl Client {
             );
         }
         let mut scene = self.scene(&cam, frame);
+        let cached = self.render.cache_sun;
+        if self
+            .sun_shadow
+            .as_ref()
+            .is_some_and(|shadow| shadow.cached != cached)
+        {
+            self.sun_shadow.take().unwrap().destroy(gpu);
+        }
+        let mut far_blend = 0.0;
+        let views = (self.has_world()
+            && self.render.casts_sun_shadows()
+            && (self.render.uses_sun_depth || self.entity_render.uses_sun_depth)
+            && content()
+                .game
+                .catalog
+                .ids(ek::CONFIG)
+                .get("core:sun_shadows")
+                .is_some_and(|&id| crate::config::get(id) != 0.0))
+        .then(|| sun_shadow::SunView::direction(scene.sun))
+        .flatten()
+        .map(|direction| {
+            let mut far_directions = [direction; 2];
+            if cached {
+                let step = sun_shadow::FAR_SUN_TICKS;
+                let interval = self.smooth_time() / step;
+                let start = interval.floor();
+                let key_directions = [start * step, (start + 1.0) * step].map(|time| {
+                    sky::sun_vector(self.world.dim as usize, time, &self.environment.sky)
+                        .map(|(toward, _)| toward)
+                        .filter(|&toward| toward.y > 0.0 && toward.dot(direction) > 0.999)
+                        .unwrap_or(direction)
+                });
+                // The shared endpoint stays in the same slot when advancing an interval.
+                let flip = start as u64 & 1 != 0;
+                far_directions = if flip { [key_directions[1], key_directions[0]] } else { key_directions };
+                far_blend = if flip { 1.0 - interval.fract() } else { interval.fract() };
+            }
+            self.sun_shadow
+                .get_or_insert_with(|| sun_shadow::SunShadow::new(gpu, cached))
+                .views(cam.pos, scene.sun, direction, far_directions)
+        });
+        let sun = views.map(|(near, _)| near);
+        let far_sun = views.and_then(|(_, far)| far);
+        let depth = sun.map(|view| {
+            scene.sun_view = view.matrix.to_cols_array_2d();
+            scene.sun_grid = view.grid;
+            if let Some([a, b]) = far_sun {
+                scene.sun_far_view = a.matrix.to_cols_array_2d();
+                if a.direction != b.direction {
+                    scene.sun_far_other_view = b.matrix.to_cols_array_2d();
+                    scene.sun_far_blend[0] = far_blend as f32;
+                }
+            }
+            self.sun_shadow.as_ref().unwrap().depth
+        });
+        let near_reuse = sun.is_some_and(|view| cached && self.render.sun_cacheable(view.range))
+            && self.entities.is_empty()
+            && (self.dead || self.mode.has(crate::tag_bits::game_mode::NO_INTERACT));
+        let near_update =
+            sun.filter(|&view| !near_reuse || !self.render.sun_cache_valid(0) || self.sun_shadow.as_ref().unwrap().needs_map(view, 0));
         while self.scene_bufs.len() < gpu.frames_in_flight() {
             self.scene_bufs.push(gpu.create_buffer(
                 size_of::<Scene>() as u64,
@@ -3335,7 +3434,40 @@ impl Client {
             })
             .collect();
         self.render
-            .draw(gpu, list, early, frame, &cam, scene_buf, &self.lod, &frames, &lights, &dry);
+            .draw(gpu, list, early, frame, &cam, scene_buf, &self.lod, &frames, &lights, &dry, depth);
+        self.sun_draws.clear();
+        if let Some(view) = near_update {
+            self.render
+                .draw_sun(gpu, &mut self.sun_draws, frame.slot, cam.pos, view, &frames, None);
+        }
+        if let Some(views) = far_sun {
+            let shadows = self.sun_shadow.as_mut().unwrap();
+            for (slot, view) in views.into_iter().enumerate() {
+                if slot == 1 && views[0].direction == view.direction {
+                    continue;
+                }
+                let map = slot + 1;
+                let reusable = self.render.sun_cacheable(view.range);
+                if reusable && self.render.sun_cache_valid(map) && !shadows.needs_map(view, map) {
+                    continue;
+                }
+                let far_scene = crate::gpu_layout::frame_buffer(
+                    gpu,
+                    &mut self.sun_far_views[slot],
+                    frame.slot,
+                    1,
+                    size_of::<Scene>() as u64,
+                    weft_render::usage::STORAGE,
+                    "far sun view",
+                );
+                let caster = Scene { sun_view: view.matrix.to_cols_array_2d(), ..scene };
+                gpu.mapped(far_scene)[..size_of::<Scene>()].copy_from_slice(bytemuck::bytes_of(&caster));
+                self.sun_far_draws.clear();
+                self.render
+                    .draw_sun(gpu, &mut self.sun_far_draws, frame.slot, cam.pos, view, &[], Some((map, far_scene)));
+                shadows.record(gpu, early, &mut self.sun_far_draws, view, map, reusable);
+            }
+        }
         let lit: Vec<u32> = frames
             .iter()
             .map(|(id, _)| {
@@ -3407,7 +3539,9 @@ impl Client {
             bob: self.hand_bob(),
             body: self.first_person_model,
         });
-        let me = (alive && (self.camera_has(crate::tag_bits::camera::BODY) || hand.is_some())).then_some(&self.me);
+        let has_body = self.camera_has(crate::tag_bits::camera::BODY);
+        let own_shadow = alive && sun.is_some() && self.camera_has(crate::tag_bits::camera::HAND);
+        let me = (alive && (has_body || hand.is_some() || own_shadow)).then_some(&self.me);
         let world = &self.world;
         let light = |p: IVec3| world.light_shown(p);
         let mut hand_late = std::mem::take(&mut self.hand_late);
@@ -3445,7 +3579,16 @@ impl Client {
             &self.gizmo_lines,
             &self.gizmo_fills,
             &mut hand_late,
+            sun.zip(depth)
+                .map(|(view, depth)| (view, depth, &mut self.sun_draws)),
+            own_shadow && !has_body,
         );
+        if let Some(view) = near_update {
+            self.sun_shadow
+                .as_mut()
+                .unwrap()
+                .record(gpu, early, &mut self.sun_draws, view, 0, near_reuse);
+        }
         self.particles.draw(list, &mut late, scene_buf);
         self.weather_render
             .draw(gpu, &mut late, frame, &cam, scene_buf, &self.world, weather, weather_ticks, self.frame_dt);

@@ -184,10 +184,10 @@ A step being registered (`Registry::step`, `modify`, `before_event`).
 Every entity of a region that has a component, with the values side by side, and the ticks each call stands for: 1 normally, more while an entity catches up on time it missed (its region was unloaded, the world's time jumped). A system worth catching up does the work of `ticks` ticks at once (a furnace: so many items smelted), anything else may ignore it.
 
 - <a id="SystemBatch-world"></a>`.world() -> World` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L953)
-- <a id="SystemBatch-ids"></a>`.ids() -> &[u64]` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L956)
+- <a id="SystemBatch-owners"></a>`.owners() -> &[abi::Holder]` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L960)
 - <a id="SystemBatch-values"></a>`.values() -> &mut [T]` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L959)
 - <a id="SystemBatch-ticks"></a>`.ticks() -> &[u32]` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L962)
-- <a id="SystemBatch-iter_mut"></a>`.iter_mut() -> impl Iterator<Item = (u64, &mut T, u32)>`: (entity, its value, ticks to do). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L966)
+- <a id="SystemBatch-iter_mut"></a>`.iter_mut() -> impl Iterator<Item = (abi::Holder, &mut T, u32)>`: (owner, its value, ticks to do). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/extend.rs#L970)
 
 ## Use
 

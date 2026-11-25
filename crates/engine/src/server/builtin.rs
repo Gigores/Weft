@@ -363,9 +363,6 @@ fn summon(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     let count = a.int("count").unwrap_or(1).clamp(1, 100_000);
     let pos = a.pos("pos").unwrap_or(here);
     let (kind, kname) = (a.id("entity").unwrap_or(0), a.text("entity").unwrap_or_default().to_string());
-    if c.game.is_block_entity(kind) {
-        return say("summon.block_entity", vec![text(&kname)]);
-    }
     let r = s.dims[me.0 as usize].ensure_region(c, pos);
     for _ in 0..count {
         r.spawn_by(0, c, kind, pos, weft_abi::spawn_cause::COMMAND, |_| {});
@@ -426,9 +423,8 @@ fn insert(s: &mut Server, x: &Ctx) -> Vec<Msg> {
     match s.dims[dim as usize].region_at(p) {
         Some(r) => match r.anchored(0, p) {
             Some(owner) => {
-                let left = r
-                    .entities
-                    .insert_item(c, owner, ItemStack::new(item, count));
+                use super::holder::{self, At, Inv};
+                let left = holder::insert(r, c, Inv::own(At::Block(owner)), ItemStack::new(item, count));
                 say("insert.done", vec![int(count - left.count), Arg::Name(Name::Item(item))])
             }
             None => say("insert.no_entity", Vec::new()),

@@ -1193,7 +1193,7 @@ impl Backend for WgpuBackend {
                 }
                 // wgpu orders what reads after what writes by itself.
                 Cmd::Barrier => {}
-                Cmd::CopyDepthToBuffer { depth, buffer } => {
+                Cmd::CopyDepthToBuffer { depth, buffer, offset } => {
                     pass = Pass::None;
                     self.written(buffer.0, &mut read_back);
                     let t = self.textures.get(depth.0);
@@ -1203,7 +1203,14 @@ impl Backend for WgpuBackend {
                         layout: &layout,
                         entries: &[
                             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) },
-                            wgpu::BindGroupEntry { binding: 1, resource: self.buffers.get(buffer.0).raw.as_entire_binding() },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: &self.buffers.get(buffer.0).raw,
+                                    offset,
+                                    size: std::num::NonZeroU64::new(u64::from(t.desc.width) * u64::from(t.desc.height) * 4),
+                                }),
+                            },
                         ],
                     });
                     let mut cp = enc.begin_compute_pass(&Default::default());

@@ -469,7 +469,7 @@ pub fn register(r: &mut Registry) {
         .hardness(3.5)
         .mined_by("pickaxe", tool_tier::HAND)
         .tab(&crate::tabs::REDSTONE)
-        .entity(|e| e.inventory(9))
+        .inventory(9)
         .opens(&DISPENSER_MENU);
     r.menu(&DISPENSER_MENU)
         .group("dispenser", Slots::chest(1).holder())

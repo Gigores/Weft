@@ -3,6 +3,10 @@ var<private> TRI_FLIP: array<u32, 6> = array<u32, 6>(1u, 2u, 3u, 1u, 3u, 0u);
 var<private> AO: array<f32, 4> = array<f32, 4>(0.42, 0.62, 0.8, 1.0);
 const WORLD_LIQUID: u32 = 1u;
 const COVER_WALL: u32 = 2u;
+
+fn surface_normal_bits(n: vec3<f32>) -> u32 {
+    return pack4x8snorm(vec4(n, 0.0)) << 8u;
+}
 const LOD_DIR_SHIFT: u32 = 2u;
 const LOD_TINTED: u32 = 1u;
 const LOD_BOX: u32 = 32u;
@@ -136,8 +140,7 @@ fn finish(local: vec3<f32>, origin: vec4<i32>) -> vec4<f32> {
     return vec4(pos, 1.0);
 }
 
-@vertex
-fn vs_face(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+fn face_vertex(vi: u32, ii: u32) -> VOut {
     let f = vi / 4u;
     let w0 = records[f * 4u];
     let w1 = records[f * 4u + 1u];
@@ -158,7 +161,6 @@ fn vs_face(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     out.lod_fade = 0.0;
     out.dist = length(pos.xyz);
     out.rel = pos.xyz;
-    out.flags = 0u;
     out.uv = UVS[(c + 4u - ((w0 >> FACE_TURN_SHIFT) & FACE_TURN_MASK)) % 4u];
     let tex_id = w1 & FACE_TEX_MASK;
     let fr = texture_frame(tex_id);
@@ -178,15 +180,17 @@ fn vs_face(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     }
     out.tint = tint;
     var shade = SHADE[dir];
+    var normal = FACE_DIRS[dir];
     if origins[ii].w != 0 {
-        shade = normal_shade(quat_vector(body_rotations[origins[ii].w], FACE_DIRS[dir]));
+        normal = quat_vector(body_rotations[origins[ii].w], normal);
+        shade = normal_shade(normal);
     }
+    out.flags = surface_normal_bits(normal);
     out.color = tint * shade * AO[a[c]];
     return out;
 }
 
-@vertex
-fn vs_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+fn quad_vertex(vi: u32, ii: u32) -> VOut {
     let q = vi / 4u;
     let c = vi % 4u;
     let base = q * 8u;
@@ -224,7 +228,7 @@ fn vs_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
         out.clip_cube = (local - lo) / (hi - lo) - 0.5;
         light1 = light0;
     }
-    out.flags = select(0u, WORLD_LIQUID, origins[ii].w == 0 && ((uvw >> QUAD_TINT_SHIFT) & QUAD_LIQUID) != 0u);
+    out.flags = surface_normal_bits(n) | select(0u, WORLD_LIQUID, origins[ii].w == 0 && ((uvw >> QUAD_TINT_SHIFT) & QUAD_LIQUID) != 0u);
     out.uv = uvs[c];
     let tex_id = w4 & FACE_TEX_MASK;
     let fr = texture_frame(tex_id);
@@ -247,9 +251,65 @@ fn vs_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     return out;
 }
 
+@vertex
+fn vs_face(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+    return face_vertex(vi, ii);
+}
+
+@vertex
+fn vs_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
+    return quad_vertex(vi, ii);
+}
+
+struct SunOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) layer: u32,
+    @location(2) clip_cube: vec3<f32>,
+    @location(3) @interpolate(flat) next_frame: u32,
+    @location(4) @interpolate(flat) blend: f32,
+    @location(5) @interpolate(flat) size: f32,
+}
+
+fn sun_vertex(v: VOut) -> SunOut {
+    return SunOut(scene.sun_view * vec4(v.rel, 1.0), v.uv, v.layer, v.clip_cube, v.layer2, v.blend, v.size);
+}
+
+@vertex
+fn vs_sun_face(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SunOut {
+    return sun_vertex(face_vertex(vi, ii));
+}
+
+@vertex
+fn vs_sun_quad(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SunOut {
+    return sun_vertex(quad_vertex(vi, ii));
+}
+
+@fragment
+fn fs_sun_clip(in: SunOut) {
+    if any(abs(in.clip_cube) > vec3(0.5)) {
+        discard;
+    }
+}
+
+@fragment
+fn fs_sun_cutout(in: SunOut) {
+    let du = dpdx(in.uv);
+    let dv = dpdy(in.uv);
+    if any(abs(in.clip_cube) > vec3(0.5)) {
+        discard;
+    }
+    let frame = Frame(in.layer, in.next_frame, in.blend, in.size);
+    if sample_cutout(frame, in.uv, du, dv).a <= 0.1 {
+        discard;
+    }
+}
+
 fn shade(in: VOut, albedo: vec4<f32>) -> vec4<f32> {
     if any(abs(in.clip_cube) > vec3(0.5)) { discard; }
-    let lit_color = lightmap(in.light, scene.params.z, scene.light.x, scene.light.y, scene.light.w, scene.environment.x);
+    let normal = unpack4x8snorm(in.flags >> 8u).xyz;
+    let sunlight = scene.environment.x * sun_visibility(scene, in.rel, in.light.x, normal);
+    let lit_color = lightmap(in.light, scene.params.z, scene.light.x, scene.light.y, scene.light.w, sunlight);
     var light = in.color * min(vec3(1.0), lit_color + lightning_ground(scene, in.rel, in.light.x));
     // Glowing texels are lifted towards full brightness by their mask: lit = albedo * max(light,
     // emission), so they stay their own (tinted, unshaded) color in the dark.
@@ -305,24 +365,22 @@ fn fs_opaque(in: VOut) -> @location(0) vec4<f32> {
 
 // Mip level from the smaller screen derivative: a plant quad seen almost edge-on would otherwise
 // pick a tiny mip whose averaged texels cover the whole quad and draw it as a solid strip.
-fn sample_cutout(in: VOut, nuv: vec2<f32>, du: vec2<f32>, dv: vec2<f32>) -> vec4<f32> {
-    let size = in.size;
-    let t = in.uv * size;
-    let lod = max(log2(max(min(length(du * size), length(dv * size)), 1e-6)), 0.0);
-    let a = textureSampleLevel(textures[in.layer], linear_mipped, nuv, lod);
-    if in.blend <= 0.0 {
+fn sample_cutout(frame: Frame, uv: vec2<f32>, du: vec2<f32>, dv: vec2<f32>) -> vec4<f32> {
+    let lod = log2(max(1.0, min(length(du), length(dv)) * frame.size));
+    let nuv = nearest_uv(frame.size, uv, du, dv);
+    let a = textureSampleLevel(textures[frame.a], linear_mipped, nuv, lod);
+    if frame.blend <= 0.0 {
         return a;
     }
-    let b = textureSampleLevel(textures[in.layer2], linear_mipped, nuv, lod);
-    return mix(a, b, in.blend);
+    let b = textureSampleLevel(textures[frame.b], linear_mipped, nuv, lod);
+    return mix(a, b, frame.blend);
 }
 
 @fragment
 fn fs_cutout(in: VOut) -> @location(0) vec4<f32> {
     let du = dpdx(in.uv);
     let dv = dpdy(in.uv);
-    let nuv = nearest_uv(in.size, in.uv, du, dv);
-    let albedo = sample_cutout(in, nuv, du, dv);
+    let albedo = sample_cutout(Frame(in.layer, in.layer2, in.blend, in.size), in.uv, du, dv);
     clip_dry_liquid(in);
     // Vanilla's alpha test (GL_GREATER 0.1).
     if albedo.a <= 0.1 {
@@ -440,7 +498,8 @@ fn lod_input(v: LodOut) -> VOut {
     out.size = v.size;
     out.lod_fade = v.lod_fade;
     out.rel = v.rel;
-    out.flags = v.flags;
+    let dir = (v.flags >> LOD_DIR_SHIFT) & FACE_DIR_MASK;
+    out.flags = (v.flags & 255u) | surface_normal_bits(FACE_DIRS[dir]);
     out.glow = 0xffffffffu;
     return out;
 }
@@ -451,6 +510,15 @@ fn lod_tile_covered(data: u32) -> bool {
 
 @vertex
 fn vs_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> LodOut {
+    return lod_vertex(vi, ii);
+}
+
+@vertex
+fn vs_sun_lod(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> @builtin(position) vec4<f32> {
+    return scene.sun_view * vec4(lod_vertex(vi, ii).rel, 1.0);
+}
+
+fn lod_vertex(vi: u32, ii: u32) -> LodOut {
     let origin = origins[ii];
     let data = u32(origin.w);
     var out: LodOut;
@@ -633,6 +701,36 @@ fn forest_view(layer: u32, local: vec2<f32>, frame: vec2<u32>, level: f32) -> ve
     return vec4(p.rgb * p.a, p.a);
 }
 
+struct SunCanopy {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) corner: vec2<f32>,
+}
+
+@vertex
+fn vs_sun_forest(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SunCanopy {
+    let f = (vi / 4u) * 4u;
+    let xz = records[f];
+    let y = records[f + 1u];
+    let radius = bitcast<f32>(records[f + 2u]);
+    let scale = exp2(f32((u32(origins[ii].w) >> LOD_DRAW_SCALE_SHIFT) & LOD_DRAW_SCALE_MASK));
+    let height = f32(y >> 16u);
+    let center = vec3(f32(xz & 65535u) * scale, f32(i32(y << 16u) >> 16u) + height * 0.65, f32(xz >> 16u) * scale);
+    let rel = finish(center, vec4<i32>(origins[ii].xyz, 0));
+    let half = vec3(radius, height * 0.35, radius);
+    let right = vec3(scene.sun_view[0].x, scene.sun_view[1].x, scene.sun_view[2].x);
+    let up = vec3(scene.sun_view[0].y, scene.sun_view[1].y, scene.sun_view[2].y);
+    let corner = UVS[vi % 4u] * 2.0 - 1.0;
+    let offset = corner * vec2(length(right * half), length(up * half));
+    return SunCanopy(scene.sun_view * rel + vec4(offset, 0.0, 0.0), corner);
+}
+
+@fragment
+fn fs_sun_forest(in: SunCanopy) {
+    if dot(in.corner, in.corner) > 1.0 {
+        discard;
+    }
+}
+
 // Only views near an angular boundary need blending. This preserves small branches at
 // magnification and skips the other texture reads when a single view describes the tree.
 fn forest_row(layer: u32, uv: vec2<f32>, frame: vec2<u32>, weight: f32, level: f32) -> vec4<f32> {
@@ -679,18 +777,18 @@ fn fs_lod(v: LodOut) -> @location(0) vec4<f32> {
         discard;
     }
     if shown_by_cubes(in.pos, 0u) {
-        let dir = (in.flags >> LOD_DIR_SHIFT) & FACE_DIR_MASK;
+        let dir = (v.flags >> LOD_DIR_SHIFT) & FACE_DIR_MASK;
         // A near column may omit a side against its neighbor. Keep the wall
         // across the boundary until that neighboring column also draws cubes.
-        if (in.flags & LOD_BOX) != 0u || dir == 2u || dir == 3u || shown_by_cubes(in.pos + FACE_DIRS[dir] * 0.5, 0u) {
+        if (v.flags & LOD_BOX) != 0u || dir == 2u || dir == 3u || shown_by_cubes(in.pos + FACE_DIRS[dir] * 0.5, 0u) {
             discard;
         }
     }
     let uv = fract(in.uv);
     let nuv = nearest_uv(in.size, uv, du, dv);
     var albedo = sample(in, nuv, du, dv);
-    if (in.flags & LOD_CUTOUT) != 0u {
-        if (in.flags & LOD_LEAVES) != 0u {
+    if (v.flags & LOD_CUTOUT) != 0u {
+        if (v.flags & LOD_LEAVES) != 0u {
             albedo = vec4(albedo.rgb * albedo.a, 1.0);
         } else if albedo.a <= 0.1 {
             discard;
@@ -698,10 +796,10 @@ fn fs_lod(v: LodOut) -> @location(0) vec4<f32> {
         return vec4(shade(in, albedo).rgb, 1.0);
     }
     let cover = smoothstep(0.1, 0.6, albedo.a);
-    let tinted = (in.flags & LOD_TINTED) != 0u;
+    let tinted = (v.flags & LOD_TINTED) != 0u;
     albedo = vec4(mix(select(albedo.rgb, vec3(1.0), tinted), albedo.rgb, cover), 1.0);
-    if (in.flags & COVER_WALL) != 0u {
-        let leaf_uv = nearest_uv(f32(in.flags >> COVER_SIZE_SHIFT), uv, du, dv);
+    if (v.flags & COVER_WALL) != 0u {
+        let leaf_uv = nearest_uv(f32(v.flags >> COVER_SIZE_SHIFT), uv, du, dv);
         let plant = textureSampleGrad(textures[v.pattern_layer], linear_mipped, leaf_uv, du, dv);
         let leaf = dot(plant.rgb, vec3(0.2126, 0.7152, 0.0722));
         albedo = vec4(albedo.rgb * mix(0.75, 1.25 + 0.35 * leaf, plant.a), 1.0);
@@ -743,6 +841,15 @@ struct FarOut {
 
 @vertex
 fn vs_lod_far(@builtin(vertex_index) vi: u32) -> FarOut {
+    return far_vertex(vi);
+}
+
+@vertex
+fn vs_sun_lod_far(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    return scene.sun_view * vec4(far_vertex(vi).rel, 1.0);
+}
+
+fn far_vertex(vi: u32) -> FarOut {
     let at = 8u + (vi / 6u) * 3u;
     let face = records[at];
     let y = records[at + 1u];
@@ -765,7 +872,8 @@ fn vs_lod_far(@builtin(vertex_index) vi: u32) -> FarOut {
 }
 
 fn far_lit(in: FarOut) -> vec4<f32> {
-    let sky_light = lightmap(vec4(1.0, 0.0, 0.0, 0.0), scene.params.z, scene.light.x, scene.light.y, scene.light.w, scene.environment.x);
+    let sun = sun_visibility(scene, in.rel, 1.0, FACE_DIRS[in.dir]);
+    let sky_light = lightmap(vec4(1.0, 0.0, 0.0, 0.0), scene.params.z, scene.light.x, scene.light.y, scene.light.w, scene.environment.x * sun);
     let light = min(vec3(1.0), sky_light + lightning_ground(scene, in.rel, 1.0));
     let lit = in.color.rgb * pow(light * SHADE[in.dir], vec3(2.2));
     let fog = fog_amount(length(in.rel), scene.params.x, scene.params.y);

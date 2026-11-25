@@ -222,7 +222,7 @@ impl EntityFilter {
     pub fn kind(kind: &crate::EntityKind) -> EntityFilter {
         EntityFilter { kind: kind.id(), flags: 0 }
     }
-    /// Only what can be hit: no dropped items, block entities, spectators or the dead.
+    /// Only what can be hit: no dropped items, spectators or the dead.
     pub fn targets(mut self) -> Self {
         self.flags |= abi::entity_filter::TARGETS;
         self

@@ -31,6 +31,7 @@ config.core.lod_detail.tooltip = Детализация учитывает ра�
 config.core.cloud_height = Подъём облаков
 config.core.cloud_height.value = {0} блоков
 config.core.cloud_distance = Дальность облаков
+config.core.sun_shadows = Тени от солнца
 config.core.cloud_distance.value = {0} блоков
 config.core.cloud_impostor_distance = Дальность перехода на импосторы облаков
 config.core.cloud_impostor_distance.value = {0} блоков

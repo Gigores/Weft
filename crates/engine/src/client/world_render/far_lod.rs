@@ -137,9 +137,21 @@ impl FarLod {
         bind: impl FnOnce(&mut CommandList, PipelineId, BufferId),
     ) {
         let Some(pipes) = self.pipes else { return };
+        self.draw_with(list, draw, camera, water, pipes[water as usize], bind);
+    }
+
+    pub fn draw_with(
+        &self,
+        list: &mut CommandList,
+        draw: &[(TileKey, f32)],
+        camera: IVec3,
+        water: bool,
+        pipe: PipelineId,
+        bind: impl FnOnce(&mut CommandList, PipelineId, BufferId),
+    ) {
         let Some(&buffer) = self.tiles.values().next() else { return };
         use crate::gpu_layout::bind::world as b;
-        bind(list, pipes[water as usize], buffer);
+        bind(list, pipe, buffer);
         for &(key, fade) in draw {
             let Some(&buffer) = self.tiles.get(&key) else { continue };
             let o = key.origin();

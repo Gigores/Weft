@@ -153,7 +153,7 @@ pub fn register(r: &mut Registry) {
     r.entity_effect(&LIT).unseen().light_rgb(0, 15, 0);
     r.block(&PEDESTAL)
         .texture("varied")
-        .entity(|e| e.inventory(1).shown_slots(&[0]))
+        .inventory(1).shown_slots(&[0])
         .no_item();
     r.storage(&STASH, 54);
     // What an edit sets wins, the rest stays; the testmod ones load after or before this mod
@@ -396,10 +396,15 @@ fn owner(w: &World, cmd: &Command) -> Result<u64, String> {
         return Ok(cmd.player());
     }
     let p = pos(cmd, "at")?;
-    match w.block_entity(p) {
-        0 => Err(format!("no block entity at {p:?} ({})", block_name(w.block(p)))),
+    match w.block_instance(p) {
+        0 => Err(format!("no block data at {p:?} ({})", block_name(w.block(p)))),
         id => Ok(id),
     }
+}
+
+fn inventory_owner(w: &World, cmd: &Command) -> Result<Holder, String> {
+    let id = owner(w, cmd)?;
+    Ok(if cmd.pos("at").is_some() || w.entity(id).is_none() { Holder::block_id(id) } else { Holder::entity(id) })
 }
 
 /// An item by name, base's when no namespace is given (lists inside one argument).
@@ -641,7 +646,7 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(String::new())
     }),
     ("group", "@owner <name:word>", |w, cmd, _, _| {
-        let g = w.inventory(owner(w, cmd)?).group(word(cmd, "name")?);
+        let g = w.inventory(inventory_owner(w, cmd)?).group(word(cmd, "name")?);
         Ok(format!("{} {}", g.len(), (0..g.len()).filter(|&i| !g.get(i).is_empty()).count()))
     }),
     ("sblock", "<id:int> <pos:pos> [block:block]", |w, cmd, _, _| {
@@ -677,16 +682,26 @@ const OPS: &[(&str, &str, Run)] = &[
         w.skip_ticks(int(cmd, "ticks")?);
         Ok(String::new())
     }),
-    ("slot", "@owner <index:int>", |w, cmd, _, _| Ok(stack_text(w.inventory(owner(w, cmd)?).get(int(cmd, "index")?)))),
+    ("block_instance", "<pos:pos> [body:int]", |w, cmd, _, _| {
+        let local = w.in_space(int(cmd, "body").unwrap_or(0)).ok_or("space missing")?;
+        let id = local.block_instance(pos(cmd, "pos")?);
+        Ok(id.to_string())
+    }),
+    ("block_pos", "<id:int> [body:int]", |w, cmd, _, _| {
+        let local = w.in_space(int(cmd, "body").unwrap_or(0)).ok_or("space missing")?;
+        let cell = local.block_location(int(cmd, "id")?).ok_or("block instance missing")?;
+        let p = local.point_in(0, cell.center()).ok_or("world space missing")?;
+        Ok(format!("{} {} {}", p.x, p.y, p.z))
+    }),
+    ("slot", "@owner <index:int>", |w, cmd, _, _| Ok(stack_text(w.inventory(inventory_owner(w, cmd)?).get(int(cmd, "index")?)))),
     ("put", "@owner <index:int> <item:item> [count:int]", |w, cmd, _, _| {
-        let o = owner(w, cmd)?;
-        w.inventory(o)
+        w.inventory(inventory_owner(w, cmd)?)
             .set(int(cmd, "index")?, ItemStack::new(id(cmd, "item")?, int(cmd, "count").unwrap_or(1)));
         Ok(String::new())
     }),
     ("display_data", "@owner <index:int> <phase:int> <counter:int> <secret:int>", |w, cmd, _, _| {
         let entity = owner(w, cmd)?;
-        let (inv, index) = (w.inventory(entity), int(cmd, "index")?);
+        let (inv, index) = (w.inventory(inventory_owner(w, cmd)?), int(cmd, "index")?);
         let secret = int(cmd, "secret")?;
         let phase = int(cmd, "phase")?;
         let inner = Item::named("base:stick")
@@ -710,7 +725,7 @@ const OPS: &[(&str, &str, Run)] = &[
     }),
     ("stack_light", "@owner <index:int> <r:int> <g:int> <b:int>", |w, cmd, _, _| {
         let entity = owner(w, cmd)?;
-        let (inv, index) = (w.inventory(entity), int(cmd, "index")?);
+        let (inv, index) = (w.inventory(inventory_owner(w, cmd)?), int(cmd, "index")?);
         inv.set(
             index,
             inv.get(index)
@@ -719,30 +734,30 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(entity.to_string())
     }),
     ("drop_stack", "@owner <index:int> <pos:pos>", |w, cmd, _, _| {
-        let stack = w.inventory(owner(w, cmd)?).get(int(cmd, "index")?);
+        let stack = w.inventory(inventory_owner(w, cmd)?).get(int(cmd, "index")?);
         let p = pos(cmd, "pos")?;
         Ok(w.spawn_item([p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5], stack)
             .to_string())
     }),
     ("wear", "@owner <index:int> <amount:int>", |w, cmd, _, _| {
-        let (inv, i) = (w.inventory(owner(w, cmd)?), int(cmd, "index")?);
+        let (inv, i) = (w.inventory(inventory_owner(w, cmd)?), int(cmd, "index")?);
         inv.set(i, inv.get(i).with_wear(int(cmd, "amount")?));
         Ok(String::new())
     }),
     ("insert", "<pos:pos> <item:item> [count:int]", |w, cmd, _, _| {
         let p = pos(cmd, "pos")?;
-        let o = match w.block_entity(p) {
-            0 => return Err(format!("no block entity at {p:?} ({})", block_name(w.block(p)))),
+        let o = match w.block_instance(p) {
+            0 => return Err(format!("no block data at {p:?} ({})", block_name(w.block(p)))),
             id => id,
         };
         let count: u32 = int(cmd, "count").unwrap_or(1);
         let left = w
-            .inventory(o)
+            .inventory(Holder::block_id(o))
             .insert(ItemStack::new(id(cmd, "item")?, count));
         Ok((count - left.count).to_string())
     }),
     ("inv", "@owner", |w, cmd, _, _| {
-        let inv = w.inventory(owner(w, cmd)?);
+        let inv = w.inventory(inventory_owner(w, cmd)?);
         let parts: Vec<String> = (0..inv.len())
             .map(|i| (i, inv.get(i)))
             .filter(|(_, s)| !s.is_empty())
@@ -1097,7 +1112,7 @@ const OPS: &[(&str, &str, Run)] = &[
         let m = Menu::lookup(name).ok_or_else(|| format!("no menu {name}"))?;
         let p = pos(cmd, "pos")?;
         if !w.open_menu(player, m, p) {
-            return Err(format!("no block entity at {p:?} ({})", block_name(w.block(p))));
+            return Err(format!("no block data at {p:?} ({})", block_name(w.block(p))));
         }
         Ok(String::new())
     }),
@@ -1209,7 +1224,7 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(String::new())
     }),
     ("secret", "@owner <index:int> [value:int]", |w, cmd, _, _| {
-        let inv = w.inventory(owner(w, cmd)?);
+        let inv = w.inventory(inventory_owner(w, cmd)?);
         let slot: u32 = int(cmd, "index")?;
         let s = inv.get(slot);
         match cmd.int("value") {

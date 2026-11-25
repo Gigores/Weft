@@ -2,7 +2,7 @@ use crate::abi::{self, Holder, ItemStack, Slice, Str};
 use crate::abi::{BlockPos, Vec3};
 use crate::component::{Component, Storage, Value};
 use crate::content::{
-    Block, Declaration, EntityCategory, EntityKind, EquipmentSlot, GizmoGroup, HudElement, Menu, Pending, RecipeKind, TintKind, WordSet,
+    Declaration, EntityCategory, EntityKind, EquipmentSlot, GizmoGroup, HudElement, Menu, Pending, RecipeKind, TintKind, WordSet,
 };
 use crate::ui::{Ui, ui_cb};
 use crate::{Id, Registry, WithComponents, World, callback, comps, host, qualify};
@@ -443,7 +443,7 @@ impl World {
         let n = unsafe { (host().player_count)(self.raw()) };
         (0..n).map(move |i| unsafe { (host().player_at)(self.raw(), i) })
     }
-    /// The inventory of an entity, a block (`[x, y, z]`, through its block entity) or a held
+    /// The inventory of an entity, a block (`[x, y, z]`) or a held
     /// stack (`Holder::held(player, slot)`, a backpack).
     pub fn inventory(&self, h: impl Into<Holder>) -> Inventory {
         Inventory { world: *self, holder: h.into() }
@@ -457,11 +457,28 @@ impl World {
         let pos = pos.into();
         self.spawn_with(&ITEM, pos, &Spawn::new().stack(stack))
     }
-    /// Entity attached to the block at `pos` (furnace, chest), 0 if none.
-    pub fn block_entity(&self, pos: impl Into<BlockPos>) -> u64 {
+    /// The stable instance ID of the block part at this position, or zero without instance data.
+    pub fn block_instance(&self, pos: impl Into<BlockPos>) -> u64 {
         let pos = pos.into();
-        unsafe { (host().block_entity)(self.raw(), &pos) }
+        unsafe { (host().block_instance)(self.raw(), &pos) }
     }
+
+    /// The cell of an instance in this world context's frame.
+    pub fn block_location(&self, id: u64) -> Option<BlockPos> {
+        let mut pos = BlockPos::ZERO;
+        (unsafe { (host().block_location)(self.raw(), id, &mut pos) } != 0).then_some(pos)
+    }
+    /// The current state of this instance, including which part of a compound cell it owns.
+    pub fn block_instance_state(&self, id: u64) -> Option<u32> {
+        let state = unsafe { (host().block_instance_state)(self.raw(), id, u32::MAX) };
+        (state != u32::MAX).then_some(state)
+    }
+
+    /// Changes the state of this particular block. The new state must belong to the same block kind.
+    pub fn set_block_instance_state(&self, id: u64, state: u32) -> bool {
+        state != u32::MAX && unsafe { (host().block_instance_state)(self.raw(), id, state) != u32::MAX }
+    }
+
     /// Opens a menu (a handle, or its id) on a holder: an entity, a block, a held stack, or
     /// `Holder::NONE` for menus without one. False (and a logged reason) when the holder isn't
     /// there or holds no items.
@@ -1089,7 +1106,7 @@ impl EntityBuilder<'_> {
         self.set(&comps::entity::CARRY_HEIGHT, blocks)
     }
     /// Where the light it gives comes from: blocks from its feet, +Z ahead, turned with it (a
-    /// lantern on its head). Its middle when not said, a block entity's block.
+    /// lantern on its head). Defaults to the middle of the entity.
     pub fn light_at(self, x: f32, y: f32, z: f32) -> Self {
         self.set(&comps::entity::LIGHT_AT, [x, y, z])
     }
@@ -1374,7 +1391,7 @@ impl MenuCtx {
     pub fn times(&self) -> u32 {
         self.args.times.max(1)
     }
-    /// What the menu was opened on (a block entity, a mob, a pouch in a slot); `None` for
+    /// What the menu was opened on (a block, a mob, a pouch in a slot); `None` for
     /// the player's own and a crafting table's.
     pub fn owner(&self) -> Option<Holder> {
         (self.args.owner.kind != abi::holder::NONE).then_some(self.args.owner)
@@ -1437,7 +1454,7 @@ impl Slots {
         self.0.owner = abi::slot_owner::MENU;
         self
     }
-    /// The inventory of what the menu opened on: a block entity's (`.entity(|e| e.inventory(n))`), an
+    /// The inventory of what the menu opened on: a block's (`.inventory(n)`), an
     /// entity's, a storage's.
     pub fn holder(mut self) -> Self {
         self.0.owner = abi::slot_owner::HOLDER;
@@ -1721,19 +1738,6 @@ impl Registry {
             self.edit(&PLAYER)
                 .set_text(&comps::entity::INVENTORY_MENU, menu.name()),
         );
-    }
-
-    /// Gives `block` a block entity of a kind of its own, named like the block
-    /// (`BlockBuilder::entity`), registered as `mode` says (`entry_mode`).
-    pub(crate) fn block_entity(&mut self, block: &Block, mode: u32, f: impl for<'r> FnOnce(EntityBuilder<'r>) -> EntityBuilder<'r>) {
-        let kind = EntityKind::generated(block.name().to_string());
-        let mut b = self.entity(kind);
-        b.e.mode = mode;
-        drop(f(b
-            .no_egg()
-            .tag(abi::comp::entity::NO_GRAVITY)
-            .invulnerable()
-            .set_text(&comps::entity::BLOCK, block.name())));
     }
 
     /// An inventory of `slots` a holder can keep besides its own (`Storage`).

@@ -344,6 +344,17 @@ impl GameTextures {
         (info, frames)
     }
 
+    pub(super) fn any_animation(&self, textures: impl Iterator<Item = u32>) -> bool {
+        let inner = self.inner.borrow();
+        let mut textures = textures;
+        textures.any(|id| {
+            inner
+                .ids
+                .get(id as usize)
+                .is_some_and(|&index| inner.entries[index as usize].anim.is_some())
+        })
+    }
+
     /// Takes assets that may have changed on disk: block, item and particle lists and connected
     /// textures are built again, but a texture whose files did not change keeps its images, so
     /// even a huge pack reloads at once. Loaded ones stay loaded.

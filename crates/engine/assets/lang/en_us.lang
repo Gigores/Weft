@@ -70,6 +70,7 @@ config.core.lod_detail.tooltip = Detail adapts to render resolution and camera z
 config.core.cloud_height = Clouds elevation
 config.core.cloud_height.value = {0} blocks
 config.core.cloud_distance = Cloud render distance
+config.core.sun_shadows = Sun shadows
 config.core.cloud_distance.value = {0} blocks
 config.core.cloud_impostor_distance = Cloud impostor distance
 config.core.cloud_impostor_distance.value = {0} blocks

@@ -1,6 +1,6 @@
 # UI guide
 
-Screens, HUD parts and the menus of inventories and block entities, and how all of it looks.\
+Screens, HUD parts and the menus of inventories and interactive blocks, and how all of it looks.\
 Base's inventory, furnace, chest and health bars are built from the same small set of parts you get, so anything you see in the game you can make.
 
 ## Note
@@ -73,7 +73,7 @@ Text and bars can change while a screen is open. A binding's closure runs every 
 - `progress_bind(class, s, |view| 0.0..1.0)` for a bar, hidden while the value is negative, and `progress_bind_dir(.., dir, ..)` to fill another way, `abi::ui_dir::UP` for a flame
 - `icons(class, count, |view| value)` for a row of icons that shows a number in half-icon steps, like hearts. `.from_right()` fills it from the right, like hunger, `.dir(abi::ui_dir::UP)` any other way, and `.shaking()` makes it jump about at 4 or less, like hearts near the end. A negative value hides the row
 
-`view` is a read-only look at the client, the same in HUD bindings, screens and frame hooks (`c.view()`): `view.player_state()` has your health and position, `view.inventory_group("core:equipment")` the stacks of a group of your inventory, `view.component(&C)` a synced component of yours, `view.game_mode()` the game mode (`view.creative()`, `view.outside_survival()` for anything but survival), and `view.menu_component(&C)` a component of the block entity whose menu is open (it needs the `SYNC_MENU` flag on that component, see the [block entities guide](block_entities.md#creating-one)).
+`view` is a read-only look at the client, the same in HUD bindings, screens and frame hooks (`c.view()`): `view.player_state()` has your health and position, `view.inventory_group("core:equipment")` the stacks of a group of your inventory, `view.component(&C)` a synced component of yours, `view.game_mode()` the game mode (`view.creative()`, `view.outside_survival()` for anything but survival), and `view.menu_component(&C)` a component of the block whose menu is open (it needs the `SYNC_MENU` flag on that component, see the [interactive blocks guide](block_entities.md#your-first-inventory-block)).
 Anything the client already has is better read than mirrored into a component: base's armor bar adds up the points of what you wear, the way the server's damage does. A component read without the flag that sends it there says so in the log.
 
 ```rust
@@ -185,9 +185,9 @@ r.menu(&CRAFTING)
         });
     });
 ```
-A group of a plain menu is the menu's own slots, given back to the player when the menu closes; `.equipment()` adds the equipment slots of what it is open on, a mob's or else the player's (drawn by `ui.equipment()`), and `holder()` groups are the inventory of what it is open on (a block entity's, a mob's, a backpack's). `player_inventory()` adds the player's inventory and hotbar, which `ui.player_inventory(title)` draws. The shapes and rules a group can have (`output`, `input`, `accepts`, `limit`, `large`, `background`, `tooltip`, `priority`) are listed in the [block entities guide](block_entities.md#creating-one). In `on_change` and `on_take`, `m.group(name)` reads and writes a group's slots by their place in it.
+A group of a plain menu is the menu's own slots, given back to the player when the menu closes; `.equipment()` adds the equipment slots of what it is open on, a mob's or else the player's (drawn by `ui.equipment()`), and `holder()` groups are the inventory of what it is open on (a block's, a mob's, a backpack's). `player_inventory()` adds the player's inventory and hotbar, which `ui.player_inventory(title)` draws. The shapes and rules a group can have (`output`, `input`, `accepts`, `limit`, `large`, `background`, `tooltip`, `priority`) are listed in the [interactive blocks guide](block_entities.md#your-first-inventory-block). In `on_change` and `on_take`, `m.group(name)` reads and writes a group's slots by their place in it.
 
-A block entity's menu is one of these opened on its block, with the block entity's data and tick behind it. The [block entities guide](block_entities.md) covers them, including the component flags that their screens read.
+A block menu can expose the block’s inventory and synced components. The [interactive blocks guide](block_entities.md) covers them, including the component flags that their screens read.
 
 ## Looks
 How a part looks follows from its class by name, there is no theme file. Class `button` is the texture `gui/button.png`; its states are `gui/button_hover.png`, `_pressed`, `_disabled` (and `_focused` for inputs). A bare class is looked up in the resource packs, then in the mods from the last loaded, then in the engine, so base's `base/textures/gui/button.png` dresses every button and a mod's own class (`testmod_panel`) lives in its own folder. `mymod:thing` looks only in `mymod`. A class without a texture shows a magenta and black checkerboard, like a missing block texture, so a typo can't hide.

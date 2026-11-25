@@ -417,6 +417,7 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         number("core:lod_distance", ck::INT, if phone { 32.0 } else { 256.0 }, 0.0, 1_048_576.0, 16.0).tag("config.logarithmic"),
         // Quality maps to a target cell size of 24 / quality render pixels.
         number("core:lod_detail", ck::FLOAT, if phone { 2.0 } else { 4.0 }, 1.0, 4.0, 0.5),
+        number("core:sun_shadows", ck::BOOL, if phone { 0.0 } else { 1.0 }, 0.0, 1.0, 0.0),
         // Blocks clouds float above where their dimension puts them.
         number("core:cloud_height", ck::INT, 0.0, 0.0, 512.0, 16.0),
         number("core:cloud_distance", ck::INT, if phone { 2048.0 } else { 6144.0 }, 0.0, 32768.0, 16.0).tag("config.logarithmic"),
@@ -495,6 +496,7 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
                 "brightness",
                 "lod_distance",
                 "lod_detail",
+                "sun_shadows",
                 "cloud_height",
                 "cloud_distance",
                 "cloud_impostor_distance",

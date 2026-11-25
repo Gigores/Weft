@@ -137,6 +137,8 @@ pub struct EntityRenderer {
     overlay: PipelineId,
     /// Model pipelines for the screen and for the inventory figure's image.
     model_pipe: PipelineId,
+    sun_model_pipe: Option<PipelineId>,
+    pub(super) uses_sun_depth: bool,
     /// The first person's arms: fixed field of view, depth squeezed so they never sink into walls.
     model_hand_pipe: PipelineId,
     preview_pipe: PipelineId,
@@ -168,7 +170,7 @@ pub struct EntityRenderer {
     /// The setting: other than the kind's own model, a player's avatar shows.
     show_avatars: bool,
     /// What plays on who coming in and going out, by entity and model: clips are the model's.
-    fades: FxHashMap<(u64, u32), Vec<Fade>>,
+    fades: FxHashMap<(u64, u32, bool), Vec<Fade>>,
     /// Actions asked for with no clip on a model, once said so.
     warned_actions: rustc_hash::FxHashSet<(u32, String)>,
     /// When the last frame was, and from where.
@@ -199,6 +201,7 @@ pub struct EntityRenderer {
     /// texture generation they were made with.
     item_pipe: PipelineId,
     hand_item_pipe: PipelineId,
+    sun_item_pipe: Option<PipelineId>,
     /// Boxes of each item's model, (first, count), by item and its stack's `layers` if any.
     item_models: FxHashMap<(u32, Option<&'static str>, Option<u16>), ItemModel>,
     item_boxes: Vec<GpuBox>,
@@ -242,7 +245,8 @@ fn light_boxes(boxes: &mut [GpuBox], from: usize, light: u32) {
 impl EntityRenderer {
     pub fn new(gpu: &mut dyn Backend, assets: &Assets) -> Result<EntityRenderer, String> {
         let (pipeline, overlay, box_preview_pipe, translucent_preview_pipe) = Self::pipelines(gpu, assets)?;
-        let ([model_pipe, preview_pipe, model_hand_pipe], kind_shaders, effect_slots) = Self::model_pipelines(gpu, assets)?;
+        let ([model_pipe, preview_pipe, model_hand_pipe], sun_model_pipe, uses_sun_depth, kind_shaders, effect_slots) =
+            Self::model_pipelines(gpu, assets)?;
         let models = Models::new(gpu, assets);
         let frames = gpu.frames_in_flight();
         let hand_views = (0..frames)
@@ -251,7 +255,7 @@ impl EntityRenderer {
         let preview = (0..frames)
             .map(|_| gpu.create_buffer(size_of::<Scene>() as u64, usage::STORAGE | usage::HOST, "preview scene"))
             .collect();
-        let (item_pipe, hand_item_pipe) = Self::item_pipelines(gpu, assets)?;
+        let (item_pipe, hand_item_pipe, sun_item_pipe) = Self::item_pipelines(gpu, assets)?;
         let icon_views = (0..frames)
             .map(|_| gpu.create_buffer(size_of::<Scene>() as u64, usage::STORAGE | usage::HOST, "icon scene"))
             .collect();
@@ -274,6 +278,7 @@ impl EntityRenderer {
             icons_todo: Vec::new(),
             item_pipe,
             hand_item_pipe,
+            sun_item_pipe,
             item_models: FxHashMap::default(),
             item_boxes: Vec::new(),
             item_buf: None,
@@ -283,6 +288,8 @@ impl EntityRenderer {
             overlay,
             camera_kick: (Vec3::ZERO, 0.0, 0.0),
             model_pipe,
+            sun_model_pipe,
+            uses_sun_depth,
             model_hand_pipe,
             models,
             buffers: Vec::new(),
@@ -306,7 +313,7 @@ impl EntityRenderer {
     }
 
     /// Item models instanced in the world and in the hand.
-    fn item_pipelines(gpu: &mut dyn Backend, assets: &Assets) -> Result<(PipelineId, PipelineId), String> {
+    fn item_pipelines(gpu: &mut dyn Backend, assets: &Assets) -> Result<(PipelineId, PipelineId, Option<PipelineId>), String> {
         let s = crate::packs::shader(assets, "entity.wgsl").map_err(|e| e.0)?;
         let mut pipe = |label, vertex| {
             gpu.create_pipeline(&PipelineDesc {
@@ -322,7 +329,20 @@ impl EntityRenderer {
             })
             .map_err(|e| e.0)
         };
-        Ok((pipe("items", "vs_item")?, pipe("hand item", "vs_hand_item")?))
+        let world = pipe("items", "vs_item")?;
+        let hand = pipe("hand item", "vs_hand_item")?;
+        let sun = s
+            .module
+            .entry_points
+            .iter()
+            .any(|e| e.name == "vs_sun_item")
+            .then(|| super::sun_shadow::pipeline(gpu, &s, "item sun shadow", "vs_sun_item", Some("fs_sun_item"), true))
+            .and_then(|result| {
+                result
+                    .inspect_err(|error| log::error!("item sun shadow shader: {error}"))
+                    .ok()
+            });
+        Ok((world, hand, sun))
     }
 
     fn pipelines(gpu: &mut dyn Backend, assets: &Assets) -> Result<(PipelineId, PipelineId, PipelineId, PipelineId), String> {
@@ -384,7 +404,10 @@ impl EntityRenderer {
 
     /// The model pipelines (screen, inventory figure image) with every entity shader snippet,
     /// and each kind's slot.
-    fn model_pipelines(gpu: &mut dyn Backend, assets: &Assets) -> Result<([PipelineId; 3], Vec<u32>, Vec<u32>), String> {
+    fn model_pipelines(
+        gpu: &mut dyn Backend,
+        assets: &Assets,
+    ) -> Result<([PipelineId; 3], Option<PipelineId>, bool, Vec<u32>, Vec<u32>), String> {
         let snippets = crate::shaders::snippets(assets, &HOOK);
         let effects = crate::shaders::snippets(assets, &EFFECT_HOOK);
         let (s, mut slots) =
@@ -432,16 +455,30 @@ impl EntityRenderer {
         let (world, preview) = (make("models", "vs", Format::Surface)?, make("entity preview", "vs", Format::Rgba8Srgb)?);
         // A shader pack's older copy of the file has no `vs_hand`.
         let hand = make("model hand", "vs_hand", Format::Surface).or_else(|_| make("model hand", "vs", Format::Surface))?;
-        Ok(([world, preview, hand], kinds, effect_slots))
+        let sun = if ["vs_sun_model", "fs_sun_model"]
+            .iter()
+            .all(|name| s.module.entry_points.iter().any(|e| e.name == *name))
+        {
+            super::sun_shadow::pipeline(gpu, &s, "model sun shadow", "vs_sun_model", Some("fs_sun_model"), true)
+                .inspect_err(|error| log::error!("model sun shadow shader: {error}"))
+                .ok()
+        } else {
+            None
+        };
+        Ok(([world, preview, hand], sun, super::sun_shadow::uses_depth(&s), kinds, effect_slots))
     }
 
     pub fn reload(&mut self, gpu: &mut dyn Backend, assets: &Assets) {
         match Self::model_pipelines(gpu, assets) {
-            Ok(([p, q, h], kinds, effects)) => {
+            Ok(([p, q, h], sun, uses_sun_depth, kinds, effects)) => {
                 self.effect_slots = effects;
+                self.uses_sun_depth = uses_sun_depth;
                 gpu.destroy_pipeline(self.model_pipe);
                 gpu.destroy_pipeline(self.model_hand_pipe);
                 gpu.destroy_pipeline(self.preview_pipe);
+                if let Some(old) = std::mem::replace(&mut self.sun_model_pipe, sun) {
+                    gpu.destroy_pipeline(old);
+                }
                 (self.model_pipe, self.preview_pipe, self.model_hand_pipe) = (p, q, h);
                 self.kind_shaders = kinds;
             }
@@ -462,10 +499,14 @@ impl EntityRenderer {
         self.icons_todo.clear();
         // Skins, masks and icons are made again the next time they are used.
         self.free_loaded(gpu);
-        if let Ok((a, b)) = Self::item_pipelines(gpu, assets) {
+        if let Ok((a, b, sun)) = Self::item_pipelines(gpu, assets) {
             gpu.destroy_pipeline(self.item_pipe);
             gpu.destroy_pipeline(self.hand_item_pipe);
+            if let Some(old) = self.sun_item_pipe.take() {
+                gpu.destroy_pipeline(old);
+            }
             (self.item_pipe, self.hand_item_pipe) = (a, b);
+            self.sun_item_pipe = sun;
         }
         // Sprites and the models made of them are read again.
         self.sprites.clear();
@@ -583,6 +624,9 @@ impl EntityRenderer {
         }
         self.models.destroy(gpu);
         gpu.destroy_pipeline(self.model_pipe);
+        if let Some(pipe) = self.sun_model_pipe.take() {
+            gpu.destroy_pipeline(pipe);
+        }
         gpu.destroy_pipeline(self.model_hand_pipe);
         gpu.destroy_pipeline(self.preview_pipe);
         gpu.destroy_pipeline(self.box_preview_pipe);
@@ -603,6 +647,9 @@ impl EntityRenderer {
         gpu.destroy_pipeline(self.overlay);
         gpu.destroy_pipeline(self.item_pipe);
         gpu.destroy_pipeline(self.hand_item_pipe);
+        if let Some(sun) = self.sun_item_pipe.take() {
+            gpu.destroy_pipeline(sun);
+        }
         if let Some((b, ..)) = self.item_buf.take() {
             gpu.destroy_buffer(b);
         }
@@ -1087,7 +1134,7 @@ impl EntityRenderer {
         list.push(Cmd::BeginPass { color: Some((Target::Texture(color), keep)), depth: Some((depth, Some(0.0))) });
         let vb = self.icon_views[frame.slot];
         self.models
-            .draw(gpu, list, frame, super::models::Batch::Icon, self.preview_pipe, vb);
+            .draw(gpu, list, frame, super::models::Batch::Icon, self.preview_pipe, vb, None);
         list.push(Cmd::EndPass);
         true
     }
@@ -1266,13 +1313,13 @@ impl EntityRenderer {
         gpu.mapped(vb)[..size_of::<Scene>()].copy_from_slice(bytemuck::bytes_of(&v));
         list.push(Cmd::BeginPass { color: Some((Target::Texture(col), Some([0.0; 4]))), depth: Some((dep, Some(0.0))) });
         self.models
-            .draw(gpu, list, frame, super::models::Batch::Preview, self.preview_pipe, vb);
+            .draw(gpu, list, frame, super::models::Batch::Preview, self.preview_pipe, vb, None);
         list.push(Cmd::EndPass);
         Some(index)
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(
+    pub(super) fn draw(
         &mut self,
         gpu: &mut dyn Backend,
         list: &mut CommandList,
@@ -1293,7 +1340,11 @@ impl EntityRenderer {
         gizmo_lines: &[super::gizmo::Line],
         gizmo_fills: &[super::gizmo::Fill],
         late: &mut CommandList,
+        mut sun: Option<(super::sun_shadow::SunView, BufferId, &mut CommandList)>,
+        only_shadow_view: bool,
     ) {
+        let sun_model = self.sun_model_pipe;
+        let casts_sun = sun.is_some() && (sun_model.is_some() || self.sun_item_pipe.is_some());
         let c = content();
         let aspect = frame.width as f32 / frame.height.max(1) as f32;
         let mut boxes: Vec<GpuBox> = Vec::new();
@@ -1329,6 +1380,7 @@ impl EntityRenderer {
         // The first person: its place in `posed`, its layers before the arms were left out of
         // them and which arms the clips bring up.
         let mut own_hand: Option<(usize, [Instance; super::models::MAX_LAYERS], usize, u32)> = None;
+        let mut own_shadow = None;
         let hidden = |e: &ClientEntity| {
             e.effects.iter().any(|f| {
                 f.until > now
@@ -1338,7 +1390,7 @@ impl EntityRenderer {
                         .is_some_and(|d| d.hides)
             })
         };
-        let own_body = me.filter(|_| hand.as_ref().is_none_or(|h| h.body));
+        let own_body = me.filter(|_| !only_shadow_view && hand.as_ref().is_none_or(|h| h.body));
         for (id, e) in entities
             .iter()
             .map(|(i, e)| (*i, e))
@@ -1359,18 +1411,22 @@ impl EntityRenderer {
             }) {
                 continue;
             }
-            // Out of the view it has nothing to show. What it may have on goes by its model's reach.
-            if id != self.local && !e.item.is_empty() {
-                if !planes.iter().all(|p| p.dot(base.extend(1.0)) > -1.5) {
-                    continue;
-                }
-            } else if id != self.local {
-                let reach = self
-                    .models
-                    .kinds
-                    .get(self.model_kind(id, e) as usize)
-                    .map_or(4.0, |m| m.reach + 2.0);
-                if !planes.iter().all(|p| p.dot(base.extend(1.0)) > -reach) {
+            if id != self.local {
+                let reach = if e.item.is_empty() {
+                    self.models
+                        .kinds
+                        .get(self.model_kind(id, e) as usize)
+                        .map_or(4.0, |m| m.reach + 2.0)
+                } else {
+                    1.5
+                };
+                if !planes.iter().all(|p| p.dot(base.extend(1.0)) > -reach)
+                    && !(casts_sun
+                        && !e.hidden_mode
+                        && sun
+                            .as_ref()
+                            .is_some_and(|(view, ..)| view.contains(base, reach)))
+                {
                     continue;
                 }
             }
@@ -1394,7 +1450,7 @@ impl EntityRenderer {
             }
             let look = e.look();
             let kind = self.model_kind(id, e);
-            let own_view = id == self.local && hand.is_some();
+            let own_view = id == self.local && (hand.is_some() || only_shadow_view);
             // With its body showing the player sees its real arms, moving as anyone else sees them.
             // Without it there is nothing for them to be attached to: they are held in the view.
             let body = own_view && hand.as_ref().is_some_and(|h| h.body);
@@ -1405,6 +1461,11 @@ impl EntityRenderer {
             let (mut layers, mut layer_count) = self.layers(look, id, worn, lit, effect);
             if layer_count == 0 {
                 continue;
+            }
+            if e.hidden_mode {
+                for layer in &mut layers[..layer_count] {
+                    layer.shadow_roles = crate::gpu_layout::model_shadow::SKIP;
+                }
             }
             if e.burning && !own_view {
                 let crate::physics::Dims { half_width: hw, height: h, .. } = e.dims();
@@ -1455,6 +1516,28 @@ impl EntityRenderer {
                 self.clips_of(id, e, kind, look, lying, in_view, hand.as_ref().filter(|_| in_view).map(|h| h.lowered))
             };
             if own_view {
+                if casts_sun && !e.hidden_mode {
+                    let (shadow_layers, shadow_count) =
+                        if in_view { self.layers(look, id, &e.worn, lit, effect) } else { (layers, layer_count) };
+                    let world_clips = if in_view { self.clips_of(id, e, kind, look, lying, false, None).0 } else { clips };
+                    let from = self.models.clips.len() as u32;
+                    self.models.clips.extend_from_slice(world_clips.all());
+                    own_shadow = Some((
+                        posed.len(),
+                        in_view && hand.is_none(),
+                        Posed {
+                            id,
+                            kind,
+                            lod: PoseLod::Direct,
+                            root,
+                            pitch,
+                            head_yaw,
+                            clips: (from, self.models.clips.len() as u32),
+                            layers: shadow_layers,
+                            layer_count: shadow_count,
+                        },
+                    ));
+                }
                 // Its model goes where the camera is: the camera doesn't sit in the torso, whatever pose it's in.
                 let eye = c.game.entities[look as usize].eye;
                 if let Some(at) = self
@@ -1476,8 +1559,11 @@ impl EntityRenderer {
                     });
                 let (arms_up, kick) = self.view_motion(kind, root, &clips, standing, in_view, steady, eye);
                 self.camera_kick = kick;
-                own_hand = in_view.then_some((posed.len(), layers, layer_count, arms_up));
+                own_hand = (in_view && hand.is_some()).then_some((posed.len(), layers, layer_count, arms_up));
                 for l in &mut layers[..layer_count] {
+                    if own_shadow.is_some() {
+                        l.shadow_roles = crate::gpu_layout::model_shadow::SKIP;
+                    }
                     l.roles &= !(1 << role::HEAD | 1 << role::ON_HEAD | arms_up);
                 }
                 if !body {
@@ -1513,8 +1599,35 @@ impl EntityRenderer {
         }
         let vb = scene_buf;
         let own_index = own_hand.as_ref().map(|o| o.0);
-        let (firsts, own_first) = self.pose_bones(&posed, aim_root, own_index, hand.as_ref(), steady, dt, moved);
-        let (hand_items, own_items) = self.place_carried(&posed, &firsts, carried, own_index, textures, &mut instances, dt, moved);
+        let (mut firsts, own_first) = self.pose_bones(&posed, aim_root, own_index, hand.as_ref(), steady, dt, moved);
+        let shadow_holder = own_shadow.map(|(owner, hide_hand, shadow)| {
+            let holder = posed.len();
+            let visible = carried.len();
+            for i in 0..visible {
+                let part = carried[i];
+                if part.holder == owner && matches!(part.what, Carrying::Held { .. }) {
+                    carried.push(Carry { holder, ..part });
+                }
+            }
+            if let Some(e) = me {
+                let lit = shade(e.pos + DVec3::Y * 0.5);
+                let biome = biome(e.pos.floor().as_ivec3());
+                self.models.carried_by(shadow.kind, &e.worn, |model, bone| {
+                    carried.push(Carry { holder, what: Carrying::On { model, bone }, lit, biome, age: e.age, id: shadow.id });
+                });
+            }
+            firsts.push(self.models.bones_so_far());
+            self.models
+                .add_many(std::slice::from_ref(&shadow), None, true);
+            posed.push(shadow);
+            if hide_hand {
+                carried.retain(|part| part.holder != owner);
+            }
+            holder
+        });
+        let mut shadow_items = Vec::new();
+        let (hand_items, own_items) =
+            self.place_carried(&posed, &firsts, carried, own_index, shadow_holder, textures, &mut instances, &mut shadow_items, dt, moved);
         self.models.end_located(cam.pos);
         if self.models.frame_number() % 256 == 0 {
             let alive = |id: &u64| *id == self.local || entities.contains_key(id);
@@ -1524,8 +1637,16 @@ impl EntityRenderer {
                 .retain_kept(|id| id == local || entities.contains_key(&id));
         }
         self.posed = posed;
-        self.models
-            .draw(gpu, list, frame, super::models::Batch::World, self.model_pipe, vb);
+        self.models.draw(
+            gpu,
+            list,
+            frame,
+            super::models::Batch::World,
+            self.model_pipe,
+            vb,
+            sun.as_mut()
+                .map(|(_, depth, list)| (*depth, sun_model.map(|pipe| (pipe, &mut **list)))),
+        );
 
         if let Some((hit, place)) = target {
             let origin = hit.origin.as_dvec3() + hit.part().shift();
@@ -1545,12 +1666,14 @@ impl EntityRenderer {
         let overlay_end = boxes.len();
         instances.sort_unstable_by_key(|i| i.0);
         boxes.extend(instances.iter().map(|i| i.1));
+        let shadow_start = boxes.len();
+        boxes.extend(shadow_items.iter().map(|i| i.1));
         boxes.extend(hand_items.iter().map(|h| h.0));
         // The buffer for them may not be empty, and arms alone have no boxes.
         if boxes.is_empty() {
             boxes.push(GpuBox::default());
         }
-        if !instances.is_empty() || !hand_items.is_empty() {
+        if !instances.is_empty() || !shadow_items.is_empty() || !hand_items.is_empty() {
             self.upload_items(gpu);
         }
 
@@ -1574,6 +1697,17 @@ impl EntityRenderer {
             list.bind(crate::gpu_layout::bind::entity::GLOW_MAP, glow);
             list.bind(crate::gpu_layout::bind::entity::ITEM_BOXES, ib);
             self.draw_item_runs(list, &instances, overlay_end);
+        }
+        if let (Some(ib), Some(pipe), Some((_, _, shadow))) = (item_buf, self.sun_item_pipe, sun)
+            && (!instances.is_empty() || !shadow_items.is_empty())
+        {
+            shadow.pipeline(pipe);
+            shadow.bind(crate::gpu_layout::bind::entity::BOXES, buf);
+            shadow.bind(crate::gpu_layout::bind::entity::SCENE, vb);
+            shadow.bind(crate::gpu_layout::bind::entity::GLOW_MAP, glow);
+            shadow.bind(crate::gpu_layout::bind::entity::ITEM_BOXES, ib);
+            self.draw_item_runs(shadow, &instances, overlay_end);
+            self.draw_item_runs(shadow, &shadow_items, shadow_start);
         }
         // Cracks, filled gizmos and the own hands come after translucent blocks.
         let list = late;
@@ -1617,7 +1751,10 @@ impl EntityRenderer {
             .models
             .model_seen(e.item)
             .and_then(|k| Some((k, self.model_layer(k, lit, effect)?)));
-        if let Some((kind, layer)) = bones {
+        if let Some((kind, mut layer)) = bones {
+            if e.hidden_mode {
+                layer.shadow_roles = crate::gpu_layout::model_shadow::SKIP;
+            }
             let m = &self.models.kinds[kind as usize];
             let mut clips = Clips::default();
             let how = Play { clock: e.age, looping: true, ..Play::default() };
@@ -1643,7 +1780,7 @@ impl EntityRenderer {
                 layer_count: 1,
             });
         } else if let Some(ItemModel { boxes: m, solid }) = self.item_model(textures, &e.item, biome) {
-            instances.push((run_key(m), item_instance(ground_transform(base, e.age, solid), m.0, hurt, lit)));
+            instances.push((run_key(m), item_instance(ground_transform(base, e.age, solid), m.0, hurt, lit, e.hidden_mode)));
         }
     }
 
@@ -1683,7 +1820,7 @@ impl EntityRenderer {
         let item_buf = self.item_buf.map(|b| b.0);
         // The hand bobs walking even where the view doesn't (`Hand::bob`).
         let hand_cam = Camera { fov: 70.0, bob: bob.unwrap_or(cam.bob), ..*cam };
-        let hv = Scene { view_proj: (hand_cam.proj(aspect) * hand_cam.view()).to_cols_array_2d(), ..*scene };
+        let hv = Scene { view_proj: (hand_cam.proj(aspect) * hand_cam.view()).to_cols_array_2d(), sun_grid: [0.0; 4], ..*scene };
         let hb = self.hand_views[frame.slot];
         gpu.mapped(hb)[..size_of::<Scene>()].copy_from_slice(bytemuck::bytes_of(&hv));
         self.models.begin_batch();
@@ -1697,7 +1834,7 @@ impl EntityRenderer {
             self.models.queue(kind, first, [l]);
         }
         self.models
-            .draw(gpu, list, frame, super::models::Batch::Hand, self.model_hand_pipe, hb);
+            .draw(gpu, list, frame, super::models::Batch::Hand, self.model_hand_pipe, hb, None);
         if let Some(ib) = item_buf.filter(|_| !hand_items.is_empty()) {
             list.pipeline(self.hand_item_pipe);
             list.bind(crate::gpu_layout::bind::entity::BOXES, buf);
@@ -1812,11 +1949,12 @@ impl EntityRenderer {
             }
         }
         // Coming and going smoothly. Nearly all of a crowd has nothing here to look at.
-        if clips.n > standing || (!self.fades.is_empty() && self.fades.contains_key(&(id, kind))) {
-            let fades = self.fades.entry((id, kind)).or_default();
+        let fade_key = (id, kind, in_view);
+        if clips.n > standing || (!self.fades.is_empty() && self.fades.contains_key(&fade_key)) {
+            let fades = self.fades.entry(fade_key).or_default();
             super::models::fade_clips(fades, m, &mut clips, standing, e.age);
             if fades.is_empty() {
-                self.fades.remove(&(id, kind));
+                self.fades.remove(&fade_key);
             }
         }
         (clips, standing)
@@ -1893,7 +2031,7 @@ impl EntityRenderer {
         moved: Vec3,
     ) -> (Vec<usize>, usize) {
         let first_bone = self.models.bones_so_far();
-        self.models.add_many(posed, aim_root);
+        self.models.add_many(posed, aim_root, false);
         // Where each one's bones start.
         let mut firsts = Vec::with_capacity(posed.len());
         let mut at = first_bone;
@@ -1944,8 +2082,10 @@ impl EntityRenderer {
         firsts: &[usize],
         carried: Vec<Carry>,
         own_holder: Option<usize>,
+        shadow_holder: Option<usize>,
         textures: &GameTextures,
         instances: &mut Vec<(u64, GpuBox)>,
+        shadow_items: &mut Vec<(u64, GpuBox)>,
         dt: f32,
         moved: Vec3,
     ) -> (Vec<(GpuBox, u32)>, Vec<(u32, u32, Instance)>) {
@@ -1953,6 +2093,14 @@ impl EntityRenderer {
         let mut own_items: Vec<(u32, u32, Instance)> = Vec::new();
         for Carry { holder, what, lit, biome, age, id } in carried {
             let at = firsts[holder];
+            let shadow_only = shadow_holder == Some(holder);
+            let skip_sun = posed[holder].layers[0].shadow_roles == crate::gpu_layout::model_shadow::SKIP;
+            let mask = |mut layer: Instance| {
+                if skip_sun {
+                    layer.shadow_roles = crate::gpu_layout::model_shadow::SKIP;
+                }
+                layer
+            };
             let parts = self
                 .models
                 .kinds
@@ -1963,7 +2111,8 @@ impl EntityRenderer {
             let (model, root, off, slot) = match what {
                 Carrying::Embedded { stack } => {
                     for (model, first, layer) in self.embedded_models(stack, posed[holder].kind, at, lit) {
-                        self.models.queue(model, first, [layer]);
+                        self.models
+                            .queue_in(model, first, [mask(layer)], shadow_only);
                     }
                     continue;
                 }
@@ -1988,9 +2137,11 @@ impl EntityRenderer {
                     if model.is_none() {
                         if let Some(ItemModel { boxes: m, solid }) = self.item_model(textures, &stack, biome) {
                             let display = self.models.displays.get(&item).copied();
-                            let inst = item_instance(held_transform(arm, item, solid, off, display), m.0, 0.0, lit);
+                            let inst = item_instance(held_transform(arm, item, solid, off, display), m.0, 0.0, lit, skip_sun);
                             if own {
                                 hand_items.push((inst, m.1));
+                            } else if shadow_only {
+                                shadow_items.push((run_key(m), inst));
                             } else {
                                 instances.push((run_key(m), inst));
                             }
@@ -2007,14 +2158,16 @@ impl EntityRenderer {
                 .models
                 .clips_along(kind, posed[holder].kind, &self.models.clips[from as usize..to as usize], age, off);
             let bones = self.models.pose_clips(kind, root, clips.all());
-            self.models.located_at(id, kind, bones as usize);
-            self.models
-                .move_live(id, kind, slot, bones as usize, dt, moved);
+            if !shadow_only {
+                self.models.located_at(id, kind, bones as usize);
+                self.models
+                    .move_live(id, kind, slot, bones as usize, dt, moved);
+            }
             if let Some(l) = self.model_layer(kind, lit, (0, 0.0)) {
                 if own {
                     own_items.push((kind, bones, l));
                 } else {
-                    self.models.queue(kind, bones, [l]);
+                    self.models.queue_in(kind, bones, [mask(l)], shadow_only);
                 }
             }
             if let Carrying::Held { stack, .. } = what {
@@ -2022,7 +2175,8 @@ impl EntityRenderer {
                     if own {
                         own_items.push((model, first, layer));
                     } else {
-                        self.models.queue(model, first, [layer]);
+                        self.models
+                            .queue_in(model, first, [mask(layer)], shadow_only);
                     }
                 }
             }
@@ -2253,8 +2407,14 @@ fn boxes_shape(
 }
 
 /// An item model instance: `m` places the model's unit cube.
-fn item_instance(m: Mat4, first: u32, hurt: f32, light: u32) -> GpuBox {
-    GpuBox { rows: rows(m), color: [1.0, 1.0, 1.0, hurt], ids: [0, 0, first, 0], ids2: [0, light, 0, 0], ..Default::default() }
+fn item_instance(m: Mat4, first: u32, hurt: f32, light: u32, skip_sun: bool) -> GpuBox {
+    GpuBox {
+        rows: rows(m),
+        color: [1.0, 1.0, 1.0, hurt],
+        ids: [0, 0, first, u32::from(skip_sun)],
+        ids2: [0, light, 0, 0],
+        ..Default::default()
+    }
 }
 
 /// Where an item goes in the hand of a model, from its arm at the shoulder (pixels): vanilla's

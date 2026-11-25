@@ -25,6 +25,17 @@ shared! {
         CELL = 4,
         CUBES = 16,
     }
+    model_shadow {
+        SKIP = 1 << 31,
+    }
+    sun_shadow {
+        NEAR_SIZE = 1024,
+        FAR_SIZE = 512,
+        NEAR_HALF = 32,
+        FAR_HALF = 256,
+        NEAR_DEPTH = 136,
+        FAR_DEPTH = 900,
+    }
     /// Block face record, four words. Word 0: x, y, z in the cube (4 bits each), direction,
     /// corner AO (2 bits per corner), tint kind. Word 1: texture, biome. Words 2 and 3: corner
     /// light, 16 bits per corner.
@@ -655,6 +666,15 @@ gpu_struct! {
         pub lightning_start: [[f32; 4]; 3],
         /// Channel ends relative to the camera, with w set for ground strikes.
         pub lightning_end: [[f32; 4]; 3],
+        /// Camera-relative orthographic transform toward the sun.
+        pub sun_view: [[f32; 4]; 4],
+        /// A coarser map for the terrain around the detailed shadow map.
+        pub sun_far_view: [[f32; 4]; 4],
+        /// Fractional camera position on the world grid, and the shadow strength (0 disables it).
+        pub sun_grid: [f32; 4],
+        /// The other coarse map and the fraction of it to blend into the first.
+        pub sun_far_other_view: [[f32; 4]; 4],
+        pub sun_far_blend: [f32; 4],
     }
 }
 
@@ -744,8 +764,8 @@ gpu_struct! {
         /// 1: something worn, drawn on the kind's worn geometry instead of its skin's (read when
         /// queued).
         pub worn: u32,
-        // Whole 16 bytes: WGSL rounds the array stride up to them.
-        pub pad1: u32,
+        /// Additional roles hidden from the first-person camera, or MODEL_SHADOW_SKIP.
+        pub shadow_roles: u32,
     }
 }
 
@@ -1047,6 +1067,7 @@ bindings! {
         CLOUD_CELLS "cloud_cells": "array<u32>",
         RAIN_DEPTH "rain_depth": "array<vec2<u32>>",
         RAIN_COVER "rain_cover": "array<i32>",
+        SUN_DEPTH "sun_depth": "array<f32>",
     }
     // `item_boxes`: item models in their own space, kept between frames
     // (`EntityRenderer::item_model`); an item instance is a box in `boxes` whose rows place
@@ -1063,6 +1084,7 @@ bindings! {
         CUBOIDS "cuboids": "array<Cuboid>",
         CORNERS "corners": "array<Corner>",
         BONES "bones": "array<Bone>",
+        SUN_DEPTH "sun_depth": "array<f32>",
     }
     particle "particle.wgsl" {
         PARTICLES "particles": "array<Particle>",

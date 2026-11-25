@@ -81,7 +81,9 @@ pub static HOST: Host = Host {
     inventory_move_into,
     selected_slot,
 
-    block_entity,
+    block_instance,
+    block_location,
+    block_instance_state,
     open_menu,
     menu_group,
     inventory_group,
@@ -766,10 +768,6 @@ unsafe extern "C" fn entity_spawn(w: *mut abi::WorldCtx, desc: *const abi::Spawn
         misuse("entity_spawn", || format!("no entity kind {kind}"));
         return 0;
     }
-    if c.game.is_block_entity(kind) {
-        misuse("entity_spawn", || format!("{} belongs to a block, set the block instead", c.game.entities[kind as usize].name));
-        return 0;
-    }
     let is_item = kind == c.game.item_kind;
     if !is_item && !d.stack.is_empty() {
         misuse("entity_spawn", || format!("{} carries no stack", c.game.entities[kind as usize].name));
@@ -1193,8 +1191,34 @@ unsafe extern "C" fn selected_slot(w: *mut abi::WorldCtx, player: u64) -> u32 {
     unsafe { dim(w).entities.get(player).map_or(0, |e| e.selected) }
 }
 
-unsafe extern "C" fn block_entity(w: *mut abi::WorldCtx, pos: *const abi::BlockPos) -> u64 {
+unsafe extern "C" fn block_instance(w: *mut abi::WorldCtx, pos: *const abi::BlockPos) -> u64 {
     unsafe { dim(w).anchored(space_id(w), ip(pos)).unwrap_or(0) }
+}
+
+unsafe extern "C" fn block_location(w: *mut abi::WorldCtx, id: u64, out: *mut abi::BlockPos) -> u32 {
+    unsafe {
+        let Some(block) = dim(w).entities.blocks.get(&id).filter(|b| b.frame == space_id(w)) else { return 0 };
+        *out = block.cell.to_array().into();
+        1
+    }
+}
+
+unsafe extern "C" fn block_instance_state(w: *mut abi::WorldCtx, id: u64, state: u32) -> u32 {
+    unsafe {
+        let d = dim(w);
+        let c = content();
+        let Some((block, part)) = d.block_part(id, c) else { return u32::MAX };
+        if state == u32::MAX {
+            return part.state;
+        }
+        if c.states.get(state as usize).is_some_and(|s| s.block == block.kind)
+            && d.replace_placed(block.frame, c, block.cell, part, state)
+        {
+            state
+        } else {
+            u32::MAX
+        }
+    }
 }
 
 unsafe extern "C" fn open_menu(w: *mut abi::WorldCtx, player: u64, menu: u32, h: *const abi::Holder) -> u32 {
@@ -1209,7 +1233,7 @@ unsafe extern "C" fn open_menu(w: *mut abi::WorldCtx, player: u64, menu: u32, h:
         let h = &*h;
         let on = match holder::inventory(d, space_id(w), c, h) {
             _ if h.kind == abi::holder::NONE => None,
-            Some(inv) if matches!(inv.at, At::Entity(_)) || holder::len(d, c, inv) > 0 => Some(inv),
+            Some(inv) if matches!(inv.at, At::Entity(_) | At::Block(_)) || holder::len(d, c, inv) > 0 => Some(inv),
             found => {
                 let what = match h.kind {
                     _ if h.storage != 0 && holder::resolve(d, space_id(w), h).is_some() => {
@@ -1223,7 +1247,7 @@ unsafe extern "C" fn open_menu(w: *mut abi::WorldCtx, player: u64, menu: u32, h:
                     abi::holder::BLOCK => {
                         let p = crate::world::ivec(h.pos);
                         d.get(space_id(w), p)
-                            .map_or("an unloaded block".to_string(), |s| format!("{} at {p}, which has no block entity", c.state_name(s)))
+                            .map_or("an unloaded block".to_string(), |s| format!("{} at {p}, which has no instance data", c.state_name(s)))
                     }
                     abi::holder::HELD if found.is_some() => {
                         format!("the stack in slot {} of entity {}, which holds no items", h.slot, h.entity)
@@ -1651,8 +1675,21 @@ unsafe extern "C" fn menu_group(m: *mut abi::MenuCtx, name: Str, out: *mut abi::
 unsafe extern "C" fn inventory_group(w: *mut abi::WorldCtx, h: *const abi::Holder, name: Str, out: *mut abi::SlotGroup) -> u32 {
     unsafe {
         let c = content();
+        use crate::server::holder::At;
+        if (*h).storage != 0 {
+            return 0;
+        }
         let entity = match held(w, h) {
-            Some(crate::server::holder::At::Entity(id)) if (*h).storage == 0 => id,
+            Some(At::Entity(id)) => id,
+            Some(At::Block(id)) => {
+                let found = dim(w).block_kind(id)
+                    .and_then(|block| c.blocks[block as usize].opens)
+                    .and_then(|menu| c.game.menus[menu as usize].group(&c.game.player_layout, name.as_str()))
+                    .filter(|g| g.0.owner == abi::slot_owner::HOLDER);
+                let Some((g, _, n)) = found else { return 0 };
+                *out = abi::SlotGroup { start: g.start, len: n, cols: g.cols };
+                return 1;
+            }
             _ => return 0,
         };
         let Some(e) = dim(w).entities.get(entity) else { return 0 };
@@ -1683,22 +1720,7 @@ unsafe extern "C" fn inventory_group(w: *mut abi::WorldCtx, h: *const abi::Holde
             *out = abi::SlotGroup { start, len, cols: 1 };
             return 1;
         }
-        // A block entity's are those of the menu its block opens.
-        let found = c
-            .game
-            .block_entities
-            .iter()
-            .find(|&(_, &k)| k == e.kind)
-            .and_then(|(&b, _)| c.blocks[b as usize].opens)
-            .and_then(|m| c.game.menus[m as usize].group(layout, name.as_str()))
-            .filter(|g| g.0.owner == abi::slot_owner::HOLDER);
-        match found {
-            Some((g, _, n)) => {
-                *out = abi::SlotGroup { start: g.start, len: n, cols: g.cols };
-                1
-            }
-            None => 0,
-        }
+        0
     }
 }
 
@@ -1981,6 +2003,15 @@ unsafe extern "C" fn timer(w: *mut abi::WorldCtx, h: *const abi::Holder, ticks: 
             // A block's own tick is the same whoever set it.
             abi::holder::BLOCK if event == c.game.block_tick => d.schedule(space_id(w), ip(&h.pos), ticks),
             abi::holder::BLOCK => d.timer_at(space_id(w), ip(&h.pos), ticks, event, data),
+            abi::holder::BLOCK_ID => {
+                if let Some(block) = d.entities.blocks.get(&h.entity).copied() {
+                    if event == c.game.block_tick {
+                        d.schedule(block.frame, block.cell, ticks);
+                    } else {
+                        d.timer_at(block.frame, block.cell, ticks, event, data);
+                    }
+                }
+            }
             abi::holder::NONE => d.dim_timers.push((until, event, data.into())),
             _ => misuse("timer", || "a stack doesn't tick, so it can't hold a timer".into()),
         }

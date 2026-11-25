@@ -92,7 +92,7 @@ impl OpenMenu {
     /// The entity it opened on (holding the stack it opened on), 0 for none.
     pub fn owner(&self) -> u64 {
         match self.on.map(|inv| inv.at) {
-            Some(At::Entity(id) | At::Stack { entity: id, .. }) => id,
+            Some(At::Entity(id) | At::Block(id) | At::Stack { entity: id, .. }) => id,
             None => 0,
         }
     }
@@ -174,16 +174,11 @@ fn call_times(
     let owner = match m.on {
         None => abi::Holder::NONE,
         Some(Inv { at: At::Entity(id), storage }) => abi::Holder { storage, ..abi::Holder::entity(id) },
+        Some(Inv { at: At::Block(id), storage }) => abi::Holder { storage, ..abi::Holder::block_id(id) },
         Some(Inv { at: At::Stack { entity, slot }, storage }) => abi::Holder { storage, ..abi::Holder::held(entity, slot) },
     };
     let mut call = MenuCall { menu: m as *mut OpenMenu, dim: dim as *mut Dim, player };
-    let frame = match m.on {
-        Some(Inv { at: At::Entity(id), .. }) => dim
-            .entities
-            .get(id)
-            .map_or(0, |entity| entity.block_frame()),
-        _ => 0,
-    };
+    let frame = dim.entities.owner_frame(m.owner());
     let mut ctx = abi::WorldCtx { region: (dim as *mut Dim).cast(), frame };
     let mut args = abi::MenuArgs { world: &mut ctx, menu: &mut call as *mut MenuCall as *mut abi::MenuCtx, player, owner, slot, times };
     host::invoke(by, cb, &mut args);
@@ -267,17 +262,21 @@ pub fn open(dim: &mut Dim, c: &'static Content, player: u64, kind: u32, on: Opti
 /// inventories have no place to walk away from.
 pub fn out_of_reach(m: &OpenMenu, dim: &Dim, player: u64) -> bool {
     let Some(on) = m.on else { return false };
-    let Some(owner) = dim.entities.get(m.owner()).filter(|o| !o.removed) else { return true };
+    if !dim.entities.contains_owner(m.owner()) {
+        return true;
+    }
     if let At::Stack { entity, slot } = on.at {
         let now = holder::get(dim, crate::content::content(), Inv::own(At::Entity(entity)), slot);
         return now.item != m.held_item || now.is_empty();
     }
-    if owner.anchor.is_none() || !m.on_block {
-        return false;
+    if let At::Block(id) = on.at
+        && m.on_block
+    {
+        return dim.block_position(id).is_none_or(|pos| {
+            dim.entities.get(player).is_none_or(|p| p.pos.distance_squared(pos) > 8.5 * 8.5)
+        });
     }
-    dim.entities
-        .get(player)
-        .is_none_or(|p| (p.pos - owner.pos).length_squared() > 8.5 * 8.5)
+    false
 }
 
 pub fn tick(m: &mut OpenMenu, dim: &mut Dim, c: &Content, player: u64) {

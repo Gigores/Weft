@@ -165,8 +165,9 @@ impl Client {
         for active in env.active.values_mut() {
             active.seen = false;
         }
-        let day = d.daylight(self.world.time);
-        let height = (d.day_turn(self.smooth_time()) * std::f64::consts::TAU).sin() as f32;
+        let time = self.smooth_time();
+        let day = d.daylight_at(time);
+        let height = (d.day_turn(time) * std::f64::consts::TAU).sin() as f32;
         let cloud_day = if d.sky_light { (height * 2.0 + 0.5).clamp(0.0, 1.0) } else { 1.0 };
         let ambient_level = d.ambient as f32 / 15.0;
         let ambient = (ambient_level / (4.0 - 3.0 * ambient_level)).max(0.04);
@@ -297,11 +298,7 @@ impl Client {
             if owner == self.player_id {
                 continue;
             }
-            let Some(e) = self
-                .entities
-                .get(&owner)
-                .or_else(|| self.showing_blocks.get(&owner))
-            else {
+            let Some(e) = self.entities.get(&owner) else {
                 continue;
             };
             let layers = env.layers(c, components::ENTITY, e.kind);
@@ -326,15 +323,12 @@ impl Client {
         for (&owner, layers) in &remote {
             let center = if owner == self.player_id {
                 body
-            } else {
-                let Some(e) = self
-                    .entities
-                    .get(&owner)
-                    .or_else(|| self.showing_blocks.get(&owner))
-                else {
-                    continue;
-                };
+            } else if let Some(e) = self.entities.get(&owner) {
                 e.pos
+            } else if let Some(block) = self.showing_blocks.get(&owner) {
+                self.frame_place(block.view.frame).to_world(block.view.local)
+            } else {
+                continue;
             };
             self.environment_layers(&mut env, layers, &format!("entity/{owner}"), owner, center);
         }

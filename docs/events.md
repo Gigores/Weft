@@ -48,9 +48,9 @@ base adds `base:smelted`.
 
 ## Systems and energy
 
-Systems run over every entity with a component all at once, and that is how block entities tick:
-`r.system(&BURNER, |batch| for (id, m, ticks) in batch.iter_mut() { .. })`. `ticks` is 1 unless it is catching up on time it missed (unloaded, the time jumped): then it should do that many ticks of work at once, see [block entities](block_entities.md#catching-up).
+Systems process batches of placed blocks and entities that carry a component:
+`r.system(&BURNER, |batch| for (holder, m, ticks) in batch.iter_mut() { .. })`. `ticks` is 1 unless it is catching up on time it missed (unloaded, the time jumped): then it should do that many ticks of work at once, see [interactive blocks](block_entities.md#catching-up).
 
-Energy is a built-in engine contract, you can give a block entity the `core:energy` component, tag
+Energy is a built-in engine contract, you can give a block the `core:energy` component, tag
 cables with `conductor`, and every mod's generators and machines will work together.\
 Networks balance once per tick.

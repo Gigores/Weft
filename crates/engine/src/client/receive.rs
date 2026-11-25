@@ -111,7 +111,9 @@ impl Client {
             ToClient::Signals { dim, frame, changes } if dim == self.world.dim => self.wires.power_changed(frame, &changes),
             ToClient::BodyGlow { dim, cells } if dim == self.world.dim => self.world.body_glow_changed(cells),
             ToClient::Clock { dim, time, ticks, weather, rate } => {
+                let rate = rate.max(1) as f64;
                 if dim == self.world.dim {
+                    self.visual_clock.synchronize(dim, time, ticks, rate);
                     self.world.time = time;
                     self.world.ticks = ticks;
                     self.since_time = 0.0;
@@ -119,7 +121,7 @@ impl Client {
                         .ok()
                         .filter(|&id| (id as usize) < content().game.weathers.len());
                 }
-                self.tick_rate = rate.max(1) as f64;
+                self.tick_rate = rate;
             }
             ToClient::Teleport { dim, pos, frame } => self.teleported(dim, pos, frame, fwd),
             ToClient::Spawn(list) => self.spawn_entities(list),
@@ -148,6 +150,18 @@ impl Client {
                     }
                 }
             }
+            ToClient::BlockViews { dim, changed, removed } if dim == self.world.dim => {
+                for id in removed {
+                    self.showing_blocks.remove(&id);
+                    self.environment.remote.remove(&id);
+                    self.entity_components.retain(|(owner, _), _| *owner != id);
+                }
+                for view in changed {
+                    self.showing_blocks.entry(view.id)
+                        .and_modify(|block| block.view = view)
+                        .or_insert_with(|| super::ClientBlock { view, shown: Vec::new() });
+                }
+            }
             ToClient::Despawn(ids) => {
                 if self
                     .grabbed_body
@@ -162,7 +176,6 @@ impl Client {
                 for &(id, killed) in &ids {
                     self.environment.remote.remove(&id);
                     self.environment.static_entities.remove(&id);
-                    self.showing_blocks.remove(&id);
                     if let Some(landing) = self.landings.get_mut(&id) {
                         landing.despawned = true;
                         continue;
@@ -301,7 +314,7 @@ impl Client {
             ToClient::Disconnect(reason) => self.disconnected = Some(reason),
             ToClient::Gizmos(shapes) => self.gizmos.receive(shapes),
             ToClient::Packet { channel, data } => self.packets.push((channel, data)),
-            ToClient::EntityComponents(list) => {
+            ToClient::SharedComponents(list) => {
                 for (id, comp, bytes) in list {
                     self.engine_field(id, comp, &bytes);
                     self.entity_components.insert((id, comp), bytes);
@@ -390,9 +403,9 @@ impl Client {
             {
                 self.environment.static_entities.insert(e.id);
             }
-            let to = if content().game.is_block_entity(e.kind) { &mut self.showing_blocks } else { &mut self.entities };
             self.entity_render.changed_items.insert(e.id);
             let mut shown = ClientEntity::new(e.kind, e.pos, e.yaw, e.pitch);
+            shown.hidden_mode = e.hidden_mode;
             if e.has_space {
                 self.landings.remove(&e.id);
                 self.render.remove_frame(e.id);
@@ -401,7 +414,7 @@ impl Client {
             shown.target_rotation = entity_rotation(e.rotation);
             (shown.born, shown.body_yaw, shown.body_target) = (e.born as f64, e.body_yaw, e.body_yaw);
             (shown.walk, shown.walk_target, shown.swing, shown.swing_target) = (e.strode, e.strode, e.stride, e.stride);
-            to.insert(e.id, shown);
+            self.entities.insert(e.id, shown);
         }
     }
 
@@ -424,8 +437,10 @@ impl Client {
                 .steers
                 .then_some(id)
         });
-        for crate::net::Move { id, pos, yaw, pitch, body_yaw, strode, stride, pose, sprinting, frame, rotation } in list.iter().copied() {
+        use crate::net::move_flags;
+        for crate::net::Move { id, pos, yaw, pitch, body_yaw, strode, stride, pose, flags, frame, rotation } in list.iter().copied() {
             if let Some(e) = self.entities.get_mut(&id) {
+                e.hidden_mode = flags & move_flags::HIDDEN_MODE != 0;
                 (e.body_target, e.walk_target, e.swing_target) = (body_yaw, strode, stride);
                 let crouching = pose == Pose::CROUCH;
                 if crouching != e.crouch_at.2 {
@@ -434,7 +449,7 @@ impl Client {
                 if Some(id) == driving {
                     continue;
                 }
-                (e.pose, e.sprinting) = (pose, sprinting);
+                (e.pose, e.sprinting) = (pose, flags & move_flags::SPRINTING != 0);
                 let was = e.target;
                 let rot = entity_rotation(rotation);
                 let was_rotation = std::mem::replace(&mut e.target_rotation, rot);

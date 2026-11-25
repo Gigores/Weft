@@ -58,7 +58,7 @@ Each guide starts with the common case and goes on to the rare ones. The referen
 | I want to make | Guide | Reference |
 |---|---|---|
 | Blocks | [blocks](blocks.md) | [reference](reference/blocks.md) |
-| Blocks with data, inventories, menus, energy | [block entities](block_entities.md) | |
+| Blocks with data, inventories, menus, energy | [interactive blocks](block_entities.md) | |
 | Items | [items](items.md) | [reference](reference/items.md) |
 | Mobs and other entities | [entities](entities.md), [poses and game modes](details/poses-and-modes.md) | [reference](reference/entities.md) |
 | Status effects and potions | [effects](details/effects.md) | [reference](reference/entities.md) |

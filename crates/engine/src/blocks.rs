@@ -19,6 +19,7 @@ type Part = (String, Vec<RawOp>);
 pub(crate) struct Blocks {
     pub states: Vec<StateInfo>,
     pub block_defs: Vec<BlockDef>,
+    pub instance_data: FxHashMap<u32, crate::registry::RawBlockData>,
     /// Per block, its owner and each state's components.
     pub block_values: Vec<(ModId, Vec<Vec<RawValue>>)>,
     /// The menu each block but air opens, by name.
@@ -103,6 +104,7 @@ pub(crate) fn freeze(
         block_values: vec![(crate::registry::ENGINE, vec![Vec::new()])],
         opens_names: Vec::new(),
         block_names: FxHashMap::default(),
+        instance_data: FxHashMap::default(),
         shares: Vec::new(),
         rules: Vec::new(),
         hazards: Vec::new(),
@@ -230,6 +232,12 @@ pub(crate) fn freeze(
             for op in p.ops.iter().filter(|op| block_only(&op.value.name)) {
                 e.apply(op, p.owner, errors);
             }
+        }
+        let slots = e.or(b::INSTANCE_SLOTS, 0u32);
+        let attach = e.or::<Vec<abi::Attach>>(b::INSTANCE_ATTACH, Vec::new());
+        let shown = e.or::<Vec<u32>>(b::INSTANCE_SHOWN, Vec::new());
+        if slots != 0 || !attach.is_empty() || !shown.is_empty() || e.has(b::INSTANCE_DATA) {
+            out.instance_data.insert(index, crate::registry::RawBlockData { slots, attach, shown });
         }
         out.block_values.push((e.owner, state_values));
         out.opens_names
@@ -410,7 +418,11 @@ fn full_key(props: &[Prop], s: u32) -> String {
 }
 
 /// What only a block as a whole has: its states leave it out.
-const BLOCK_ONLY: [&str; 17] = [
+const BLOCK_ONLY: [&str; 21] = [
+    b::INSTANCE_DATA,
+    b::INSTANCE_ATTACH,
+    b::INSTANCE_SLOTS,
+    b::INSTANCE_SHOWN,
     b::PROPS,
     b::ON_USE,
     b::ON_NEIGHBOR,

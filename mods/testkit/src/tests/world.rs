@@ -262,7 +262,7 @@ pub async fn virtual_menus(t: T) -> R {
     {
         Ok(_) => t.fail("a furnace menu opened on grass"),
         Err(e) => {
-            t.check(e.contains("no block entity"), format!("unexpected refusal: {e}"));
+            t.check(e.contains("no block data"), format!("unexpected refusal: {e}"));
         }
     }
     t.frames(5).await?;
@@ -834,14 +834,8 @@ pub async fn persistence(t: T) -> R {
     t.set(chest, "chest").await?;
     t.op(&format!("insert {} {} {} coal 5", chest[0], chest[1], chest[2]))
         .await?;
-    t.check_eq(
-        t.op(&format!("spawn base:chest {} {} {}", p[0], p[1] + 2, p[2]))
-            .await?,
-        "0".to_string(),
-        "no chest entity without a chest",
-    );
-    let said = t.cmd("/summon base:furnace").await?;
-    t.check(said.contains("belongs to a block"), format!("/summon refuses a furnace: {said}"));
+    t.check(EntityKind::lookup("base:chest").is_none(), "a chest registers only a block");
+    t.check(EntityKind::lookup("base:furnace").is_none(), "a furnace registers only a block");
     t.op("secret me 0 1234").await?;
     t.check_eq(t.op("secret me 0").await?, "1234".into(), "server keeps the secret");
     t.frames(5).await?;

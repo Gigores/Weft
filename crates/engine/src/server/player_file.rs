@@ -226,7 +226,7 @@ pub(super) fn save_player(s: &Storage, p: &Player, d: &Dim) {
         .map(|((_, comp), bytes)| (*comp, bytes.as_ref()))
         .collect();
     let mut bytes = Vec::new();
-    super::persist::write(c, &mut bytes, &[(e, d.entities.inventories.get(&p.entity), comps, None)], d.time);
+    super::persist::write(c, &mut bytes, &[(super::persist::SaveOwner::Entity(e), d.entities.inventories.get(&p.entity), comps, None)], d.time);
     let text = format!(
         "name = {}\ndim = {}\ndeaths = {}\nentity = {}\n",
         p.identity.name,
@@ -267,7 +267,7 @@ pub(super) fn load_player(c: &Content, s: &Storage, key: &str, time: impl Fn(u32
         .unwrap_or(c.spawn_dim);
     let now = time(destination);
     let bytes = crate::kv::unhex(crate::kv::get(&src, "entity").unwrap_or_default());
-    let Some((entity, inventory, components, _)) = super::persist::read(c, &bytes, now).pop() else {
+    let Some((super::persist::SavedOwner::Entity(entity), inventory, components, _)) = super::persist::read(c, &bytes, now).pop() else {
         log::error!("player {key}: invalid entity record; kept as .bak, the player starts anew");
         let _ = std::fs::copy(&path, path.with_extension("bak"));
         return None;

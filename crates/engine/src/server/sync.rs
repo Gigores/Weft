@@ -75,7 +75,7 @@ impl Server {
                     .entities
                     .list
                     .iter_mut()
-                    .filter(|e| !e.removed && e.anchor.is_none())
+                    .filter(|e| !e.removed)
                 {
                     let now = crate::net::Move {
                         id: e.id,
@@ -86,7 +86,8 @@ impl Server {
                         strode: e.strode,
                         stride: e.stride,
                         pose: e.pose,
-                        sprinting: e.sprinting,
+                        flags: (if e.sprinting { crate::net::move_flags::SPRINTING } else { 0 })
+                            | (if e.mode.has(crate::tag_bits::game_mode::HIDDEN) { crate::net::move_flags::HIDDEN_MODE } else { 0 }),
                         frame: e.frame.unwrap_or(0),
                         rotation: e.wire_rotation(),
                     };
@@ -102,7 +103,7 @@ impl Server {
                                 || s.strode != now.strode
                                 || s.stride != now.stride
                                 || s.pose != now.pose
-                                || s.sprinting != now.sprinting
+                                || s.flags != now.flags
                                 || s.frame != now.frame
                         })
                     {
@@ -139,13 +140,12 @@ impl Server {
                 r.entities.told.clear();
                 r.entities.dirty_comp.clear();
                 r.gizmos.clear();
-                // Block entity inventory changes must reach the save.
+                // Block inventory changes must reach the save.
                 let anchored: Vec<IVec3> = r
                     .entities
-                    .list
+                    .dirty_inv
                     .iter()
-                    .filter(|e| e.anchor.is_some() && r.entities.dirty_inv.contains(&e.id))
-                    .map(|e| cube_of(e.pos.floor().as_ivec3()))
+                    .filter_map(|id| r.entities.blocks.get(id).filter(|block| block.frame == 0).map(|block| cube_of(block.cell)))
                     .collect();
                 r.space.modified.extend(anchored);
                 r.entities.dirty_inv.clear();
@@ -256,7 +256,7 @@ fn send_entities(
             .entities
             .list
             .iter()
-            .filter(|e| e.seen(c) && e.id != p.entity && (!e.player || e.alive()))
+            .filter(|e| e.in_world() && e.id != p.entity && (!e.player || e.alive()))
             .filter(shown)
         {
             if !p.known.contains(&e.id)
@@ -289,6 +289,7 @@ fn send_entities(
                     id: e.id,
                     kind: e.kind,
                     has_space: reg.bodies.contains_key(&e.id),
+                    hidden_mode: hidden(e.mode),
                     pos: e.pos,
                     yaw: e.yaw,
                     pitch: e.pitch,
@@ -411,7 +412,7 @@ fn send_entities(
         }
     }
     if !shared.is_empty() {
-        p.conn.send(ToClient::EntityComponents(shared));
+        p.conn.send(ToClient::SharedComponents(shared));
     }
     let moves: Vec<crate::net::Move> = moved
         .iter()
@@ -420,7 +421,48 @@ fn send_entities(
         .collect();
     // Every tick, moving or not: clients show what they see by its timeline, clips included.
     p.conn.send(ToClient::Moves { tick, moves });
+    send_block_views(c, p, dim, &visible, me, range2);
     p.known = visible;
+}
+
+fn send_block_views(c: &Content, p: &mut Player, dim: &DimSet, bodies: &FxHashSet<u64>, eye: DVec3, range2: f64) {
+    let mut visible = FxHashMap::default();
+    let mut changed = Vec::new();
+    let mut shared = Vec::new();
+    for reg in &dim.regions {
+        let data = &reg.entities;
+        for &id in &data.public_blocks {
+            let block = data.blocks[&id];
+            if block.frame != 0 && !bodies.contains(&block.frame) {
+                continue;
+            }
+            let local = block.center();
+            if reg.space_pose(block.frame).to_world(local).distance_squared(eye) > range2 {
+                continue;
+            }
+            let view = crate::net::BlockView { id, frame: block.frame, local };
+            let old = p.known_blocks.get(&id);
+            if old != Some(&view) {
+                changed.push(view);
+            }
+            visible.insert(id, view);
+            for &comp in &c.game.watched_comps {
+                if old.is_none() || data.dirty_comp.contains(&(id, comp)) {
+                    if let Some(value) = data.comps.get(&(id, comp)) {
+                        shared.push((id, comp, value.to_vec()));
+                    }
+                }
+            }
+        }
+    }
+    let removed: Vec<_> = p.known_blocks.keys().filter(|id| !visible.contains_key(id)).copied().collect();
+    if !changed.is_empty() || !removed.is_empty() {
+        p.conn.send(ToClient::BlockViews { dim: p.dim, changed, removed });
+    }
+    if !shared.is_empty() {
+        p.conn.send(ToClient::SharedComponents(shared));
+    }
+    p.known_blocks = visible;
 }
 
 /// What only the player itself hears: pushes, movement numbers, inventory, components, its menu.
@@ -479,7 +521,7 @@ fn send_own_state(c: &'static Content, p: &mut Player, dim: &mut DimSet) {
             })
             .collect();
         if !comps.is_empty() {
-            p.conn.send(ToClient::EntityComponents(comps));
+            p.conn.send(ToClient::SharedComponents(comps));
         }
         let (slots, cursor) = menu::changes(m, reg, c, p.entity);
         if !slots.is_empty() {

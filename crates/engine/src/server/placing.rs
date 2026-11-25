@@ -258,60 +258,44 @@ impl Dim {
             if e.kind == c.game.player_kind {
                 continue;
             }
-            let data = super::serialize(c, self, &[e.id]);
-            match e.anchor {
-                Some(a)
-                    if inside(a)
-                        || outside.iter().any(|&(owner, part)| {
-                            owner == a
-                                && part.offset == e.anchor_offset
-                                && c.game
-                                    .block_entities
-                                    .get(&c.states[part.state as usize].block)
-                                    == Some(&e.kind)
-                        }) =>
-                {
-                    parts
-                        .data
-                        .push(abi::TemplateData { pos: (a - lo).to_array(), data })
-                }
-                Some(_) => {}
-                None => {
-                    let at = self.space_pose(space_id).to_local(e.pos);
-                    if inside(at.floor().as_ivec3()) {
-                        let rel = (at - lo.as_dvec3()).as_vec3();
-                        let kind = c.game.entities[e.kind as usize].name.clone();
-                        parts
-                            .entities
-                            .push(abi::TemplateEntity { pos: rel.to_array(), kind, data });
-                    }
-                }
+            let at = self.space_pose(space_id).to_local(e.pos);
+            if inside(at.floor().as_ivec3()) {
+                let rel = (at - lo.as_dvec3()).as_vec3();
+                let kind = c.game.entities[e.kind as usize].name.clone();
+                let data = super::serialize(c, self, &[e.id]);
+                parts.entities.push(abi::TemplateEntity { pos: rel.to_array(), kind, data });
+            }
+        }
+        for (&id, block) in self.entities.blocks.iter().filter(|(_, block)| block.frame == space_id) {
+            if inside(block.cell) || outside.iter().any(|&(owner, part)| {
+                owner == block.cell && part.offset == block.offset && c.states[part.state as usize].block == block.kind
+            }) {
+                let data = super::serialize(c, self, &[id]);
+                parts.data.push(abi::TemplateData { pos: (block.cell - lo).to_array(), data });
             }
         }
         Some(parts)
     }
 
-    /// Entities and what block entities hold, as features bring them.
+    /// Saved entities and block data, as features bring them.
     pub fn bring(&mut self, space_id: u64, c: &'static Content, extras: &[Extra]) {
         for e in extras {
             match (e.anchor, &e.data) {
                 (Some(p), Some(data)) => {
-                    let Some((mut saved, inv, comps, _)) = super::persist::read(c, data, self.time).into_iter().next() else { continue };
-                    let (p, part) = Part { state: AIR, offset: e.transform.offset(saved.anchor_offset) }.owner(p);
-                    saved.anchor_offset = part.offset;
-                    if let Some(old) = self
-                        .entities
-                        .anchored_kind(space_id, p, saved.kind, saved.anchor_offset)
-                    {
+                    let Some((super::persist::SavedOwner::Block { mut block, .. }, inv, comps, _)) =
+                        super::persist::read(c, data, self.time).into_iter().next()
+                    else { continue };
+                    let (p, part) = Part { state: AIR, offset: e.transform.offset(block.offset) }.owner(p);
+                    block.frame = space_id;
+                    block.cell = p;
+                    block.offset = part.offset;
+                    if let Some(old) = self.entities.anchored_kind(space_id, p, block.kind, block.offset) {
                         self.entities.remove(old, UNTOLD);
                     }
-                    saved.id = self.new_id();
-                    saved.anchor = Some(p);
-                    saved.frame = (space_id != 0).then_some(space_id);
-                    saved.pos = self.space_pose(space_id).to_world(
-                        p.as_dvec3() + saved.anchor_offset.as_dvec3() / f64::from(crate::world::placement::UNIT) + DVec3::splat(0.5),
-                    );
-                    self.entities.insert_with(c, saved, inv, comps);
+                    if self.block_data_fits(c, block) {
+                        let id = self.new_id();
+                        self.entities.insert_block(c, id, block, inv, comps);
+                    }
                 }
                 (Some(p), None) => {
                     let (Some(table), Some(owner)) = (&e.loot, self.anchored(space_id, p)) else { continue };
@@ -320,10 +304,9 @@ impl Dim {
                     self.fill_slots(owner, stacks);
                 }
                 (None, Some(data)) => {
-                    let Some((mut saved, inv, comps, _)) = super::persist::read(c, data, self.time).into_iter().next() else { continue };
+                    let Some((super::persist::SavedOwner::Entity(mut saved), inv, comps, _)) = super::persist::read(c, data, self.time).into_iter().next() else { continue };
                     saved.id = self.new_id();
                     saved.pos = self.space_pose(space_id).to_world(e.at);
-                    saved.anchor = None;
                     saved.frame = None;
                     self.entities.insert_with(c, saved, inv, comps);
                 }

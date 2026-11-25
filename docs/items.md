@@ -322,7 +322,7 @@ Ids inside a value shift when a mod comes or goes. The same warning applies to a
 
 ### Tools made of parts
 
-A tool made of parts keeps them in a storage (`r.storage(&PARTS, 3)`, see [block entities](block_entities.md)):
+A tool made of parts keeps them in a storage (`r.storage(&PARTS, 3)`, see [interactive blocks](block_entities.md)):
 
 ```rust
 let pick = PICKAXE.stack(1)

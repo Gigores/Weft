@@ -836,7 +836,6 @@ unsafe fn with_entity<T>(
         g.client
             .entities
             .get(&entity)
-            .or_else(|| g.client.showing_blocks.get(&entity))
             .map(|e| f(&g.client, e))
     }
 }
@@ -894,6 +893,17 @@ pub unsafe extern "C" fn client_environment_values(c: *mut abi::ClientCtx, out: 
 
 pub unsafe extern "C" fn client_displayed(c: *mut abi::ClientCtx, entity: u64, source: u32, out: *mut ItemStack, max: usize) -> usize {
     unsafe {
+        let copy = |stacks: &[ItemStack]| {
+            for (i, stack) in stacks.iter().take(max).enumerate() {
+                *out.add(i) = *stack;
+            }
+            stacks.len()
+        };
+        if source == abi::display_source::SHOWN
+            && let Some(block) = run(c).and_then(|r| r.game.as_ref()).and_then(|g| g.client.showing_blocks.get(&entity))
+        {
+            return copy(&block.shown);
+        }
         with_entity(c, entity, |_, e| {
             let hands = [e.held, e.off_held];
             let stacks = match source {
@@ -903,10 +913,7 @@ pub unsafe extern "C" fn client_displayed(c: *mut abi::ClientCtx, entity: u64, s
                 abi::display_source::GROUND => std::slice::from_ref(&e.item),
                 _ => &[],
             };
-            for (i, stack) in stacks.iter().take(max).enumerate() {
-                *out.add(i) = *stack;
-            }
-            stacks.len()
+            copy(stacks)
         })
         .unwrap_or(0)
     }

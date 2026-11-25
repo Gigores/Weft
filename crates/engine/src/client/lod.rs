@@ -107,7 +107,7 @@ impl TileKey {
     }
 
     /// Nearest and farthest horizontal distance from `p` (x, z) to it.
-    fn distance(self, p: glam::DVec2) -> (f64, f64) {
+    pub(super) fn distance(self, p: glam::DVec2) -> (f64, f64) {
         let lo = self.origin().as_dvec2();
         let hi = lo + glam::DVec2::splat(self.size() as f64);
         let near = (lo - p).max(p - hi).max(glam::DVec2::ZERO).length();
@@ -1582,6 +1582,8 @@ impl Lod {
             self.ground = None;
             self.mask.clear();
             render.lod_draw.clear();
+            render.lod_shadow_tiles.clear();
+            render.invalidate_lod_sun();
             render.set_forest(gpu, Vec::new());
         }
         render.far_lod.collect(gpu);
@@ -1621,6 +1623,7 @@ impl Lod {
             .as_deref()
             .map_or(0, |t| t.detail_margin.min(lod_face::DETAIL_PAD as i32));
         let hide = if land.is_some_and(|h| cam.y > (h + view * 8) as f64) { 0 } else { (view / 2 * 16 - spill).max(0) };
+        render.lod_shadow_hole = hide;
         let upload_start = Instant::now();
         // An eased FOV can settle a few float steps below its target at high frame rates.
         let zooming = camera.fov < normal_fov - 0.01;
@@ -1746,6 +1749,15 @@ impl Lod {
                 camera.fov, reach, self.wanted.len(), self.wanted.iter().map(|k| k.level).min().unwrap_or(0), self.max_level,
                 self.frontier.len(), self.frontier.iter().map(|k| k.level).min(), self.zoom_only.iter().filter(|k| self.ready.contains_key(k)).count(),
                 self.frontier.iter().filter(|key| self.ready.get(key).is_some_and(|t| t.far)).count());
+        }
+        if changed || self.hidden != hidden {
+            render.invalidate_lod_sun();
+            render.lod_shadow_tiles.clear();
+            if !hidden {
+                render
+                    .lod_shadow_tiles
+                    .extend(self.frontier.iter().map(|&tile| (tile, 1.0)));
+            }
         }
         if changed || !self.transitions.is_empty() || self.hidden != hidden {
             self.hidden = hidden;

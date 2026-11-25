@@ -1,6 +1,6 @@
 //! The `core:energy` contract: any mod's generator, cable and machine work together without
-//! knowing each other. Blocks tagged `conductor` form networks; block entities with
-//! `core:energy` join the network of their own block or an adjacent conductor. Networks are
+//! knowing each other. Blocks tagged `conductor` form networks; blocks with `core:energy`
+//! join their own network or that of an adjacent conductor. Networks are
 //! rebuilt when a conductor or endpoint changes and balanced in one pass per tick, like
 //! Factorio's electric networks, instead of ticking every cable block.
 
@@ -35,9 +35,7 @@ impl Grid {
         // A machine arriving next to cables that are here already belongs to their network.
         if !self.conductors.is_empty()
             && cube.palette().iter().any(|&s| {
-                c.game
-                    .block_entities
-                    .contains_key(&c.states[s as usize].block)
+                c.game.has_block_data(c.states[s as usize].block)
             })
         {
             self.dirty = true;
@@ -90,21 +88,16 @@ impl Grid {
             let mut stack = vec![start];
             let mut ends: Vec<u64> = Vec::new();
             while let Some(p) = stack.pop() {
-                if let Some(id) = e.anchored(frame, p)
-                    && e.comps.contains_key(&(id, c.game.energy))
-                {
-                    ends.push(id);
-                }
+                let powered = |cell| e.block_ids(frame, cell).filter(|id| e.comps.contains_key(&(*id, c.game.energy)));
+                ends.extend(powered(p));
                 for d in DIRS {
                     let n = p + d;
                     if self.conductors.contains(&n) {
                         if seen.insert(n) {
                             stack.push(n);
                         }
-                    } else if let Some(id) = e.anchored(frame, n) {
-                        if e.comps.contains_key(&(id, c.game.energy)) {
-                            ends.push(id);
-                        }
+                    } else {
+                        ends.extend(powered(n));
                     }
                 }
             }

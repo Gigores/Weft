@@ -40,7 +40,7 @@ Jump to a section you're interested in, or just read the page top-to-bottom.
 
 | I want a block like... | Section |
 |---|---|
-| furnace, chest | [Block entities](block_entities.md) |
+| furnace, chest | [Interactive blocks](block_entities.md) |
 | flower, grass, crop | [Plants and growth](#plants-and-growth) |
 | stairs, slabs, beams | [Stairs, slabs and other shapes](#stairs-slabs-and-other-shapes) |
 | fence, pane, pipe, cable | [Connect to neighbors](#connect-to-neighbors) |
@@ -581,9 +581,9 @@ Blocks share a cell when their hitboxes don't overlap (for example, two slabs of
 
 Water doesn't flow through the sides the hitbox covers whole (a stair's back holds it, a hollow log lets it out its ends). To choose the sides yourself, use `.liquid_walls(&[Dir::North, Dir::South])`, written facing north and turned with the block (`&[]` for none).
 
-### Block entities and circuits
+### Block data and circuits
 
-Each block in a cell works on its own: it can have a circuit, light, its own growth rules, its own block entity, neighbor updates, scheduled ticks, support and loot. The player breaks and uses the one they aim at.
+Each block in a cell works on its own. It can have a circuit, light, growth rules, inventory and components, neighbor updates, scheduled ticks, support and loot. The player breaks and uses the one they aim at.
 
 ### Changing a cell from code
 

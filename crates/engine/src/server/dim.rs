@@ -416,7 +416,6 @@ impl Dim {
             .filter(|e| {
                 e.player
                     || (e.is_body()
-                        && e.anchor.is_none()
                         && ((now + e.id) % 10 == 0 || !self.entities.comps.contains_key(&(e.id, attributes))))
             })
             .map(|e| e.id)
@@ -443,8 +442,17 @@ impl Dim {
                 }
             }
         }
-        let Entities { list, comps, inventories, .. } = &mut self.entities;
-        for e in list.iter().filter(|e| e.seen(c)) {
+        let Entities { list, comps, inventories, blocks, public_blocks, dirty_inv, .. } = &mut self.entities;
+        for &id in public_blocks.iter().filter(|id| dirty_inv.contains(id)) {
+            let b = &blocks[&id];
+            let slots = &c.game.block_data[&b.kind].shown_slots;
+            if !slots.is_empty() {
+                let inv = inventories.get(&id);
+                let items: Vec<_> = slots.iter().map(|&s| inv.and_then(|i| i.get(s as usize)).copied().unwrap_or_default()).collect();
+                comps.insert((id, shown), crate::stack::shown_bytes(&items).into());
+            }
+        }
+        for e in list.iter().filter(|e| e.in_world()) {
             let put = |comps: &mut FxHashMap<(u64, u32), Box<[u8]>>, comp: u32, bytes: &[u8]| match comps.get_mut(&(e.id, comp)) {
                 Some(v) if **v != *bytes => *v = bytes.into(),
                 Some(_) => {}
@@ -466,10 +474,6 @@ impl Dim {
                     })
                     .collect();
                 put(comps, shown, &crate::stack::shown_bytes(&items));
-            }
-            // A block entity is heard of only for what it shows.
-            if e.anchor.is_some() {
-                continue;
             }
             let attrs = attrs.get(&e.id);
             // Between its turns, the maximum it was sent.
@@ -570,12 +574,18 @@ impl Dim {
             .map_or_else(crate::physics::Transform::default, Entity::body_place)
     }
 
-    /// The block entity of the cell at `p`: inside a callback of a part of it, that part's (as
+    /// The block instance in the cell at `p`: inside a callback of a part of it, that part's (as
     /// `seen`); else of its block, else of another in it.
     pub fn anchored(&self, space_id: u64, p: IVec3) -> Option<u64> {
         match self.space(space_id).acting {
             Some((at, part)) if at == p => self.anchored_part(space_id, crate::content::content(), p, part.state),
-            _ => self.entities.anchored(space_id, p).or_else(|| {
+            _ => self.get(space_id, p).and_then(|state| {
+                let c = crate::content::content();
+                self.space(space_id).layout(p).residents(state).find_map(|part| {
+                    let kind = c.states[part.state as usize].block;
+                    self.entities.anchored_kind(space_id, p, kind, part.offset)
+                })
+            }).or_else(|| {
                 self.space(space_id)
                     .layout(p)
                     .covers
@@ -583,10 +593,7 @@ impl Dim {
                     .find_map(|cover| {
                         let (owner, part) = cover.owner(p);
                         let c = crate::content::content();
-                        let kind = *c
-                            .game
-                            .block_entities
-                            .get(&c.states[part.state as usize].block)?;
+                        let kind = c.states[part.state as usize].block;
                         self.entities
                             .anchored_kind(space_id, owner, kind, part.offset)
                     })
@@ -594,9 +601,12 @@ impl Dim {
         }
     }
 
-    /// The block entity of the block of `state` in the cell at `p`.
+    /// The instance of the block of `state` in the cell at `p`.
     pub fn anchored_part(&self, space_id: u64, c: &Content, p: IVec3, state: u32) -> Option<u64> {
-        let kind = *c.game.block_entities.get(&c.states[state as usize].block)?;
+        let kind = c.states[state as usize].block;
+        if !c.game.has_block_data(kind) {
+            return None;
+        }
         self.entities
             .anchored_kind(space_id, p, kind, self.resident(space_id, p, state)?.offset)
     }
@@ -834,7 +844,8 @@ impl Dim {
         let mut gone: Vec<IVec3> = gone.into_iter().collect();
         gone.sort_unstable_by_key(|p| (p.x, p.y, p.z));
         for pos in gone {
-            let inside = inside.remove(&pos).unwrap_or_default();
+            let mut inside = inside.remove(&pos).unwrap_or_default();
+            inside.extend(self.entities.blocks_in_cube.get(&pos).into_iter().flatten().copied());
             let mut cube = self.space.cubes.remove(&pos).unwrap();
             self.cube_gone(pos);
             self.space.grid.cube_unloaded(pos);
@@ -894,14 +905,13 @@ impl Dim {
         c.dims[self.id as usize].daylight(time.saturating_add_signed(self.day_offset))
     }
 
-    /// Writes a block, relights, records the change for clients, queues neighbor updates and keeps
-    /// block entities in sync with their block.
+    /// Writes a block and updates its light, neighbors, client state and instance data.
     pub fn set(&mut self, space_id: u64, c: &'static Content, p: IVec3, state: u32) -> Option<u32> {
         self.write_cell(space_id, c, p, state, None, false)
     }
 
     /// The cell at `p` holds `state` and `extras`; `None`: what else is in the cell stays with the
-    /// same block, a property changing, and goes with another block. A carried block keeps its block entity.
+    /// same block, a property changing, and goes with another block. A carried block keeps its instance data.
     pub(super) fn write_cell(
         &mut self,
         space_id: u64,
@@ -1003,7 +1013,7 @@ impl Dim {
             self.layout_changed(space_id, c, p, &had, &layout);
         }
         if !carried && (old != state || layout != had) {
-            self.block_entities_follow(space_id, c, p, &before, parts);
+            self.block_data_follow(space_id, c, p, &before, parts);
         }
         if def.block_updates {
             let signals = &mut self.space_mut(space_id).signals;
@@ -1101,20 +1111,15 @@ impl Dim {
         self.layout_changed(space_id, c, p, &old, &layout);
     }
 
-    /// Block entities go with their blocks from the cell at `p` and come with new ones, what one
-    /// held dropped.
-    fn block_entities_follow(&mut self, space_id: u64, c: &'static Content, p: IVec3, before: &[Part], after: &[Part]) {
+    /// Removes data and drops contents for parts that left the cell. Initializes new parts.
+    fn block_data_follow(&mut self, space_id: u64, c: &'static Content, p: IVec3, before: &[Part], after: &[Part]) {
         let same = |a: Part, b: Part| a.offset == b.offset && c.states[a.state as usize].block == c.states[b.state as usize].block;
         for &part in before
             .iter()
             .filter(|&&part| !after.iter().any(|&v| same(part, v)))
         {
-            let Some(id) = c
-                .game
-                .block_entities
-                .get(&c.states[part.state as usize].block)
-                .and_then(|&kind| self.entities.anchored_kind(space_id, p, kind, part.offset))
-            else {
+            let kind = c.states[part.state as usize].block;
+            let Some(id) = self.entities.anchored_kind(space_id, p, kind, part.offset) else {
                 continue;
             };
             if let Some(items) = self.entities.inventories.get(&id).cloned() {
@@ -1128,12 +1133,9 @@ impl Dim {
             .iter()
             .filter(|&&part| !before.iter().any(|&v| same(part, v)))
         {
-            if let Some(&kind) = c
-                .game
-                .block_entities
-                .get(&c.states[part.state as usize].block)
-            {
-                self.add_block_entity(space_id, c, p, kind, part);
+            let kind = c.states[part.state as usize].block;
+            if c.game.has_block_data(kind) {
+                self.add_block_data(space_id, c, p, kind, part);
             }
         }
     }
@@ -1225,7 +1227,7 @@ impl Dim {
         self.replace_placed(space_id, c, owner, part, new)
     }
 
-    pub(super) fn replace_placed(&mut self, space_id: u64, c: &'static Content, p: IVec3, part: Part, state: u32) -> bool {
+    pub(crate) fn replace_placed(&mut self, space_id: u64, c: &'static Content, p: IVec3, part: Part, state: u32) -> bool {
         let Some(main) = self.get(space_id, p) else { return false };
         let mut parts: Vec<_> = self.space(space_id).layout(p).residents(main).collect();
         let Some(i) = parts.iter().position(|&v| v == part) else { return false };
@@ -1333,40 +1335,35 @@ impl Dim {
         }
     }
 
-    fn add_block_entity(&mut self, space_id: u64, c: &Content, p: IVec3, kind: u32, part: Part) {
+    fn add_block_data(&mut self, frame: u64, c: &Content, cell: IVec3, kind: u32, part: Part) {
         let id = self.new_id();
-        let mut e = Entity::new(
-            id,
-            kind,
-            self.space_pose(space_id)
-                .to_world(p.as_dvec3() + part.shift() + DVec3::splat(0.5)),
-            1.0,
-        );
-        e.anchor = Some(p);
-        e.anchor_offset = part.offset;
-        e.frame = (space_id != 0).then_some(space_id);
-        self.entities.insert(c, e);
+        self.entities.insert_block(c, id, super::entity::BlockData { kind, frame, cell, offset: part.offset }, None, Vec::new());
     }
 
-    /// Whether a saved block entity still has its block: a block in the cell at its anchor has
-    /// this kind, and no other entity took the place.
-    pub fn block_entity_fits(&self, space_id: u64, c: &Content, e: &Entity) -> bool {
-        e.anchor.is_some_and(|a| {
-            self.entities
-                .anchored_kind(space_id, a, e.kind, e.anchor_offset)
-                .is_none()
-                && self
-                    .space(space_id)
-                    .layout(a)
-                    .residents(self.get(space_id, a).unwrap_or(AIR))
-                    .any(|part| {
-                        part.offset == e.anchor_offset
-                            && c.game
-                                .block_entities
-                                .get(&c.states[part.state as usize].block)
-                                == Some(&e.kind)
-                    })
-        })
+    pub(crate) fn block_kind(&self, id: u64) -> Option<u32> {
+        self.entities.blocks.get(&id).map(|block| block.kind)
+    }
+
+    pub(crate) fn block_part(&self, id: u64, c: &Content) -> Option<(super::entity::BlockData, Part)> {
+        let block = *self.entities.blocks.get(&id)?;
+        if !self.has_space(block.frame) {
+            return None;
+        }
+        let part = self.space(block.frame).layout(block.cell).residents(self.get(block.frame, block.cell)?)
+            .find(|part| part.offset == block.offset && c.states[part.state as usize].block == block.kind)?;
+        Some((block, part))
+    }
+
+    pub(super) fn block_position(&self, id: u64) -> Option<DVec3> {
+        let block = self.entities.blocks.get(&id)?;
+        Some(self.space_pose(block.frame).to_world(block.center()))
+    }
+
+    pub fn block_data_fits(&self, c: &Content, block: super::entity::BlockData) -> bool {
+        self.has_space(block.frame)
+            && self.entities.anchored_kind(block.frame, block.cell, block.kind, block.offset).is_none()
+            && self.space(block.frame).layout(block.cell).residents(self.get(block.frame, block.cell).unwrap_or(AIR))
+                .any(|part| part.offset == block.offset && c.states[part.state as usize].block == block.kind)
     }
 
     /// The same for all of a body, once the ones saved with it are in.
@@ -1376,19 +1373,14 @@ impl Dim {
             .get(&id)
             .map_or(Vec::new(), |s| s.cubes.keys().copied().collect());
         for cp in cubes {
-            self.add_missing_block_entities(id, c, cp);
+            self.add_missing_block_data(id, c, cp);
         }
     }
 
-    /// Gives every block of the cube that has a block entity one, if it has none: blocks a
-    /// generator placed, or a block a mod gave an entity after the world was saved.
-    pub fn add_missing_block_entities(&mut self, space_id: u64, c: &Content, pos: IVec3) {
+    /// Initializes missing instance data in generated cubes or cubes saved before the block declared it.
+    pub fn add_missing_block_data(&mut self, space_id: u64, c: &Content, pos: IVec3) {
         let Some(cube) = self.space(space_id).cubes.get(&pos).cloned() else { return };
-        let has = |s: u32| {
-            c.game
-                .block_entities
-                .contains_key(&c.states[s as usize].block)
-        };
+        let has = |s: u32| c.game.has_block_data(c.states[s as usize].block);
         let mains = cube.palette().iter().any(|&s| has(s));
         let parts = cube
             .all_extras()
@@ -1396,30 +1388,23 @@ impl Dim {
         let cells = (0..if mains { VOLUME } else { 0 }).chain(parts.filter(|_| !mains).map(|(i, _)| i));
         for i in cells {
             for part in cube.layout(i).residents(cube.get(i)) {
-                let Some(&kind) = c
-                    .game
-                    .block_entities
-                    .get(&c.states[part.state as usize].block)
-                else {
+                let kind = c.states[part.state as usize].block;
+                if !c.game.has_block_data(kind) {
                     continue;
-                };
+                }
                 let p = pos * 16 + crate::world::cube::offset(i);
                 if self
                     .entities
                     .anchored_kind(space_id, p, kind, part.offset)
                     .is_none()
                 {
-                    self.add_block_entity(space_id, c, p, kind, part);
+                    self.add_block_data(space_id, c, p, kind, part);
                 }
             }
         }
     }
 
-    /// 0 for kinds that belong to a block: those come only with their block.
     pub fn spawn(&mut self, space_id: u64, c: &'static Content, kind: u32, pos: DVec3) -> u64 {
-        if c.game.is_block_entity(kind) {
-            return 0;
-        }
         let id = self.new_id();
         let k = &c.game.entities[kind as usize];
         if let Some(blocks) = super::structure::template(c, kind) {
@@ -1520,11 +1505,7 @@ impl Dim {
                     down.push(super::structure::Carried { local, to: p, state });
                 } else {
                     broke.extend(self.space(id).layout(local).residents(state).map(|part| {
-                        let entity = c
-                            .game
-                            .block_entities
-                            .get(&c.states[part.state as usize].block)
-                            .and_then(|&kind| self.entities.anchored_kind(id, local, kind, part.offset));
+                        let entity = self.entities.anchored_kind(id, local, c.states[part.state as usize].block, part.offset);
                         (p, part.state, entity)
                     }));
                 }
@@ -2075,7 +2056,9 @@ impl Dim {
         let pos = self
             .entities
             .get(id)
-            .map_or(DVec3::ZERO, |e| self.space_pose(space_id).to_local(e.pos));
+            .map(|e| e.pos)
+            .or_else(|| self.block_position(id))
+            .map_or(DVec3::ZERO, |pos| self.space_pose(space_id).to_local(pos));
         for (i, s) in items.into_iter().enumerate() {
             if !s.is_empty() {
                 let item = self.spawn_item(space_id, c, pos + DVec3::Y, s);
@@ -2596,7 +2579,7 @@ impl Dim {
             let frame = self
                 .entities
                 .get(id)
-                .map(Entity::block_frame)
+                .map(|_| self.entities.owner_frame(id))
                 .filter(|&frame| self.active_space(frame))
                 .unwrap_or(0);
             for (name, data) in due {
@@ -2615,12 +2598,12 @@ impl Dim {
         let idle = (!self.idle.is_empty()).then(|| self.idle.clone());
         let still = |e: &super::entity::Entity| {
             idle.as_ref()
-                .is_some_and(|i| !e.player && e.anchor.is_none() && i.contains(&cube_of(e.pos.floor().as_ivec3())))
+                .is_some_and(|i| !e.player && i.contains(&cube_of(e.pos.floor().as_ivec3())))
         };
         for e in &self.entities.list {
             if !e.removed && (!e.player || e.alive()) && !still(e) {
                 by_kind
-                    .entry((e.block_frame(), e.kind))
+                    .entry((0, e.kind))
                     .or_default()
                     .push(e.id);
             }
@@ -2652,7 +2635,7 @@ impl Dim {
             .entities
             .list
             .iter()
-            .filter(|e| !e.removed && !e.player && e.anchor.is_none() && e.item.is_empty())
+            .filter(|e| !e.removed && !e.player && e.item.is_empty())
             .map(|e| e.id)
             .collect();
         for id in bodies {
@@ -2721,23 +2704,6 @@ impl Dim {
             })
             .collect();
         let block = crate::physics::ObservedCells { cells: block, dry: &dry };
-        // What belongs to a body's blocks is where those are.
-        if !self.bodies.is_empty() {
-            let at: FxHashMap<u64, crate::physics::Transform> = bodies
-                .iter()
-                .filter_map(|b| b.blocks.map(|(_, place)| (b.id, place)))
-                .collect();
-            for e in self
-                .entities
-                .list
-                .iter_mut()
-                .filter(|e| e.anchor.is_some() && e.frame.is_some())
-            {
-                if let (Some(place), Some(a)) = (e.frame.and_then(|f| at.get(&f)), e.anchor) {
-                    e.pos = place.to_world(a.as_dvec3() + DVec3::splat(0.5));
-                }
-            }
-        }
         // Physics only reads blocks and bodies and writes its own entity, so entities move in
         // parallel; damage is applied afterwards in list order to stay deterministic.
         let inventories = &self.entities.inventories;
@@ -2949,8 +2915,9 @@ impl Dim {
             })
             .map(|e| e.id)
             .collect();
+        let blocks = self.entities.system_blocks.iter().copied();
         let mut missed: Vec<(u64, u64)> = Vec::new();
-        for id in worked {
+        for id in worked.into_iter().chain(blocks.collect::<Vec<_>>()) {
             let last = self
                 .entities
                 .comps
@@ -2993,8 +2960,7 @@ impl Dim {
     fn frames_of(&self, only: &FxHashMap<u64, u32>) -> Vec<u64> {
         let mut frames: Vec<u64> = only
             .keys()
-            .filter_map(|id| self.entities.get(*id))
-            .map(|e| e.block_frame())
+            .map(|id| self.entities.owner_frame(*id))
             .collect();
         frames.sort_unstable();
         frames.dedup();
@@ -3016,7 +2982,14 @@ impl Dim {
                 .iter()
                 .filter(|e| !e.removed && self.entities.comps.contains_key(&(e.id, comp)) && only.is_none_or(|o| o.contains_key(&e.id)))
             {
-                by_frame.entry(e.block_frame()).or_default().push(e.id);
+                by_frame.entry(0).or_default().push(e.id);
+            }
+            let mut blocks: Vec<_> = self.entities.system_blocks.iter().copied().filter(|id| {
+                self.entities.comps.contains_key(&(*id, comp)) && only.is_none_or(|o| o.contains_key(id))
+            }).collect();
+            blocks.sort_unstable();
+            for id in blocks {
+                by_frame.entry(self.entities.blocks[&id].frame).or_default().push(id);
             }
             let mut frames: Vec<u64> = by_frame.keys().copied().collect();
             frames.sort_unstable();
@@ -3031,12 +3004,15 @@ impl Dim {
                     .iter()
                     .map(|id| only.and_then(|o| o.get(id).copied()).unwrap_or(1))
                     .collect();
-                let (ids_ptr, values, count, ticks) = (ids.as_ptr(), bytes.as_mut_ptr(), ids.len() as u32, ticks.as_ptr());
+                let owners: Vec<abi::Holder> = ids.iter().map(|&id| {
+                    if self.entities.blocks.contains_key(&id) { abi::Holder::block_id(id) } else { abi::Holder::entity(id) }
+                }).collect();
+                let (values, count, ticks) = (bytes.as_mut_ptr(), ids.len() as u32, ticks.as_ptr());
                 if self.active_space(frame) {
                     self.call(frame, owner, cb, |w| abi::SystemArgs {
                         world: w,
                         component: comp,
-                        ids: ids_ptr,
+                        owners: owners.as_ptr(),
                         values,
                         count,
                         stride: size as u32,
@@ -3062,7 +3038,7 @@ impl Dim {
             .entities
             .list
             .iter()
-            .filter(|e| !e.player && e.is_body() && e.anchor.is_none() && e.alive())
+            .filter(|e| !e.player && e.is_body() && e.alive())
             .filter(|e| c.game.entities[e.kind as usize].is(crate::tag_bits::entity::POSES))
             .map(|e| e.id)
             .collect();
@@ -3589,7 +3565,7 @@ impl Dim {
         if !self.may_break(space_id, c, p, state, tool.item, player) {
             return false;
         }
-        // What the block entity carries goes back onto the block's item.
+        // What the block carries goes back onto the block's item.
         let carried = self.anchored_part(space_id, c, p, state).map_or(0, |id| {
             crate::stack::intern(
                 c.game
@@ -3837,10 +3813,10 @@ impl Dim {
             return true;
         }
         if let Some(menu) = opens {
-            // Its block entity's menu, or one of its own (a crafting table).
+            // Its inventory menu, or one of its own (a crafting table).
             let on = self
                 .anchored_part(space_id, c, p, state)
-                .map(|id| crate::server::holder::Inv::own(crate::server::holder::At::Entity(id)));
+                .map(|id| crate::server::holder::Inv::own(crate::server::holder::At::Block(id)));
             self.events
                 .push(DimEvent::OpenMenu { player, menu, on, block: state });
             return true;
@@ -4185,6 +4161,7 @@ pub struct Parcel {
     bodies: Vec<(u64, Box<Space>)>,
     scheduled: Vec<Reverse<BlockTimer>>,
     growth: Vec<(IVec3, u64)>,
+    blocks: Vec<super::entity::MovedBlock>,
 }
 
 impl Dim {
@@ -4295,6 +4272,13 @@ impl Dim {
                 p.bodies.push((id, st));
             }
         }
+        let instances: Vec<_> = p.cubes.iter()
+            .filter_map(|(cube, ..)| self.entities.blocks_in_cube.get(cube))
+            .chain(p.bodies.iter().filter_map(|(body, _)| self.entities.blocks_in_body.get(body)))
+            .flatten()
+            .copied()
+            .collect();
+        p.blocks = self.entities.take_blocks(instances);
         let (moved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.space.scheduled)
             .into_iter()
             .partition(|t| take(section_of_cube(cube_of(IVec3::from_array(t.0.1)))));
@@ -4336,6 +4320,9 @@ impl Dim {
             self.entities.insert_with(c, e, inv, comps);
         }
         self.bodies.extend(p.bodies);
+        for (id, block, inv, comps) in p.blocks {
+            self.entities.insert_block(c, id, block, inv, comps);
+        }
         self.entities.sort_by_id();
         self.space.scheduled.extend(p.scheduled);
         for (q, at) in p.growth {

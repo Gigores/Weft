@@ -18,4 +18,4 @@ A liquid has no audio filter unless one is configured with `.environment(..)`.
 ## Reactions
 
 Reactions: `r.liquid_reaction("#hot", "#water").source_turns_into("obsidian")`, named `base:hot>water` for others' `edit` and `remove` (`.named(..)` for one of your choice).\
-Every liquid is also an item of its name and tags, its count in millibuckets: what liquid slots (`Slots::liquid(capacity)`) hold and recipes count, see the [block entities guide](../block_entities.md).
+Every liquid is also an item of its name and tags, its count in millibuckets: what liquid slots (`Slots::liquid(capacity)`) hold and recipes count, see the [interactive blocks guide](../block_entities.md).

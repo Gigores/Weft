@@ -6,10 +6,11 @@
 
 use glam::{DVec3, IVec3, Mat4, Vec3, Vec4};
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use weft_render::*;
 
 use super::mesher::Mesh;
+use super::sun_shadow::{self, SunView};
 use super::textures::GameTextures;
 use crate::content::Content;
 pub use crate::gpu_layout::Globals;
@@ -203,9 +204,18 @@ fn runs<'a>(start: u32, groups: impl IntoIterator<Item = (&'a u32, bool)>, mut e
 /// points to; contiguous visible runs become one draw.
 /// The draws the CPU makes of a mesh: a structure's all, and of the world's what is translucent, the
 /// rest being `CubeTable`'s.
-fn mesh_draws(m: &GpuMesh, key: MeshKey, lo: Vec3, center: Vec3, k: i32, cam_cube: IVec3, out: &mut Vec<DrawRecord>) -> u64 {
+fn mesh_draws(
+    m: &GpuMesh,
+    key: MeshKey,
+    lo: Vec3,
+    center: Vec3,
+    k: i32,
+    cam_cube: IVec3,
+    sun: Option<Vec3>,
+    out: &mut Vec<DrawRecord>,
+) -> u64 {
     // The world's own are the cube table's but what is translucent.
-    let drawn = |layer: usize| k != 0 || layer == 2;
+    let drawn = |layer: usize| if sun.is_some() { layer < 2 } else { k != 0 || layer == 2 };
     let rel = if k == 0 { key.1 - cam_cube } else { key.1 };
     let origin = [rel.x, rel.y, rel.z, k];
     let mut faces = 0u64;
@@ -217,7 +227,8 @@ fn mesh_draws(m: &GpuMesh, key: MeshKey, lo: Vec3, center: Vec3, k: i32, cam_cub
         first_instance: 0,
     };
     if let Some(a) = m.faces {
-        let seen = seen_sides(lo, lo + Vec3::splat(16.0));
+        let seen = sun
+            .map_or_else(|| seen_sides(lo, lo + Vec3::splat(16.0)), |d| [d.x > 0.0, d.y > 0.0, d.z > 0.0, d.x < 0.0, d.y < 0.0, d.z < 0.0]);
         let mut off = a.offset;
         for layer in 0..4 {
             let counts = m.face_counts[layer];
@@ -307,6 +318,17 @@ pub struct WorldRenderer {
     quad_pipes: [PipelineId; 4],
     /// Distant terrain: what is opaque, then see-through surfaces (seas).
     lod_pipes: [PipelineId; 3],
+    sun_pipes: Option<[[PipelineId; 2]; 2]>,
+    sun_lod_pipes: Option<[PipelineId; 3]>,
+    pub(super) uses_sun_depth: bool,
+    sun_origins: [Vec<(BufferId, u32)>; sun_shadow::MAP_COUNT],
+    sun_indirect: [Vec<(BufferId, u32)>; sun_shadow::MAP_COUNT],
+    sun_draws: Vec<DrawRecord>,
+    sun_depth: Option<BufferId>,
+    pub(super) cache_sun: bool,
+    sun_ranges: [Option<[IVec3; 2]>; sun_shadow::MAP_COUNT],
+    sun_dirty: [bool; sun_shadow::MAP_COUNT],
+    sun_animated: FxHashSet<IVec3>,
     lod_coverage_flag: bool,
     pub(super) far_lod: far_lod::FarLod,
     forest_textures: Vec<(TextureId, u32)>,
@@ -316,6 +338,8 @@ pub struct WorldRenderer {
     lod: FxHashMap<super::lod::TileKey, (Alloc, super::lod::Counts, (i32, i32), i32)>,
     lod_quads: usize,
     pub lod_draw: Vec<(super::lod::TileKey, f32)>,
+    pub(super) lod_shadow_tiles: Vec<(super::lod::TileKey, f32)>,
+    pub(super) lod_shadow_hole: i32,
     pub lod_half: u32,
     lod_mask: (BufferId, usize),
     faces: Pool,
@@ -437,6 +461,8 @@ impl WorldRenderer {
     ) -> Result<WorldRenderer, String> {
         let (shader, slots) = world_shader(assets).map_err(|e| e.0)?;
         let (face_pipes, quad_pipes, lod_pipes) = Self::pipelines(gpu, &shader, assets)?;
+        let sun_pipes = Self::sun_pipelines(gpu, &shader);
+        let sun_lod_pipes = Self::sun_lod_pipelines(gpu, &shader);
         let mut far_lod = far_lod::FarLod::default();
         far_lod.reload(gpu, &shader);
         let tex_shader = shader_table(gpu, c, textures, &slots);
@@ -469,12 +495,25 @@ impl WorldRenderer {
             face_pipes,
             quad_pipes,
             lod_pipes,
+            sun_pipes,
+            sun_lod_pipes,
+            uses_sun_depth: sun_shadow::uses_depth(&shader),
+            sun_origins: Default::default(),
+            sun_indirect: Default::default(),
+            sun_draws: Vec::new(),
+            sun_depth: None,
+            cache_sun: !crate::packs::custom_sun_shaders(),
+            sun_ranges: [None; sun_shadow::MAP_COUNT],
+            sun_dirty: [true; sun_shadow::MAP_COUNT],
+            sun_animated: FxHashSet::default(),
             lod_coverage_flag: uses_lod_coverage_flag(&shader),
             far_lod,
             forest_textures: Vec::new(),
             lod: FxHashMap::default(),
             lod_quads: 0,
             lod_draw: Vec::new(),
+            lod_shadow_tiles: Vec::new(),
+            lod_shadow_hole: 0,
             lod_half: 0,
             lod_mask: (gpu.create_buffer(4, usage::STORAGE, "lod mask"), 1),
             faces: Pool { words: FACE_WORDS, pages: Vec::new(), label: "face page" },
@@ -600,6 +639,62 @@ impl WorldRenderer {
         Ok((faces, quads, lod))
     }
 
+    fn sun_pipelines(gpu: &mut dyn Backend, shader: &Shader) -> Option<[[PipelineId; 2]; 2]> {
+        let entries = ["vs_sun_face", "vs_sun_quad", "fs_sun_clip", "fs_sun_cutout"];
+        if !entries
+            .iter()
+            .all(|name| shader.module.entry_points.iter().any(|e| e.name == *name))
+        {
+            return None;
+        }
+        let mut built = Vec::new();
+        for (vs, fs) in [
+            ("vs_sun_face", None),
+            ("vs_sun_face", Some("fs_sun_cutout")),
+            ("vs_sun_quad", Some("fs_sun_clip")),
+            ("vs_sun_quad", Some("fs_sun_cutout")),
+        ] {
+            match sun_shadow::pipeline(gpu, shader, "world sun shadow", vs, fs, true) {
+                Ok(pipe) => built.push(pipe),
+                Err(error) => {
+                    for pipe in built {
+                        gpu.destroy_pipeline(pipe);
+                    }
+                    log::error!("sun shadow shader: {error}");
+                    return None;
+                }
+            }
+        }
+        Some([[built[0], built[1]], [built[2], built[3]]])
+    }
+
+    fn sun_lod_pipelines(gpu: &mut dyn Backend, shader: &Shader) -> Option<[PipelineId; 3]> {
+        if ["vs_sun_lod", "vs_sun_forest", "fs_sun_forest", "vs_sun_lod_far"]
+            .iter()
+            .any(|entry| !shader.module.entry_points.iter().any(|p| p.name == *entry))
+        {
+            return None;
+        }
+        let mut built = Vec::new();
+        for (vs, fs) in [("vs_sun_lod", None), ("vs_sun_forest", Some("fs_sun_forest")), ("vs_sun_lod_far", None)] {
+            match sun_shadow::pipeline(gpu, shader, "LOD sun shadow", vs, fs, fs.is_none()) {
+                Ok(pipe) => built.push(pipe),
+                Err(error) => {
+                    for pipe in built {
+                        gpu.destroy_pipeline(pipe);
+                    }
+                    log::error!("LOD shadow shader: {error}");
+                    return None;
+                }
+            }
+        }
+        Some([built[0], built[1], built[2]])
+    }
+
+    pub(super) fn casts_sun_shadows(&self) -> bool {
+        self.sun_pipes.is_some()
+    }
+
     /// Recompiles the world shader; keeps the old pipelines when the new source has errors.
     pub fn reload_shaders(&mut self, gpu: &mut dyn Backend, textures: &GameTextures, assets: &crate::assets::Assets) {
         self.occlusion.reload(gpu, assets);
@@ -619,6 +714,17 @@ impl WorldRenderer {
                 self.face_pipes = f;
                 self.quad_pipes = q;
                 self.lod_pipes = l;
+                for pipe in self.sun_pipes.take().into_iter().flatten().flatten() {
+                    gpu.destroy_pipeline(pipe);
+                }
+                self.sun_pipes = Self::sun_pipelines(gpu, &shader);
+                for pipe in self.sun_lod_pipes.take().into_iter().flatten() {
+                    gpu.destroy_pipeline(pipe);
+                }
+                self.sun_lod_pipes = Self::sun_lod_pipelines(gpu, &shader);
+                self.uses_sun_depth = sun_shadow::uses_depth(&shader);
+                self.cache_sun = !crate::packs::custom_sun_shaders();
+                self.sun_dirty.fill(true);
                 self.lod_coverage_flag = uses_lod_coverage_flag(&shader);
                 self.far_lod.reload(gpu, &shader);
                 gpu.destroy_buffer(self.tex_shader);
@@ -670,6 +776,10 @@ impl WorldRenderer {
             }
             m
         };
+        if key.0 == 0 {
+            self.sun_animated.remove(&key.1);
+            self.invalidate_sun_at(key.1);
+        }
         self.table.remove(m.slots);
         if let Some(a) = m.faces {
             self.faces.free(a);
@@ -709,6 +819,16 @@ impl WorldRenderer {
             .chain(self.offsets.drain(..))
             .chain(self.rotations.drain(..))
             .chain(self.dry_volumes.drain(..))
+            .chain(
+                self.sun_origins
+                    .iter_mut()
+                    .flat_map(|buffers| buffers.drain(..)),
+            )
+            .chain(
+                self.sun_indirect
+                    .iter_mut()
+                    .flat_map(|buffers| buffers.drain(..)),
+            )
         {
             gpu.destroy_buffer(b);
         }
@@ -718,6 +838,8 @@ impl WorldRenderer {
             .into_iter()
             .chain(self.quad_pipes)
             .chain(self.lod_pipes)
+            .chain(self.sun_pipes.take().into_iter().flatten().flatten())
+            .chain(self.sun_lod_pipes.take().into_iter().flatten())
         {
             gpu.destroy_pipeline(p);
         }
@@ -873,6 +995,7 @@ impl WorldRenderer {
     pub fn remove_lod(&mut self, key: super::lod::TileKey) {
         self.far_lod.remove(key);
         if let Some((a, _, _, _)) = self.lod.remove(&key) {
+            self.invalidate_lod_sun();
             self.lod_quads -= a.len as usize;
             self.faces.free(a);
         }
@@ -952,6 +1075,17 @@ impl WorldRenderer {
                     .map(|q| q[4] & crate::gpu_layout::face::TEX_MASK),
             );
         textures.ensure_blocks(gpu, used);
+        if key.0 == 0 {
+            self.invalidate_sun_at(key.1);
+            let cutouts = mesh.faces[1]
+                .iter()
+                .map(|f| f[1])
+                .chain(mesh.quads[1].iter().map(|q| q[4]))
+                .map(|texture| texture & crate::gpu_layout::face::TEX_MASK);
+            if textures.any_animation(cutouts) {
+                self.sun_animated.insert(key.1);
+            }
+        }
         let face_counts = mesh.faces.each_ref().map(|v| {
             let mut n = [0u32; 6];
             for f in v {
@@ -1015,7 +1149,9 @@ impl WorldRenderer {
         frames: &[(u64, crate::physics::Transform)],
         lights: &FxHashMap<MeshKey, u32>,
         dry: &[(crate::physics::Transform, &[(IVec3, IVec3)])],
+        sun_depth: Option<BufferId>,
     ) {
+        self.sun_depth = sun_depth;
         self.sort_translucent(gpu, cam.pos, frames);
         let aspect = frame.width as f32 / frame.height.max(1) as f32;
         let view_proj = cam.proj(aspect) * cam.view();
@@ -1094,7 +1230,7 @@ impl WorldRenderer {
                         (lo, center, cube_pick.get(&key).copied().unwrap_or(k as i32 + 1))
                     };
                     if planes.iter().all(|pl| pl.dot(center.extend(1.0)) > -13.86) {
-                        faces += mesh_draws(&m, key, lo, center, k, cam_cube, out);
+                        faces += mesh_draws(&m, key, lo, center, k, cam_cube, None, out);
                     }
                 }
                 faces
@@ -1374,6 +1510,192 @@ impl WorldRenderer {
             .draw(list, &self.lod_draw, cam_cube, false, |list, pipe, records| self.bind_run(list, pipe, records, obuf));
     }
 
+    fn invalidate_sun_at(&mut self, cube: IVec3) {
+        for (range, dirty) in self.sun_ranges.iter().zip(&mut self.sun_dirty) {
+            *dirty |= range.is_some_and(|[lo, hi]| cube.cmpge(lo).all() && cube.cmple(hi).all());
+        }
+    }
+
+    pub(super) fn sun_cache_valid(&self, map: usize) -> bool {
+        !self.sun_dirty[map]
+    }
+
+    pub(super) fn invalidate_lod_sun(&mut self) {
+        self.sun_dirty[1..].fill(true);
+    }
+
+    pub(super) fn sun_cacheable(&self, [lo, hi]: [IVec3; 2]) -> bool {
+        !self
+            .sun_animated
+            .iter()
+            .any(|&cube| cube.cmpge(lo).all() && cube.cmple(hi).all())
+    }
+
+    pub(super) fn draw_sun(
+        &mut self,
+        gpu: &mut dyn Backend,
+        list: &mut CommandList,
+        slot: usize,
+        camera: DVec3,
+        view: SunView,
+        frames: &[(u64, crate::physics::Transform)],
+        far_scene: Option<(usize, BufferId)>,
+    ) {
+        let Some(pipes) = self.sun_pipes else { return };
+        let map = far_scene.map_or(0, |(map, _)| map);
+        let far_scene = far_scene.map(|(_, scene)| scene);
+        self.sun_dirty[map] = false;
+        let camera_cube = camera.floor().as_ivec3() >> 4;
+        let within = |center| view.contains(center, 16.0);
+        let draws = &mut self.sun_draws;
+        draws.clear();
+        let [mut lo, mut hi] = view.range;
+        let lod_pipes = self
+            .sun_lod_pipes
+            .filter(|_| far_scene.is_some() && self.cache_sun);
+        if far_scene.is_some() {
+            // The coarse map uses the ready LOD outside the hole reserved for loaded blocks.
+            let radius = if lod_pipes.is_some() && !self.lod_shadow_tiles.is_empty() { (self.lod_shadow_hole / 16 + 2).max(5) } else { 9 };
+            let extent = IVec3::new(radius, 12, radius);
+            lo = lo.max(camera_cube - extent);
+            hi = hi.min(camera_cube + extent);
+        }
+        self.sun_ranges[map] = Some([lo, hi]);
+        for z in lo.z..=hi.z {
+            for x in lo.x..=hi.x {
+                for y in lo.y..=hi.y {
+                    let cube = IVec3::new(x, y, z);
+                    let center = ((cube.as_dvec3() * 16.0 + DVec3::splat(8.0)) - camera).as_vec3();
+                    if !within(center) {
+                        continue;
+                    }
+                    let key = (0, cube);
+                    let mesh = self.table_only.get(&key).or_else(|| {
+                        let index = *self.meshes.get(&key)?;
+                        self.regions
+                            .get(&region_of(key))?
+                            .get(index)
+                            .map(|(_, mesh)| mesh)
+                    });
+                    if let Some(mesh) = mesh {
+                        mesh_draws(mesh, key, Vec3::ZERO, center, 0, camera_cube, Some(view.direction), draws);
+                    }
+                }
+            }
+        }
+        for (index, &(id, place)) in frames.iter().enumerate() {
+            let sun = place.rotation().inverse() * view.direction.as_dvec3();
+            for (&(owner, _), cubes) in &self.regions {
+                if owner != id {
+                    continue;
+                }
+                for &(key, mesh) in cubes {
+                    let center = (place.to_world(key.1.as_dvec3() * 16.0 + DVec3::splat(8.0)) - camera).as_vec3();
+                    if within(center) {
+                        mesh_draws(&mesh, key, Vec3::ZERO, center, index as i32 + 1, camera_cube, Some(sun.as_vec3()), draws);
+                    }
+                }
+            }
+        }
+        if lod_pipes.is_some() {
+            use super::lod::{ALWAYS, BESIDE_CUBES, FOREST, PLANTS, SURFACE};
+            let d = view.direction;
+            let seen = [d.x > 0.0, d.y > 0.0, d.z > 0.0, d.x < 0.0, d.y < 0.0, d.z < 0.0];
+            for &(key, _) in &self.lod_shadow_tiles {
+                let Some(&(alloc, counts, (y0, y1), spill)) = self.lod.get(&key) else { continue };
+                let o = key.origin();
+                let half = Vec3::new(key.size() as f32, (y1 - y0) as f32, key.size() as f32) * 0.5;
+                let center = (DVec3::new(o.x as f64, y0 as f64, o.y as f64) - camera).as_vec3() + half;
+                if !view.contains(center, (half + Vec3::new(spill as f32, 1.0, spill as f32)).length()) {
+                    continue;
+                }
+                let pad = if key.level == 0 { crate::gpu_layout::lod_face::DETAIL_PAD as i32 / 16 } else { 0 };
+                let origin = [
+                    o.x / 16 - camera_cube.x - pad,
+                    -camera_cube.y,
+                    o.y / 16 - camera_cube.z - pad,
+                    crate::gpu_layout::lod_draw_data(key.level, 1.0),
+                ];
+                let mut draw = |layer, start, len| {
+                    if len > 0 {
+                        let args = DrawIndexedArgs {
+                            indices: len * 6,
+                            instances: 1,
+                            first_index: 0,
+                            vertex_offset: (start * 4) as i32,
+                            first_instance: 0,
+                        };
+                        draws.push((3, layer, alloc.page, args, origin, center));
+                    }
+                };
+                let land = counts[ALWAYS].iter().sum::<u32>();
+                runs(alloc.offset, counts[ALWAYS].iter().zip(seen), |start, len| draw(0, start, len));
+                let forest_at = alloc.offset
+                    + land
+                    + counts[BESIDE_CUBES]
+                        .iter()
+                        .chain(&counts[SURFACE])
+                        .chain(&counts[PLANTS])
+                        .sum::<u32>();
+                draw(1, forest_at, counts[FOREST][0]);
+            }
+        }
+        if let (Some(pipes), Some(scene)) = (lod_pipes, far_scene)
+            && self.far_lod.len() > 0
+        {
+            let eye = glam::DVec2::new(camera.x, camera.z);
+            let on_map: Vec<_> = self
+                .lod_shadow_tiles
+                .iter()
+                .copied()
+                .filter(|(key, _)| key.distance(eye).0 < 640.0)
+                .collect();
+            if !on_map.is_empty() {
+                self.far_lod
+                    .draw_with(list, &on_map, camera_cube, false, pipes[2], |list, pipe, records| {
+                        self.bind_run(list, pipe, records, self.lod_mask.0);
+                        list.bind(crate::gpu_layout::bind::world::SCENE, scene);
+                    });
+            }
+        }
+        let draws = &mut self.sun_draws;
+        if draws.is_empty() {
+            return;
+        }
+        draws.sort_unstable_by_key(|r| (r.1, r.0, r.2));
+        let count = draws.len() as u32;
+        let ibuf = crate::gpu_layout::frame_buffer(gpu, &mut self.sun_indirect[map], slot, count, 20, usage::INDIRECT, "sun draws");
+        let obuf = crate::gpu_layout::frame_buffer(gpu, &mut self.sun_origins[map], slot, count, 16, usage::STORAGE, "sun draw origins");
+        for (i, (out, draw)) in gpu
+            .mapped(ibuf)
+            .chunks_exact_mut(20)
+            .zip(draws.iter())
+            .enumerate()
+        {
+            out.copy_from_slice(bytemuck::bytes_of(&DrawIndexedArgs { first_instance: i as u32, ..draw.3 }));
+        }
+        for (out, draw) in gpu.mapped(obuf).chunks_exact_mut(16).zip(draws.iter()) {
+            out.copy_from_slice(bytemuck::bytes_of(&draw.4));
+        }
+        let draws = &self.sun_draws;
+        let mut i = 0;
+        while i < draws.len() {
+            let (kind, layer, page, ..) = draws[i];
+            let count = draws[i..]
+                .iter()
+                .take_while(|d| (d.0, d.1, d.2) == (kind, layer, page))
+                .count();
+            let (_, records) = self.pipe_of(kind, layer, page);
+            let pipe = if kind == 3 { lod_pipes.unwrap()[layer as usize] } else { pipes[kind as usize][layer as usize] };
+            self.bind_run(list, pipe, records, obuf);
+            if let Some(scene) = far_scene {
+                list.bind(crate::gpu_layout::bind::world::SCENE, scene);
+            }
+            list.push(Cmd::DrawIndexedIndirect { buffer: ibuf, offset: i as u64 * 20, count: count as u32 });
+            i += count;
+        }
+    }
+
     /// The translucent part of the last `draw`, after everything that may stand behind it.
     pub(super) fn draw_translucent(&self, list: &mut CommandList, camera: &Camera, atmosphere: Option<&super::sky::AtmosphereFrame>) {
         if let Some((_, origins, _, _, _, _, dry)) = self.buffers {
@@ -1431,6 +1753,7 @@ impl WorldRenderer {
         list.bind(b::SCENE, scene);
         list.bind(b::LOD_MASK, self.lod_mask.0);
         list.bind(b::SOLID, self.solid.buf);
+        list.bind(b::SUN_DEPTH, self.sun_depth.unwrap_or(scene));
     }
 
     fn upload_dry_volumes(
@@ -1860,7 +2183,7 @@ impl Occlusion {
             return;
         }
         let buffer = self.capture_buffer(gpu, size);
-        list.push(Cmd::CopyDepthToBuffer { depth, buffer });
+        list.push(Cmd::CopyDepthToBuffer { depth, buffer, offset: 0 });
         list.push(Cmd::Barrier);
         let Some(down) = down else {
             self.last = None;

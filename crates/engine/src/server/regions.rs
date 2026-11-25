@@ -253,20 +253,30 @@ impl DimSet {
         d.space.restore_timers(timers);
         let mut bodies = Vec::new();
         let now = d.time;
-        for (e, inv, comps, blocks) in super::persist::read(c, entities, now) {
-            let id = e.id;
-            if d.entities.get(id).is_some()
-                || e.mount.is_some()
-                    && e.frame
-                        .is_some_and(|parent| !d.bodies.contains_key(&parent))
-            {
-                continue;
-            }
-            if c.game.is_block_entity(e.kind) && (!d.has_space(e.block_frame()) || !d.block_entity_fits(e.block_frame(), c, &e)) {
-                // Its block is gone (or it never had one): what it held stays in the world.
-                for s in inv.into_iter().flatten() {
-                    d.spawn_item(0, c, e.pos, s);
+        for (owner, inv, comps, blocks) in super::persist::read(c, entities, now) {
+            let e = match owner {
+                super::persist::SavedOwner::Block { id, block, old_position } => {
+                    if d.entities.contains_owner(id) {
+                        continue;
+                    }
+                    if c.game.has_block_data(block.kind) && d.block_data_fits(c, block) {
+                        d.entities.insert_block(c, id, block, inv, comps);
+                    } else {
+                        let drop_at = old_position.unwrap_or_else(|| {
+                            if d.has_space(block.frame) { d.space_pose(block.frame).to_world(block.center()) } else { pos.as_dvec3() * 16.0 }
+                        });
+                        for stack in inv.into_iter().flatten() {
+                            d.spawn_item(0, c, drop_at, stack);
+                        }
+                    }
+                    continue;
                 }
+                super::persist::SavedOwner::Entity(e) => e,
+            };
+            let id = e.id;
+            if d.entities.contains_owner(id)
+                || e.mount.is_some() && e.frame.is_some_and(|parent| !d.bodies.contains_key(&parent))
+            {
                 continue;
             }
             if let Some(saved) = blocks {
@@ -284,7 +294,7 @@ impl DimSet {
         for id in bodies {
             d.add_missing_on_body(c, id);
         }
-        d.add_missing_block_entities(0, c, pos);
+        d.add_missing_block_data(0, c, pos);
         if let Some(g) = generated {
             d.joined(0, c, *g);
         }

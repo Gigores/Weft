@@ -381,7 +381,7 @@ fn to_hex(b: &[u8]) -> String {
 const FORMAT: &str = "weft:structure";
 
 /// Our file: `size`, a `palette` of block states and slots, `blocks` as `[x, y, z, palette
-/// index]` (a cell not there is left as it is), `slots`, `entities`, `block_entities`, `loot`
+/// index]` (a cell not there is left as it is), `slots`, `entities`, `block_data`, `loot`
 /// and `joints`.
 pub fn read_json(bytes: &[u8]) -> Result<Parts, String> {
     let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
@@ -437,7 +437,7 @@ pub fn read_json(bytes: &[u8]) -> Result<Parts, String> {
         out.entities
             .push(abi::TemplateEntity { pos, kind: text(&e, "kind"), data: hex(&text(&e, "data")) });
     }
-    for e in list("block_entities") {
+    for e in list(if v.get("block_data").is_some() { "block_data" } else { "block_entities" }) {
         out.data
             .push(abi::TemplateData { pos: ivec(e.get("pos")).unwrap_or_default(), data: hex(&text(&e, "data")) });
     }
@@ -495,7 +495,7 @@ pub fn write_json(size: IVec3, parts: &Parts) -> String {
         "blocks": blocks,
         "slots": parts.slots.iter().map(|s| (s.name.clone(), serde_json::Value::String(s.block.clone()))).collect::<serde_json::Map<_, _>>(),
         "entities": parts.entities.iter().map(|e| serde_json::json!({"pos": e.pos, "kind": e.kind, "data": to_hex(&e.data)})).collect::<Vec<_>>(),
-        "block_entities": parts.data.iter().map(|d| serde_json::json!({"pos": d.pos, "data": to_hex(&d.data)})).collect::<Vec<_>>(),
+        "block_data": parts.data.iter().map(|d| serde_json::json!({"pos": d.pos, "data": to_hex(&d.data)})).collect::<Vec<_>>(),
         "loot": parts.loot.iter().map(|l| serde_json::json!({"pos": l.pos, "table": l.table})).collect::<Vec<_>>(),
         "joints": parts.joints.iter().map(|j| serde_json::json!({
             "pos": j.pos, "facing": abi::FACE_NAMES[j.face as usize % 6], "name": j.name, "target": j.target, "pool": j.pool,

@@ -1,6 +1,6 @@
-# Block entities
+# Interactive blocks
 
-## Your first block entity
+## Your first inventory block
 
 ```rust
 static CHEST: Block = Block::named("chest");
@@ -10,7 +10,7 @@ fn init(r: &mut Registry) {
     r.block(&CHEST)
         .hardness(2.5)
         .mined_by("axe", tool_tier::HAND)
-        .entity(|e| e.inventory(27))
+        .inventory(27)
         .opens(&CHEST_MENU);
 
     r.menu(&CHEST_MENU)
@@ -21,24 +21,21 @@ fn init(r: &mut Registry) {
 
 This is *base*'s chest (simplified). The block needs a texture and a name like any other block (see [Blocks](blocks.md)).
 
-- `.entity(|e| e.inventory(27))`: every placed chest gets a block entity with 27 slots.
+- `.inventory(27)`: each placed chest has 27 slots.
 - `.opens(&CHEST_MENU)`: using the block opens this menu.
 - `Slots::chest(3)`: three rows of nine slots.
 - `.holder()`: the group shows the inventory of what the menu was opened on. Leave it out for slots that should be empty (like a crafting grid)
 - `.default_screen()`: the window is its title, your `.group` calls in order, then the player's inventory. See [screens](ui.md#menus) if you want a different layout.
 
-Two terms:
+A placed block can carry inventory slots and its own component values. Blocks without either cost no per-instance storage. A holder is anything that can carry inventory: a block, an entity, or a stack in a slot.
 
-- A **block entity** is an invisible entity sitting on a block. It holds the block's data, its items and its tick.
-- A **holder** is anything that carries items: a block entity, any entity or a stack in a slot.
+Storage and menus are independent. A chest uses both, a crafting table can open a menu with temporary slots, and a water wheel can attach state without a menu.
 
-A block entity, a menu or both can be left out, depending on what you build:
+### Migrating an existing mod
 
-| | block entity | menu |
-|---|---|---|
-| chest | items | yes |
-| furnace | items and a state | yes |
-| water wheel | a state | no |
+Move the inventory size, attached components, storages, and shown slots onto the block builder. Keep the block and component names so older worlds can restore their data. Use `World::block_instance` and `Holder::block_id` where code needs to retain the identity of a block as it moves. Systems receive typed holders from `SystemBatch::owners` and `SystemBatch::iter_mut`.
+
+Rebuild native mods with the current SDK. The engine converts old block records when it loads them and writes the new format when it saves.
 
 ## Quick navigation
 
@@ -73,13 +70,13 @@ Examples to copy from:
 
 ## Slots
 
-A **slot group** is a named set of slots with rules of its own. The block entity's inventory holds your `.group(..)` calls that end in `.holder()`, in order, so `.inventory(n)` is their total.
+A **slot group** is a named set of slots with rules of its own. The block's inventory holds your `.group(..)` calls that end in `.holder()`, in order, so `.inventory(n)` is their total.
 
 *base*'s furnace, its slots:
 
 ```rust
 r.block(&FURNACE)
-    .entity(|e| e.inventory(3))      // 3 slots: input, fuel, output
+    .inventory(3)      // 3 slots: input, fuel, output
     .opens(&FURNACE_MENU);
 r.menu(&FURNACE_MENU)
     .group("input", Slots::single().holder())
@@ -113,7 +110,7 @@ Sorting is off by default for `Slots::single()`, `.input()`, `.output()`, `.liqu
 
 ## State
 
-Slots hold items and liquids. Anything else a block entity keeps (heat, progress, a mode) is a component.
+Slots hold items and liquids. Anything else a block keeps (heat, progress, a mode) is a component.
 
 ```rust
 value! {
@@ -121,25 +118,26 @@ value! {
 }
 static SMELTING: Component<Smelting> = Component::named("smelting");
 
-r.entity_component(
+r.instance_component(
     &SMELTING,
     Smelting { burn: 0, burn_max: 0, cook: 0, cook_max: 0 },  // default
     component_flags::SAVE | component_flags::SYNC_MENU,
 );
 r.block(&FURNACE)
-    .entity(|e| e.attach(&SMELTING).inventory(3))
+    .attach(&SMELTING)
+    .inventory(3)
     .opens(&FURNACE_MENU);
 ```
 
-- `w.component(id, &C)`, `w.set_component(id, &C, value)`: read and change.
+- `w.component(pos, &C)`, `w.set_component(pos, &C, value)`: read and change.
 - `.attach_with(&C, value)`: attach with another starting value.
 
 The value lives on the server. A player's game only knows it if the server **syncs** it, which means sending a copy, and sending it again whenever the value changes. The flags choose what is kept and who gets a copy:
 
 - `SAVE`: the value is written to the world, so it survives a restart. Without it the value starts over from its default.
 - `SYNC_MENU`: players who have the block's menu open get a copy, so its screen can read it (a progress indicator needs this).
-- `SYNC_WATCHERS`: every player who can see the block entity gets a copy.
-- `SYNC_OWNER`: only the player the entity belongs to gets a copy (a player's hunger on the HUD). It is rarely needed for a block entity.
+- `SYNC_WATCHERS`: every player who can see the block gets a copy.
+- `SYNC_OWNER`: only the player the entity belongs to gets a copy (a player's hunger on the HUD). Use SYNC_MENU or SYNC_WATCHERS for blocks.
 
 How another mod reads it: [components and tags](details/components-and-tags.md).
 
@@ -151,18 +149,18 @@ A charged battery or a half-done job should survive being broken. Declare its co
 r.instance_component(&CHARGE, 0, component_flags::SAVE | component_flags::CARRIED);
 ```
 
-The broken block's item takes the value along, and placing the item puts it back on the new block entity. `w.component(h, &C)` and `w.set_component(h, &C, v)` read and write such a value on any holder, the stack in a player's slot included.
+The broken block's item takes the value along, and placing the item puts it back on the new block. `w.component(h, &C)` and `w.set_component(h, &C, v)` read and write such a value on any holder, the stack in a player's slot included.
 
 ## The tick
 
-`r.system(&C, f)` calls `f` once per tick for every loaded block entity that has the component `C`. It hands over all of their values in one slice, changed in place.
+`r.system(&C, f)` calls `f` in batches per region and space, once per tick. The batch includes each holder with `C`, its value, and the number of ticks to simulate.
 
 ```rust
 fn tick_generators(b: &mut SystemBatch<Burner>) {
     let w = b.world();
-    for (id, burner, _ticks) in b.iter_mut() {
+    for (owner, burner, _ticks) in b.iter_mut() {
         if burner.burn == 0 {
-            let slot = w.inventory(id).group("fuel");
+            let slot = w.inventory(owner).group("fuel");
             let fuel = slot.get(0);
             // FUEL is base's component, so any mod's fuel works
             if let Some(ticks) = FUEL.on_item(fuel.item).filter(|_| !fuel.is_empty()) {
@@ -177,11 +175,11 @@ fn tick_generators(b: &mut SystemBatch<Burner>) {
 }
 ```
 
-Register it with `r.system(&BURNER, tick_generators)`. This is the only way a block entity ticks, and it is cheap: thousands of one kind cost little.
+Register it with `r.system(&BURNER, tick_generators)`. A chest needs no system. A furnace uses one for its ongoing work, and a block can schedule an individual action with a timer.
 
-Give each kind of block entity its own state component (the generator's `Burner`, the furnace's `Smelting`), so a system only receives its own kind.
+Give each kind of block its own state component (the generator's `Burner`, the furnace's `Smelting`), so a system only receives its own kind.
 
-To read and change items, `w.inventory(id)` takes the block entity's id and:
+To read and change items, `w.inventory(owner)` takes the holder from the system. Outside a system, `w.inventory(pos)` addresses a block by position:
 
 - `.group(name)`: one group of its slots, numbered from 0, with `.get(i)`, `.set(i, stack)` and `.len()`.
 - `.insert(stack)`: puts the stack wherever it fits in the whole inventory, and returns what didn't fit.
@@ -191,27 +189,31 @@ Helpers for stacks:
 - `consume_one(stack)`: takes one item away, a lava bucket leaves its bucket.
 - `stacks_with(other)`: whether two stacks can share a slot.
 
-Block entities don't pass items to each other by themselves. A pipe or a hopper is a tick that moves items with `insert`.
+Blocks don't pass items to each other by themselves. A pipe or a hopper is a tick that moves items with `insert`.
 
 ### Showing that it works
 
 Give the block a property and flip it from the tick. The furnace has `.prop("lit", ["false", "true"])`, and every tick it does:
 
 ```rust
-w.prop_set(pos, "lit", if lit { "true" } else { "false" });
+if let Some(state) = w.block_instance_state(owner.entity)
+    && let Some(next) = state_with(state, "lit", if lit { "true" } else { "false" })
+{
+    w.set_block_instance_state(owner.entity, next);
+}
 ```
 
-See [States](blocks.md#states-blocks-that-change). `tick_furnaces` in `mods/base/src/block_entities.rs` is the whole furnace in one place.
+The holder refers to the same part when more than one block shares the cell. See [States](blocks.md#states-blocks-that-change). `tick_furnaces` in `mods/base/src/block_entities.rs` is the whole furnace in one place.
 
 ### Catching up
 
-The third value of `iter_mut()` (see [tick](#the-tick)) is how many ticks the call stands for. It is 1 normally. When the block entity's area was unloaded, or the world's time jumped, the engine doesn't tick it thousands of times. It hands over the missed ticks in up to 20 calls.
+The third value of `iter_mut()` (see [tick](#the-tick)) is how many ticks the call stands for. It is 1 normally. When the block's area was unloaded, or the world's time jumped, the engine doesn't tick it thousands of times. It hands over the missed ticks in up to 20 calls.
 
-So a block entity that should keep working while nobody is near does `ticks` ticks of work in one go. For a furnace that is arithmetic: as many items as the fuel, the input and the output room allow. See `catch_up` in base's `block_entities.rs` and testmod's generator.
+So a block that should keep working while nobody is near does `ticks` ticks of work in one go. For a furnace that is arithmetic: as many items as the fuel, the input and the output room allow. See `catch_up` in base's `block_entities.rs` and testmod's generator.
 
 ## Recipes
 
-Anything where inputs turn into outputs over time is a **recipe kind**. A block entity uses the base game's kinds or one of its own.
+Anything where inputs turn into outputs over time is a **recipe kind**. A block uses the base game's kinds or one of its own.
 
 ```rust
 r.menu(&FURNACE_MENU)
@@ -301,7 +303,7 @@ More about recipes: [Recipes and loot](details/recipes-loot.md).
 
 A liquid is an item too: every liquid has one named like it, counted in millibuckets. A liquid slot holds up to its capacity of one liquid (16,000 is sixteen buckets).
 
-In the tick it reads and sets like any slot: `w.inventory(id).group("water").get(0)` is the water item with its millibuckets as the count.
+In the tick it reads and sets like any slot: `w.inventory(owner).group("water").get(0)` is the water item with its millibuckets as the count.
 
 A recipe takes a liquid as an input like any item, named like the liquid, with its millibuckets in `.input_amounts(&[1000])`. For flowing liquids and their rules see [Liquids](details/liquids.md).
 
@@ -309,17 +311,16 @@ A recipe takes a liquid as an input like any item, named like the liquid, with i
 
 Generators, cables and machines from different mods work together through one contract in the engine.
 
-- A block entity with the `ENERGY` component (`core:energy`) takes part. The component is built in, so nothing needs declaring.
+- A block with the `ENERGY` component (`core:energy`) takes part. The component is built in, so nothing needs declaring.
 - A block tagged `conductor` connects to other blocks tagged `conductor` (a cable is one).
-- A **network** is the conductors that touch each other, plus the block entities with `ENERGY` that sit in one of them or next to one. A block entity joins through its own block when that is a conductor, or through a neighbor that is one.
+- A **network** is the conductors that touch each other, plus the blocks with `ENERGY` that sit in one of them or next to one. A block joins through its own block when that is a conductor, or through a neighbor that is one.
 - Once per tick the engine shares what the generators offer among the machines that want it.
 
 ```rust
 r.block(&GENERATOR)
-    .entity(|e| e
-        .attach(&BURNER)
-        .attach_with(&ENERGY, Energy { stored: 0, capacity: 20_000, max_in: 0, max_out: 200 })
-        .inventory(1))
+    .attach(&BURNER)
+    .attach_with(&ENERGY, Energy { stored: 0, capacity: 20_000, max_in: 0, max_out: 200 })
+    .inventory(1)
     .opens(&GENERATOR_MENU);
 r.block(&CABLE).model_box([5.0, 5.0, 5.0], [11.0, 11.0, 11.0]).tag("conductor");
 ```
@@ -342,11 +343,11 @@ w.set_component(id, &ENERGY, e);
 
 - `w.energy_move(holder, amount, simulate)`: moves energy in (positive) or out (negative), respecting the limits, and returns how much moved. With `simulate = true` it only reports it.
 
-`w.component` and `w.energy_move` take any holder, not only a block entity's id: a block (`w.component(pos, &ENERGY)`) or a stack in someone's inventory, `Holder::held(player, slot)`.
+`w.component` and `w.energy_move` take any holder, not only a block's id: a block (`w.component(pos, &ENERGY)`) or a stack in someone's inventory, `Holder::held(player, slot)`.
 
 An item whose stacks carry `energy` is a battery: `.set(&ENERGY, Energy { .. })` on the item gives each stack a charge of its own. A machine that charges the tool in its slot does `w.energy_move(Holder::held(id, slot), amount, false)`.
 
-Networks are rebuilt when a conductor, or a block entity next to one, is placed or broken (and when its cube loads or unloads), not every tick.
+Networks are rebuilt when a conductor, or a block next to one, is placed or broken (and when its cube loads or unloads), not every tick.
 
 There are no units, conversion or losses. Testmod uses 40 per tick and capacities in the tens of thousands, so if your mod should play along with others, stay in that range.
 
@@ -354,15 +355,14 @@ Cables that connect to their neighbors are covered in [Connect to neighbors](blo
 
 ### A machine that is also a conductor
 
-Two machines side by side form no network on their own: a conductor has to touch them. A block can be both, with the `conductor` tag and a block entity with `ENERGY`. This is *testmod*'s electric furnace:
+Two machines side by side form no network on their own: a conductor has to touch them. A block can be both, with the `conductor` tag and a block with `ENERGY`. This is *testmod*'s electric furnace:
 
 ```rust
 r.block(&ELECTRIC_FURNACE)
     .tag("conductor")
-    .entity(|e| e
-        .attach(&WORK)
-        .attach_with(&ENERGY, Energy { stored: 0, capacity: 40_000, max_in: 400, max_out: 0 })
-        .inventory(2))
+    .attach(&WORK)
+    .attach_with(&ENERGY, Energy { stored: 0, capacity: 40_000, max_in: 400, max_out: 0 })
+    .inventory(2)
     .opens(&FURNACE_MENU);
 ```
 
@@ -372,7 +372,7 @@ The network runs through this block, so cables on its two sides stay one network
 
 `.inventory(n)` works the same on every holder:
 
-- A block entity: `r.block(&CRATE).entity(|e| e.inventory(27))`. `w.inventory(pos)` reaches the slots, and `w.open_menu(player, &CRATE_MENU, pos)` shows them.
+- A block: `r.block(&CRATE).inventory(27)`. `w.inventory(pos)` reaches the slots, and `w.open_menu(player, &CRATE_MENU, pos)` shows them.
 - An entity kind: `.inventory(n)` on the kind.
 - An item: `.inventory(n)` makes it a backpack.
 
@@ -402,7 +402,7 @@ Worn equipment is covered in [Armor and wearables](items.md#armor-and-wearables)
 
 ### Keeping cubes loaded
 
-Catching up is enough for one block entity. A network that has to run while nobody is there (a generator in one cube, its consumers in others, a quarry digging far below) keeps its cubes loaded:
+Catching up is enough for one block. A network that has to run while nobody is there (a generator in one cube, its consumers in others, a quarry digging far below) keeps its cubes loaded:
 
 ```rust
 w.keep_loaded(id, from, to, Loading::BlockEntities, 200);
@@ -415,11 +415,11 @@ This keeps the cubes from block `from` to block `to` for 200 ticks under the key
 
 | `Loading::` | runs there |
 |---|---|
-| `BlockEntities` | block entities, systems, scheduled ticks and redstone. Mobs stand still and nothing grows |
+| `BlockEntities` | blocks, systems, scheduled ticks and redstone. Mobs stand still and nothing grows |
 | `All` | everything, as if a player stood there |
 
 All tickets together keep at most `core:max_forced_cubes` cubes, and `question::FORCE_LOAD` lets a mod refuse one (someone else's claim).
 
-### Another mod's block entity
+### Another mod's block
 
-`r.replace(&BLOCK)` replaces a block entity only when it calls `.entity`, and `r.remove(&BLOCK)` takes the block and its item but not its block entity. To add to someone else's block, see [Changing something of another mod](details/editing-others.md).
+Block inventories and attachments belong to their block definitions. Use `r.edit(&BLOCK).attach(..)` to add a component to an existing block, or set up its inventory and attachments on the replacement when using `r.replace(&BLOCK)`. See [Changing something of another mod](details/editing-others.md).

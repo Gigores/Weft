@@ -1,7 +1,5 @@
-//! What any `abi::Holder` holds, reached one way: an entity's inventory and components, a
-//! block's through its block entity, a stack's through its `contents` and stack components,
-//! written back into the slot the stack sits in. Storages are more inventories, kept in a
-//! component of whoever carries them.
+//! Inventory and component access for entity, block and stack holders. Stack changes are
+//! written back into the slot. Separate storages are inventories kept in holder components.
 
 use weft_abi::{self as abi, InventorySlot, ItemMove, ItemStack, slot_flags as sf};
 
@@ -12,6 +10,7 @@ use crate::stack;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum At {
     Entity(u64),
+    Block(u64),
     /// The stack in `slot` of `entity`'s inventory.
     Stack {
         entity: u64,
@@ -26,10 +25,9 @@ pub fn resolve(d: &Dim, space_id: u64, h: &abi::Holder) -> Option<At> {
             .get(h.entity)
             .filter(|e| !e.removed)
             .map(|_| At::Entity(h.entity)),
-        abi::holder::BLOCK => d
-            .anchored(space_id, crate::world::ivec(h.pos))
-            .map(At::Entity),
-        abi::holder::HELD => d
+        abi::holder::BLOCK => d.anchored(space_id, crate::world::ivec(h.pos)).map(At::Block),
+        abi::holder::BLOCK_ID => d.entities.blocks.contains_key(&h.entity).then_some(At::Block(h.entity)),
+        abi::holder::HELD if d.entities.contains_owner(h.entity) => d
             .entities
             .inventories
             .get(&h.entity)
@@ -63,7 +61,7 @@ pub fn inventory(d: &Dim, space_id: u64, c: &Content, h: &abi::Holder) -> Option
     let inv = Inv { at: resolve(d, space_id, h)?, storage: h.storage };
     let carried = match inv.at {
         _ if h.storage == 0 => true,
-        At::Entity(id) => storage_slots(c, h.storage).is_some() && d.entities.comps.contains_key(&(id, h.storage)),
+        At::Entity(id) | At::Block(id) => storage_slots(c, h.storage).is_some() && d.entities.comps.contains_key(&(id, h.storage)),
         At::Stack { .. } => storage_slots(c, h.storage).is_some(),
     };
     carried.then_some(inv)
@@ -144,13 +142,13 @@ fn store(d: &mut Dim, c: &Content, inv: Inv, list: &[ItemStack]) {
 
 pub fn len(d: &Dim, c: &Content, inv: Inv) -> u32 {
     match (inv.at, inv.storage) {
-        (At::Entity(id), 0) => d
+        (At::Entity(id) | At::Block(id), 0) => d
             .entities
             .inventories
             .get(&id)
             .map_or(0, |i| i.len() as u32),
         (At::Stack { entity, slot }, 0) => item_slots(c, stack_at(d, entity, slot).item),
-        (At::Entity(id), comp) if !d.entities.comps.contains_key(&(id, comp)) => 0,
+        (At::Entity(id) | At::Block(id), comp) if !d.entities.comps.contains_key(&(id, comp)) => 0,
         (At::Stack { entity, slot }, _) if stack_at(d, entity, slot).is_empty() => 0,
         (_, comp) => storage_slots(c, comp).unwrap_or(0),
     }
@@ -158,7 +156,7 @@ pub fn len(d: &Dim, c: &Content, inv: Inv) -> u32 {
 
 pub fn get(d: &Dim, c: &Content, inv: Inv, i: u32) -> ItemStack {
     match (inv.at, inv.storage) {
-        (At::Entity(id), 0) => stack_at(d, id, i),
+        (At::Entity(id) | At::Block(id), 0) => stack_at(d, id, i),
         _ => stored(d, c, inv)
             .get(i as usize)
             .copied()
@@ -168,7 +166,7 @@ pub fn get(d: &Dim, c: &Content, inv: Inv, i: u32) -> ItemStack {
 
 pub fn set(d: &mut Dim, c: &Content, inv: Inv, i: u32, s: ItemStack) {
     match (inv.at, inv.storage) {
-        (At::Entity(id), 0) => d.entities.set_slot(id, i, s),
+        (At::Entity(id) | At::Block(id), 0) => d.entities.set_slot(id, i, s),
         _ => {
             let mut list = stored(d, c, inv);
             if let Some(e) = list.get_mut(i as usize) {
@@ -183,6 +181,23 @@ pub fn set(d: &mut Dim, c: &Content, inv: Inv, i: u32, s: ItemStack) {
 pub fn insert(d: &mut Dim, c: &Content, inv: Inv, stack: ItemStack) -> ItemStack {
     match (inv.at, inv.storage) {
         (At::Entity(id), 0) => d.entities.insert_item(c, id, stack),
+        (At::Block(id), 0) => {
+            let Some(list) = d.entities.inventories.get_mut(&id) else { return stack };
+            let rest = stack::insert_into(
+                stack, 0..list.len(),
+                |i, value| {
+                    if let Some(value) = value {
+                        list[i] = value;
+                    }
+                    list[i]
+                },
+                |_, _| c.max_stack(&stack),
+            );
+            if rest != stack {
+                d.entities.dirty_inv.insert(id);
+            }
+            rest
+        }
         _ => {
             let mut list = stored(d, c, inv);
             let rest = stack::insert_into(
@@ -215,25 +230,19 @@ fn resolve_slot(d: &Dim, c: &Content, slot: InventorySlot) -> Option<Slot> {
 }
 
 fn slot_group<'a>(d: &Dim, c: &'a Content, (inv, slot): Slot) -> Option<&'a crate::registry::GroupDef> {
-    let Inv { at: At::Entity(id), storage: 0 } = inv else { return None };
-    let entity = d.entities.get(id)?;
-    let layout = &c.game.player_layout;
-    if entity.player {
-        return layout.storage_at(slot).or_else(|| {
-            layout
-                .equipment
-                .get(slot.checked_sub(layout.worn.start)? as usize)
-                .map(|part| &part.group)
-        });
+    if inv.storage != 0 {
+        return None;
     }
-    let frame = entity.block_frame();
-    let anchor = entity.anchor.filter(|_| d.has_space(frame))?;
-    let layout = d.space(frame).layout(anchor);
-    let block = layout
-        .residents(d.get(frame, anchor)?)
-        .map(|part| (part.offset, c.states[part.state as usize].block))
-        .find(|&(offset, block)| offset == entity.anchor_offset && c.game.block_entities.get(&block) == Some(&entity.kind))?
-        .1;
+    let layout = &c.game.player_layout;
+    let block = match inv.at {
+        At::Entity(id) if d.entities.get(id).is_some_and(|entity| entity.player) => {
+            return layout.storage_at(slot).or_else(|| {
+                layout.equipment.get(slot.checked_sub(layout.worn.start)? as usize).map(|part| &part.group)
+            });
+        }
+        At::Block(id) => d.block_kind(id)?,
+        _ => return None,
+    };
     let menu = c.blocks[block as usize].opens?;
     c.game.menus[menu as usize]
         .groups
@@ -333,7 +342,7 @@ pub fn move_items(d: &mut Dim, c: &Content, moves: &[ItemMove<InventorySlot>]) -
 /// The holder's `comp`, as bytes.
 pub fn component(d: &Dim, at: At, comp: u32) -> Option<Box<[u8]>> {
     match at {
-        At::Entity(id) => d.entities.comps.get(&(id, comp)).cloned(),
+        At::Entity(id) | At::Block(id) => d.entities.comps.get(&(id, comp)).cloned(),
         At::Stack { entity, slot } => stack::value(stack_at(d, entity, slot).data, comp).map(Into::into),
     }
 }
@@ -342,7 +351,7 @@ pub fn component(d: &Dim, at: At, comp: u32) -> Option<Box<[u8]>> {
 /// without it, or bytes of another size than its kind's.
 pub fn set_component(d: &mut Dim, c: &Content, at: At, comp: u32, v: Option<&[u8]>) -> bool {
     match at {
-        At::Entity(id) => {
+        At::Entity(id) | At::Block(id) => {
             let size = c
                 .game
                 .components

@@ -1,5 +1,5 @@
 //! Cubes kept loaded with no player near (`Host::force_load`): a mod's tickets, each a box
-//! of cubes kept for so many ticks more unless renewed, as block entities only or all of it. Saved
+//! of cubes kept for so many ticks more unless renewed, with block systems or full simulation. Saved
 //! with the world, so a factory goes on after a restart.
 
 use glam::IVec3;
@@ -104,7 +104,7 @@ impl Server {
         out
     }
 
-    /// The cubes of `dim` only block entity tickets keep: their mobs stand still and nothing grows.
+    /// The cubes of `dim` kept by block system tickets. Their mobs stand still and nothing grows.
     pub(super) fn idle_cubes(&self, dim: u32, near_player: impl Fn(IVec3) -> bool) -> FxHashSet<IVec3> {
         let tickets = &self.forced[dim as usize];
         let mut out = FxHashSet::default();

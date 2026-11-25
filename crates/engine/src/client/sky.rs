@@ -55,6 +55,38 @@ fn frame_of(s: &SkyDef, turn: f64) -> Mat3 {
     Mat3::from_rotation_y(s.heading) * Mat3::from_rotation_x(s.tilt) * Mat3::from_rotation_z((turn * std::f64::consts::TAU) as f32)
 }
 
+fn night_factor(d: &DimensionDef, time: f64) -> f32 {
+    let height = (d.day_turn(time) * std::f64::consts::TAU).sin() as f32;
+    if d.sky_light { (2.0 * (0.75 - height * 2.0)).clamp(0.0, 1.0).powi(2) } else { 1.0 }
+}
+
+pub(super) fn solar_body<'a>(
+    objects: &'a [SkyDef],
+    d: &DimensionDef,
+    time: f64,
+    night: f32,
+    weights: &FxHashMap<String, f32>,
+) -> Option<(&'a SkyDef, Vec3, f32)> {
+    objects
+        .iter()
+        .filter(|s| s.glow != 0 && s.kind == sky_kind::BODY)
+        .find_map(|s| {
+            let toward = frame_of(s, turn_of(s, d, time)).x_axis;
+            let opacity = (s.opacity[0] + (s.opacity[1] - s.opacity[0]) * night) * weights.get(&s.name).copied().unwrap_or(1.0);
+            (opacity > 0.0 && toward.y > -0.09).then_some((s, toward, opacity))
+        })
+}
+
+pub(super) fn sun_vector(dim: usize, time: f64, weights: &FxHashMap<String, f32>) -> Option<(Vec3, f32)> {
+    let c = content();
+    let d = &c.dims[dim];
+    if !d.sky_light {
+        return None;
+    }
+    let objects = c.game.sky.get(dim)?;
+    solar_body(objects, d, time, night_factor(d, time), weights).map(|(_, toward, opacity)| (toward, opacity))
+}
+
 /// How far around the sunset of a body is at `height` (the sine of its elevation): how much it
 /// glows and how far along it is, 0 at the end of the dusk, 1 at the start. Vanilla's
 /// getSunriseColor.
@@ -672,10 +704,8 @@ impl Sky {
             }
             return (GpuSky::default(), None);
         }
-        let turn = d.day_turn(time);
-        let height = (turn * std::f64::consts::TAU).sin() as f32;
         // 0 by day, 1 at night: vanilla's star brightness, before its last factor of 0.5.
-        let night = if d.sky_light { (2.0 * (0.75 - height * 2.0)).clamp(0.0, 1.0).powi(2) } else { 1.0 };
+        let night = night_factor(d, time);
 
         self.list.clear();
         let aspect = frame.width as f32 / frame.height.max(1) as f32;
@@ -698,22 +728,15 @@ impl Sky {
         // Use the visible sun's orbit, including its heading and tilt. A small
         // color curve models the longer path through the air near the horizon.
         let (cloud_sun_dir, cloud_sun) = if d.sky_light && weather.clouds.is_some() && environment.sunlight > 0.0 {
-            objects
-                .iter()
-                .filter(|s| s.glow != 0 && s.kind == sky_kind::BODY)
-                .find_map(|s| {
-                    let toward = frame_of(s, turn_of(s, d, time)).x_axis;
-                    let opacity = (s.opacity[0] + (s.opacity[1] - s.opacity[0]) * night) * weights.get(&s.name).copied().unwrap_or(1.0);
+            solar_body(objects, d, time, night, weights)
+                .map(|(s, toward, opacity)| {
                     let fade = ((toward.y + 0.09) * 9.0).clamp(0.0, 1.0);
-                    if opacity <= 0.0 || fade <= 0.0 {
-                        return None;
-                    }
                     let warmth = (1.0 - toward.y.max(0.0) / 0.46).clamp(0.0, 1.0);
                     let color = Vec3::ONE.lerp(Vec3::new(1.0, 0.36, 0.10), warmth)
                         * rgb(s.color).powf(2.2)
                         * (opacity * fade * environment.sunlight);
                     let path = 0.21 / toward.y.max(0.24);
-                    Some((toward.extend(0.0).to_array(), color.extend(path).to_array()))
+                    (toward.extend(0.0).to_array(), color.extend(path).to_array())
                 })
                 .unwrap_or_default()
         } else {

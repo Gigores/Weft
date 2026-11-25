@@ -494,7 +494,7 @@ impl Plan {
         let p = pos.into();
         self.op(Plan::simple(abi::plan_op::ENTITY, p, p, 0, kind.name()))
     }
-    /// The block entity at `pos` (a chest) filled from `table` once it joins the world.
+    /// The block inventory at `pos` (a chest) filled from `table` once it joins the world.
     pub fn loot(&mut self, pos: impl Into<BlockPos>, table: &LootTable) -> bool {
         let p = pos.into();
         self.op(Plan::simple(abi::plan_op::LOOT, p, p, 0, table.name()))

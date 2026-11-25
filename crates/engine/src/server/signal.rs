@@ -20,7 +20,7 @@ use weft_abi::block_flags as bf;
 use weft_abi::signal_kind as sk;
 
 use super::dim::Dim;
-use super::entity::{Completion, Entities, Motion};
+use super::entity::{Completion, Motion};
 use super::structure::{Carried, Lifted, Liveness};
 use crate::content::{AIR, Content, Signal};
 use crate::physics::Aabb;
@@ -1337,9 +1337,9 @@ impl Signals {
         }
     }
 
-    fn fullness(&self, c: &Content, entities: &Entities, frame: u64, at: Site) -> Option<u8> {
-        let id = entities.anchored(frame, at.cell)?;
-        let items = entities.inventories.get(&id)?;
+    fn fullness(&self, c: &Content, dim: &Dim, frame: u64, at: Site) -> Option<u8> {
+        let id = dim.anchored(frame, at.cell)?;
+        let items = dim.entities.inventories.get(&id)?;
         if items.is_empty() {
             return Some(0);
         }
@@ -1420,7 +1420,7 @@ impl Signals {
                 let reads_itself = d
                     .get(space_id, behind.cell)
                     .is_some_and(|b| c.block_of(b).cb.signal_read.is_some());
-                let container = self.fullness(c, &d.entities, space_id, behind);
+                let container = self.fullness(c, d, space_id, behind);
                 if reads_itself || container.is_some() {
                     self.readers.insert(p);
                 } else {
@@ -1606,12 +1606,7 @@ impl Dim {
                 .entities
                 .dirty_inv
                 .iter()
-                .filter_map(|id| {
-                    self.entities
-                        .get(*id)
-                        .filter(|e| e.block_frame() == frame)
-                        .and_then(|e| e.anchor)
-                })
+                .filter_map(|id| self.entities.blocks.get(id).filter(|block| block.frame == frame).map(|block| block.cell))
                 .collect();
             for p in changed {
                 self.space_mut(space_id).signals.read_changed(c, p);

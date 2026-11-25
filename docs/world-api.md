@@ -52,7 +52,7 @@ What happens in the world comes as actions, a question before and an event after
 
 ## Stacks and inventories
 
-For stacks, `s.add_wear(1)` wears one down, and in a block entity's tick `output.room_for(result)` and `output.merged(result, n)` are what an output slot takes
+For stacks, `s.add_wear(1)` wears one down, and in a block system `output.room_for(result)` and `output.merged(result, n)` are what an output slot takes
 
 Inventories (`inventory(h).get/set/insert`, `inventory(h).group("fuel")`), where `h` is an entity id, a block position or `Holder::held(player, slot)` for a backpack, or `STORAGE.of(h)` for a storage it carries (`r.storage(&S, slots)`, an ender chest's slots in every player); a player's by the groups its inventory was declared with (`r.player_slots().group("hotbar", Slots::row(9).hotbar())..`, the mod loaded last wins), `core:equipment` for all equipment slots
 

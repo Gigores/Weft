@@ -65,7 +65,7 @@ impl Server {
                 .as_vec3()
                 .to_array();
             let (target, part) = d.place_clicked(space_id, c, pos, surface, face, state, look, hit, entity, held.item, by_face)?;
-            // What the stack carries goes onto the block entity it becomes (a renamed chest).
+            // What the stack carries goes onto the placed block (a renamed chest).
             if let Some(id) = d.as_placed(space_id, target, part, |d| d.anchored_part(space_id, c, target, part.state)) {
                 for &comp in &c.game.carried {
                     if let Some(v) = crate::stack::value(held.data, comp) {
@@ -535,7 +535,9 @@ impl Server {
             ToServer::Click { slot, button, shift } => {
                 let Server { players, dims, .. } = self;
                 let p = &mut players[pi];
-                if let (Some(m), Some(r)) = (&mut p.menu, dims[p.dim as usize].entity_region(p.entity)) {
+                if let (Some(m), Some(r)) = (&mut p.menu, dims[p.dim as usize].entity_region(p.entity))
+                    && !menu::out_of_reach(m, r, p.entity)
+                {
                     menu::click(m, r, c, p.entity, slot, button, shift);
                 }
             }
@@ -577,7 +579,9 @@ impl Server {
             ToServer::Drag { slots, button } => {
                 let Server { players, dims, .. } = self;
                 let p = &mut players[pi];
-                if let (Some(m), Some(r)) = (&mut p.menu, dims[p.dim as usize].entity_region(p.entity)) {
+                if let (Some(m), Some(r)) = (&mut p.menu, dims[p.dim as usize].entity_region(p.entity))
+                    && !menu::out_of_reach(m, r, p.entity)
+                {
                     menu::drag(m, r, c, p.entity, &slots, button);
                 }
             }

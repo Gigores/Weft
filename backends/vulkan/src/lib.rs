@@ -2195,7 +2195,7 @@ impl Backend for VulkanBackend {
                     }
                     Cmd::Dispatch { x, y, z } => self.device.cmd_dispatch(cmd, x, y, z),
                     Cmd::Barrier => self.memory_barrier(cmd),
-                    Cmd::CopyDepthToBuffer { depth, buffer } => {
+                    Cmd::CopyDepthToBuffer { depth, buffer, offset } => {
                         let t = self.textures.get(depth.0);
                         let (image, width, height) = (t.image, t.desc.width, t.desc.height);
                         let raw = self.buffers.get(buffer.0).raw;
@@ -2207,6 +2207,7 @@ impl Backend for VulkanBackend {
                             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                         );
                         let region = vk::BufferImageCopy::default()
+                            .buffer_offset(offset)
                             .image_subresource(vk::ImageSubresourceLayers {
                                 aspect_mask: vk::ImageAspectFlags::DEPTH,
                                 mip_level: 0,

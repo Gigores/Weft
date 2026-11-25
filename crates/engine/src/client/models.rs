@@ -375,6 +375,12 @@ pub struct SkinModels {
     pub slim: u32,
 }
 
+struct QueuedModel {
+    kind: u32,
+    layer: Instance,
+    sun_only: bool,
+}
+
 pub struct Models {
     pub kinds: Vec<KindModel>,
     /// Items with a model of bones: their place in `kinds`, past the entities'.
@@ -411,8 +417,8 @@ pub struct Models {
     instances: [Vec<(BufferId, u32)>; 4],
     bones: [Vec<(BufferId, u32)>; 3],
     uploaded: Option<BufferId>,
-    /// This frame: (kind, instance) and bone rows.
-    queued: Vec<(u32, Instance)>,
+    /// This frame: model instances and bone rows.
+    queued: Vec<QueuedModel>,
     rows: Vec<[[f32; 4]; 3]>,
     scratch: Vec<Mat4>,
     /// Bones per entity in `add_many`.
@@ -1621,11 +1627,16 @@ impl Models {
 
     /// Queues layers of a model whose bones start at `first`.
     pub fn queue(&mut self, kind: u32, first: u32, layers: impl IntoIterator<Item = Instance>) {
+        self.queue_in(kind, first, layers, false);
+    }
+
+    pub(super) fn queue_in(&mut self, kind: u32, first: u32, layers: impl IntoIterator<Item = Instance>, sun_only: bool) {
         let Some(m) = self.kinds.get(kind as usize) else { return };
         for mut inst in layers {
             let (cuboids, corners) = m.ranges(inst.worn != 0);
             (inst.bones, inst.cuboids, inst.cuboid_count, inst.vertices) = (first, cuboids.0, cuboids.1, corners.0);
-            self.queued.push((kind, inst));
+            self.queued
+                .push(QueuedModel { kind, layer: inst, sun_only });
         }
     }
 
@@ -1643,7 +1654,7 @@ impl Models {
     /// root, look, clips and layers. Nothing is allocated per entity (a thousand mobs are a
     /// thousand of each every frame).
     /// `own`: the one entity whose arms are in the view (`Motion::aim_root`).
-    pub fn add_many(&mut self, entities: &[Posed], own: Option<(usize, Mat4)>) {
+    pub fn add_many(&mut self, entities: &[Posed], own: Option<(usize, Mat4)>, sun_only: bool) {
         let kinds = &self.kinds;
         let clips = &self.clips;
         let base = self.rows.len();
@@ -1718,7 +1729,7 @@ impl Models {
         }
         let mut first = base as u32;
         for (e, &n) in entities.iter().zip(&counts) {
-            self.queue(e.kind, first, e.layers[..e.layer_count].iter().copied());
+            self.queue_in(e.kind, first, e.layers[..e.layer_count].iter().copied(), sun_only);
             first += n as u32;
         }
         self.counts = counts;
@@ -1734,11 +1745,13 @@ impl Models {
         batch: Batch,
         pipe: PipelineId,
         view: BufferId,
+        sun: Option<(BufferId, Option<(PipelineId, &mut CommandList)>)>,
     ) {
         if self.queued.is_empty() {
             return;
         }
-        self.queued.sort_by_key(|q| (q.0, q.1.worn));
+        self.queued
+            .sort_by_key(|q| (q.sun_only, q.kind, q.layer.worn));
         let grow = crate::gpu_layout::frame_buffer;
         let ib = grow(
             gpu,
@@ -1749,7 +1762,7 @@ impl Models {
             usage::STORAGE,
             "model instances",
         );
-        let insts: Vec<Instance> = self.queued.iter().map(|q| q.1).collect();
+        let insts: Vec<Instance> = self.queued.iter().map(|q| q.layer).collect();
         gpu.mapped(ib)[..insts.len() * size_of::<Instance>()].copy_from_slice(bytemuck::cast_slice(&insts));
         let bb = match self.uploaded {
             Some(b) => b,
@@ -1768,18 +1781,40 @@ impl Models {
                 b
             }
         };
+        let depth = sun.as_ref().map_or(view, |(depth, _)| *depth);
+        let world_end = self.queued.partition_point(|q| !q.sun_only);
+        self.emit(list, pipe, view, ib, bb, depth, &self.queued[..world_end]);
+        if let Some((_, Some((pipe, shadow)))) = sun {
+            self.emit(shadow, pipe, view, ib, bb, view, &self.queued);
+        }
+    }
+
+    fn emit(
+        &self,
+        list: &mut CommandList,
+        pipe: PipelineId,
+        view: BufferId,
+        ib: BufferId,
+        bb: BufferId,
+        depth: BufferId,
+        queue: &[QueuedModel],
+    ) {
+        if queue.is_empty() {
+            return;
+        }
         list.pipeline(pipe);
         list.bind(crate::gpu_layout::bind::model::INSTANCES, ib);
         list.bind(crate::gpu_layout::bind::model::SCENE, view);
         list.bind(crate::gpu_layout::bind::model::CUBOIDS, self.cuboids);
         list.bind(crate::gpu_layout::bind::model::CORNERS, self.corners);
         list.bind(crate::gpu_layout::bind::model::BONES, bb);
+        list.bind(crate::gpu_layout::bind::model::SUN_DEPTH, depth);
         let mut i = 0;
-        while i < self.queued.len() {
-            let (kind, worn) = (self.queued[i].0, self.queued[i].1.worn);
-            let end = i + self.queued[i..]
+        while i < queue.len() {
+            let (kind, worn) = (queue[i].kind, queue[i].layer.worn);
+            let end = i + queue[i..]
                 .iter()
-                .take_while(|q| (q.0, q.1.worn) == (kind, worn))
+                .take_while(|q| (q.kind, q.layer.worn) == (kind, worn))
                 .count();
             let (cuboids, corners) = self.kinds[kind as usize].ranges(worn != 0);
             let vertices = cuboids.1 * 36 + corners.1;

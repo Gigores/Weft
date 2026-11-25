@@ -610,7 +610,6 @@ pub mod entity {
     pub static BONE_MODELS: Component<Vec<abi::BoneModel>, Entity> = Component::named(e::BONE_MODELS);
     pub static CATEGORY: Component<Text, Entity> = Component::named(e::CATEGORY);
     pub static TEMPLATE: Component<Text, Entity> = Component::named(e::TEMPLATE);
-    pub static BLOCK: Component<Text, Entity> = Component::named(e::BLOCK);
     pub static SEATS: Component<Vec<abi::Seat>, Entity> = Component::named(e::SEATS);
     pub static PROJECTILE: Component<abi::Projectile, Entity> = Component::named(e::PROJECTILE);
     pub static HITBOXES: Component<abi::Hitboxes, Entity> = Component::named(e::HITBOXES);

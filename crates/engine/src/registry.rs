@@ -128,8 +128,7 @@ pub struct EntityKind {
     pub effects: [crate::content::Fx; 4],
     /// Solid bodies: riders up to this high above it move with it.
     pub carry_height: f32,
-    /// Where its light comes from, from its position turned with it: its middle unless said, a
-    /// block entity's block's.
+    /// Where its light comes from, from its position turned with it. Defaults to its middle.
     pub light_at: glam::DVec3,
     /// Inventory slots everyone around sees (`SHOWN`).
     pub shown_slots: Vec<u32>,
@@ -459,7 +458,7 @@ pub struct Game {
     pub player_layout: PlayerLayout,
     pub screen_parts: Vec<ScreenPart>,
     /// Block index -> (entity kind, inventory slots).
-    pub block_entities: FxHashMap<u32, u32>,
+    pub block_data: FxHashMap<u32, BlockDataDef>,
     pub player_kind: u32,
     pub item_kind: u32,
     pub falling_kind: u32,
@@ -495,7 +494,7 @@ pub struct Game {
     pub name_comp: u32,
     /// `abi::comp::PERSISTENT` as an entity component.
     pub persistent_comp: u32,
-    /// Components with `component_flags::CARRIED`: between a block's item and its block entity.
+    /// Components with `component_flags::CARRIED`: between a placed block and its item.
     pub carried: Vec<u32>,
     pub fields: FieldComps,
     /// `SIMULATED`.
@@ -764,7 +763,7 @@ fn engine_components() -> Vec<RawEntry> {
     // What items, entity kinds, poses and entity effects give (`content::SourceMods`).
     let modifiers = <Vec<abi::Modifier> as abi::data::Data>::schema();
     let mut all = vec![decl(abi::comp::CONTENTS, "bytes"), decl(abi::comp::LAYERS, "str"), decl(abi::comp::MODIFIERS, &modifiers)];
-    // Variable length (no bytes): attribute modifiers, timers, a block entity's own name (a
+    // Variable length (no bytes): attribute modifiers, timers, a placed block's own name (a
     // renamed chest).
     for (name, schema, flags, default) in [
         (abi::comp::ENERGY, energy.0, energy.1, energy.2),
@@ -1786,7 +1785,6 @@ fn bake_entity(e: &Entry) -> EntityKind {
         carry_height: e.or(k::CARRY_HEIGHT, 0.0),
         light_at: match e.get::<[f32; 3]>(k::LIGHT_AT) {
             Some(v) => glam::Vec3::from(v).as_dvec3(),
-            None if e.text(k::BLOCK).is_some() => glam::DVec3::ZERO,
             None => glam::DVec3::Y * (size.height as f64 * 0.5),
         },
         shown_slots: e.or(k::SHOWN_SLOTS, Vec::new()),
@@ -2042,14 +2040,58 @@ pub struct Entities {
     pub values: Vec<(ModId, Vec<RawValue>)>,
     /// What each kind's entities carry, by component name until those are known.
     pub attach: Vec<Vec<abi::Attach>>,
-    /// (block, kind) of block entities.
-    pub blocks: Vec<(String, u32)>,
     /// The player's inventory groups, and the menu its key opens.
     pub player_groups: Vec<abi::SlotGroupDef>,
     pub player_menu: Option<String>,
 }
 
 /// Every entity kind, the engine's among the mods', ids by name.
+pub(crate) struct RawBlockData {
+    pub slots: u32,
+    pub attach: Vec<abi::Attach>,
+    pub shown: Vec<u32>,
+}
+
+pub(crate) fn freeze_block_data(
+    g: &mut Game, c: &Components, blocks: &[crate::content::BlockDef], raw: FxHashMap<u32, RawBlockData>, errors: &mut Vec<String>,
+) {
+    use crate::components::BLOCK;
+    for (block, RawBlockData { slots, attach, shown }) in raw {
+        let def = &blocks[block as usize];
+        if slots >= u32::from(u16::MAX) {
+            errors.push(format!("block {}: inventory has too many slots ({slots})", def.name));
+            continue;
+        }
+        let state = def.first_state;
+        let mut values = Vec::new();
+        for a in attach {
+            let Some(id) = c.id(&a.name).filter(|&id| g.components[id as usize].runtime) else {
+                errors.push(format!("block {}: {} is not a runtime component", def.name, a.name));
+                continue;
+            };
+            let runtime = &g.components[id as usize];
+            let bytes = if a.start.is_empty() {
+                c.bytes(BLOCK, state, id).filter(|bytes| bytes.len() == runtime.size as usize).unwrap_or(&runtime.default).to_vec()
+            } else {
+                a.start
+            };
+            if bytes.len() != runtime.size as usize {
+                errors.push(format!("block {}: {} has {} bytes, expected {}", def.name, a.name, bytes.len(), runtime.size));
+                continue;
+            }
+            values.retain(|(existing, _)| *existing != id);
+            values.push((id, bytes.into_boxed_slice()));
+        }
+        g.block_data.insert(block, BlockDataDef { slots, values, shown_slots: shown });
+    }
+}
+
+pub struct BlockDataDef {
+    pub slots: u32,
+    pub values: Vec<(u32, Box<[u8]>)>,
+    pub shown_slots: Vec<u32>,
+}
+
 pub fn freeze_entities(raw: Vec<RawEntry>, mod_name: &dyn Fn(ModId) -> String, errors: &mut Vec<String>) -> Entities {
     use abi::comp::entity as k;
     let mut all = engine_entities();
@@ -2066,18 +2108,13 @@ pub fn freeze_entities(raw: Vec<RawEntry>, mod_name: &dyn Fn(ModId) -> String, e
                 out.player_groups = e.or(k::SLOT_GROUPS, Vec::new());
                 out.player_menu = e.text(k::INVENTORY_MENU).map(str::to_string);
             }
-            let block = e
-                .text(k::BLOCK)
-                .filter(|b| !b.is_empty())
-                .map(str::to_string);
-            (bake_entity(e), (e.owner, e.components("entity.")), e.or(k::ATTACH, Vec::new()), block)
+            (bake_entity(e), (e.owner, e.components("entity.")), e.or(k::ATTACH, Vec::new()))
         },
     );
-    for (i, (kind, values, attach, block)) in made.into_iter().enumerate() {
+    for (kind, values, attach) in made {
         out.kinds.push(kind);
         out.values.push(values);
         out.attach.push(attach);
-        out.blocks.extend(block.map(|b| (b, i as u32)));
     }
     out.names = names;
     out
@@ -2086,7 +2123,6 @@ pub fn freeze_entities(raw: Vec<RawEntry>, mod_name: &dyn Fn(ModId) -> String, e
 pub fn freeze(
     mut raws: Vec<RawGame>,
     entities: Entities,
-    block_names: &FxHashMap<String, u32>,
     item_names: &FxHashMap<String, u32>,
     items: &[crate::content::ItemDef],
     dim_names: &FxHashMap<String, u32>,
@@ -2478,20 +2514,6 @@ pub fn freeze(
         }
         m
     });
-
-    for (block, kind) in entities.blocks {
-        match block_names.get(&block) {
-            Some(&b) => {
-                if g.block_entities
-                    .insert(b, kind)
-                    .is_some_and(|old| old != kind)
-                {
-                    errors.push(format!("block {block} has two block entities"));
-                }
-            }
-            None => errors.push(format!("entity {}: the block entity of unknown block {block}", g.entities[kind as usize].name)),
-        }
-    }
 
     g.catalog = std::mem::take(&mut tables.1);
     freeze_recipes(&mut g, recipes, items, item_names, c, conds, errors);
@@ -2893,8 +2915,8 @@ impl Game {
     }
 
     /// Entities of `kind` belong to a block (machines, chests): they come and go with it.
-    pub fn is_block_entity(&self, kind: u32) -> bool {
-        self.block_entities.values().any(|&k| k == kind)
+    pub fn has_block_data(&self, block: u32) -> bool {
+        self.block_data.contains_key(&block)
     }
 
     /// Bytes read back for a component, cut or filled to its size as it is now (0: variable, like

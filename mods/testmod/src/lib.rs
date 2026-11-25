@@ -216,8 +216,8 @@ fn init(r: &mut Registry) {
     // opening a menu.
     // The components sync to open menus; screens bind to them.
     // Each kind ticks as a system over its own state: every machine of a region in one call.
-    r.entity_component(&BURNER, Burner::default(), component_flags::SAVE | component_flags::SYNC_MENU);
-    r.entity_component(&WORK, Work::default(), component_flags::SAVE | component_flags::SYNC_MENU);
+    r.instance_component(&BURNER, Burner::default(), component_flags::SAVE | component_flags::SYNC_MENU);
+    r.instance_component(&WORK, Work::default(), component_flags::SAVE | component_flags::SYNC_MENU);
     r.system(&BURNER, tick_generators);
     r.system(&WORK, tick_furnaces);
     // Machines' sounds have their own category (and volume setting `testmod:volume_machines`).
@@ -231,11 +231,9 @@ fn init(r: &mut Registry) {
         .ends("machine_top")
         .hardness(3.0)
         .mined_by("pickaxe", 0)
-        .entity(|e| {
-            e.attach(&BURNER)
-                .attach_with(&ENERGY, Energy { stored: 0, capacity: 20_000, max_in: 0, max_out: 200 })
-                .inventory(1)
-        })
+        .attach(&BURNER)
+        .attach_with(&ENERGY, Energy { stored: 0, capacity: 20_000, max_in: 0, max_out: 200 })
+        .inventory(1)
         .opens(&GENERATOR_MENU);
     r.menu(&GENERATOR_MENU)
         // Only fuel goes in (the base game's `fuel` component), and stays in until burnt.
@@ -264,7 +262,7 @@ fn init(r: &mut Registry) {
     r.block(&TANK)
         .texture("machine_top")
         .hardness(3.0)
-        .entity(|e| e.inventory(1))
+        .inventory(1)
         .opens(&TANK_MENU);
     r.menu(&TANK_MENU)
         .group("liquid", Slots::single().liquid(8000).holder())
@@ -276,11 +274,9 @@ fn init(r: &mut Registry) {
         .hardness(3.0)
         .mined_by("pickaxe", 0)
         .tag("conductor")
-        .entity(|e| {
-            e.attach(&WORK)
-                .attach_with(&ENERGY, Energy { stored: 0, capacity: 40_000, max_in: 400, max_out: 0 })
-                .inventory(2)
-        })
+        .attach(&WORK)
+        .attach_with(&ENERGY, Energy { stored: 0, capacity: 40_000, max_in: 400, max_out: 0 })
+        .inventory(2)
         .opens(&FURNACE_MENU);
     r.menu(&FURNACE_MENU)
         // At most 16 to smelt at a time.
@@ -306,7 +302,7 @@ fn init(r: &mut Registry) {
         .ends("machine_top")
         .hardness(3.0)
         .mined_by("pickaxe", 0)
-        .entity(|e| e.attach_with(&ENERGY, Energy { stored: 0, capacity: 100_000, max_in: 400, max_out: 400 }))
+        .attach_with(&ENERGY, Energy { stored: 0, capacity: 100_000, max_in: 400, max_out: 400 })
         .opens(&BATTERY_MENU);
     r.menu(&BATTERY_MENU)
         .player_inventory()
@@ -658,14 +654,14 @@ fn machine_screen(ui: &mut Ui, slots: impl FnOnce(&mut Ui)) {
 }
 
 /// `/gizmo testmod:energy`: stored energy above every machine, the mod-side use of gizmos.
-fn energy_gizmos(w: &World, ids: &[u64]) {
+fn energy_gizmos(w: &World, owners: &[Holder]) {
     if w.game_time() % 10 != 0 || !w.gizmo_shown(&ENERGY_GIZMOS) {
         return;
     }
-    for &id in ids {
-        if let (Some(st), Some(e)) = (w.entity(id), w.component(id, &ENERGY)) {
+    for &owner in owners {
+        if let (Some(pos), Some(e)) = (w.block_location(owner.entity), w.component(owner, &ENERGY)) {
             let args = [Arg::Int(e.stored as i64), Arg::Int(e.capacity as i64)];
-            w.draw_text(Some(&ENERGY_GIZMOS), [st.pos.x, st.pos.y + 1.3, st.pos.z], "testmod.energy_label", &args, 0x60FF60FF, 1.0)
+            w.draw_text(Some(&ENERGY_GIZMOS), [pos.x as f64 + 0.5, pos.y as f64 + 1.3, pos.z as f64 + 0.5], "testmod.energy_label", &args, 0x60FF60FF, 1.0)
                 .ticks(11);
         }
     }
@@ -721,9 +717,9 @@ fn dynamite(r: &mut Registry) {
 
 fn tick_generators(b: &mut SystemBatch<Burner>) {
     let w = b.world();
-    energy_gizmos(&w, b.ids());
-    for (id, m, ticks) in b.iter_mut() {
-        let Some(e) = w.component(id, &ENERGY) else { continue };
+    energy_gizmos(&w, b.owners());
+    for (owner, m, ticks) in b.iter_mut() {
+        let Some(e) = w.component(owner, &ENERGY) else { continue };
         let room = e.capacity - e.stored;
         if ticks > 1 {
             // Catching up: it runs while there is room for what it makes, lighting fuel as it
@@ -732,7 +728,7 @@ fn tick_generators(b: &mut SystemBatch<Burner>) {
             let mut ran = want.min(m.burn);
             m.burn -= ran;
             want -= ran;
-            let slot = w.inventory(id).group("fuel");
+            let slot = w.inventory(owner).group("fuel");
             while want > 0 {
                 let fuel = slot.get(0);
                 let Some(t) = FUEL.on_stack_item(&fuel) else { break };
@@ -743,14 +739,14 @@ fn tick_generators(b: &mut SystemBatch<Burner>) {
                 ran += r;
                 want -= r;
             }
-            if let Some(mut e) = w.component(id, &ENERGY) {
+            if let Some(mut e) = w.component(owner, &ENERGY) {
                 e.stored = (e.stored + ran as i64 * PER_TICK).min(e.capacity);
-                w.set_component(id, &ENERGY, e);
+                w.set_component(owner, &ENERGY, e);
             }
             continue;
         }
         if m.burn == 0 && room >= PER_TICK {
-            let slot = w.inventory(id).group("fuel");
+            let slot = w.inventory(owner).group("fuel");
             let fuel = slot.get(0);
             // Any mod's fuel works: the value is the common `fuel` component.
             if let Some(ticks) = FUEL.on_item(fuel.item).filter(|_| !fuel.is_empty()) {
@@ -762,14 +758,14 @@ fn tick_generators(b: &mut SystemBatch<Burner>) {
         }
         if m.burn > 0 {
             m.burn -= 1;
-            if let Some(mut e) = w.component(id, &ENERGY) {
+            if let Some(mut e) = w.component(owner, &ENERGY) {
                 e.stored = (e.stored + PER_TICK).min(e.capacity);
-                w.set_component(id, &ENERGY, e);
+                w.set_component(owner, &ENERGY, e);
             }
             // A low hum every two seconds, under the test mod's own volume setting.
             if w.game_time() % 40 == 0 && looks::GENERATOR_HUM.get() {
-                if let Some(st) = w.entity(id) {
-                    w.play_sound(&HUM, st.pos, 0.4);
+                if let Some(pos) = w.block_location(owner.entity) {
+                    w.play_sound(&HUM, pos.center(), 0.4);
                 }
             }
         }
@@ -778,11 +774,11 @@ fn tick_generators(b: &mut SystemBatch<Burner>) {
 
 fn tick_furnaces(b: &mut SystemBatch<Work>) {
     let w = b.world();
-    energy_gizmos(&w, b.ids());
-    for (id, m, ticks) in b.iter_mut() {
-        let Some(e) = w.component(id, &ENERGY) else { continue };
+    energy_gizmos(&w, b.owners());
+    for (owner, m, ticks) in b.iter_mut() {
+        let Some(e) = w.component(owner, &ENERGY) else { continue };
         let stored = e.stored;
-        let inv = w.inventory(id);
+        let inv = w.inventory(owner);
         let (input_slot, output_slot) = (inv.group("input"), inv.group("output"));
         let (input, output) = (input_slot.get(0), output_slot.get(0));
         let recipe = (!input.is_empty())
@@ -803,9 +799,9 @@ fn tick_furnaces(b: &mut SystemBatch<Work>) {
             let total = m.progress + steps as u32;
             let done = total / m.progress_max;
             m.progress = total % m.progress_max;
-            if let Some(mut e) = w.component(id, &ENERGY) {
+            if let Some(mut e) = w.component(owner, &ENERGY) {
                 e.stored -= steps * FURNACE_USE;
-                w.set_component(id, &ENERGY, e);
+                w.set_component(owner, &ENERGY, e);
             }
             if done > 0 {
                 input_slot.set(0, input.shrink(done));
@@ -818,9 +814,9 @@ fn tick_furnaces(b: &mut SystemBatch<Work>) {
         if done {
             m.progress = 0;
         }
-        if let Some(mut e) = w.component(id, &ENERGY) {
+        if let Some(mut e) = w.component(owner, &ENERGY) {
             e.stored -= FURNACE_USE;
-            w.set_component(id, &ENERGY, e);
+            w.set_component(owner, &ENERGY, e);
         }
         if done {
             input_slot.set(0, input.shrink(1));

@@ -24,7 +24,7 @@ Read-only client state for bindings.
 - <a id="ClientView-outside_survival"></a>`.outside_survival() -> bool`: The local player's mode spares it damage and hunger: no bars to show. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/ui.rs#L94)
 - <a id="ClientView-game_mode"></a>`.game_mode() -> u32`: `abi::game_mode`. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/ui.rs#L98)
 - <a id="ClientView-component_of"></a>`.component_of<T: Value>(entity: u64, c: &Component<T>) -> Option<T>`: Another entity's component the server shares with this client (`SYNC_WATCHERS`, or `SYNC_MENU` while its menu is open). [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/ui.rs#L104)
-- <a id="ClientView-menu_owner"></a>`.menu_owner() -> Option<u64>`: The entity the open menu is on (a block entity, a mob), if any. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/ui.rs#L112)
+- <a id="ClientView-menu_owner"></a>`.menu_owner() -> Option<u64>`: The instance ID the menu is open on, if any. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/ui.rs#L112)
 - <a id="ClientView-menu_component"></a>`.menu_component<T: Value>(c: &Component<T>) -> Option<T>`: A component of what the open menu is on, synced with `SYNC_MENU`, for screens to bind to. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/ui.rs#L117)
 
 ## HudElementBuilder
@@ -60,7 +60,7 @@ A row of icons in the making (`Ui::icons`); it goes in as this goes.
 - <a id="MenuCtx-taken_in"></a>`.taken_in(name: &str) -> Option<u32>`: In `on_take`, which slot of group `name` was taken from; `None` for another group's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1321)
 - <a id="MenuCtx-player"></a>`.player() -> u64` [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1327)
 - <a id="MenuCtx-times"></a>`.times() -> u32`: In `on_take` of a crafting grid's result (`Slots::crafting`), how many runs of its recipe that was (a shift-click crafts all that fit at once); 1 otherwise. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1332)
-- <a id="MenuCtx-owner"></a>`.owner() -> Option<Holder>`: What the menu was opened on (a block entity, a mob, a pouch in a slot); `None` for the player's own and a crafting table's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1337)
+- <a id="MenuCtx-owner"></a>`.owner() -> Option<Holder>`: What the menu was opened on (a block, a mob, a pouch in a slot); `None` for the player's own and a crafting table's. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1396)
 - <a id="MenuCtx-group"></a>`.group(name: &str) -> SlotGroup<'_>`: Slot group `name` of this menu; asking for one it doesn't have is a mistake that gets logged, and the group is empty. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1342)
 - <a id="MenuCtx-find_group"></a>`.find_group(name: &str) -> Option<SlotGroup<'_>>`: `group`, when not having it is fine. [source](https://github.com/Weft-Rust/Weft/blob/master/crates/sdk/src/game.rs#L1349)
 

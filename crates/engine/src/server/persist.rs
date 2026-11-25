@@ -4,15 +4,25 @@
 use glam::{DQuat, DVec3, IVec3};
 use weft_abi::{ItemStack, component_flags as cf, entry_kind as ek};
 
-use super::entity::{BodyMount, Completion, Entity, Stuck, StuckIn};
+use super::entity::{BlockData, BodyMount, Completion, Entity, Stuck, StuckIn};
 use super::space::{BlockTimer, Space};
 use crate::content::Content;
 use crate::net::codec::{self, R, Wire};
 
 /// An entity read back: itself, its inventory, components and, for a moving structure, its
 /// blocks.
-pub type Saved = (Entity, Option<Vec<ItemStack>>, Vec<(u32, Box<[u8]>)>, Option<SavedSpace>);
-pub type ToSave<'a> = (&'a Entity, Option<&'a Vec<ItemStack>>, Vec<(u32, &'a [u8])>, Option<&'a Space>);
+pub enum SavedOwner {
+    Entity(Entity),
+    Block { id: u64, block: BlockData, old_position: Option<DVec3> },
+}
+
+pub enum SaveOwner<'a> {
+    Entity(&'a Entity),
+    Block(u64, BlockData),
+}
+
+pub type Saved = (SavedOwner, Option<Vec<ItemStack>>, Vec<(u32, Box<[u8]>)>, Option<SavedSpace>);
+pub type ToSave<'a> = (SaveOwner<'a>, Option<&'a Vec<ItemStack>>, Vec<(u32, &'a [u8])>, Option<&'a Space>);
 
 pub struct SavedSpace {
     pub blocks: Vec<(IVec3, crate::world::placement::Part)>,
@@ -22,6 +32,7 @@ pub struct SavedSpace {
 const ENTITY_FORMAT_V2: u32 = 0x3254_4E45;
 const ENTITY_FORMAT_V3: u32 = 0x3354_4E45;
 const ENTITY_FORMAT: u32 = 0x3454_4E45;
+const OWNER_FORMAT: u32 = 0x3554_4E45;
 const MOUNTED_BODY: u16 = 0x80;
 const FLOATING_BODY: u16 = 0x40;
 const FLOATER_DRIVEN: u16 = 0x20;
@@ -109,22 +120,24 @@ pub fn write(c: &Content, out: &mut Vec<u8>, list: &[ToSave<'_>], now: u64) {
         Completion::Dock => DOCK_BODY,
         _ => 0,
     };
-    let format = if list
-        .iter()
-        .any(|(e, ..)| e.stuck.is_some() || e.anchor_offset != IVec3::ZERO)
-    {
-        ENTITY_FORMAT
-    } else if list
-        .iter()
-        .any(|(e, _, _, space)| orientation(e, space.is_some()).is_some() || completion(e) != 0)
-    {
-        ENTITY_FORMAT_V3
-    } else {
-        ENTITY_FORMAT_V2
-    };
-    w.u32(format);
+    w.u32(OWNER_FORMAT);
     w.u32(list.len() as u32);
-    for (e, inv, comps, blocks) in list {
+    for (owner, inv, comps, blocks) in list {
+        let e = match owner {
+            SaveOwner::Block(id, block) => {
+                w.u8(1);
+                w.u64(*id);
+                w.str(&c.blocks[block.kind as usize].name);
+                w.u64(block.frame);
+                for coordinate in block.cell.to_array().into_iter().chain(block.offset.to_array()) {
+                    w.u32(coordinate as u32);
+                }
+                write_data(c, &mut w, *inv, comps, now);
+                continue;
+            }
+            SaveOwner::Entity(e) => *e,
+        };
+        w.u8(0);
         w.str(&c.game.entities[e.kind as usize].name);
         w.u64(e.id);
         for v in e.pos.to_array().into_iter().chain(e.vel.to_array()) {
@@ -151,28 +164,8 @@ pub fn write(c: &Content, out: &mut Vec<u8>, list: &[ToSave<'_>], now: u64) {
             | if e.mount.as_ref().is_some_and(|m| m.slide.is_some()) { MOUNT_SLIDE } else { 0 }
             | if rotation.is_some() { ROTATED_BODY } else { 0 }
             | completion(e)
-            | if e.stuck.is_some() { STUCK } else { 0 }
-            | if e.anchor_offset != IVec3::ZERO { SHIFTED_ANCHOR } else { 0 };
-        let frame = e.block_frame();
-        let attachment = attachment | e.anchor.map_or(0, |_| if frame != 0 { 2 } else { 1 });
-        if format != ENTITY_FORMAT_V2 {
-            w.u16(attachment);
-        } else {
-            w.u8(attachment as u8);
-        }
-        if let Some(a) = e.anchor {
-            for v in a.to_array() {
-                w.u32(v as u32);
-            }
-            if attachment & SHIFTED_ANCHOR != 0 {
-                for v in e.anchor_offset.to_array() {
-                    w.u32(v as u32);
-                }
-            }
-            if frame != 0 {
-                w.u64(frame);
-            }
-        }
+            | if e.stuck.is_some() { STUCK } else { 0 };
+        w.u16(attachment);
         if let Some(parent) = parent_mount {
             w.u64(parent);
         }
@@ -229,37 +222,7 @@ pub fn write(c: &Content, out: &mut Vec<u8>, list: &[ToSave<'_>], now: u64) {
             w.f32(stuck.yaw);
             w.u32(stuck.ticks);
         }
-        match inv {
-            Some(inv) => {
-                w.u16(inv.len() as u16);
-                for s in inv.iter() {
-                    w.stack(c, *s);
-                }
-            }
-            None => w.u16(u16::MAX),
-        }
-        let saved: Vec<&(u32, &[u8])> = comps
-            .iter()
-            .filter(|(id, _)| c.game.components[*id as usize].flags & cf::SAVE != 0)
-            .collect();
-        w.u16(saved.len() as u16);
-        for (id, bytes) in saved {
-            w.str(&c.game.components[*id as usize].name);
-            let named = if crate::stack::holds_stacks(c, *id) {
-                Some(crate::stack::contents_to_names(c, bytes))
-            } else {
-                (*id == c.game.fields.effect).then(|| effects_to_save(c, bytes, now))
-            };
-            let bytes = named.as_deref().unwrap_or(bytes);
-            // Component values over 64 KB say so with a marker, older saves never have it.
-            if bytes.len() >= u16::MAX as usize {
-                w.u16(u16::MAX);
-                w.u32(bytes.len() as u32);
-            } else {
-                w.u16(bytes.len() as u16);
-            }
-            w.0.extend_from_slice(bytes);
-        }
+        write_data(c, &mut w, *inv, comps, now);
         match blocks {
             Some(space) => {
                 let list = space.placed_blocks();
@@ -280,7 +243,8 @@ pub fn write(c: &Content, out: &mut Vec<u8>, list: &[ToSave<'_>], now: u64) {
             None => w.u32(u32::MAX),
         }
     }
-    let timed = list.iter().filter_map(|(entity, _, _, space)| {
+    let timed = list.iter().filter_map(|(owner, _, _, space)| {
+        let SaveOwner::Entity(entity) = owner else { return None };
         space
             .filter(|space| !space.scheduled.is_empty())
             .map(|space| (entity.id, space))
@@ -301,6 +265,40 @@ pub fn write(c: &Content, out: &mut Vec<u8>, list: &[ToSave<'_>], now: u64) {
             w.0[length..length + 4].copy_from_slice(&bytes.to_le_bytes());
         }
         w.u32(BODY_TIMERS_MAGIC);
+    }
+}
+
+fn write_data(c: &Content, w: &mut W, inv: Option<&Vec<ItemStack>>, comps: &[(u32, &[u8])], now: u64) {
+    match inv {
+        Some(inv) => {
+            w.u16(inv.len() as u16);
+            for s in inv.iter() {
+                w.stack(c, *s);
+            }
+        }
+        None => w.u16(u16::MAX),
+    }
+    let saved: Vec<&(u32, &[u8])> = comps
+        .iter()
+        .filter(|(id, _)| c.game.components[*id as usize].flags & cf::SAVE != 0)
+        .collect();
+    w.u16(saved.len() as u16);
+    for (id, bytes) in saved {
+        w.str(&c.game.components[*id as usize].name);
+        let named = if crate::stack::holds_stacks(c, *id) {
+            Some(crate::stack::contents_to_names(c, bytes))
+        } else {
+            (*id == c.game.fields.effect).then(|| effects_to_save(c, bytes, now))
+        };
+        let bytes = named.as_deref().unwrap_or(bytes);
+        // Component values over 64 KB say so with a marker, older saves never have it.
+        if bytes.len() >= u16::MAX as usize {
+            w.u16(u16::MAX);
+            w.u32(bytes.len() as u32);
+        } else {
+            w.u16(bytes.len() as u16);
+        }
+        w.0.extend_from_slice(bytes);
     }
 }
 
@@ -353,9 +351,10 @@ pub fn read(c: &Content, data: &[u8], now: u64) -> Vec<Saved> {
     if data.is_empty() {
         return out;
     }
-    let extended = match r.u32() {
-        Some(ENTITY_FORMAT | ENTITY_FORMAT_V3) => true,
-        Some(ENTITY_FORMAT_V2) => false,
+    let Some(format) = r.u32() else { return out };
+    let extended = match format {
+        OWNER_FORMAT | ENTITY_FORMAT | ENTITY_FORMAT_V3 => true,
+        ENTITY_FORMAT_V2 => false,
         _ => {
             log::warn!("unsupported saved entity format");
             return out;
@@ -363,7 +362,16 @@ pub fn read(c: &Content, data: &[u8], now: u64) -> Vec<Saved> {
     };
     let Some(n) = r.u32() else { return out };
     for _ in 0..n {
-        let Some(e) = read_one(c, &mut r, now, extended) else { break };
+        let record = if format == OWNER_FORMAT {
+            match r.u8() {
+                Some(0) => read_one(c, &mut r, now, extended),
+                Some(1) => read_block(c, &mut r, now),
+                _ => None,
+            }
+        } else {
+            read_one(c, &mut r, now, extended)
+        };
+        let Some(e) = record else { break };
         if let Some(e) = e {
             out.push(e);
         }
@@ -376,8 +384,9 @@ pub fn read(c: &Content, data: &[u8], now: u64) -> Vec<Saved> {
             let Some(data) = r.take(bytes as usize) else { break };
             timers.insert(id, read_timers(c, data));
         }
-        for (entity, _, _, space) in &mut out {
-            if let Some(space) = space
+        for (owner, _, _, space) in &mut out {
+            if let SavedOwner::Entity(entity) = owner
+                && let Some(space) = space
                 && let Some(timers) = timers.remove(&entity.id)
             {
                 space.timers = timers;
@@ -391,8 +400,9 @@ pub fn read(c: &Content, data: &[u8], now: u64) -> Vec<Saved> {
 // Older falls stored the placement offset in the body instead of its pose.
 fn center_saved_falls(c: &Content, saved: &mut [Saved]) {
     let mut offsets = rustc_hash::FxHashMap::default();
-    for (entity, _, _, space) in saved.iter_mut() {
-        if entity.kind == c.game.falling_kind
+    for (owner, _, _, space) in saved.iter_mut() {
+        if let SavedOwner::Entity(entity) = owner
+            && entity.kind == c.game.falling_kind
             && let Some(space) = space
             && let [(cell, part)] = space.blocks.as_mut_slice()
             && *cell == IVec3::ZERO
@@ -406,17 +416,36 @@ fn center_saved_falls(c: &Content, saved: &mut [Saved]) {
     if offsets.is_empty() {
         return;
     }
-    for (entity, _, _, _) in saved {
-        if entity.anchor == Some(IVec3::ZERO) && entity.frame.and_then(|id| offsets.get(&id)) == Some(&entity.anchor_offset) {
-            entity.anchor_offset = IVec3::ZERO;
-        }
-        if let Some(stuck) = &mut entity.stuck
-            && let StuckIn::Block { body, .. } = stuck.into
-            && let Some(offset) = offsets.get(&body)
-        {
-            stuck.at -= offset.as_dvec3() / f64::from(crate::world::placement::UNIT);
+    for (owner, _, _, _) in saved {
+        match owner {
+            SavedOwner::Block { block, .. } => {
+                if block.cell == IVec3::ZERO && offsets.get(&block.frame) == Some(&block.offset) {
+                    block.offset = IVec3::ZERO;
+                }
+            }
+            SavedOwner::Entity(entity) => {
+                if let Some(stuck) = &mut entity.stuck
+                    && let StuckIn::Block { body, .. } = stuck.into
+                    && let Some(offset) = offsets.get(&body)
+                {
+                    stuck.at -= offset.as_dvec3() / f64::from(crate::world::placement::UNIT);
+                }
+            }
         }
     }
+}
+
+fn read_block(c: &Content, r: &mut R, now: u64) -> Option<Option<Saved>> {
+    let id = r.u64()?;
+    let name = r.str()?;
+    let frame = r.u64()?;
+    let cell = IVec3::get(r)?;
+    let offset = IVec3::get(r)?;
+    let (inv, comps) = read_data(c, r, now)?;
+    Some(c.game.catalog.find(ek::BLOCK, &name).map(|kind| {
+        let block = BlockData { kind, frame, cell, offset };
+        (SavedOwner::Block { id, block, old_position: None }, inv, comps, None)
+    }))
 }
 
 fn read_one(c: &Content, r: &mut R, now: u64, extended: bool) -> Option<Option<Saved>> {
@@ -491,6 +520,77 @@ fn read_one(c: &Content, r: &mut R, now: u64, extended: bool) -> Option<Option<S
     } else {
         None
     };
+    let (inv, mut comps) = read_data(c, r, now)?;
+    let nb = r.u32()?;
+    let blocks = if nb == u32::MAX {
+        None
+    } else {
+        let shifted = nb & (1 << 31) != 0;
+        let nb = nb & 0x7fff_ffff;
+        if nb as usize > r.0.len() / 12 {
+            return None;
+        }
+        let mut v = Vec::with_capacity(nb as usize);
+        for _ in 0..nb {
+            let p = IVec3::new(r.u32()? as i32, r.u32()? as i32, r.u32()? as i32);
+            let offset = if shifted { IVec3::new(r.u32()? as i32, r.u32()? as i32, r.u32()? as i32) } else { IVec3::ZERO };
+            // Blocks of removed mods are left out.
+            if let Some(s) = c.state_by_name(&r.str()?) {
+                v.push((p, crate::world::placement::Part { state: s, offset }));
+            }
+        }
+        Some(SavedSpace { blocks: v, timers: Vec::new() })
+    };
+    if let Some(cell) = anchor {
+        return Some(c.game.catalog.find(ek::BLOCK, &kind_name).map(|kind| {
+            let block = BlockData { kind, frame: frame.unwrap_or(0), cell, offset: anchor_offset };
+            let old_position = Some(DVec3::new(v[0], v[1], v[2]));
+            (SavedOwner::Block { id, block, old_position }, inv, comps, None)
+        }));
+    }
+    let Some(kind) = c.game.catalog.find(ek::ENTITY, &kind_name) else { return Some(None) };
+    if kind == c.game.ship_kind
+        && !comps.iter().any(|(id, _)| *id == c.game.fields.helm)
+        && blocks.as_ref().is_some_and(|space| {
+            space.blocks.iter().any(|&(pos, state)| {
+                pos == IVec3::ZERO && c.states[state.state as usize].signal.flags as u32 & weft_abi::signal_flags::HELM != 0
+            })
+        })
+    {
+        comps.push((c.game.fields.helm, IVec3::ZERO.to_bytes().into_boxed_slice()));
+    }
+    let mut e = Entity::new(id, kind, DVec3::new(v[0], v[1], v[2]), health);
+    e.selected = selected;
+    e.flying = flying;
+    e.fire = fire;
+    e.mode = mode;
+    e.vel = DVec3::new(v[3], v[4], v[5]);
+    e.yaw = yaw;
+    e.pitch = pitch;
+    e.stuck = stuck;
+    e.age = age;
+    e.item = item;
+    e.frame = frame;
+    e.mount = mount;
+    e.completion = match attachment {
+        flags if flags & LAND_ON_SUPPORT != 0 => Completion::LandOnSupport,
+        flags if flags & DOCK_BODY != 0 => Completion::Dock,
+        _ => Completion::Stay,
+    };
+    if let Some((ship, rotation)) = dynamic {
+        e.ship = Some(ship);
+        e.set_frame_rotation(rotation);
+    } else if let Some(rotation) = rotation {
+        e.set_frame_rotation(rotation);
+    }
+    e.floater_driven = attachment & FLOATER_DRIVEN != 0;
+    if kind == c.game.item_kind && item.is_empty() {
+        return Some(None);
+    }
+    Some(Some((SavedOwner::Entity(e), inv, comps, blocks)))
+}
+
+fn read_data(c: &Content, r: &mut R, now: u64) -> Option<(Option<Vec<ItemStack>>, Vec<(u32, Box<[u8]>)>)> {
     let inv_len = r.u16()?;
     let inv = if inv_len == u16::MAX {
         None
@@ -519,68 +619,7 @@ fn read_one(c: &Content, r: &mut R, now: u64, extended: bool) -> Option<Option<S
             comps.push((id, c.game.fit_component(id, bytes)));
         }
     }
-    let nb = r.u32()?;
-    let blocks = if nb == u32::MAX {
-        None
-    } else {
-        let shifted = nb & (1 << 31) != 0;
-        let nb = nb & 0x7fff_ffff;
-        if nb as usize > r.0.len() / 12 {
-            return None;
-        }
-        let mut v = Vec::with_capacity(nb as usize);
-        for _ in 0..nb {
-            let p = IVec3::new(r.u32()? as i32, r.u32()? as i32, r.u32()? as i32);
-            let offset = if shifted { IVec3::new(r.u32()? as i32, r.u32()? as i32, r.u32()? as i32) } else { IVec3::ZERO };
-            // Blocks of removed mods are left out.
-            if let Some(s) = c.state_by_name(&r.str()?) {
-                v.push((p, crate::world::placement::Part { state: s, offset }));
-            }
-        }
-        Some(SavedSpace { blocks: v, timers: Vec::new() })
-    };
-    let Some(kind) = c.game.catalog.find(ek::ENTITY, &kind_name) else { return Some(None) };
-    if kind == c.game.ship_kind
-        && !comps.iter().any(|(id, _)| *id == c.game.fields.helm)
-        && blocks.as_ref().is_some_and(|space| {
-            space.blocks.iter().any(|&(pos, state)| {
-                pos == IVec3::ZERO && c.states[state.state as usize].signal.flags as u32 & weft_abi::signal_flags::HELM != 0
-            })
-        })
-    {
-        comps.push((c.game.fields.helm, IVec3::ZERO.to_bytes().into_boxed_slice()));
-    }
-    let mut e = Entity::new(id, kind, DVec3::new(v[0], v[1], v[2]), health);
-    e.selected = selected;
-    e.flying = flying;
-    e.fire = fire;
-    e.mode = mode;
-    e.vel = DVec3::new(v[3], v[4], v[5]);
-    e.yaw = yaw;
-    e.pitch = pitch;
-    e.stuck = stuck;
-    e.age = age;
-    e.item = item;
-    e.anchor = anchor;
-    e.anchor_offset = anchor_offset;
-    e.frame = frame;
-    e.mount = mount;
-    e.completion = match attachment {
-        flags if flags & LAND_ON_SUPPORT != 0 => Completion::LandOnSupport,
-        flags if flags & DOCK_BODY != 0 => Completion::Dock,
-        _ => Completion::Stay,
-    };
-    if let Some((ship, rotation)) = dynamic {
-        e.ship = Some(ship);
-        e.set_frame_rotation(rotation);
-    } else if let Some(rotation) = rotation {
-        e.set_frame_rotation(rotation);
-    }
-    e.floater_driven = attachment & FLOATER_DRIVEN != 0;
-    if kind == c.game.item_kind && item.is_empty() {
-        return Some(None);
-    }
-    Some(Some((e, inv, comps, blocks)))
+    Some((inv, comps))
 }
 
 /// An `EFFECT` component as saves keep it: each effect by name, with its level and the ticks it has

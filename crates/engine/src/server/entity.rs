@@ -53,11 +53,8 @@ pub struct Entity {
     pub blocking_disabled_until: u64,
     /// The block it is breaking.
     pub mining: Option<Mining>,
-    pub anchor: Option<IVec3>,
-    pub anchor_offset: IVec3,
     pub sent: Option<crate::net::Move>,
     /// The solid body it rides (stands on, or flies above within its carry height).
-    /// The body it is on: what it rides, or whose blocks hold it if it has an `anchor`.
     pub frame: Option<u64>,
     /// Where its body faces (`physics::turn_body`), and where it was when that last turned.
     pub body_yaw: f32,
@@ -277,11 +274,6 @@ impl Entity {
 }
 
 impl Entity {
-    /// The frame the block it belongs to is in: 0 for the world and what isn't a block's.
-    pub fn block_frame(&self) -> u64 {
-        self.anchor.and(self.frame).unwrap_or(0)
-    }
-
     /// Out of the world for `why` (`abi::removal`), dropped at the end of the tick.
     pub fn gone(&mut self, why: u32) {
         self.removed = true;
@@ -324,8 +316,6 @@ impl Entity {
             using: (0, false),
             use_done: None,
             mining: None,
-            anchor: None,
-            anchor_offset: IVec3::ZERO,
             sent: None,
             frame: None,
             motion: Motion::Free,
@@ -434,13 +424,7 @@ impl Entity {
 
     /// A thing of its own in the world, for others to see: not a block's entity.
     pub fn in_world(&self) -> bool {
-        !self.removed && self.anchor.is_none()
-    }
-
-    /// What clients hear of: what is in the world, and block entities that show items
-    /// (`EntityKind::shown_slots`), only for the light those give.
-    pub fn seen(&self, c: &Content) -> bool {
-        self.in_world() || !self.removed && !c.game.entities[self.kind as usize].shown_slots.is_empty()
+        !self.removed
     }
 
     /// Something that stands in the world and can be hit: not a dropped item, a projectile or a
@@ -456,8 +440,7 @@ impl Entity {
     }
 
     pub fn structure_parent(&self) -> Option<u64> {
-        self.frame
-            .filter(|_| self.anchor.is_some() || self.mount.is_some())
+        self.frame.filter(|_| self.mount.is_some())
     }
 
     pub fn state(&self, c: &Content, max_health: f32) -> weft_abi::EntityState {
@@ -491,6 +474,22 @@ impl Entity {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct BlockData {
+    pub kind: u32,
+    pub frame: u64,
+    pub cell: IVec3,
+    pub offset: IVec3,
+}
+
+pub(super) type MovedBlock = (u64, BlockData, Option<Vec<ItemStack>>, Vec<(u32, Box<[u8]>)>);
+
+impl BlockData {
+    pub fn center(self) -> DVec3 {
+        self.cell.as_dvec3() + self.offset.as_dvec3() / f64::from(crate::world::placement::UNIT) + DVec3::splat(0.5)
+    }
+}
+
 #[derive(Default)]
 pub struct Entities {
     pub list: Vec<Entity>,
@@ -501,8 +500,13 @@ pub struct Entities {
     pub dirty_comp: FxHashSet<(u64, u32)>,
     /// Synced components as last sent, to find what changed (`find_changes`).
     sent: FxHashMap<(u64, u32), Box<[u8]>>,
-    /// Block entities by the frame their block is in (0: the world) and where in it, one per
-    /// block of the cell that has one, the cell's block first.
+    pub blocks: FxHashMap<u64, BlockData>,
+    pub public_blocks: FxHashSet<u64>,
+    pub blocks_in_body: FxHashMap<u64, FxHashSet<u64>>,
+    pub blocks_in_cube: FxHashMap<IVec3, FxHashSet<u64>>,
+    removed_blocks: FxHashSet<u64>,
+    pub system_blocks: FxHashSet<u64>,
+    /// Instances of the resident parts of each cell, with the main block first.
     pub anchors: FxHashMap<(u64, IVec3), Vec<u64>>,
     /// Killed this tick: clients play the death animation when they go.
     pub killed: Vec<u64>,
@@ -596,14 +600,103 @@ impl Entities {
                 .entry(id)
                 .or_insert_with(|| vec![ItemStack::EMPTY; kind.slots as usize]);
         }
-        if let Some(a) = e.anchor {
-            self.anchors
-                .entry((e.block_frame(), a))
-                .or_default()
-                .push(id);
-        }
         self.index.insert(id, self.list.len());
         self.list.push(e);
+    }
+
+    pub fn insert_block(
+        &mut self, c: &Content, id: u64, block: BlockData, inv: Option<Vec<ItemStack>>, comps: Vec<(u32, Box<[u8]>)>,
+    ) {
+        let Some(kind) = c.game.block_data.get(&block.kind) else { return };
+        if kind.slots > 0 || inv.is_some() {
+            let mut inv = inv.unwrap_or_default();
+            if inv.len() < kind.slots as usize {
+                inv.resize(kind.slots as usize, ItemStack::EMPTY);
+            }
+            self.inventories.insert(id, inv);
+            self.dirty_inv.insert(id);
+        }
+        for (comp, value) in &kind.values {
+            self.comps.insert((id, *comp), value.clone());
+        }
+        for (comp, value) in comps {
+            self.comps.insert((id, comp), value);
+        }
+        if !kind.shown_slots.is_empty() || kind.values.iter().any(|(comp, _)| {
+            c.game.components[*comp as usize].flags & weft_abi::component_flags::SYNC_WATCHERS != 0
+        }) {
+            self.public_blocks.insert(id);
+        }
+        if c.game.systems.iter().any(|system| self.comps.contains_key(&(id, system.1))) {
+            self.system_blocks.insert(id);
+        }
+        self.blocks.insert(id, block);
+        self.index_block(id, block);
+    }
+
+    pub(super) fn take_blocks(&mut self, ids: impl IntoIterator<Item = u64>) -> Vec<MovedBlock> {
+        let mut blocks: FxHashMap<_, _> = ids.into_iter().filter_map(|id| {
+            let block = self.detach_block(id)?;
+            let inv = self.inventories.remove(&id);
+            self.dirty_inv.remove(&id);
+            Some((id, (block, inv, Vec::new())))
+        }).collect();
+        if blocks.is_empty() {
+            return Vec::new();
+        }
+        self.comps.retain(|&(id, comp), bytes| {
+            if let Some((_, _, values)) = blocks.get_mut(&id) {
+                values.push((comp, std::mem::take(bytes)));
+                false
+            } else {
+                true
+            }
+        });
+        self.sent.retain(|(id, _), _| !blocks.contains_key(id));
+        self.dirty_comp.retain(|(id, _)| !blocks.contains_key(id));
+        blocks.into_iter().map(|(id, (block, inv, comps))| (id, block, inv, comps)).collect()
+    }
+
+    fn detach_block(&mut self, id: u64) -> Option<BlockData> {
+        let block = self.blocks.remove(&id)?;
+        self.public_blocks.remove(&id);
+        self.system_blocks.remove(&id);
+        self.unindex_block(id, block);
+        Some(block)
+    }
+
+    fn index_block(&mut self, id: u64, block: BlockData) {
+        self.anchors.entry((block.frame, block.cell)).or_default().push(id);
+        if block.frame == 0 {
+            self.blocks_in_cube.entry(crate::world::cube_of(block.cell)).or_default().insert(id);
+        } else {
+            self.blocks_in_body.entry(block.frame).or_default().insert(id);
+        }
+    }
+
+    fn unindex_block(&mut self, id: u64, block: BlockData) {
+        self.unanchor((block.frame, block.cell), id);
+        fn remove<K: Eq + std::hash::Hash>(index: &mut FxHashMap<K, FxHashSet<u64>>, key: K, id: u64) {
+            if let std::collections::hash_map::Entry::Occupied(mut entry) = index.entry(key) {
+                entry.get_mut().remove(&id);
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
+            }
+        }
+        if block.frame == 0 {
+            remove(&mut self.blocks_in_cube, crate::world::cube_of(block.cell), id);
+        } else {
+            remove(&mut self.blocks_in_body, block.frame, id);
+        }
+    }
+
+    pub fn contains_owner(&self, id: u64) -> bool {
+        self.blocks.contains_key(&id) || self.get(id).is_some()
+    }
+
+    pub fn owner_frame(&self, id: u64) -> u64 {
+        self.blocks.get(&id).map_or(0, |block| block.frame)
     }
 
     /// A new life for an entity that stays, what its kind attaches starts
@@ -648,29 +741,23 @@ impl Entities {
         }
     }
 
-    /// `id`'s block is at `at` in `frame` now, as it comes to be somewhere else.
-    pub fn attach(&mut self, id: u64, frame: u64, at: IVec3, pos: DVec3) {
-        let Some(e) = self.get_mut(id) else { return };
-        let was = e.anchor.map(|a| (e.block_frame(), a));
-        e.anchor = Some(at);
-        e.frame = (frame != 0).then_some(frame);
-        e.pos = pos;
-        if let Some(was) = was {
-            self.unanchor(was, id);
-        }
-        self.anchors.entry((frame, at)).or_default().push(id);
+    pub fn move_block(&mut self, id: u64, frame: u64, cell: IVec3, offset: IVec3) {
+        let Some(block) = self.blocks.get_mut(&id) else { return };
+        let old = *block;
+        let new = BlockData { frame, cell, offset, ..old };
+        *block = new;
+        self.unindex_block(id, old);
+        self.index_block(id, new);
     }
 
-    /// The block entity of the cell at `at` in `frame`: of its block, else of another in it.
-    pub fn anchored(&self, frame: u64, at: IVec3) -> Option<u64> {
-        self.anchors.get(&(frame, at))?.first().copied()
+    pub(super) fn block_ids(&self, frame: u64, cell: IVec3) -> impl Iterator<Item = u64> + '_ {
+        self.anchors.get(&(frame, cell)).into_iter().flatten().copied()
     }
 
-    /// The block entity of kind `kind` in the cell at `at` in `frame`.
-    pub fn anchored_kind(&self, frame: u64, at: IVec3, kind: u32, offset: IVec3) -> Option<u64> {
-        self.anchors.get(&(frame, at))?.iter().copied().find(|&id| {
-            self.get(id)
-                .is_some_and(|e| e.kind == kind && e.anchor_offset == offset)
+    pub fn anchored_kind(&self, frame: u64, cell: IVec3, kind: u32, offset: IVec3) -> Option<u64> {
+        self.block_ids(frame, cell).find(|id| {
+            let block = self.blocks[id];
+            block.kind == kind && block.offset == offset
         })
     }
 
@@ -707,6 +794,9 @@ impl Entities {
                 children.entry(parent).or_default().push(e.id);
             }
         }
+        for (&frame, ids) in &self.blocks_in_body {
+            children.entry(frame).or_default().extend(ids);
+        }
         children
     }
 
@@ -727,35 +817,28 @@ impl Entities {
 
     /// Takes `id` out of the world for `why` (`abi::removal`).
     pub fn remove(&mut self, id: u64, why: u32) {
-        if let Some(e) = self.get_mut(id) {
+        if self.detach_block(id).is_some() {
+            self.removed_blocks.insert(id);
+        } else if let Some(e) = self.get_mut(id) {
             e.gone(why);
-            if let Some(a) = e.anchor {
-                let frame = e.block_frame();
-                self.unanchor((frame, a), id);
-            }
         }
     }
 
     /// Drops removed entities and their data. Keeps list order (it is the tick order).
     pub fn compact(&mut self) {
-        if !self.list.iter().any(|e| e.removed) {
+        let mut gone = std::mem::take(&mut self.removed_blocks);
+        let total = gone.len();
+        gone.extend(self.list.iter().filter(|e| e.removed).map(|e| e.id));
+        if gone.is_empty() {
             return;
         }
-        let gone: FxHashSet<u64> = self
-            .list
-            .iter()
-            .filter(|e| e.removed)
-            .map(|e| e.id)
-            .collect();
-        self.list.retain(|e| !e.removed);
-        self.index = self
-            .list
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (e.id, i))
-            .collect();
+        if gone.len() != total {
+            self.list.retain(|e| !e.removed);
+            self.index = self.list.iter().enumerate().map(|(i, e)| (e.id, i)).collect();
+        }
         self.comps.retain(|(e, _), _| !gone.contains(e));
         self.sent.retain(|(e, _), _| !gone.contains(e));
+        self.dirty_comp.retain(|(id, _)| !gone.contains(id));
         for id in &gone {
             self.inventories.remove(id);
             self.dirty_inv.remove(id);
@@ -820,10 +903,11 @@ impl Entities {
             .enumerate()
             .map(|(i, e)| (e.id, i))
             .collect();
-        // Its block is the new region's now; here, the place would still count as taken.
-        if let Some(a) = e.anchor {
-            self.unanchor((e.block_frame(), a), id);
-        }
+        let (inv, comps) = self.take_data(id);
+        Some((e, inv, comps))
+    }
+
+    fn take_data(&mut self, id: u64) -> (Option<Vec<ItemStack>>, Vec<(u32, Box<[u8]>)>) {
         let inv = self.inventories.remove(&id);
         let keys: Vec<(u64, u32)> = self.comps.keys().filter(|k| k.0 == id).copied().collect();
         let comps = keys
@@ -831,7 +915,9 @@ impl Entities {
             .filter_map(|k| self.comps.remove(&k).map(|v| (k.1, v)))
             .collect();
         self.sent.retain(|k, _| k.0 != id);
-        Some((e, inv, comps))
+        self.dirty_inv.remove(&id);
+        self.dirty_comp.retain(|k| k.0 != id);
+        (inv, comps)
     }
 
     /// Canonical tick order after regions merge.
@@ -982,7 +1068,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     let k = &c.game.entities[e.kind as usize];
     let mut out = Stepped { land: None, crushed: Vec::new() };
     // A rider goes where its seat is, a mount a player steers where that player's client says.
-    if e.anchor.is_some() || e.vehicle.is_some() || e.driver.is_some() {
+    if e.vehicle.is_some() || e.driver.is_some() {
         return out;
     }
     match e.body_motion() {

@@ -70,6 +70,12 @@ pub fn pack_uses(name: &str, what: &str) -> bool {
     pack_source(name).is_some_and(|s| s.contains(what))
 }
 
+pub(crate) fn custom_sun_shaders() -> bool {
+    ["world.wgsl", "model.wgsl", "sun-shadow.wgsl"]
+        .iter()
+        .any(|name| pack_source(name).is_some())
+}
+
 fn pack_source(name: &str) -> Option<String> {
     let path = SHADER_PACK.read().unwrap().as_ref().map(|d| d.join(name))?;
     std::fs::read_to_string(path)
@@ -103,7 +109,29 @@ pub fn engine_shader(assets: &Assets, name: &str, prelude: &str) -> Result<Shade
 /// What every engine shader starts with: its prelude (structs, bindings, constants) and
 /// `common.wgsl` (the lightmap, fog, the structs snippets get), so a shader only writes functions.
 fn with_common(assets: &Assets, name: &str, src: &str) -> String {
-    format!("{}{src}", crate::gpu_layout::prelude(name, &engine_source(assets, "common.wgsl")))
+    with_sun_shadow(assets, name, src, None)
+}
+
+fn with_sun_shadow(assets: &Assets, name: &str, src: &str, shadow: Option<&str>) -> String {
+    let mut prelude = crate::gpu_layout::prelude(name, &engine_source(assets, "common.wgsl"));
+    if matches!(name, "world.wgsl" | "model.wgsl") {
+        prelude.push_str(if shadow.is_some() {
+            "\nconst CUSTOM_SUN_VISIBILITY: bool = true;\n"
+        } else {
+            "\nconst CUSTOM_SUN_VISIBILITY: bool = false;\n"
+        });
+        let stock;
+        let shadow = if let Some(shadow) = shadow {
+            shadow
+        } else {
+            stock = engine_source(assets, "sun-shadow.wgsl");
+            &stock
+        };
+        prelude.push_str(shadow);
+        prelude.push('\n');
+    }
+    prelude.push_str(src);
+    prelude
 }
 
 /// `name` from the shader pack if it has a valid one, else the engine's.
@@ -123,6 +151,15 @@ pub fn compose(
     name: &str,
     parts: &[(&crate::shaders::Hook, &[(String, String)])],
 ) -> Result<(Shader, Vec<crate::shaders::Slots>), ShaderError> {
+    if matches!(name, "world.wgsl" | "model.wgsl")
+        && let Some(shadow) = pack_source("sun-shadow.wgsl")
+    {
+        let source = pack_source(name).unwrap_or_else(|| engine_source(assets, name));
+        match crate::shaders::compose(name, &with_sun_shadow(assets, name, &source, Some(&shadow)), parts) {
+            Ok(made) => return Ok(made),
+            Err(e) => log::error!("shader pack sun-shadow.wgsl ({name}): {}", e.0),
+        }
+    }
     if let Some(src) = pack_source(name) {
         match crate::shaders::compose(name, &with_common(assets, name, &src), parts) {
             Ok(made) => return Ok(made),

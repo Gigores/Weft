@@ -296,6 +296,7 @@ pub enum Cmd {
     CopyDepthToBuffer {
         depth: TextureId,
         buffer: BufferId,
+        offset: u64,
     },
     /// GPU timestamp, see [`Backend::gpu_times`].
     Mark,

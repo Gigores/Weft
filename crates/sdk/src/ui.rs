@@ -99,7 +99,7 @@ impl ClientView {
         self.component(&GAME_MODE)
             .unwrap_or(abi::game_mode::SURVIVAL)
     }
-    /// Another entity's component the server shares with this client (`SYNC_WATCHERS`, or
+    /// A block or entity component the server shares with this client (`SYNC_WATCHERS`, or
     /// `SYNC_MENU` while its menu is open).
     pub fn component_of<T: Value>(&self, entity: u64, c: &Component<T>) -> Option<T> {
         if entity == 0 {
@@ -108,7 +108,7 @@ impl ClientView {
         let p = unsafe { (host().client_component)(self.raw, entity, c.id()) };
         (!p.is_null()).then(|| unsafe { std::ptr::read_unaligned(p as *const T) })
     }
-    /// The entity the open menu is on (a block entity, a mob), if any.
+    /// The instance ID the menu is open on, if any.
     pub fn menu_owner(&self) -> Option<u64> {
         let o = unsafe { (host().client_menu_owner)(self.raw) };
         (o != 0).then_some(o)

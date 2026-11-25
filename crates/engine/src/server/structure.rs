@@ -244,14 +244,7 @@ impl Dim {
             }
             for part in moving {
                 let local = l.part.unwrap_or(part);
-                if let Some(id) = c
-                    .game
-                    .block_entities
-                    .get(&c.states[part.state as usize].block)
-                    .and_then(|&kind| {
-                        self.entities
-                            .anchored_kind(space_id, l.from, kind, part.offset)
-                    })
+                if let Some(id) = self.entities.anchored_kind(space_id, l.from, c.states[part.state as usize].block, part.offset)
                 {
                     self.entities.unanchor((space_id, l.from), id);
                     anchors.push((l.local, local.offset, id));
@@ -293,12 +286,7 @@ impl Dim {
         }
         self.reparent_mounts(space_id, body, abi::Turn::NONE, |at| moved.get(&at).copied());
         for (local, offset, id) in anchors {
-            if let Some(e) = self.entities.get_mut(id) {
-                e.anchor_offset = offset;
-            }
-            let shift = offset.as_dvec3() / f64::from(crate::world::placement::UNIT);
-            self.entities
-                .attach(id, body, local, place.to_world(local.as_dvec3() + shift + DVec3::splat(0.5)));
+            self.entities.move_block(id, body, local, offset);
         }
         (body, carried)
     }
@@ -1342,14 +1330,7 @@ impl Dim {
             let Some(main) = source.get(b.local).filter(|&s| s != AIR) else { continue };
             let residents: Vec<_> = source.layout(b.local).residents(main).collect();
             for (i, part) in residents.into_iter().enumerate() {
-                let entity = c
-                    .game
-                    .block_entities
-                    .get(&c.states[part.state as usize].block)
-                    .and_then(|&kind| {
-                        self.entities
-                            .anchored_kind(body, b.local, kind, part.offset)
-                    });
+                let entity = self.entities.anchored_kind(body, b.local, c.states[part.state as usize].block, part.offset);
                 let signal = self
                     .space(body)
                     .signals
@@ -1463,13 +1444,7 @@ impl Dim {
                 .is_some()
             {
                 if let Some(id) = entity {
-                    if let Some(e) = self.entities.get_mut(id) {
-                        e.anchor_offset = part.offset;
-                    }
-                    let pos = self
-                        .space_pose(space_id)
-                        .to_world(at.as_dvec3() + part.shift() + DVec3::splat(0.5));
-                    self.entities.attach(id, space_id, at, pos);
+                    self.entities.move_block(id, space_id, at, part.offset);
                 }
                 return true;
             }
@@ -1714,6 +1689,13 @@ impl Dim {
     /// What bodies gone gave the world goes with them, however they went; ones whose lamps changed
     /// say so.
     pub(super) fn forget_gone_bodies(&mut self, c: &'static Content) {
+        let gone_blocks: Vec<_> = self.entities.blocks_in_body.iter()
+            .filter(|(frame, _)| !self.bodies.contains_key(frame))
+            .flat_map(|(_, ids)| ids.iter().copied())
+            .collect();
+        for id in gone_blocks {
+            self.entities.remove(id, super::dim::UNTOLD);
+        }
         let gone: Vec<u64> = self
             .space
             .body_lights

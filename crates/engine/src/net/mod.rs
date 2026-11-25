@@ -301,6 +301,7 @@ wire_struct! {
         pub id: u64,
         pub kind: u32,
         pub has_space: bool,
+        pub hidden_mode: bool,
         pub pos: DVec3,
         pub yaw: f32,
         pub pitch: f32,
@@ -311,6 +312,15 @@ wire_struct! {
         pub strode: f32,
         pub stride: f32,
         pub rotation: Option<[f32; 4]>,
+    }
+}
+
+wire_struct! {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct BlockView {
+        pub id: u64,
+        pub frame: u64,
+        pub local: DVec3,
     }
 }
 
@@ -361,6 +371,11 @@ wire_struct! {
     }
 }
 
+pub mod move_flags {
+    pub const SPRINTING: u8 = 1;
+    pub const HIDDEN_MODE: u8 = 2;
+}
+
 wire_struct! {
     #[derive(Clone, Copy, Debug)]
     pub struct Move {
@@ -372,7 +387,7 @@ wire_struct! {
         pub strode: f32,
         pub stride: f32,
         pub pose: crate::world::Pose,
-        pub sprinting: bool,
+        pub flags: u8,
         pub frame: u64,
         pub rotation: Option<[f32; 4]>,
     }
@@ -426,6 +441,7 @@ messages! {
         Moves { tick: u64, moves: Vec<Move> },
         /// Entities out of sight, and whether they were killed (they play the death animation).
         Despawn(Vec<(u64, bool)>),
+        BlockViews { dim: u32, changed: Vec<BlockView>, removed: Vec<u64> },
         SpaceLanded { dim: u32, frame: u64, destination: u64, cubes: Vec<IVec3> },
         /// Items picked up: (item entity, who took it). They fly to the taker before going.
         Taken(Vec<(u64, u64)>),
@@ -482,7 +498,7 @@ messages! {
         /// Mod channel message (`Host::reg_packet`).
         Packet { channel: u32, data: Vec<u8> },
         /// Components of other entities: (entity, component id, bytes).
-        EntityComponents(Vec<(u64, u32, Vec<u8>)>),
+        SharedComponents(Vec<(u64, u32, Vec<u8>)>),
         Particles(Vec<weft_abi::ParticleBurst>),
         /// The server's values of `SYNCED` settings: (config id, value).
         Configs(Vec<(u32, f64)>),
