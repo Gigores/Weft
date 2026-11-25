@@ -2097,8 +2097,9 @@ impl Dim {
             }));
         let (id, _) =
             self.lift(space_id, c, c.game.platform_kind, from.as_dvec3() + crate::physics::Transform::FEET, cells, &[], Liveness::Free);
+        let travel = self.space_pose(space_id).vector_to_world(step.as_dvec3());
         let Some(e) = self.entities.get_mut(id) else { return false };
-        e.motion = super::entity::Motion::To { to: e.pos + step.as_dvec3(), left: MOVE_TICKS as u16 };
+        e.motion = Motion::To { to: e.pos + travel, left: MOVE_TICKS as u16 };
         e.completion = Completion::Dock;
         true
     }
@@ -2386,8 +2387,12 @@ impl Dim {
             }));
         let (body, blocks) =
             self.lift(space_id, c, c.game.moving_kind, plan.p.as_dvec3() + DVec3::new(0.5, 0.0, 0.5), cells, &also, Liveness::OnTheWay);
+        // Motion stores a world-space endpoint and carries it with the assembly as it moves.
+        let travel = self
+            .space_pose(space_id)
+            .vector_to_world(plan.step.as_dvec3());
         if let Some(e) = self.entities.get_mut(body) {
-            e.motion = Motion::To { to: e.pos + plan.step.as_dvec3(), left: MOVE_TICKS as u16 };
+            e.motion = Motion::To { to: e.pos + travel, left: MOVE_TICKS as u16 };
         }
         self.space_mut(space_id)
             .signals
