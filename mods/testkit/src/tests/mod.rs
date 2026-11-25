@@ -171,6 +171,7 @@ pub fn all() -> Vec<TestDef> {
         redstone::body_walking,
         bodies::zombie_chases,
         bodies::neutral_mobs,
+        bodies::torch_shy_brain,
     ]
 }
 

@@ -106,6 +106,7 @@ pub struct EntityKind {
     pub bone_models: Vec<(String, String)>,
     /// The kind's own callbacks (empty or one).
     pub on_tick: Vec<(ModId, Callback)>,
+    pub(crate) brain: Vec<crate::server::brain::Rule>,
     pub on_interact: Vec<(ModId, Callback)>,
     /// Every frame on the client for each one, in order (`comp::entity::FRAMES`).
     pub frames: Vec<(ModId, Callback)>,
@@ -484,6 +485,7 @@ pub struct Game {
     pub attributes: Vec<AttrDef>,
     /// The engine component holding entities' attribute modifiers.
     pub modifiers_comp: u32,
+    pub brain_edits_comp: u32,
     /// `TIMERS` as an entity component.
     pub timers_comp: u32,
     /// `abi::event::BLOCK_TICK`.
@@ -773,6 +775,10 @@ fn engine_components() -> Vec<RawEntry> {
         (abi::comp::NAME, "bytes", cf::SAVE | cf::CARRIED, Vec::new()),
         (abi::comp::PERSISTENT, "bytes", cf::SAVE, Vec::new()),
         (HEALTH, health_schema.as_str(), own, crate::net::HealthField::default().to_bytes()),
+        (abi::brain::HURT, <abi::BrainMemory as abi::Schema>::SCHEMA, 0, vec![0; size_of::<abi::BrainMemory>()]),
+        (abi::brain::ANGER, <abi::BrainMemory as abi::Schema>::SCHEMA, cf::SAVE, vec![0; size_of::<abi::BrainMemory>()]),
+        (abi::brain::FEAR, <abi::BrainMemory as abi::Schema>::SCHEMA, cf::SAVE, vec![0; size_of::<abi::BrainMemory>()]),
+        (crate::server::brain::EDITS, "bytes", cf::SAVE, Vec::new()),
         (BURNING, "u8", own, vec![0]),
         (abi::comp::LIGHT, "[u8;3]", own, vec![0; 3]),
         (SHOWN, "bytes", shown, Vec::new()),
@@ -1598,6 +1604,7 @@ pub const ENGINE_EVENTS: &[(&str, &str, u32)] = {
         (abi::action::PICKUP_ITEM, abi::Pickup::SCHEMA, size_of::<abi::Pickup>() as u32),
         (abi::action::CHAT, abi::ChatMessage::SCHEMA, size_of::<abi::ChatMessage>() as u32),
         (abi::action::HURT, abi::Hurt::SCHEMA, size_of::<abi::Hurt>() as u32),
+        (abi::brain::HELD_CHANGED, abi::HeldChange::SCHEMA, size_of::<abi::HeldChange>() as u32),
         (abi::action::USE_ITEM, abi::ItemUsed::SCHEMA, size_of::<abi::ItemUsed>() as u32),
         (abi::event::ENTITY_HEALED, abi::Hurt::SCHEMA, size_of::<abi::Hurt>() as u32),
         (abi::event::WEATHER_TICK, abi::WeatherTick::SCHEMA, size_of::<abi::WeatherTick>() as u32),
@@ -1774,6 +1781,11 @@ fn bake_entity(e: &Entry) -> EntityKind {
             .map(|b| (b.model, b.bone))
             .collect(),
         on_tick: e.callback(k::ON_TICK).into_iter().collect(),
+        brain: e.values.iter().filter_map(|v| {
+            let name = v.name.strip_prefix(abi::brain::RULE)?;
+            let settings = e.get(&format!("{}{name}", abi::brain::SETTINGS))?;
+            Some(crate::server::brain::Rule { name: name.to_owned(), call: e.callback(&v.name)?, settings })
+        }).collect(),
         on_interact: e.callback(k::ON_INTERACT).into_iter().collect(),
         frames: e.callbacks(k::FRAMES),
         components: Vec::new(),
@@ -2623,6 +2635,7 @@ fn freeze_entity_storage(
     g.thrust_comp = c.id(abi::comp::block::THRUST).unwrap();
     g.guide_rail_comp = c.id(abi::comp::block::GUIDE_RAIL).unwrap();
     g.modifiers_comp = c.id(MODIFIERS).unwrap();
+    g.brain_edits_comp = c.id(crate::server::brain::EDITS).unwrap();
     g.timers_comp = c.id(TIMERS).unwrap();
     g.name_comp = c.id(abi::comp::NAME).unwrap();
     g.persistent_comp = c.id(abi::comp::PERSISTENT).unwrap();

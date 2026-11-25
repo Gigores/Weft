@@ -369,7 +369,10 @@ pub fn set_component(d: &mut Dim, c: &Content, at: At, comp: u32, v: Option<&[u8
                 .map_or(0, |def| def.size as usize);
             match (d.entities.comps.get_mut(&(id, comp)), v) {
                 (Some(old), Some(v)) if size == 0 || v.len() == size => {
-                    *old = v.into();
+                    if &**old != v {
+                        *old = v.into();
+                        d.brain_component_changed(c, id, &c.game.components[comp as usize].name);
+                    }
                     true
                 }
                 _ => false,

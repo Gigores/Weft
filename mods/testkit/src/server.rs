@@ -585,6 +585,21 @@ const OPS: &[(&str, &str, Run)] = &[
         if missed > 0 { Err(format!("{missed} blocks not loaded")) } else { Ok(volume.to_string()) }
     }),
     ("get", "<pos:pos>", |w, cmd, _, _| Ok(block_name(w.block(pos(cmd, "pos")?)).to_string())),
+    ("brain", "<id:int> <rule:word>", |w, cmd, _, _| {
+        let id = int::<u64>(cmd, "id")?;
+        Ok(w.brain_action(id, word(cmd, "rule")?)
+            .map_or_else(|| "idle".to_owned(), |action| format!("{} {}", action.target(), action.priority())))
+    }),
+    ("brain_edit", "<id:int> <rule:word> <edit:word>", |w, cmd, _, _| {
+        let id = int::<u64>(cmd, "id")?;
+        let rule = word(cmd, "rule")?;
+        let edited = match word(cmd, "edit")? {
+            "disable" => w.enable_brain_rule(id, rule, false),
+            "enable" => w.enable_brain_rule(id, rule, true),
+            kind => w.install_brain_rule(id, EntityKind::generated(kind.to_string()), rule),
+        };
+        Ok(edited.to_string())
+    }),
     ("count", "<from:pos> <to:pos> <block:block>", |w, cmd, _, _| {
         // How many of a block lie in a box.
         let (a, b, want) = (pos(cmd, "from")?, pos(cmd, "to")?, block_of(id(cmd, "block")?));

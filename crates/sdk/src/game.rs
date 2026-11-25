@@ -1269,11 +1269,34 @@ impl EntityBuilder<'_> {
     pub fn on_tick(self, f: impl Fn(&EntityTick) + Send + Sync + 'static) -> Self {
         self.set(&comps::entity::ON_TICK, tick_cb(f))
     }
-    /// Behavior from goals and what sets it off (`ai::Goals`), run every tick; replaces `on_tick`.
-    pub fn goals(self, goals: crate::ai::Goals) -> Self {
-        let hurt = goals.reactions.clone();
-        self.on_hurt(move |w, h| crate::ai::Goals::hurt(&hurt, w, h))
-            .on_tick(move |t| goals.tick(t))
+    /// Adds named sensors and actions. A rule with the same name replaces its previous definition.
+    pub fn brain(mut self, brain: crate::ai::Brain) -> Self {
+        for rule in brain.rules {
+            let name = crate::qualify(crate::mod_id(), &rule.name);
+            let key = format!("{}{name}", abi::brain::RULE);
+            let settings = format!("{}{name}", abi::brain::SETTINGS);
+            self.e.ops.push(crate::Pending::value(&key, "callback", abi::data::bytes_of(&rule.callback)));
+            self.e.ops.push(crate::Pending::value(
+                &settings, crate::component::schema_of::<abi::BrainSettings>(), abi::data::bytes_of(&rule.settings),
+            ));
+        }
+        if brain.anger {
+            self = self.attach(&crate::ai::ANGER).attach(&crate::ai::LAST_HURT);
+        }
+        if brain.fear {
+            self = self.attach(&crate::ai::FEAR).attach(&crate::ai::LAST_HURT);
+        }
+        self
+    }
+
+    /// Removes a registered rule from this kind, including its observers and actions.
+    pub fn without_brain_rule(mut self, name: &str) -> Self {
+        let name = crate::full_name(name);
+        let key = format!("{}{name}", abi::brain::RULE);
+        self.e.ops.push(crate::Pending::value(&key, "callback", Vec::new()).as_op(abi::value_op::UNSET, ""));
+        let key = format!("{}{name}", abi::brain::SETTINGS);
+        self.e.ops.push(crate::Pending::value(&key, "bytes", Vec::new()).as_op(abi::value_op::UNSET, ""));
+        self
     }
     /// One of these was hurt: `actions::HURT` for this kind, after the damage, with the other
     /// events at the end of the tick. Changing the damage is `r.modify(&chain::DAMAGE, ..)`,

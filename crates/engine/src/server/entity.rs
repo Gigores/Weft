@@ -28,6 +28,8 @@ pub struct Entity {
     pub hurt_cooldown: u32,
     /// AI steering requested this tick.
     pub walk: Option<Walk>,
+    pub(super) brain: Option<Box<super::brain::State>>,
+    pub(super) seen_hands: [u32; 2],
     /// Jump strength attribute when its walk was set (1 = vanilla's).
     pub jump_mul: f32,
     /// What its attributes say of how it moves this tick, which physics goes by.
@@ -302,6 +304,8 @@ impl Entity {
             hurt_cooldown: 0,
             blocking_disabled_until: 0,
             walk: None,
+            brain: None,
+            seen_hands: [0; 2],
             jump_mul: 1.0,
             moves: physics::Moves::default(),
             safe_fall: 3.0,
@@ -583,6 +587,10 @@ impl Entities {
     }
 
     pub fn insert(&mut self, c: &Content, mut e: Entity) {
+        let rules = &c.game.entities[e.kind as usize].brain;
+        if e.brain.is_none() && !rules.is_empty() {
+            e.brain = Some(Box::new(super::brain::State::new(e.kind, rules.len())));
+        }
         let id = e.id;
         // Saved mid-fall, it still lands.
         if e.kind == c.game.falling_kind && e.completion == Completion::Stay {
@@ -733,6 +741,8 @@ impl Entities {
     /// `insert` with the inventory and components it had (loaded, or moved from another region).
     pub fn insert_with(&mut self, c: &Content, e: Entity, inv: Option<Vec<ItemStack>>, comps: Vec<(u32, Box<[u8]>)>) {
         let (id, slots) = (e.id, c.game.entities[e.kind as usize].slots as usize);
+        let kind = e.kind;
+        let restore_brain = e.brain.is_none();
         self.insert(c, e);
         if let Some(mut inv) = inv {
             // Saved before its kind had as many slots as now.
@@ -753,6 +763,13 @@ impl Entities {
                 }
             }
             self.comps.insert((id, k), v);
+        }
+        if restore_brain
+            && let Some(bytes) = self.comps.get(&(id, c.game.brain_edits_comp))
+            && let Some(brain) = super::brain::State::restore(c, kind, bytes)
+            && let Some(e) = self.get_mut(id)
+        {
+            e.brain = Some(brain);
         }
     }
 

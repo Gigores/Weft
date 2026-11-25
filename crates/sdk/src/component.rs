@@ -67,6 +67,8 @@ macro_rules! raw_data {
 
 unsafe impl Value for abi::Worn {}
 unsafe impl Value for abi::Energy {}
+unsafe impl Value for abi::BrainMemory {}
+unsafe impl Value for abi::HeldChange {}
 
 /// A stable text view (`str` schema). Values serialize as UTF-8, never as pointers.
 #[repr(transparent)]

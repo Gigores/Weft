@@ -172,6 +172,7 @@ pub struct Dim {
     pub space: Box<Space>,
     /// The blocks of bodies of this region, by entity.
     pub bodies: FxHashMap<u64, Box<Space>>,
+    pub(super) brain_writes: FxHashMap<(u64, u32), Box<[u8]>>,
     pub time: u64,
     /// What `/time` moved the time of day by, from `time`.
     pub day_offset: i64,
@@ -533,6 +534,7 @@ impl Dim {
             seed,
             space: Box::default(),
             bodies: FxHashMap::default(),
+            brain_writes: FxHashMap::default(),
             time: 1000,
             day_offset: 0,
             weather: Default::default(),
@@ -1942,6 +1944,13 @@ impl Dim {
         }
         let amount = landing;
         let direct = if d.direct != 0 { d.direct } else { source };
+        if self.entities.get(id).is_some_and(|e| e.brain.is_some())
+            && let Some(comp) = c.components.id(abi::brain::HURT)
+        {
+            let memory = abi::BrainMemory { source, time: self.time.saturating_add(1) };
+            let bytes = abi::data::bytes_of(&memory);
+            super::holder::set_component(self, c, super::holder::At::Entity(id), comp, Some(&bytes));
+        }
         self.emit_engine(
             space_id,
             c,
@@ -2356,7 +2365,7 @@ impl Dim {
     fn navigation(&mut self, c: &Content) {
         let cubes = &self.space.cubes;
         let block = super::space::CubeCells(cubes);
-        let walks = |e: &Entity| e.nav.is_some() && !e.removed && !e.player && e.walk.is_none();
+        let walks = |e: &Entity| e.nav.is_some() && !e.removed && !e.player && e.walk.is_none() && e.facing.is_none();
         // On a body its path is on that, in its coordinates.
         let bodies = &self.bodies;
         let places: FxHashMap<u64, crate::physics::Transform> = self
@@ -2399,12 +2408,19 @@ impl Dim {
             nav.path = path;
             (nav.next, nav.repath, nav.found_for, nav.stuck) = (1, e.age + 20, Some(nav.target), 0);
         }
+        let now = self.time;
         for e in list.iter_mut().filter(|e| walks(e)) {
+            let finish = |e: &mut Entity| {
+                e.nav = None;
+                if let Some(brain) = &mut e.brain {
+                    brain.wake_controls(c, abi::brain::MOVE, now);
+                }
+            };
             let frame = e.nav.as_ref().and_then(|n| n.frame);
             let place = frame.and_then(|f| places.get(&f).copied());
             // Its body went.
             if frame.is_some() && place.is_none() {
-                e.nav = None;
+                finish(e);
                 continue;
             }
             let pos = place.map_or(e.pos, |t| t.to_local(e.pos));
@@ -2413,13 +2429,15 @@ impl Dim {
             nav.stuck = if e.moved < 0.02 { nav.stuck + 1 } else { 0 };
             let close = (nav.target - pos).with_y(0.0).length() < 1.0 && (nav.target.y - pos.y).abs() < 1.5;
             match super::path::steer(nav, pos, dims, e.blocked) {
-                _ if close || nav.stuck > 40 => e.nav = None,
+                _ if close || nav.stuck > 40 => finish(e),
                 Some((dir, jump)) => {
                     let dir = place.map_or(dir, |t| {
                         let v = t.vector_to_world(DVec3::new(dir[0] as f64, 0.0, dir[1] as f64));
                         [v.x as f32, v.z as f32]
                     });
-                    e.yaw = (-dir[0]).atan2(-dir[1]);
+                    if !e.brain.as_ref().is_some_and(|b| b.controls(abi::brain::LOOK)) && e.facing.is_none() {
+                        e.yaw = (-dir[0]).atan2(-dir[1]);
+                    }
                     e.walk = Some(super::entity::Walk { dir, speed: nav.speed, keys: if jump { abi::walk::JUMP } else { 0 } });
                 }
                 // The end of a path that stopped short: look again.
@@ -2630,7 +2648,9 @@ impl Dim {
         };
         for e in &self.entities.list {
             if !e.removed && (!e.player || e.alive()) && !still(e) {
-                by_kind.entry((0, e.kind)).or_default().push(e.id);
+                if !c.game.entities[e.kind as usize].on_tick.is_empty() {
+                    by_kind.entry((0, e.kind)).or_default().push(e.id);
+                }
             }
         }
         let mut kinds: Vec<(u64, u32)> = by_kind.keys().copied().collect();
@@ -2651,6 +2671,17 @@ impl Dim {
             self.call(0, owner, cb, |w| abi::WorldTickArgs { world: w });
         }
         self.fire_timers(c);
+        self.observe_hands(c);
+        self.flush_brain_writes(c);
+        let mut ready: Vec<_> = self.entities.list.iter()
+            .filter(|e| !e.removed && e.alive() && !still(e) && self.brain_due(e))
+            .map(|e| (e.kind, e.id))
+            .collect();
+        if ready.len() > super::brain::DECISIONS_PER_TICK {
+            ready.sort_unstable_by_key(|&(_, id)| (self.brain_deadline(id), id));
+            ready.truncate(super::brain::DECISIONS_PER_TICK);
+        }
+        self.tick_brains(c, &ready);
         self.navigation(c);
         self.steer_mounts(c);
         self.choose_poses(c);
@@ -3054,8 +3085,10 @@ impl Dim {
                 }
                 let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, ids.len() * size) };
                 for (i, id) in ids.iter().enumerate() {
-                    if let Some(old) = self.entities.comps.get_mut(&(*id, comp)) {
-                        old.copy_from_slice(&bytes[i * size..(i + 1) * size]);
+                    let value = &bytes[i * size..(i + 1) * size];
+                    if let Some(old) = self.entities.comps.get_mut(&(*id, comp)).filter(|old| &***old != value) {
+                        old.copy_from_slice(value);
+                        self.brain_component_changed(c, *id, &c.game.components[comp as usize].name);
                     }
                 }
             }

@@ -279,7 +279,7 @@ fn client(_r: &mut Registry) {
     //
     // A mob's goal that plays its own run instead of walking:
     // static SCARED: EntityKind = EntityKind::named("scared");
-    // r.entity(&SCARED).goals(ai::Goals::new().then(ai::with_action_override("walk", "flee", ai::wander(4.0, 12.0))));
+    // r.entity(&SCARED).brain(ai::Brain::new().timid(3.0).rule(ai::panic(1.6)).rule(ai::wander(0.7, 12.0)));
     //
     // Any item as a model, in the hand, on the ground and in slots: models/apple.geo.json and
     // textures/apple.png. All food at once, what has no file stays as it was:

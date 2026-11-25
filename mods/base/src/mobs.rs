@@ -31,7 +31,7 @@ pub fn register(r: &mut Registry) {
         .burns_in_sun()
         .attack_damage(3.0)
         .reach(1.3)
-        .goals(hostile(ai::Goals::new().aggressive(35.0)));
+        .brain(hostile(ai::Brain::new().aggressive(35.0)));
     r.entity(&SPIDER)
         .hitboxes(spider_parts())
         .tag("hostile")
@@ -46,9 +46,9 @@ pub fn register(r: &mut Registry) {
         // Vanilla's reach goes by a mob's width: a body this wide stops further off.
         .reach(2.4)
         // In daylight it only fights back.
-        .goals(hostile(
-            ai::Goals::new()
-                .react(ai::Trigger::sight(35.0).only_if(|w, st| !in_daylight(w, st)), ai::react::anger(2.0, 1))
+        .brain(hostile(
+            ai::Brain::new()
+                .sight_when(35.0, |w, st| !in_daylight(w, st))
                 .neutral(),
         ));
     r.entity_component(&FUSE, 0u32, 0);
@@ -63,8 +63,7 @@ pub fn register(r: &mut Registry) {
         .walk_speed(2.5)
         .hostile()
         .burns_in_sun()
-        .attach(&FUSE)
-        .goals(skeleton());
+        .brain(skeleton());
     r.on_event(&actions::SPAWN, |batch| {
         for spawned in batch.iter() {
             if spawned.kind == SKELETON.id() {
@@ -119,7 +118,7 @@ pub fn register(r: &mut Registry) {
         .max_health(8.0)
         .walk_speed(2.3)
         .passive()
-        .goals(passive());
+        .brain(passive());
     r.entity(&CHICKEN)
         .hitboxes(chicken_parts())
         .tag("livestock")
@@ -128,7 +127,7 @@ pub fn register(r: &mut Registry) {
         .walk_speed(2.5)
         .passive()
         .attach(&FUSE)
-        .goals(passive_chicken());
+        .brain(passive_chicken());
     r.entity(&PIG)
         .hitboxes(pig_parts())
         .tag("livestock")
@@ -139,7 +138,7 @@ pub fn register(r: &mut Registry) {
         .max_health(10.0)
         .walk_speed(2.5)
         .passive()
-        .goals(passive());
+        .brain(passive());
     r.entity(&COW)
         .hitboxes(Hitboxes::quadruped())
         .tag("livestock")
@@ -150,7 +149,7 @@ pub fn register(r: &mut Registry) {
         .max_health(10.0)
         .walk_speed(2.2)
         .passive()
-        .goals(passive());
+        .brain(passive());
     // Vanilla amounts; meat comes out cooked when the animal burns.
     r.loot(&ZOMBIE)
         .pool(Pool::new().items("rotten_flesh", 0, 2));
@@ -217,25 +216,33 @@ pub fn register(r: &mut Registry) {
 }
 
 /// Vanilla's skeleton: keeps to about 10 blocks and shoots once in two seconds.
-fn skeleton() -> ai::Goals {
-    ai::Goals::new()
+fn skeleton() -> ai::Brain {
+    ai::Brain::new()
         .aggressive(16.0)
-        .then(ai::watch_player(16.0))
-        .then(|w: &World, id: u64, st: &EntityState| {
-            let Some((_, p)) = ai::target(w, id, st, 15.0) else { return false };
-            let Some(reload) = w.component_mut(id, &FUSE) else { return false };
-            *reload = (*reload + 1) % 40;
-            if *reload == 0 {
-                shoot(w, id, st, &p);
-            }
+        .rule(ai::watch_player(16.0))
+        .rule(ai::Rule::action("keep_shooting_distance", ai::MOVE, |ctx| {
+            ai::follow_memory(ctx, &ai::ANGER, 4)?;
+            let w = ctx.world();
+            let st = w.entity(ctx.id())?;
+            let (id, p) = ai::target(w, ctx.id(), &st, 16.0)?;
             let d2 = (p.pos.x - st.pos.x).powi(2) + (p.pos.z - st.pos.z).powi(2);
-            if d2 > 100.0 {
-                w.navigate(id, p.pos, 1.0);
+            Some(ai::Offer::new(id, 50.0).toward(p.pos, if d2 > 100.0 { 1.0 } else { 0.0 }))
+        }, ai::navigate).reads(&ai::ANGER))
+        .rule(ai::Rule::action("shoot", ai::USE, |ctx| {
+            ai::follow_memory(ctx, &ai::ANGER, 4)?;
+            let w = ctx.world();
+            let st = w.entity(ctx.id())?;
+            let (id, _) = ai::target(w, ctx.id(), &st, 15.0)?;
+            Some(ai::Offer::new(id, 50.0))
+        }, |ctx, phase, offer| {
+            let w = ctx.world();
+            if phase == ai::Phase::Step
+                && let (Some(st), Some(target)) = (w.entity(ctx.id()), w.entity(offer.target()))
+            {
+                shoot(w, ctx.id(), &st, &target);
             }
-            true
-        })
-        .then(ai::chase_target(16.0, 1.0))
-        .then(ai::wander(0.6, 10.0))
+        }).reads(&ai::ANGER).step_every(40))
+        .rule(ai::wander(0.6, 10.0))
 }
 
 /// Vanilla's bow: full strength after a second's draw, the curve easing in; an arrow from the
@@ -294,35 +301,36 @@ fn shoot(w: &World, id: u64, from: &EntityState, at: &EntityState) {
 }
 
 /// A chicken: flutters down instead of falling, and lays an egg now and then.
-fn passive_chicken() -> ai::Goals {
-    let goals = ai::Goals::new().then(|w: &World, id: u64, st: &EntityState| {
-        if st.on_ground == 0 && st.vel.y < 0.0 {
-            w.entity_modify(id)
-                .velocity(Vec3 { y: st.vel.y * 0.6, ..st.vel });
-        }
-        if let Some(next) = w.component_mut(id, &FUSE) {
-            if *next == 0 {
-                *next = 6000 + w.random_below(6000) as u32;
-            } else {
-                *next -= 1;
-                if *next == 0 {
-                    w.spawn_item(st.pos, ItemStack::new(EGG.id(), 1));
-                }
+fn passive_chicken() -> ai::Brain {
+    passive()
+        .rule(ai::Rule::sensor("flutter", |ctx| {
+            let w = ctx.world();
+            if let Some(st) = w.entity(ctx.id()).filter(|s| s.on_ground == 0 && s.vel.y < 0.0) {
+                w.entity_modify(ctx.id()).velocity(Vec3 { y: st.vel.y * 0.6, ..st.vel });
             }
-        }
-        false
-    });
-    with_passive(goals)
+        }).every(1))
+        .rule(ai::Rule::sensor("lay_egg", |ctx| {
+            let w = ctx.world();
+            let id = ctx.id();
+            if w.component(id, &FUSE).unwrap_or_default() != 0
+                && let Some(st) = w.entity(id)
+            {
+                w.spawn_item(st.pos, ItemStack::new(EGG.id(), 1));
+            }
+            w.set_component(id, &FUSE, 1);
+            let delay = 6000 + w.random_below(6000) as u32;
+            ctx.next_in(delay);
+        }))
 }
 
 /// Monsters chase the player they are after (what `goals` sets them off by) and hit it when in
 /// reach (`ai::melee`, once a second). Otherwise they wander.
-fn hostile(goals: ai::Goals) -> ai::Goals {
-    goals
-        .then(ai::watch_player(8.0))
-        .then(ai::melee())
-        .then(ai::chase_target(35.0, 1.0))
-        .then(ai::wander(0.6, 10.0))
+fn hostile(brain: ai::Brain) -> ai::Brain {
+    brain
+        .rule(ai::watch_player(8.0))
+        .rule(ai::melee())
+        .rule(ai::chase(35.0, 1.0))
+        .rule(ai::wander(0.6, 10.0))
 }
 
 /// A spider's peace: out in daylight.
@@ -332,16 +340,12 @@ fn in_daylight(w: &World, st: &EntityState) -> bool {
 }
 
 /// Animals run about for three seconds after being hurt, otherwise wander.
-fn passive() -> ai::Goals {
-    with_passive(ai::Goals::new())
-}
-
-fn with_passive(goals: ai::Goals) -> ai::Goals {
-    goals
+fn passive() -> ai::Brain {
+    ai::Brain::new()
         .timid(3.0)
-        .then(ai::watch_player(6.0))
-        .then(ai::panic(1.6))
-        .then(ai::wander(0.5, 10.0))
+        .rule(ai::watch_player(6.0))
+        .rule(ai::panic(1.6))
+        .rule(ai::wander(0.5, 10.0))
 }
 
 // Where each of base's mobs is hit, part by part, in the pixels of its model: what its body

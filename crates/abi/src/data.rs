@@ -365,6 +365,8 @@ macro_rules! schema_data {
     };
 }
 schema_data!(
+    BrainMemory,
+    HeldChange,
     ShapeStep,
     ItemStack,
     Mounting,

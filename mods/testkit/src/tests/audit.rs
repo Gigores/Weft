@@ -7,7 +7,7 @@ use weft_sdk::*;
 use super::add;
 use crate::runner::{R, T};
 
-async fn reopen(t: &T, seed: u64) -> R {
+pub(super) async fn reopen(t: &T, seed: u64) -> R {
     let name = format!("test-{}", t.name());
     t.c().world_leave();
     t.screen("core:title").await?;

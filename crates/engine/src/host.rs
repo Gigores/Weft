@@ -209,6 +209,11 @@ pub static HOST: Host = Host {
     config_text,
     config_set_text,
     action_play,
+    brain_wake,
+    brain_enable,
+    brain_install,
+    brain_status,
+    entity_hands,
     action_override,
     play_sound,
     client_play_sound: crate::app::api::client_play_sound,
@@ -461,6 +466,36 @@ unsafe extern "C" fn action_play(w: *mut abi::WorldCtx, id: u64, name: Str, loop
         }
         d.events
             .push(crate::server::DimEvent::PlayAction { id, name: name.as_str().to_string(), looping: looping != 0 });
+    }
+}
+
+unsafe extern "C" fn brain_wake(w: *mut abi::WorldCtx, id: u64, rule: Str) -> u32 {
+    unsafe { dim(w).wake_brain(content(), id, rule.as_str()) as u32 }
+}
+
+unsafe extern "C" fn brain_enable(w: *mut abi::WorldCtx, id: u64, rule: Str, enable: u32) -> u32 {
+    unsafe { dim(w).enable_brain(content(), id, rule.as_str(), enable != 0) as u32 }
+}
+
+unsafe extern "C" fn brain_install(w: *mut abi::WorldCtx, id: u64, source: u32, rule: Str) -> u32 {
+    unsafe { dim(w).install_brain_rule(content(), id, source, rule.as_str()) as u32 }
+}
+
+unsafe extern "C" fn brain_status(w: *mut abi::WorldCtx, id: u64, rule: Str, out: *mut abi::BrainOffer) -> u32 {
+    unsafe {
+        let Some(offer) = dim(w).brain_status(content(), id, rule.as_str()) else { return 0 };
+        *out = offer;
+        1
+    }
+}
+
+unsafe extern "C" fn entity_hands(w: *mut abi::WorldCtx, id: u64, out: *mut [ItemStack; 2]) {
+    unsafe {
+        let entities = &dim(w).entities;
+        let c = content();
+        let off = entities.get(id).zip(entities.inventories.get(&id))
+            .map_or(ItemStack::EMPTY, |(e, inv)| crate::content::in_off_hand(c, e.kind, inv));
+        *out = [entities.held(id), off];
     }
 }
 
@@ -1104,6 +1139,7 @@ unsafe extern "C" fn entities_in(
 unsafe extern "C" fn component(w: *mut abi::WorldCtx, id: u64, comp: u32) -> *mut u8 {
     unsafe {
         let d = dim(w);
+        d.track_brain_write(content(), id, comp);
         // Writes are found by comparing at sync time (`Entities::find_changes`).
         d.entities
             .comps

@@ -5,6 +5,7 @@ pub(crate) mod actions;
 pub mod area;
 pub(crate) mod assembly;
 mod builtin;
+pub(crate) mod brain;
 pub(crate) mod buoyancy;
 mod controls;
 pub mod dim;

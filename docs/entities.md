@@ -20,11 +20,53 @@
 - `on_tick`: every entity of the kind at once, once per tick
 - `on_interact`: a player right clicked one (after `actions::INTERACT_ENTITY`); true if it did something, which swings the player's arm
 
-## AI and hands
+## Brains
 
-- `goals(..)` for AI (see `weft_sdk::ai`); `ai::melee()` with `.attack_damage(3.0)` and `.reach(1.3)` makes it hit like a player does, with full swings paced by `.attack_speed(..)` (the reach is the `ENTITY_REACH` attribute, so a modifier lengthens a mob's arms the same as a player's; `w.in_reach(id, target)` is the test, `w.swing_strength(id)` how charged it is), so `question::ATTACK` and `attribute::ATTACK_DAMAGE` (a strength effect, a peaceful zone) work on mobs too
-- a mob can do whatever a player does with its hands. `equipment()` gives it the player's armor slots and other hand, and what it holds (its first slot, or another of its own with `w.entity_modify(id).selected(slot)`) shows in its hand and hits, wearing out, like a player's sword. `w.use_item(id, off_hand)` uses it (a witch drinking, a skeleton drawing its bow, eating taking its time), `w.use_item_on(id, off_hand, pos, face)` on a block, and `w.start_mining(id, pos)` breaks a block at the speed its tool mines it, cracks showing. `picks_up_items()` makes it take the dropped stacks it touches. When it dies, what it carries falls with its loot, and a named one's death goes in the chat
-- what sets a mob off is on its goals: every mob leaves everyone alone until a trigger goes off (`ai::Trigger::sight(range)`, `hurt()`, `gaze(range)` for an enderman, `when(range, |w, mob, them| ..)`, each with `.only_if(|w, mob| ..)`, `.of(&KIND)`, `.of_tag(&TAG)` or `.of_any(|w, id, st| ..)` for other mobs, `hurt().by_anything()`), and then a reaction does whatever it should: `ai::react::anger(secs, max)` (`ai::melee`, `ai::chase_target` and `ai::target` go after the nearest, `ai::targets` gives all of them, up to `max` at once: a charge through five players), `react::fear(secs, max)` (`ai::panic`, `ai::flee` away from all it fears), `react::alert(radius, ..)` for the pack around, or any `|w, mob, who| ..` of yours (points toward a grudge, a call for help). `Goals::new().aggressive(16.0)` is sight and hurt to anger, `.neutral()` hurt alone, `.timid(3.0)` an animal's panic; a spider is `.react(Trigger::sight(35.0).only_if(not_in_daylight), react::anger(2.0, 1)).neutral()`. Anger and fear last while the mod runs, they aren't saved with the world
+```rust
+r.entity(&MOB).brain(ai::Brain::new()
+    .aggressive(16.0)
+    .rule(ai::chase(20.0, 1.0))
+    .rule(ai::melee())
+    .rule(ai::wander(0.6, 10.0)));
+```
+
+`aggressive` remembers nearby visible players and anyone the preset retaliates against.
+`neutral` reacts to being hit by a player. `timid` records a threat for `panic` to act on.
+Anger and fear are ordinary saved instance components. Supply your own condition to
+`sight_when`, for example to make a spider hunt in the dark.
+
+Add your own named `ai::Rule::sensor` to update facts or `ai::Rule::action` to return an
+`Offer` from those facts. The engine wakes rules when components declared with
+`.reads(&COMPONENT)` change. A mod event can call `w.wake_brain(id, "my_rule")`
+for a specific target. Use `.every(ticks)` for facts that need periodic sampling,
+or call `ctx.next_in(ticks)` to schedule one check. For a held item trigger, subscribe
+to `ai::HELD_CHANGED` and query either hand with `w.hands(id)`.
+
+Actions can own `ai::MOVE`, `ai::LOOK` and `ai::USE` independently or together. An
+offer must beat the current owner's priority on every control it needs.
+`Offer::keep_at` sets the priority for continuing a running action. Calculate it
+from the current facts, such as distance to the target or the stage of an attack.
+Keep the same target key while pursuing it so a change of priority alone preserves
+the action. The action callback receives `Start`, `Update`, `Stop`, and optional
+`Step` calls from `.step_every(ticks)`. An action callback can call
+`w.navigate` or use `ai::navigate` for standard movement offers.
+
+Use `ai::share` in a group alert to write a fact to nearby members selected by your
+predicate. Rules watching that fact then decide how each member responds.
+
+Use `.without_brain_rule("core:chase")` to edit the kind. Use
+`w.enable_brain_rule(id, name, enabled)` and `w.install_brain_rule(id, &SOURCE, name)` to
+edit the rules of a single entity. Instance edits are saved by name. Inspect a running rule
+with `w.brain_action(id, name)` or log transitions with `--log brain=debug`.
+
+## Hands
+
+A mob can use the same hand calls as a player. `equipment()` gives it armor
+slots and an off hand. `w.entity_modify(id).selected(slot)` chooses a main hand
+slot, `w.use_item(id, off_hand)` uses it, and `w.use_item_on` targets a block.
+The melee preset uses the same reach, swing strength and attack permission as a
+player. `w.start_mining(id, pos)` mines with its tool and `picks_up_items()`
+lets it take dropped stacks.
 
 ## Projectiles
 

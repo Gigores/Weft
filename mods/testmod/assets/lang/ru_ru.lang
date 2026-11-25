@@ -18,6 +18,7 @@ item.testmod.edited = Изменённый предмет
 item.testmod.scoped_blaster = Бластер с прицелом
 entity.testmod.fast_arrow = Быстрая стрела
 entity.testmod.sentry = Часовой
+entity.testmod.torch_shy = Боязливый зомби
 block.testmod.cable = Кабель
 testmod.energy = {color:key}{0}{/} / {1} ЭЕ
 block.testmod.regolith = Реголит

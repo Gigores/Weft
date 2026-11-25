@@ -471,7 +471,47 @@ pub async fn neutral_mobs(t: T) -> R {
     Ok(())
 }
 
-/// A zombie's goals: it finds its way around a wall to the player and hits it.
+/// A held torch displaces both the chase and the attack, and putting it away restores pursuit.
+pub async fn torch_shy_brain(t: T) -> R {
+    t.flat().await?;
+    let f = t.feet();
+    t.op("put me 2 base:torch 1").await?;
+    t.c().select_slot(0);
+    let id = spawn(&t, "testmod:torch_shy", add(f, [6, 0, 0])).await?;
+    let state = |rule: &str| format!("brain {id} {rule}");
+    t.until("the mob attacks without a torch", std::time::Duration::from_secs(8), |t| {
+        t.c().entity(0).is_some_and(|e| e.health < 20.0)
+    }).await?;
+    let before = pos_of(&t, &id.to_string()).await?;
+    t.c().select_slot(2);
+    t.secs(0.35).await?;
+    let fleeing = t.op(&state("testmod:run_from_torch")).await?;
+    t.check(fleeing != "idle", format!("the torch triggers flight: {fleeing}"));
+    t.check_eq(t.op(&state("core:chase")).await?, "idle".to_owned(), "flight owns movement");
+    t.check_eq(t.op(&state("core:melee")).await?, "idle".to_owned(), "flight owns attacks");
+    t.secs(0.6).await?;
+    let after = pos_of(&t, &id.to_string()).await?;
+    t.check(after[0] > before[0] + 0.6, format!("it moved away: {before:?} -> {after:?}"));
+    t.c().select_slot(0);
+    t.secs(0.35).await?;
+    t.check_eq(t.op(&state("testmod:run_from_torch")).await?, "idle".to_owned(), "putting the torch away ends flight");
+    let chasing = t.op(&state("core:chase")).await?;
+    t.check(chasing != "idle", format!("pursuit resumes: {chasing}"));
+    t.check_eq(t.op(&format!("brain_edit {id} core:chase disable")).await?, "true".to_owned(), "disable the default movement rule");
+    t.check_eq(t.op(&format!("brain_edit {id} core:melee disable")).await?, "true".to_owned(), "disable the default attack rule");
+    t.check_eq(t.op(&format!("brain_edit {id} core:watch_player base:skeleton")).await?, "true".to_owned(), "install a rule from another kind");
+    t.secs(0.35).await?;
+    t.check(t.op(&state("core:watch_player")).await? != "idle", "installed rule runs before reload");
+    super::audit::reopen(&t, 1).await?;
+    t.op("mode survival").await?;
+    t.secs(1.0).await?;
+    t.check_eq(t.op(&state("core:chase")).await?, "idle".to_owned(), "disabled rule stays disabled after reload");
+    let watching = t.op(&state("core:watch_player")).await?;
+    t.check(watching != "idle", format!("installed rule survives reload: {watching}"));
+    Ok(())
+}
+
+/// A zombie finds its way around a wall to the player and hits it.
 pub async fn zombie_chases(t: T) -> R {
     t.flat().await?;
     let f = t.feet();

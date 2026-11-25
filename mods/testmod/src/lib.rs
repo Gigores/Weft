@@ -20,6 +20,7 @@ mod looks;
 mod mace;
 mod riding;
 mod scoped_blaster;
+mod torch_shy;
 
 use weft_sdk::terrain::*;
 use weft_sdk::*;
@@ -163,12 +164,14 @@ fn init(r: &mut Registry) {
         .texture("base:zombie")
         .model(humanoid(true))
         .attack_damage(1.0)
-        .goals(
-            ai::Goals::new()
+        .reach(1.3)
+        .brain(
+            ai::Brain::new()
                 .aggressive(5.0)
-                .then(ai::melee_within(1.3))
-                .then(ai::chase_target(20.0, 1.0)),
+                .rule(ai::melee())
+                .rule(ai::chase(20.0, 1.0)),
         );
+    torch_shy::register(r);
     // One block in 2x2x2 cells, its model and boxes spanning them from its own.
     static BIG: Block = Block::named("big");
     r.block(&BIG)

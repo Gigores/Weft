@@ -3079,6 +3079,85 @@ pub struct EntityTickArgs {
     pub count: usize,
 }
 
+pub mod brain {
+    pub const RULE: &str = "entity.brain/";
+    pub const SETTINGS: &str = "entity.brain_settings/";
+    pub const HURT: &str = "core:brain_hurt";
+    pub const ANGER: &str = "core:brain_anger";
+    pub const FEAR: &str = "core:brain_fear";
+    pub const HELD_CHANGED: &str = "core:held_changed";
+    pub const MOVE: u32 = 1;
+    pub const LOOK: u32 = 2;
+    pub const USE: u32 = 4;
+    pub const SENSE: u32 = 0;
+    pub const OFFER: u32 = 1;
+    pub const START: u32 = 2;
+    pub const UPDATE: u32 = 3;
+    pub const STOP: u32 = 4;
+    pub const STEP: u32 = 5;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BrainMemory {
+    pub source: u64,
+    pub time: u64,
+}
+
+impl Schema for BrainMemory {
+    const SCHEMA: &'static str = "{source:u64,time:u64}";
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct HeldChange {
+    pub entity: u64,
+    pub main: u32,
+    pub off: u32,
+}
+
+impl Schema for HeldChange {
+    const SCHEMA: &'static str = "{entity:u64,main:u32,off:u32}";
+}
+
+data! {
+    pub struct BrainSettings {
+        pub controls: u32,
+        pub interval: u32,
+        pub step: u32,
+        pub watched: data::Vec<data::String>,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BrainOffer {
+    pub target: u64,
+    pub point: Vec3,
+    pub speed: f32,
+    pub priority: f32,
+    pub keep: f32,
+    pub valid: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BrainActor {
+    pub id: u64,
+    pub current: BrainOffer,
+    pub offer: BrainOffer,
+    /// Delay until its next evaluation. A zero delay waits for a signal.
+    pub next: u32,
+}
+
+#[repr(C)]
+pub struct BrainArgs {
+    pub world: *mut WorldCtx,
+    pub actors: *mut BrainActor,
+    pub count: usize,
+    pub phase: u32,
+}
+
 #[repr(C)]
 pub struct EntityEventArgs {
     pub world: *mut WorldCtx,
@@ -4665,6 +4744,11 @@ pub struct Host {
     /// Server: entity `id` plays action `name` for everyone who sees it; `looping` keeps it going
     /// until another one starts, empty `name` ends it.
     pub action_play: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, name: Str, looping: u32),
+    pub brain_wake: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, rule: Str) -> u32,
+    pub brain_enable: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, rule: Str, enable: u32) -> u32,
+    pub brain_install: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, source: u32, rule: Str) -> u32,
+    pub brain_status: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, rule: Str, out: *mut BrainOffer) -> u32,
+    pub entity_hands: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, out: *mut [ItemStack; 2]),
     /// Entity `id` plays action `to` wherever it would play `from`; `to` empty ends that.
     pub action_override: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, from: Str, to: Str),
     /// Server: sound event `sound` (`find` with `entry_kind::SOUND`) at `pos` for `who` (`Around`:

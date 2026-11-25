@@ -16,6 +16,7 @@ block.testmod.pedestal = Pedestal
 block.testmod.big = Big Block
 item.testmod.edited = Edited Item
 entity.testmod.sentry = Sentry
+entity.testmod.torch_shy = Torch-Shy Zombie
 block.testmod.cable = Cable
 testmod.energy = {color:key}{0}{/} / {1} EU
 block.testmod.regolith = Regolith
