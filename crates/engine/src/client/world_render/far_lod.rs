@@ -9,7 +9,7 @@ use crate::client::lod::TileKey;
 use crate::gpu_layout::terrain::{binding, far_lod as layout};
 
 pub(in crate::client) const TILE_WORDS: u32 = layout::SCRATCH + layout::SAMPLES * 3;
-const TILE_BYTES: u64 = TILE_WORDS as u64 * 4;
+pub(super) const TILE_BYTES: u64 = TILE_WORDS as u64 * 4;
 
 #[derive(Default)]
 pub(in crate::client) struct FarLod {
@@ -64,10 +64,17 @@ impl FarLod {
         self.pipes.is_some()
     }
 
-    pub fn add(&mut self, gpu: &mut dyn Backend, key: TileKey) {
-        let buffer = gpu.create_buffer(TILE_BYTES, usage::STORAGE | usage::INDIRECT, "far LOD tile");
-        self.tiles.insert(key, buffer);
+    pub fn add(&mut self, gpu: &mut dyn Backend, key: TileKey) -> bool {
+        let Some(buffer) = gpu.try_create_buffer(TILE_BYTES, usage::STORAGE | usage::INDIRECT, "far LOD tile") else { return false };
+        if let Some(old) = self.tiles.insert(key, buffer) {
+            self.retired.push(old);
+        }
         self.build.push((key, buffer));
+        true
+    }
+
+    pub fn bytes_except(&self, key: TileKey) -> usize {
+        (self.tiles.len() - usize::from(self.tiles.contains_key(&key))) * TILE_BYTES as usize
     }
 
     pub fn remove(&mut self, key: TileKey) {

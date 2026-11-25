@@ -1325,6 +1325,8 @@ pub struct Lod {
     ready: FxHashMap<TileKey, ReadyTile>,
     cached_heights: cache::Heights,
     cache_misses: FxHashSet<TileKey>,
+    memory_min_level: u32,
+    memory_retry: Option<Instant>,
     generation: u64,
     pending: FxHashSet<TileKey>,
     /// Tiles wanted, coarse first then nearest, and the view that selected them.
@@ -1390,6 +1392,8 @@ impl Lod {
             ready: FxHashMap::default(),
             cached_heights: cache::Heights::default(),
             cache_misses: FxHashSet::default(),
+            memory_min_level: 0,
+            memory_retry: None,
             generation: 0,
             pending: FxHashSet::default(),
             wanted: Vec::new(),
@@ -1564,6 +1568,8 @@ impl Lod {
             self.save_view();
             self.cached_heights.clear();
             self.cache_misses.clear();
+            self.memory_min_level = 0;
+            self.memory_retry = None;
             for (key, _) in self.ready.drain() {
                 render.remove_lod(key);
             }
@@ -1646,18 +1652,23 @@ impl Lod {
                 }
                 continue;
             }
-            if self.stale.contains(&key) {
+            if self.stale.contains(&key) || key.level < self.memory_min_level.min(self.max_level) {
                 continue;
             }
             let tile = match result {
                 Ok(BuiltTile::Meshed(m)) => {
-                    render.upload_lod(gpu, textures, m.key, &m.quads, m.counts, m.y);
+                    if !render.upload_lod(gpu, textures, m.key, &m.quads, m.counts, m.y) {
+                        self.memory_pressure(key);
+                        break;
+                    }
                     ReadyTile { y: m.y, quads: m.quads.len(), last_used: self.generation, far: false }
                 }
                 Ok(BuiltTile::Far(key)) => {
                     far_built += 1;
-                    render.remove_lod(key);
-                    render.far_lod.add(gpu, key);
+                    if !render.upload_far_lod(gpu, key) {
+                        self.memory_pressure(key);
+                        break;
+                    }
                     // The height envelope is only a priority hint. Geometry stays on the GPU.
                     let y = land.unwrap_or(0);
                     let quads = super::world_render::far_lod::TILE_WORDS.div_ceil(4) as usize;
@@ -1686,6 +1697,10 @@ impl Lod {
             hide,
             reach,
         };
+        if self.memory_retry.is_some_and(|t| t <= Instant::now()) {
+            self.memory_retry = None;
+            self.dirty = true;
+        }
         let changed = self.dirty
             || released
             || self
@@ -1774,6 +1789,17 @@ impl Lod {
                 .far_lod
                 .prepare(gpu, early, frame.slot, compute, terrain.description.len(), || terrain.far_description(c, dim, textures));
         }
+        render.release_empty_pages(gpu);
+    }
+
+    fn memory_pressure(&mut self, key: TileKey) {
+        log::debug!(target: "alloc", "LOD tile {key:?} could not be uploaded, reducing detail");
+        self.memory_min_level = self
+            .memory_min_level
+            .max((key.level + 1).min(self.max_level));
+        self.memory_retry = Some(Instant::now() + Duration::from_secs(1));
+        self.remembered.clear();
+        self.dirty = true;
     }
 
     fn change_frontier(&mut self, next: FxHashSet<TileKey>, now: Instant) {
@@ -1883,7 +1909,7 @@ impl Lod {
         let mut spare = Vec::new();
         let mut quads = 0;
         for (&key, tile) in &mut self.ready {
-            if needed.contains(&key) || self.remembered.contains_key(&key) {
+            if needed.contains(&key) || self.memory_min_level == 0 && self.remembered.contains_key(&key) {
                 tile.last_used = self.generation;
             } else {
                 quads += tile.quads;
@@ -1892,7 +1918,7 @@ impl Lod {
         }
         let mut count = spare.len();
         // Room for the other directions around the camera, including empty tiles.
-        let limit = 3 * self.wanted.len();
+        let limit = if self.memory_min_level == 0 && self.memory_retry.is_none() { 3 * self.wanted.len() } else { 0 };
         if count <= limit && quads <= SPARE_QUADS {
             return;
         }
@@ -2097,7 +2123,7 @@ impl Lod {
             near <= reach && far >= view.hide as f64
         };
         let priority = |key: TileKey| {
-            if key.level == 0 {
+            if key.level <= self.memory_min_level {
                 return None;
             }
             let (low, high) = self
@@ -2261,6 +2287,9 @@ impl Lod {
 
     /// Asks for the nearest wanted tiles not made yet, or made before columns changed.
     fn request(&mut self, far: bool) {
+        if self.memory_retry.is_some() {
+            return;
+        }
         let Some(terrain) = &self.terrain else { return };
         let columns = (self.columns_dim == self.dim).then_some(&self.columns);
         let edits = (self.edits_dim == self.dim).then_some(&self.edits);
@@ -2271,7 +2300,7 @@ impl Lod {
                 break;
             }
             // Leave the mark: the one in flight still has the old columns.
-            if self.pending.contains(&key) {
+            if self.pending.contains(&key) || key.level < self.memory_min_level.min(self.max_level) {
                 continue;
             }
             let again = self.stale.remove(&key);
@@ -2475,6 +2504,23 @@ mod tests {
         settle(&mut lod, selection(1.4, 1080, 16 * 1_048_576), (0.0, 256.0));
         assert!(lod.wanted.len() < 8192, "extreme zoom requests {} tiles", lod.wanted.len());
         eprintln!("adaptive LOD nodes normal={normal}, million-range={far}, 50x={}", lod.wanted.len());
+    }
+
+    #[test]
+    fn memory_pressure_keeps_the_parent_instead_of_requesting_finer_tiles() {
+        let view = selection(70.0, 1080, 4096);
+        let heights = (0.0, 256.0);
+        let mut lod = Lod::new(unbounded().0, PathBuf::new(), None);
+        settle(&mut lod, view, heights);
+        let fine = lod.wanted.iter().find(|k| k.level == 0).copied().unwrap();
+        lod.memory_pressure(fine);
+        let needed = lod.pick(view, heights, None);
+        assert!(needed.contains(&fine.parent()));
+        assert!(lod.wanted.iter().all(|key| key.level > fine.level));
+
+        let mut shown = Vec::new();
+        assert!(lod.cover(fine.parent(), &needed, &mut shown));
+        assert_eq!(shown, [fine.parent()]);
     }
 
     #[test]

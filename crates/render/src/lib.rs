@@ -430,6 +430,10 @@ pub trait Backend: Send {
     fn set_surface(&mut self, _window: Option<&dyn Window>) {}
 
     fn create_buffer(&mut self, size: u64, usage: u32, label: &str) -> BufferId;
+    /// Optional buffers may be skipped if the backend can report an allocation failure.
+    fn try_create_buffer(&mut self, size: u64, usage: u32, label: &str) -> Option<BufferId> {
+        Some(self.create_buffer(size, usage, label))
+    }
     /// Only valid for `usage::HOST` buffers.
     fn mapped(&mut self, buffer: BufferId) -> &mut [u8];
     /// Copied on the GPU timeline at the start of the next submitted frame, before any pass.

@@ -1361,6 +1361,17 @@ fn raw_buffer(
     location: MemoryLocation,
     name: &str,
 ) -> (vk::Buffer, Allocation) {
+    try_raw_buffer(device, allocator, size, usage, location, name).unwrap_or_else(|e| panic!("allocating {size} bytes for {name}: {e}"))
+}
+
+fn try_raw_buffer(
+    device: &ash::Device,
+    allocator: &mut Allocator,
+    size: u64,
+    usage: vk::BufferUsageFlags,
+    location: MemoryLocation,
+    name: &str,
+) -> Result<(vk::Buffer, Allocation), String> {
     unsafe {
         let buffer = device
             .create_buffer(
@@ -1369,21 +1380,27 @@ fn raw_buffer(
                     .usage(usage),
                 None,
             )
-            .expect("vkCreateBuffer");
+            .map_err(|e| e.to_string())?;
         let requirements = device.get_buffer_memory_requirements(buffer);
-        let alloc = allocator
-            .allocate(&AllocationCreateDesc {
-                name,
-                requirements,
-                location,
-                linear: true,
-                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-            })
-            .unwrap_or_else(|e| panic!("allocating {size} bytes for {name}: {e}"));
-        device
-            .bind_buffer_memory(buffer, alloc.memory(), alloc.offset())
-            .expect("bind buffer memory");
-        (buffer, alloc)
+        let alloc = match allocator.allocate(&AllocationCreateDesc {
+            name,
+            requirements,
+            location,
+            linear: true,
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        }) {
+            Ok(alloc) => alloc,
+            Err(e) => {
+                device.destroy_buffer(buffer, None);
+                return Err(e.to_string());
+            }
+        };
+        if let Err(e) = device.bind_buffer_memory(buffer, alloc.memory(), alloc.offset()) {
+            device.destroy_buffer(buffer, None);
+            let _ = allocator.free(alloc);
+            return Err(e.to_string());
+        }
+        Ok((buffer, alloc))
     }
 }
 
@@ -1570,6 +1587,11 @@ impl Backend for VulkanBackend {
     }
 
     fn create_buffer(&mut self, size: u64, usage: u32, label: &str) -> BufferId {
+        self.try_create_buffer(size, usage, label)
+            .unwrap_or_else(|| panic!("allocating {size} bytes for {label} failed"))
+    }
+
+    fn try_create_buffer(&mut self, size: u64, usage: u32, label: &str) -> Option<BufferId> {
         let mut flags = vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC;
         if usage & usage::STORAGE != 0 {
             flags |= vk::BufferUsageFlags::STORAGE_BUFFER;
@@ -1590,8 +1612,10 @@ impl Backend for VulkanBackend {
         } else {
             MemoryLocation::GpuOnly
         };
-        let (raw, alloc) = raw_buffer(&self.device, &mut self.allocator, size, flags, location, label);
-        BufferId(self.buffers.insert(Buffer { raw, alloc, size }))
+        let (raw, alloc) = try_raw_buffer(&self.device, &mut self.allocator, size, flags, location, label)
+            .inspect_err(|e| log::warn!("allocating {size} bytes for {label}: {e}"))
+            .ok()?;
+        Some(BufferId(self.buffers.insert(Buffer { raw, alloc, size })))
     }
 
     fn mapped(&mut self, buffer: BufferId) -> &mut [u8] {

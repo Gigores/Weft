@@ -20,6 +20,8 @@ pub(super) mod far_lod;
 const FACE_WORDS: u32 = 4;
 const QUAD_WORDS: u32 = 8;
 const PAGE_BYTES: u64 = 64 << 20;
+/// Bound LOD geometry independently of the full-detail terrain faces sharing its pool.
+const LOD_FACE_BYTES: usize = 192 << 20;
 /// How far from the camera, in blocks, translucent quads are kept sorted far to near. Past that
 /// overlaps are too small to tell.
 const SORT_REACH: f64 = 48.0;
@@ -35,7 +37,7 @@ struct Alloc {
 
 struct Pool {
     words: u32,
-    pages: Vec<(BufferId, FreeList)>,
+    pages: Vec<Option<(BufferId, FreeList)>>,
     label: &'static str,
 }
 
@@ -66,28 +68,66 @@ impl Pool {
     }
 
     fn alloc(&mut self, gpu: &mut dyn Backend, n: u32) -> Alloc {
+        self.try_alloc(gpu, n)
+            .unwrap_or_else(|| panic!("allocating {} ({} records)", self.label, n))
+    }
+
+    fn try_alloc(&mut self, gpu: &mut dyn Backend, n: u32) -> Option<Alloc> {
         let per = self.records_per_page();
-        assert!(n <= per, "mesh larger than a page");
-        for (pi, (_, free)) in self.pages.iter_mut().enumerate() {
+        if n > per {
+            return None;
+        }
+        for (pi, (_, free)) in self
+            .pages
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, slot)| Some((i, slot.as_mut()?)))
+        {
             if let Some(&(len, start)) = free.by_len.range((n, 0)..).next() {
                 free.take(start, len);
                 if len > n {
                     free.add(start + n, len - n);
                 }
-                return Alloc { page: pi as u32, offset: start, len: n };
+                return Some(Alloc { page: pi as u32, offset: start, len: n });
             }
         }
-        let buf = gpu.create_buffer(PAGE_BYTES, usage::STORAGE, self.label);
+        let buf = gpu.try_create_buffer(PAGE_BYTES, usage::STORAGE, self.label)?;
         let mut free = FreeList::default();
         if per > n {
             free.add(n, per - n);
         }
-        self.pages.push((buf, free));
-        Alloc { page: self.pages.len() as u32 - 1, offset: 0, len: n }
+        let page = if let Some(i) = self.pages.iter().position(Option::is_none) {
+            self.pages[i] = Some((buf, free));
+            i
+        } else {
+            self.pages.push(Some((buf, free)));
+            self.pages.len() - 1
+        };
+        Some(Alloc { page: page as u32, offset: 0, len: n })
+    }
+
+    fn buffer(&self, page: u32) -> BufferId {
+        self.pages[page as usize].as_ref().unwrap().0
+    }
+
+    fn release_empty(&mut self, gpu: &mut dyn Backend) {
+        let per = self.records_per_page();
+        for page in &mut self.pages {
+            if page
+                .as_ref()
+                .is_some_and(|(_, free)| free.by_start.get(&0) == Some(&per))
+            {
+                let (buffer, _) = page.take().unwrap();
+                gpu.destroy_buffer(buffer);
+            }
+        }
+        while self.pages.last().is_some_and(Option::is_none) {
+            self.pages.pop();
+        }
     }
 
     fn free(&mut self, a: Alloc) {
-        let free = &mut self.pages[a.page as usize].1;
+        let free = &mut self.pages[a.page as usize].as_mut().unwrap().1;
         let (mut start, mut len) = (a.offset, a.len);
         if let Some((&s, &l)) = free
             .by_start
@@ -798,7 +838,13 @@ impl WorldRenderer {
         self.lod.clear();
         self.far_lod.destroy(gpu);
         self.lod_quads = 0;
-        for (b, _) in self.faces.pages.drain(..).chain(self.quads.pages.drain(..)) {
+        for (b, _) in self
+            .faces
+            .pages
+            .drain(..)
+            .chain(self.quads.pages.drain(..))
+            .flatten()
+        {
             gpu.destroy_buffer(b);
         }
         for b in self.globals.drain(..).chain([
@@ -932,11 +978,16 @@ impl WorldRenderer {
         quads: &[[u32; 4]],
         counts: super::lod::Counts,
         y: (i32, i32),
-    ) {
-        self.remove_lod(key);
+    ) -> bool {
         if quads.is_empty() {
-            return;
+            self.remove_lod(key);
+            return true;
         }
+        if self.lod_bytes_except(key) + quads.len() * (FACE_WORDS as usize * 4) > LOD_FACE_BYTES {
+            return false;
+        }
+        let Some(a) = self.faces.try_alloc(gpu, quads.len() as u32) else { return false };
+        self.remove_lod(key);
         let n = quads.len() - counts[super::lod::FOREST][0] as usize;
         let (land, forest) = quads.split_at(n);
         textures.ensure_blocks(
@@ -944,8 +995,7 @@ impl WorldRenderer {
             land.iter()
                 .flat_map(|q| std::iter::once(q[1] & crate::gpu_layout::face::TEX_MASK).chain(crate::gpu_layout::lod_cover_pattern(q))),
         );
-        let a = self.faces.alloc(gpu, quads.len() as u32);
-        let buf = self.faces.pages[a.page as usize].0;
+        let buf = self.faces.buffer(a.page);
         if !land.is_empty() {
             gpu.write_buffer(buf, a.offset as u64 * 16, bytemuck::cast_slice(land));
         }
@@ -976,6 +1026,12 @@ impl WorldRenderer {
             .max(fine_spill);
         self.lod.insert(key, (a, counts, y, spill));
         self.lod_quads += quads.len();
+        true
+    }
+
+    pub(super) fn release_empty_pages(&mut self, gpu: &mut dyn Backend) {
+        self.faces.release_empty(gpu);
+        self.quads.release_empty(gpu);
     }
 
     /// The columns shown by cubes (`Lod::mask`).
@@ -992,8 +1048,25 @@ impl WorldRenderer {
         (self.lod.len() + self.far_lod.len(), self.lod_quads)
     }
 
+    fn lod_bytes_except(&self, key: super::lod::TileKey) -> usize {
+        let old = self.lod.get(&key).map_or(0, |(a, _, _, _)| a.len as usize);
+        (self.lod_quads - old) * (FACE_WORDS as usize * 4) + self.far_lod.bytes_except(key)
+    }
+
+    pub(super) fn upload_far_lod(&mut self, gpu: &mut dyn Backend, key: super::lod::TileKey) -> bool {
+        if self.lod_bytes_except(key) + far_lod::TILE_BYTES as usize > LOD_FACE_BYTES || !self.far_lod.add(gpu, key) {
+            return false;
+        }
+        self.remove_cpu_lod(key);
+        true
+    }
+
     pub fn remove_lod(&mut self, key: super::lod::TileKey) {
         self.far_lod.remove(key);
+        self.remove_cpu_lod(key);
+    }
+
+    fn remove_cpu_lod(&mut self, key: super::lod::TileKey) {
         if let Some((a, _, _, _)) = self.lod.remove(&key) {
             self.invalidate_lod_sun();
             self.lod_quads -= a.len as usize;
@@ -1050,7 +1123,7 @@ impl WorldRenderer {
         for key in &redone {
             let s = &self.sorted[key];
             quads += s.quads.len();
-            gpu.write_buffer(self.quads.pages[s.page as usize].0, s.offset as u64 * 32, bytemuck::cast_slice(&s.quads));
+            gpu.write_buffer(self.quads.buffer(s.page), s.offset as u64 * 32, bytemuck::cast_slice(&s.quads));
         }
         if !redone.is_empty() {
             log::debug!(target: "frame", "translucent: {} cubes, {quads} quads sorted in {:.2} ms", redone.len(), began.elapsed().as_secs_f64() * 1000.0);
@@ -1099,13 +1172,13 @@ impl WorldRenderer {
         let faces = (total_f > 0).then(|| {
             let a = self.faces.alloc(gpu, total_f);
             let data: Vec<[u32; 4]> = mesh.faces.concat();
-            gpu.write_buffer(self.faces.pages[a.page as usize].0, a.offset as u64 * 16, bytemuck::cast_slice(&data));
+            gpu.write_buffer(self.faces.buffer(a.page), a.offset as u64 * 16, bytemuck::cast_slice(&data));
             a
         });
         let quads = (total_q > 0).then(|| {
             let a = self.quads.alloc(gpu, total_q);
             let data: Vec<[u32; 8]> = mesh.quads.concat();
-            gpu.write_buffer(self.quads.pages[a.page as usize].0, a.offset as u64 * 32, bytemuck::cast_slice(&data));
+            gpu.write_buffer(self.quads.buffer(a.page), a.offset as u64 * 32, bytemuck::cast_slice(&data));
             if !mesh.quads[2].is_empty() {
                 self.sorted.insert(
                     key,
@@ -1726,11 +1799,11 @@ impl WorldRenderer {
     /// The pipeline and records of a run: kind 0 faces, 1 quads, 3 distant terrain.
     fn pipe_of(&self, kind: u8, layer: u8, page: u32) -> (PipelineId, BufferId) {
         if kind == 0 {
-            (self.face_pipes[layer as usize], self.faces.pages[page as usize].0)
+            (self.face_pipes[layer as usize], self.faces.buffer(page))
         } else if kind == 3 {
-            (self.lod_pipes[layer as usize], self.faces.pages[page as usize].0)
+            (self.lod_pipes[layer as usize], self.faces.buffer(page))
         } else {
-            (self.quad_pipes[layer as usize], self.quads.pages[page as usize].0)
+            (self.quad_pipes[layer as usize], self.quads.buffer(page))
         }
     }
 
