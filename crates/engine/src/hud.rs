@@ -46,6 +46,7 @@ pub const TAG_CROSSHAIR: u32 = 2;
 /// A status effect's icon in its frame (`data` the effect), fading its last ten seconds.
 pub const TAG_EFFECT: u32 = 3;
 const TAG_EDIT_GRID: u32 = 4;
+const TAG_OFFHAND: u32 = 5;
 
 /// The status effects the local player has now, beneficial ones first: effect, level, ticks left
 /// (`u64::MAX` for good).
@@ -607,6 +608,7 @@ impl Hud {
             Part::Hotbar if !editing && client.is_some_and(|cl| cl.mode.has(crate::tag_bits::game_mode::NO_HUD)) => {}
             Part::Hotbar => {
                 ui.container(Style::row().gap(0.0), |ui| {
+                    ui.add(Kind::Custom { tag: TAG_OFFHAND, data: 0 }, Style::default().size(20.0, 20.0).at(-4.0, 0.0, [1.0, 0.0]));
                     for i in 0..content().game.player_layout.hotbar as u64 {
                         ui.add(Kind::Custom { tag: TAG_HOTBAR, data: i }, Style::default().size(20.0, 20.0));
                     }
@@ -1189,6 +1191,20 @@ pub fn draw_custom(
                 let s = 18.0 * scale;
                 let a = (alpha.clamp(0.0, 1.0) * 255.0) as u32;
                 ren.image(Rect { x: r.x + (r.w - s) / 2.0, y: r.y + (r.h - s) / 2.0, w: s, h: s }, t, [0.0, 0.0, 1.0, 1.0], 0xFFFFFF00 | a);
+            }
+        }
+        TAG_OFFHAND => {
+            let Some(client) = client else { return };
+            let stack = client.off_held();
+            if !stack.is_empty() {
+                slot_background(ren, look, "hotbar", r, false, scale);
+                ren.defer_stack(r, stack);
+                if content().game.entities[client.me.kind as usize]
+                    .off
+                    .is_some_and(|i| client.blocked_hand_slot(i as usize))
+                {
+                    blocked_slot(ren, look, r, scale);
+                }
             }
         }
         TAG_HOTBAR => {
