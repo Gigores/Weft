@@ -22,6 +22,9 @@ use crate::ui::text::{self, Arg};
 use crate::ui::{Kind, Style, Ui};
 use crate::world::Cube;
 
+mod region_index;
+use region_index::RegionIndex;
+
 const REGION: i32 = 8;
 const ENTRIES: usize = (REGION * REGION * REGION) as usize;
 
@@ -427,10 +430,10 @@ impl Region {
             return Err(std::io::Error::other("region file over 4 GB until it is reopened and compacted"));
         }
         self.file.write_all(data)?;
-        self.header[i] = (end as u32, data.len() as u32);
         self.file.seek(SeekFrom::Start((i * 8) as u64))?;
         self.file.write_all(&(end as u32).to_le_bytes())?;
         self.file.write_all(&(data.len() as u32).to_le_bytes())?;
+        self.header[i] = (end as u32, data.len() as u32);
         Ok(())
     }
 }
@@ -446,6 +449,7 @@ pub struct Storage {
     /// Per dimension, the cubes saved: what differs from generation (clients generate the
     /// rest themselves).
     saved: Vec<FxHashSet<IVec3>>,
+    region_indices: Vec<RegionIndex>,
     /// What was last written for a cube this session: an unchanged one is not appended again.
     last_written: FxHashMap<(u32, IVec3), u64>,
     /// Per dimension, what distant terrain needs of the saved cubes (`lod_tops`).
@@ -473,37 +477,37 @@ impl Storage {
             .collect();
         let mut on_disk = FxHashSet::default();
         let mut saved = vec![FxHashSet::default(); dim_dirs.len()];
-        for (dim, dir) in dim_dirs.iter().enumerate() {
-            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                let parts: Vec<i32> = name
-                    .strip_prefix("r.")
-                    .and_then(|n| n.strip_suffix(".bin"))
-                    .map_or(Vec::new(), |n| n.split('.').filter_map(|v| v.parse().ok()).collect());
-                if let [x, y, z] = parts[..] {
-                    let r = IVec3::new(x, y, z);
-                    on_disk.insert((dim as u32, r));
-                    // The header says which of its cubes are there.
-                    let mut raw = vec![0u8; ENTRIES * 8];
-                    if std::fs::File::open(e.path())
-                        .and_then(|mut f| f.read_exact(&mut raw))
-                        .is_ok()
-                    {
-                        for i in 0..ENTRIES {
-                            if raw[i * 8 + 4..i * 8 + 8] != [0; 4] {
-                                let i = i as i32;
-                                saved[dim].insert(r * REGION + IVec3::new(i % REGION, i / (REGION * REGION), i / REGION % REGION));
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let region_indices = dim_dirs
+            .iter()
+            .zip(&mut saved)
+            .enumerate()
+            .map(|(dim, (dir, saved))| {
+                RegionIndex::open(
+                    dir,
+                    |r| {
+                        on_disk.insert((dim as u32, r));
+                    },
+                    |pos| {
+                        saved.insert(pos);
+                    },
+                )
+            })
+            .collect();
         let lod = dim_dirs
             .iter()
             .map(|dir| crate::server::lod_tops::DimTops::read(&dir.join("lod.bin"), &mut |w| ids.runtime_id(w)))
             .collect();
-        Storage { meta, ids, regions: FxHashMap::default(), dim_dirs, on_disk, saved, last_written: FxHashMap::default(), lod }
+        Storage {
+            meta,
+            ids,
+            regions: FxHashMap::default(),
+            dim_dirs,
+            on_disk,
+            saved,
+            region_indices,
+            last_written: FxHashMap::default(),
+            lod,
+        }
     }
 
     fn region(&mut self, dim: u32, r: IVec3) -> Option<&mut Region> {
@@ -587,16 +591,20 @@ impl Storage {
             buf.hash(&mut h);
             h.finish()
         };
-        if self.last_written.insert((dim, pos), hash) == Some(hash) {
+        if self.last_written.get(&(dim, pos)) == Some(&hash) {
             return;
         }
         let packed = lz4_flex::compress_prepend_size(&buf);
         let (r, i) = region_of(pos);
-        if let Some(reg) = self.region(dim, r) {
-            if let Err(e) = reg.write(i, &packed) {
-                log::error!("saving cube {pos}: {e}");
-            }
+        let Some(reg) = self.region(dim, r) else { return };
+        if let Err(e) = reg.write(i, &packed) {
+            log::error!("saving cube {pos}: {e}");
+            self.regions.remove(&(dim, r));
+            self.region_indices[dim as usize].changed(r);
+            return;
         }
+        self.last_written.insert((dim, pos), hash);
+        self.region_indices[dim as usize].changed(r);
         self.saved[dim as usize].insert(pos);
         let seed = self.meta.seed;
         self.lod[dim as usize].saved(c, dim, seed, pos, &cube, around);
@@ -613,6 +621,9 @@ impl Storage {
         self.meta.save();
         for r in self.regions.values_mut() {
             let _ = r.file.flush();
+        }
+        for (dim, index) in self.region_indices.iter_mut().enumerate() {
+            index.flush(&self.dim_dirs[dim], |pos| self.regions.get(&(dim as u32, pos)));
         }
     }
 
