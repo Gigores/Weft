@@ -99,6 +99,9 @@ impl OpenMenu {
 }
 
 fn get(m: &OpenMenu, dim: &Dim, player: u64, slot: u32) -> ItemStack {
+    if slot == abi::MENU_CURSOR {
+        return m.cursor;
+    }
     let Some(r) = m.slots.get(slot as usize) else { return ItemStack::EMPTY };
     let c = crate::content::content();
     match r.owner {
@@ -110,8 +113,13 @@ fn get(m: &OpenMenu, dim: &Dim, player: u64, slot: u32) -> ItemStack {
 }
 
 fn set(m: &mut OpenMenu, dim: &mut Dim, player: u64, slot: u32, stack: ItemStack) {
-    let Some(r) = m.slots.get(slot as usize).copied() else { return };
     let stack = if stack.count == 0 { ItemStack::EMPTY } else { stack };
+    if slot == abi::MENU_CURSOR {
+        let c = crate::content::content();
+        m.cursor = if stack.is_empty() { ItemStack::EMPTY } else { ItemStack { count: stack.count.min(c.max_stack(&stack)), ..stack } };
+        return;
+    }
+    let Some(r) = m.slots.get(slot as usize).copied() else { return };
     match r.owner {
         Owner::Temp => {
             if let Some(s) = m.temp.get_mut(r.index as usize) {
@@ -341,29 +349,27 @@ pub fn move_items(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: 
     let mut aliases = rustc_hash::FxHashMap::default();
     let mut outputs = Vec::new();
     for &abi::ItemMove { from, to, count } in moves {
-        let (Some(a), Some(b)) = (m.slots.get(from as usize), m.slots.get(to as usize)) else { return false };
-        if count == 0 || from == to {
-            continue;
-        }
-        let output = a.flags & sf::OUTPUT != 0;
-        if !takeable(a)
-            || crafting_result == Some(from)
-            || b.flags & (sf::OUTPUT | sf::LIQUID) != 0
-            || !live_slot(m, dim, c, player, a)
-            || !live_slot(m, dim, c, player, b)
-        {
-            return false;
-        }
-        for (index, slot) in [(from, a), (to, b)] {
-            if aliases
-                .insert((slot.owner.backing(player), slot.index), index)
-                .is_some_and(|prior| prior != index)
+        for (index, taking) in [(from, true), (to, false)] {
+            if index == abi::MENU_CURSOR {
+                continue;
+            }
+            let Some(slot) = m.slots.get(index as usize) else { return false };
+            if count == 0 || from == to {
+                continue;
+            }
+            let permitted =
+                if taking { takeable(slot) && crafting_result != Some(index) } else { slot.flags & (sf::OUTPUT | sf::LIQUID) == 0 };
+            if !permitted
+                || !live_slot(m, dim, c, player, slot)
+                || aliases
+                    .insert((slot.owner.backing(player), slot.index), index)
+                    .is_some_and(|prior| prior != index)
             {
                 return false;
             }
-        }
-        if output && !outputs.contains(&from) {
-            outputs.push(from);
+            if taking && slot.flags & sf::OUTPUT != 0 && !outputs.contains(&index) {
+                outputs.push(index);
+            }
         }
     }
     if aliases.keys().any(|&(owner, _)| match owner {
@@ -378,6 +384,9 @@ pub fn move_items(m: &mut OpenMenu, dim: &mut Dim, c: &'static Content, player: 
         moves,
         |i| get(m, dim, player, i),
         |i, stack| {
+            if i == abi::MENU_CURSOR {
+                return c.max_stack(&stack);
+            }
             let slot = &m.slots[i as usize];
             if fits(c, slot, stack.item) { cap(c, slot, &stack) } else { 0 }
         },
@@ -408,7 +417,9 @@ fn apply_slot_changes(
     }
     show_craft(m, dim, c, player);
     for (i, _) in changes {
-        call(m, dim, c, player, i, |d| d.on_change);
+        if i != abi::MENU_CURSOR {
+            call(m, dim, c, player, i, |d| d.on_change);
+        }
     }
 }
 

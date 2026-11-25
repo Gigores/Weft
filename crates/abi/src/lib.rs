@@ -2665,6 +2665,9 @@ impl<S> ItemMove<S> {
 
 pub const MAX_ITEM_MOVES: usize = 4096;
 
+/// Cursor endpoint for menu item moves.
+pub const MENU_CURSOR: u32 = u32::MAX;
+
 pub mod holder {
     /// Nothing: menus without an owner (a crafting table's grid).
     pub const NONE: u32 = 0;

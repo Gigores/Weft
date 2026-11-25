@@ -468,6 +468,7 @@ impl Client {
 
     /// Requests an atomic batch in this window. True means sent. The server validates exact
     /// counts, backing slots and filters, then syncs the changed stacks normally.
+    /// Use [crate::MENU_CURSOR] as either endpoint to include the carried stack.
     pub fn menu_move(&self, window: u32, moves: &[crate::ItemMove<u32>]) -> bool {
         unsafe { (host().client_menu_move)(self.raw, window, abi::Slice::new(moves)) != 0 }
     }

@@ -1417,6 +1417,17 @@ impl MenuCtx {
     pub fn player(&self) -> u64 {
         self.args.player
     }
+
+    /// The stack the player is carrying in this menu.
+    pub fn cursor_stack(&self) -> ItemStack {
+        unsafe { (host().menu_get)(self.args.menu, abi::MENU_CURSOR) }
+    }
+
+    /// Replaces the carried stack from a server-side menu callback.
+    pub fn set_cursor_stack(&self, stack: ItemStack) {
+        unsafe { (host().menu_set)(self.args.menu, abi::MENU_CURSOR, stack) };
+    }
+
     /// In `on_take` of a crafting grid's result (`Slots::crafting`), how many runs of its recipe
     /// that was (a shift-click crafts all that fit at once); 1 otherwise.
     pub fn times(&self) -> u32 {

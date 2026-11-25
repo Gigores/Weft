@@ -2105,6 +2105,41 @@ pub async fn inventory_tools(t: T) -> R {
         t.c().menu_slot(chest + 22).count == 3 && t.c().menu_slot(main + 1).count == 3
     })
     .await?;
+    let cursor = weft_sdk::MENU_CURSOR;
+    t.check(
+        t.c()
+            .menu_move(window, &[ItemMove::new(chest + 23, cursor, 5)]),
+        "sent a move to the cursor",
+    );
+    t.until("cursor received part of the stack", Duration::from_secs(3), |t| {
+        t.c().cursor_stack().count == 5 && t.c().menu_slot(chest + 23).count == 2
+    })
+    .await?;
+    t.check(
+        t.c()
+            .menu_move(window, &[ItemMove::new(cursor, chest + 22, 5), ItemMove::new(chest + 22, cursor, 3)]),
+        "sent a cursor swap",
+    );
+    t.until("cursor and slot swapped", Duration::from_secs(3), |t| {
+        t.c().cursor_stack().count == 3 && t.c().menu_slot(chest + 22).count == 5
+    })
+    .await?;
+    t.check(
+        t.c()
+            .menu_move(window, &[ItemMove::new(cursor, chest + 22, 1)]),
+        "sent a rejected cursor move",
+    );
+    t.secs(0.25).await?;
+    t.check_eq(t.c().cursor_stack().count, 3, "rejected move leaves the cursor stack intact");
+    t.check(
+        t.c()
+            .menu_move(window, &[ItemMove::new(cursor, chest + 20, 3)]),
+        "sent a move back to a slot",
+    );
+    t.until("cursor emptied into the slot", Duration::from_secs(3), |t| {
+        t.c().cursor_stack().is_empty() && t.c().menu_slot(chest + 20).count == 3
+    })
+    .await?;
     t.c().menu_close();
     t.no_screen().await?;
     t.op(&format!("menu testmod:shelves {at}")).await?;
