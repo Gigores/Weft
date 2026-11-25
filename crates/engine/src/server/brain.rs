@@ -47,11 +47,7 @@ pub(super) const DECISIONS_PER_TICK: usize = 512;
 
 impl State {
     pub fn new(kind: u32, count: usize) -> Self {
-        Self {
-            slots: (0..count).map(|i| Slot::new((kind, i))).collect(),
-            next: if count == 0 { ASLEEP } else { 0 },
-            controls: 0,
-        }
+        Self { slots: (0..count).map(|i| Slot::new((kind, i))).collect(), next: if count == 0 { ASLEEP } else { 0 }, controls: 0 }
     }
 
     pub fn restore(c: &Content, kind: u32, bytes: &[u8]) -> Option<Box<Self>> {
@@ -63,7 +59,11 @@ impl State {
             let mut slot = Slot::new((source, i));
             slot.enabled = enabled;
             slot.due = if enabled { 0 } else { ASLEEP };
-            match brain.slots.iter().position(|old| old.definition(c).name == name) {
+            match brain
+                .slots
+                .iter()
+                .position(|old| old.definition(c).name == name)
+            {
                 Some(i) if brain.slots[i].rule != slot.rule => continue,
                 Some(i) => brain.slots[i] = slot,
                 None => brain.slots.push(slot),
@@ -74,14 +74,22 @@ impl State {
     }
 
     fn saved_edits(&self, c: &Content, kind: u32) -> Option<Box<[u8]>> {
-        let edits: Vec<_> = self.slots.iter().filter(|s| s.rule.0 != kind || !s.enabled).map(|s| {
-            (&c.game.entities[s.rule.0 as usize].name, &s.definition(c).name, s.enabled)
-        }).collect();
+        let edits: Vec<_> = self
+            .slots
+            .iter()
+            .filter(|s| s.rule.0 != kind || !s.enabled)
+            .map(|s| (&c.game.entities[s.rule.0 as usize].name, &s.definition(c).name, s.enabled))
+            .collect();
         if edits.is_empty() { None } else { serde_json::to_vec(&edits).ok().map(Vec::into_boxed_slice) }
     }
 
     fn refresh(&mut self) {
-        self.next = self.slots.iter().map(|s| s.due.min(s.step)).min().unwrap_or(ASLEEP);
+        self.next = self
+            .slots
+            .iter()
+            .map(|s| s.due.min(s.step))
+            .min()
+            .unwrap_or(ASLEEP);
     }
 
     pub fn controls(&self, mask: u32) -> bool {
@@ -105,7 +113,12 @@ impl State {
 }
 
 fn rule_index(c: &Content, kind: u32, name: &str) -> Option<usize> {
-    c.game.entities.get(kind as usize)?.brain.iter().position(|r| r.name == name)
+    c.game
+        .entities
+        .get(kind as usize)?
+        .brain
+        .iter()
+        .position(|r| r.name == name)
 }
 
 type Batch = FxHashMap<(u32, usize, u32), Vec<BrainActor>>;
@@ -119,8 +132,11 @@ fn actor(id: u64, current: BrainOffer, offer: BrainOffer, next: u32) -> BrainAct
 }
 
 fn valid(offer: BrainOffer) -> bool {
-    offer.valid != 0 && offer.priority.is_finite() && offer.keep.is_finite()
-        && offer.speed.is_finite() && offer.point.to_array().iter().all(|v| v.is_finite())
+    offer.valid != 0
+        && offer.priority.is_finite()
+        && offer.keep.is_finite()
+        && offer.speed.is_finite()
+        && offer.point.to_array().iter().all(|v| v.is_finite())
 }
 
 fn same_target(a: BrainOffer, b: BrainOffer) -> bool {
@@ -190,8 +206,14 @@ impl Dim {
         let Some(i) = rule_index(c, source, name) else { return false };
         let Some(e) = self.entities.get_mut(id) else { return false };
         let kind = e.kind;
-        let brain = e.brain.get_or_insert_with(|| Box::new(State::new(kind, c.game.entities[kind as usize].brain.len())));
-        if let Some(slot) = brain.slots.iter().find(|slot| slot.definition(c).name == name) {
+        let brain = e
+            .brain
+            .get_or_insert_with(|| Box::new(State::new(kind, c.game.entities[kind as usize].brain.len())));
+        if let Some(slot) = brain
+            .slots
+            .iter()
+            .find(|slot| slot.definition(c).name == name)
+        {
             return slot.rule == (source, i) && self.enable_brain(c, id, name, true);
         }
         brain.slots.push(Slot::new((source, i)));
@@ -213,7 +235,10 @@ impl Dim {
     pub(crate) fn brain_status(&self, c: &Content, id: u64, name: &str) -> Option<BrainOffer> {
         let e = self.entities.get(id)?;
         let brain = e.brain.as_ref()?;
-        let slot = brain.slots.iter().find(|slot| slot.definition(c).name == name)?;
+        let slot = brain
+            .slots
+            .iter()
+            .find(|slot| slot.definition(c).name == name)?;
         Some(slot.current).filter(|offer| valid(*offer))
     }
 
@@ -221,7 +246,13 @@ impl Dim {
         let Some(e) = self.entities.get_mut(id) else { return };
         let Some(brain) = &mut e.brain else { return };
         for i in 0..brain.slots.len() {
-            if brain.slots[i].definition(c).settings.watched.iter().any(|watch| watch == name) {
+            if brain.slots[i]
+                .definition(c)
+                .settings
+                .watched
+                .iter()
+                .any(|watch| watch == name)
+            {
                 brain.wake(i, self.time);
             }
         }
@@ -230,10 +261,15 @@ impl Dim {
     pub(crate) fn track_brain_write(&mut self, c: &Content, id: u64, component: u32) {
         let Some(brain) = self.entities.get(id).and_then(|e| e.brain.as_ref()) else { return };
         let Some(def) = c.game.components.get(component as usize) else { return };
-        if brain.slots.iter().any(|slot| slot.definition(c).settings.watched.contains(&def.name))
+        if brain
+            .slots
+            .iter()
+            .any(|slot| slot.definition(c).settings.watched.contains(&def.name))
             && let Some(value) = self.entities.comps.get(&(id, component))
         {
-            self.brain_writes.entry((id, component)).or_insert_with(|| value.clone());
+            self.brain_writes
+                .entry((id, component))
+                .or_insert_with(|| value.clone());
         }
     }
 
@@ -250,17 +286,24 @@ impl Dim {
         batch.sort_unstable_by_key(|&(key, _)| key);
         for ((kind, i, phase), mut actors) in batch {
             let (owner, callback) = c.game.entities[kind as usize].brain[i].call;
-            self.call(0, owner, callback, |world| abi::BrainArgs {
-                world, actors: actors.as_mut_ptr(), count: actors.len(), phase,
-            });
+            self.call(0, owner, callback, |world| abi::BrainArgs { world, actors: actors.as_mut_ptr(), count: actors.len(), phase });
             if !matches!(phase, b::OFFER | b::SENSE | b::START | b::STEP) {
                 continue;
             }
             for entry in actors {
-                let Some(brain) = self.entities.get_mut(entry.id).and_then(|e| e.brain.as_mut()) else { continue };
+                let Some(brain) = self
+                    .entities
+                    .get_mut(entry.id)
+                    .and_then(|e| e.brain.as_mut())
+                else {
+                    continue;
+                };
                 let key = (kind, i);
-                let index = if brain.slots.get(i).is_some_and(|s| s.rule == key) { Some(i) }
-                    else { brain.slots.iter().position(|s| s.rule == key) };
+                let index = if brain.slots.get(i).is_some_and(|s| s.rule == key) {
+                    Some(i)
+                } else {
+                    brain.slots.iter().position(|s| s.rule == key)
+                };
                 let Some(slot) = index.map(|i| &mut brain.slots[i]) else { continue };
                 if matches!(phase, b::START | b::STEP) {
                     if valid(slot.current) {
@@ -305,7 +348,10 @@ impl Dim {
                         let interval = rule.settings.interval;
                         let next = if !slot.sampled && interval > 1 { 1 + (id % u64::from(interval)) as u32 } else { interval };
                         slot.sampled = true;
-                        batch.entry(slot.batch(phase)).or_default().push(actor(id, slot.current, BrainOffer::default(), next));
+                        batch
+                            .entry(slot.batch(phase))
+                            .or_default()
+                            .push(actor(id, slot.current, BrainOffer::default(), next));
                     } else if valid(slot.wanted) || valid(slot.current) {
                         slot.wanted = BrainOffer::default();
                         decisions.insert(id);
@@ -327,7 +373,10 @@ impl Dim {
                     if valid(slot.current) && slot.step <= now {
                         slot.step = ASLEEP;
                         let period = slot.definition(c).settings.step;
-                        apply.entry(slot.batch(b::STEP)).or_default().push(actor(id, slot.current, slot.current, period));
+                        apply
+                            .entry(slot.batch(b::STEP))
+                            .or_default()
+                            .push(actor(id, slot.current, slot.current, period));
                     }
                 }
                 brain.refresh();
@@ -345,21 +394,30 @@ impl Dim {
                 }
             }
             candidates.sort_unstable_by(|&a, &b| {
-                brain.slots[b].wanted.priority.total_cmp(&brain.slots[a].wanted.priority).then(a.cmp(&b))
+                brain.slots[b]
+                    .wanted
+                    .priority
+                    .total_cmp(&brain.slots[a].wanted.priority)
+                    .then(a.cmp(&b))
             });
             for &i in &candidates {
                 let mask = brain.slots[i].definition(c).settings.controls;
-                let wins = chosen.iter().filter(|&&j| brain.slots[j].definition(c).settings.controls & mask != 0).all(|&j| {
-                    let slot = &brain.slots[j];
-                    let keep = if same_target(slot.current, slot.wanted) { slot.wanted.keep } else { slot.wanted.priority };
-                    brain.slots[i].wanted.priority > keep
-                });
+                let wins = chosen
+                    .iter()
+                    .filter(|&&j| brain.slots[j].definition(c).settings.controls & mask != 0)
+                    .all(|&j| {
+                        let slot = &brain.slots[j];
+                        let keep = if same_target(slot.current, slot.wanted) { slot.wanted.keep } else { slot.wanted.priority };
+                        brain.slots[i].wanted.priority > keep
+                    });
                 if wins {
                     chosen.retain(|&j| brain.slots[j].definition(c).settings.controls & mask == 0);
                     chosen.push(i);
                 }
             }
-            brain.controls = chosen.iter().fold(0, |mask, &i| mask | brain.slots[i].definition(c).settings.controls);
+            brain.controls = chosen
+                .iter()
+                .fold(0, |mask, &i| mask | brain.slots[i].definition(c).settings.controls);
             for (i, slot) in brain.slots.iter_mut().enumerate() {
                 let rule = slot.definition(c);
                 let old = slot.current;
@@ -371,21 +429,32 @@ impl Dim {
                         e.nav = None;
                         e.walk = None;
                     }
-                    stop.entry(slot.batch(b::STOP)).or_default().push(actor(id, old, next, 0));
+                    stop.entry(slot.batch(b::STOP))
+                        .or_default()
+                        .push(actor(id, old, next, 0));
                 }
                 if !valid(next) {
                     slot.step = ASLEEP;
                 } else if !same {
                     let step = rule.settings.step;
                     slot.step = deadline(now, step);
-                    apply.entry(slot.batch(b::START)).or_default().push(actor(id, old, next, step));
+                    apply
+                        .entry(slot.batch(b::START))
+                        .or_default()
+                        .push(actor(id, old, next, step));
                 } else {
                     if old.point != next.point || old.speed != next.speed {
-                        apply.entry(slot.batch(b::UPDATE)).or_default().push(actor(id, old, next, 0));
+                        apply
+                            .entry(slot.batch(b::UPDATE))
+                            .or_default()
+                            .push(actor(id, old, next, 0));
                     }
                     if slot.step <= now {
                         slot.step = ASLEEP;
-                        apply.entry(slot.batch(b::STEP)).or_default().push(actor(id, old, next, rule.settings.step));
+                        apply
+                            .entry(slot.batch(b::STEP))
+                            .or_default()
+                            .push(actor(id, old, next, rule.settings.step));
                     }
                 }
                 if log::log_enabled!(target: "brain", log::Level::Debug) && (lost || !same && valid(next)) {
@@ -400,10 +469,15 @@ impl Dim {
     }
 
     pub(super) fn brain_due(&self, e: &super::entity::Entity) -> bool {
-        e.brain.as_ref().is_some_and(|brain| brain.next <= self.time)
+        e.brain
+            .as_ref()
+            .is_some_and(|brain| brain.next <= self.time)
     }
 
     pub(super) fn brain_deadline(&self, id: u64) -> u64 {
-        self.entities.get(id).and_then(|e| e.brain.as_ref()).map_or(ASLEEP, |brain| brain.next)
+        self.entities
+            .get(id)
+            .and_then(|e| e.brain.as_ref())
+            .map_or(ASLEEP, |brain| brain.next)
     }
 }

@@ -314,11 +314,18 @@ pub async fn multiplayer(t: T) -> R {
     let ticket = format!("{dir}/ticket.txt");
     let script = format!("{dir}/join.txt");
     let advertised = t.c().ticket();
-    let (key, _, addresses) = advertised.split_once(';').and_then(|(key, rest)| {
-        rest.split_once(';').map(|(relay, addresses)| (key, relay, addresses))
-    }).ok_or("invalid host ticket")?;
-    let port = addresses.split(',').find_map(|address| address.parse::<std::net::SocketAddrV4>().ok())
-        .ok_or("the host did not advertise an IPv4 port")?.port();
+    let (key, _, addresses) = advertised
+        .split_once(';')
+        .and_then(|(key, rest)| {
+            rest.split_once(';')
+                .map(|(relay, addresses)| (key, relay, addresses))
+        })
+        .ok_or("invalid host ticket")?;
+    let port = addresses
+        .split(',')
+        .find_map(|address| address.parse::<std::net::SocketAddrV4>().ok())
+        .ok_or("the host did not advertise an IPv4 port")?
+        .port();
     std::fs::write(&ticket, format!("{key};;127.0.0.1:{port}")).map_err(|e| e.to_string())?;
     std::fs::write(
         &script,

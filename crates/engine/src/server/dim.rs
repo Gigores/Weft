@@ -2435,7 +2435,12 @@ impl Dim {
                         let v = t.vector_to_world(DVec3::new(dir[0] as f64, 0.0, dir[1] as f64));
                         [v.x as f32, v.z as f32]
                     });
-                    if !e.brain.as_ref().is_some_and(|b| b.controls(abi::brain::LOOK)) && e.facing.is_none() {
+                    if !e
+                        .brain
+                        .as_ref()
+                        .is_some_and(|b| b.controls(abi::brain::LOOK))
+                        && e.facing.is_none()
+                    {
                         e.yaw = (-dir[0]).atan2(-dir[1]);
                     }
                     e.walk = Some(super::entity::Walk { dir, speed: nav.speed, keys: if jump { abi::walk::JUMP } else { 0 } });
@@ -2673,7 +2678,10 @@ impl Dim {
         self.fire_timers(c);
         self.observe_hands(c);
         self.flush_brain_writes(c);
-        let mut ready: Vec<_> = self.entities.list.iter()
+        let mut ready: Vec<_> = self
+            .entities
+            .list
+            .iter()
             .filter(|e| !e.removed && e.alive() && !still(e) && self.brain_due(e))
             .map(|e| (e.kind, e.id))
             .collect();
@@ -3086,7 +3094,12 @@ impl Dim {
                 let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, ids.len() * size) };
                 for (i, id) in ids.iter().enumerate() {
                     let value = &bytes[i * size..(i + 1) * size];
-                    if let Some(old) = self.entities.comps.get_mut(&(*id, comp)).filter(|old| &***old != value) {
+                    if let Some(old) = self
+                        .entities
+                        .comps
+                        .get_mut(&(*id, comp))
+                        .filter(|old| &***old != value)
+                    {
                         old.copy_from_slice(value);
                         self.brain_component_changed(c, *id, &c.game.components[comp as usize].name);
                     }

@@ -32,10 +32,18 @@ impl Offer {
         self
     }
 
-    pub fn target(self) -> u64 { self.0.target }
-    pub fn point(self) -> Vec3 { self.0.point }
-    pub fn speed(self) -> f32 { self.0.speed }
-    pub fn priority(self) -> f32 { self.0.priority }
+    pub fn target(self) -> u64 {
+        self.0.target
+    }
+    pub fn point(self) -> Vec3 {
+        self.0.point
+    }
+    pub fn speed(self) -> f32 {
+        self.0.speed
+    }
+    pub fn priority(self) -> f32 {
+        self.0.priority
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,13 +60,19 @@ pub struct Context<'a> {
 }
 
 impl Context<'_> {
-    pub fn world(&self) -> &World { self.world }
-    pub fn id(&self) -> u64 { self.actor.id }
+    pub fn world(&self) -> &World {
+        self.world
+    }
+    pub fn id(&self) -> u64 {
+        self.actor.id
+    }
     pub fn current(&self) -> Option<Offer> {
         (self.actor.current.valid != 0).then_some(Offer(self.actor.current))
     }
     /// Ask for another check or step. Zero waits for a signal.
-    pub fn next_in(&mut self, ticks: u32) { self.actor.next = ticks; }
+    pub fn next_in(&mut self, ticks: u32) {
+        self.actor.next = ticks;
+    }
 }
 
 pub struct Rule {
@@ -143,7 +157,9 @@ pub struct Brain {
 }
 
 impl Brain {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn rule(mut self, rule: Rule) -> Self {
         self.rules.push(rule);
@@ -156,13 +172,16 @@ impl Brain {
 
     pub fn sight_when(mut self, range: f64, condition: impl Fn(&World, &EntityState) -> bool + Send + Sync + 'static) -> Self {
         self.anger = true;
-        self.rule(Rule::sensor("core:sight", move |ctx| {
-            let w = ctx.world();
-            let Some(st) = w.entity(ctx.id()).filter(|s| condition(w, s)) else { return };
-            if let Some((source, _)) = nearest_player(w, &st, range) {
-                remember(w, ctx.id(), &ANGER, source, w.game_time().saturating_add(40));
-            }
-        }).every(5))
+        self.rule(
+            Rule::sensor("core:sight", move |ctx| {
+                let w = ctx.world();
+                let Some(st) = w.entity(ctx.id()).filter(|s| condition(w, s)) else { return };
+                if let Some((source, _)) = nearest_player(w, &st, range) {
+                    remember(w, ctx.id(), &ANGER, source, w.game_time().saturating_add(40));
+                }
+            })
+            .every(5),
+        )
     }
 
     pub fn neutral(mut self) -> Self {
@@ -212,7 +231,9 @@ impl World {
 }
 
 fn remember(w: &World, id: u64, memory: &Component<abi::BrainMemory>, source: u64, until: u64) {
-    if w.component(id, memory).is_none_or(|old| old.source != source || old.time.saturating_add(10) < until) {
+    if w.component(id, memory)
+        .is_none_or(|old| old.source != source || old.time.saturating_add(10) < until)
+    {
         w.set_component(id, memory, abi::BrainMemory { source, time: until });
     }
 }
@@ -225,34 +246,38 @@ fn hurt_memory(
 ) -> Rule {
     Rule::sensor(name, move |ctx| {
         let w = ctx.world();
-        if let Some(hit) = w.component(ctx.id(), &LAST_HURT).filter(|h| h.time != 0 && accepts(w, h.source)) {
+        if let Some(hit) = w
+            .component(ctx.id(), &LAST_HURT)
+            .filter(|h| h.time != 0 && accepts(w, h.source))
+        {
             remember(w, ctx.id(), memory, hit.source, hit.time.saturating_add(duration));
         }
-    }).reads(&LAST_HURT)
+    })
+    .reads(&LAST_HURT)
 }
 
 fn visible(st: &EntityState, target: &EntityState, range: f64, visibility: f64) -> bool {
     let d = st.pos - target.pos;
-    target.health > 0.0 && visibility > 0.0 && d.y.abs() <= 8.0 * visibility
-        && d.x * d.x + d.z * d.z <= (range * visibility).powi(2)
+    target.health > 0.0 && visibility > 0.0 && d.y.abs() <= 8.0 * visibility && d.x * d.x + d.z * d.z <= (range * visibility).powi(2)
 }
 
 pub fn nearest_player(w: &World, st: &EntityState, range: f64) -> Option<(u64, EntityState)> {
-    w.players_iter().filter_map(|id| w.entity(id).map(|target| (id, target)))
+    w.players_iter()
+        .filter_map(|id| w.entity(id).map(|target| (id, target)))
         .filter(|(id, target)| visible(st, target, range, w.attribute(*id, &crate::attribute::VISIBILITY)))
         .min_by(|a, b| {
-            (st.pos - a.1.pos).length_squared().total_cmp(&(st.pos - b.1.pos).length_squared()).then(a.0.cmp(&b.0))
+            (st.pos - a.1.pos)
+                .length_squared()
+                .total_cmp(&(st.pos - b.1.pos).length_squared())
+                .then(a.0.cmp(&b.0))
         })
 }
 
 pub fn target(w: &World, id: u64, st: &EntityState, range: f64) -> Option<(u64, EntityState)> {
     let memory = w.component(id, &ANGER).filter(|m| m.time > w.game_time())?;
     let target = w.entity(memory.source)?;
-    let visibility = if w.players_iter().any(|p| p == memory.source) {
-        w.attribute(memory.source, &crate::attribute::VISIBILITY)
-    } else {
-        1.0
-    };
+    let visibility =
+        if w.players_iter().any(|p| p == memory.source) { w.attribute(memory.source, &crate::attribute::VISIBILITY) } else { 1.0 };
     visible(st, &target, range, visibility).then_some((memory.source, target))
 }
 
@@ -273,52 +298,66 @@ pub fn navigate(ctx: &mut Context<'_>, phase: Phase, offer: Offer) {
 }
 
 pub fn chase(range: f64, speed: f32) -> Rule {
-    Rule::action("core:chase", MOVE, move |ctx| {
-        follow_memory(ctx, &ANGER, 4)?;
-        let w = ctx.world();
-        let st = w.entity(ctx.id())?;
-        let (id, p) = target(w, ctx.id(), &st, range)?;
-        let priority = 25.0 + (1.0 - ((st.pos - p.pos).length_squared().sqrt() / range.max(1.0)).min(1.0)) as f32 * 65.0;
-        Some(Offer::new(id, priority).toward(p.pos, speed))
-    }, navigate).reads(&ANGER)
+    Rule::action(
+        "core:chase",
+        MOVE,
+        move |ctx| {
+            follow_memory(ctx, &ANGER, 4)?;
+            let w = ctx.world();
+            let st = w.entity(ctx.id())?;
+            let (id, p) = target(w, ctx.id(), &st, range)?;
+            let priority = 25.0 + (1.0 - ((st.pos - p.pos).length_squared().sqrt() / range.max(1.0)).min(1.0)) as f32 * 65.0;
+            Some(Offer::new(id, priority).toward(p.pos, speed))
+        },
+        navigate,
+    )
+    .reads(&ANGER)
 }
 
 pub fn melee() -> Rule {
-    Rule::action("core:melee", USE, |ctx| {
-        follow_memory(ctx, &ANGER, 3)?;
-        let w = ctx.world();
-        let st = w.entity(ctx.id())?;
-        let reach = w.attribute(ctx.id(), &crate::attribute::ENTITY_REACH);
-        let (id, _) = target(w, ctx.id(), &st, reach + st.size.width as f64 + 2.0)?;
-        w.in_reach(ctx.id(), id).then_some(Offer::new(id, 40.0))
-    }, |ctx, phase, action| {
-        let w = ctx.world();
-        if matches!(phase, Phase::Start | Phase::Step)
-            && w.in_reach(ctx.id(), action.target()) && w.swing_strength(ctx.id()) >= 1.0
-        {
-            w.attack(ctx.id(), action.target());
-        }
-    }).reads(&ANGER).step_every(2)
+    Rule::action(
+        "core:melee",
+        USE,
+        |ctx| {
+            follow_memory(ctx, &ANGER, 3)?;
+            let w = ctx.world();
+            let st = w.entity(ctx.id())?;
+            let reach = w.attribute(ctx.id(), &crate::attribute::ENTITY_REACH);
+            let (id, _) = target(w, ctx.id(), &st, reach + st.size.width as f64 + 2.0)?;
+            w.in_reach(ctx.id(), id).then_some(Offer::new(id, 40.0))
+        },
+        |ctx, phase, action| {
+            let w = ctx.world();
+            if matches!(phase, Phase::Start | Phase::Step) && w.in_reach(ctx.id(), action.target()) && w.swing_strength(ctx.id()) >= 1.0 {
+                w.attack(ctx.id(), action.target());
+            }
+        },
+    )
+    .reads(&ANGER)
+    .step_every(2)
 }
 
 fn random_point(w: &World, st: &EntityState, radius: f64) -> Vec3 {
     let angle = w.random_below(628) as f64 / 100.0;
-    st.pos.offset(angle.cos() * radius, 0.0, angle.sin() * radius)
+    st.pos
+        .offset(angle.cos() * radius, 0.0, angle.sin() * radius)
 }
 
 pub fn wander(speed: f32, radius: f64) -> Rule {
-    Rule::action("core:wander", MOVE, move |ctx| {
-        let w = ctx.world();
-        let st = w.entity(ctx.id())?;
-        if let Some(current) = ctx.current().filter(|_| w.navigating(ctx.id())) {
-            return Some(current);
-        }
-        if w.random_below(12) == 0 {
-            Some(Offer::new(0, 1.0).toward(random_point(w, &st, radius), speed))
-        } else {
-            None
-        }
-    }, navigate).every(8)
+    Rule::action(
+        "core:wander",
+        MOVE,
+        move |ctx| {
+            let w = ctx.world();
+            let st = w.entity(ctx.id())?;
+            if let Some(current) = ctx.current().filter(|_| w.navigating(ctx.id())) {
+                return Some(current);
+            }
+            if w.random_below(12) == 0 { Some(Offer::new(0, 1.0).toward(random_point(w, &st, radius), speed)) } else { None }
+        },
+        navigate,
+    )
+    .every(8)
 }
 
 pub fn flee_from(st: &EntityState, source: Vec3, distance: f64) -> Vec3 {
@@ -327,44 +366,73 @@ pub fn flee_from(st: &EntityState, source: Vec3, distance: f64) -> Vec3 {
     if len < 0.001 {
         st.pos.offset(distance, 0.0, 0.0)
     } else {
-        st.pos.offset(d.x * distance / len, 0.0, d.z * distance / len)
+        st.pos
+            .offset(d.x * distance / len, 0.0, d.z * distance / len)
     }
 }
 
 pub fn panic(speed: f32) -> Rule {
-    Rule::action("core:panic", MOVE, move |ctx| {
-        let fear = follow_memory(ctx, &FEAR, 5)?;
-        let w = ctx.world();
-        let st = w.entity(ctx.id())?;
-        if let Some(current) = ctx.current().filter(|o| o.target() == fear.source && w.navigating(ctx.id())) {
-            return Some(current);
-        }
-        let point = w.entity(fear.source).map_or_else(|| random_point(w, &st, 8.0), |src| flee_from(&st, src.pos, 8.0));
-        Some(Offer::new(fear.source, 120.0).toward(point, speed))
-    }, navigate).reads(&FEAR)
+    Rule::action(
+        "core:panic",
+        MOVE,
+        move |ctx| {
+            let fear = follow_memory(ctx, &FEAR, 5)?;
+            let w = ctx.world();
+            let st = w.entity(ctx.id())?;
+            if let Some(current) = ctx
+                .current()
+                .filter(|o| o.target() == fear.source && w.navigating(ctx.id()))
+            {
+                return Some(current);
+            }
+            let point = w
+                .entity(fear.source)
+                .map_or_else(|| random_point(w, &st, 8.0), |src| flee_from(&st, src.pos, 8.0));
+            Some(Offer::new(fear.source, 120.0).toward(point, speed))
+        },
+        navigate,
+    )
+    .reads(&FEAR)
 }
 
 pub fn watch_player(range: f64) -> Rule {
-    Rule::action("core:watch_player", LOOK, move |ctx| {
-        let w = ctx.world();
-        let st = w.entity(ctx.id())?;
-        if w.navigating(ctx.id()) {
-            return None;
-        }
-        let (id, seen) = nearest_player(w, &st, range)?;
-        Some(Offer::new(id, 1.0).toward(seen.eye(), 0.0))
-    }, |ctx, phase, offer| {
-        if !matches!(phase, Phase::Stop) && let Some(st) = ctx.world().entity(ctx.id()) {
-            let d = offer.point() - st.eye();
-            let horizontal = (d.x * d.x + d.z * d.z).sqrt();
-            ctx.world().entity_modify(ctx.id()).yaw(crate::yaw_toward(st.pos, offer.point())).pitch(d.y.atan2(horizontal) as f32);
-        }
-    }).every(6).step_every(6)
+    Rule::action(
+        "core:watch_player",
+        LOOK,
+        move |ctx| {
+            let w = ctx.world();
+            let st = w.entity(ctx.id())?;
+            if w.navigating(ctx.id()) {
+                return None;
+            }
+            let (id, seen) = nearest_player(w, &st, range)?;
+            Some(Offer::new(id, 1.0).toward(seen.eye(), 0.0))
+        },
+        |ctx, phase, offer| {
+            if !matches!(phase, Phase::Stop)
+                && let Some(st) = ctx.world().entity(ctx.id())
+            {
+                let d = offer.point() - st.eye();
+                let horizontal = (d.x * d.x + d.z * d.z).sqrt();
+                ctx.world()
+                    .entity_modify(ctx.id())
+                    .yaw(crate::yaw_toward(st.pos, offer.point()))
+                    .pitch(d.y.atan2(horizontal) as f32);
+            }
+        },
+    )
+    .every(6)
+    .step_every(6)
 }
 
 /// Deliver a fact to nearby members of a group. Call from an event or a transition.
 pub fn share<T: crate::Value>(
-    w: &World, position: Vec3, radius: f64, belongs: impl Fn(u64, &EntityState) -> bool, fact: &Component<T>, value: T,
+    w: &World,
+    position: Vec3,
+    radius: f64,
+    belongs: impl Fn(u64, &EntityState) -> bool,
+    fact: &Component<T>,
+    value: T,
 ) {
     for id in w.entities_near(position, radius, None) {
         if w.entity(id).is_some_and(|state| belongs(id, &state)) {

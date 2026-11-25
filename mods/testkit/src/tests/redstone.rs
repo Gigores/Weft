@@ -1086,7 +1086,12 @@ pub async fn body_walking(t: T) -> R {
     let pig = t
         .op(&format!("spawn base:pig {} {} {}", f[0] - 6, f[1] + 5, f[2] - 6))
         .await?;
-    t.check_eq(t.op(&format!("brain_edit {pig} core:wander disable")).await?, "true".to_owned(), "the pig takes only the commanded path");
+    t.check_eq(
+        t.op(&format!("brain_edit {pig} core:wander disable"))
+            .await?,
+        "true".to_owned(),
+        "the pig takes only the commanded path",
+    );
     t.op(&format!("onto {id} 1.0 {pig}")).await?;
     t.secs(0.5).await?;
     let pos = |t: T, id: String| async move {

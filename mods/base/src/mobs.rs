@@ -220,28 +220,45 @@ fn skeleton() -> ai::Brain {
     ai::Brain::new()
         .aggressive(16.0)
         .rule(ai::watch_player(16.0))
-        .rule(ai::Rule::action("keep_shooting_distance", ai::MOVE, |ctx| {
-            ai::follow_memory(ctx, &ai::ANGER, 4)?;
-            let w = ctx.world();
-            let st = w.entity(ctx.id())?;
-            let (id, p) = ai::target(w, ctx.id(), &st, 16.0)?;
-            let d2 = (p.pos.x - st.pos.x).powi(2) + (p.pos.z - st.pos.z).powi(2);
-            Some(ai::Offer::new(id, 50.0).toward(p.pos, if d2 > 100.0 { 1.0 } else { 0.0 }))
-        }, ai::navigate).reads(&ai::ANGER))
-        .rule(ai::Rule::action("shoot", ai::USE, |ctx| {
-            ai::follow_memory(ctx, &ai::ANGER, 4)?;
-            let w = ctx.world();
-            let st = w.entity(ctx.id())?;
-            let (id, _) = ai::target(w, ctx.id(), &st, 15.0)?;
-            Some(ai::Offer::new(id, 50.0))
-        }, |ctx, phase, offer| {
-            let w = ctx.world();
-            if phase == ai::Phase::Step
-                && let (Some(st), Some(target)) = (w.entity(ctx.id()), w.entity(offer.target()))
-            {
-                shoot(w, ctx.id(), &st, &target);
-            }
-        }).reads(&ai::ANGER).step_every(40))
+        .rule(
+            ai::Rule::action(
+                "keep_shooting_distance",
+                ai::MOVE,
+                |ctx| {
+                    ai::follow_memory(ctx, &ai::ANGER, 4)?;
+                    let w = ctx.world();
+                    let st = w.entity(ctx.id())?;
+                    let (id, p) = ai::target(w, ctx.id(), &st, 16.0)?;
+                    let d2 = (p.pos.x - st.pos.x).powi(2) + (p.pos.z - st.pos.z).powi(2);
+                    Some(ai::Offer::new(id, 50.0).toward(p.pos, if d2 > 100.0 { 1.0 } else { 0.0 }))
+                },
+                ai::navigate,
+            )
+            .reads(&ai::ANGER),
+        )
+        .rule(
+            ai::Rule::action(
+                "shoot",
+                ai::USE,
+                |ctx| {
+                    ai::follow_memory(ctx, &ai::ANGER, 4)?;
+                    let w = ctx.world();
+                    let st = w.entity(ctx.id())?;
+                    let (id, _) = ai::target(w, ctx.id(), &st, 15.0)?;
+                    Some(ai::Offer::new(id, 50.0))
+                },
+                |ctx, phase, offer| {
+                    let w = ctx.world();
+                    if phase == ai::Phase::Step
+                        && let (Some(st), Some(target)) = (w.entity(ctx.id()), w.entity(offer.target()))
+                    {
+                        shoot(w, ctx.id(), &st, &target);
+                    }
+                },
+            )
+            .reads(&ai::ANGER)
+            .step_every(40),
+        )
         .rule(ai::wander(0.6, 10.0))
 }
 
@@ -303,12 +320,19 @@ fn shoot(w: &World, id: u64, from: &EntityState, at: &EntityState) {
 /// A chicken: flutters down instead of falling, and lays an egg now and then.
 fn passive_chicken() -> ai::Brain {
     passive()
-        .rule(ai::Rule::sensor("flutter", |ctx| {
-            let w = ctx.world();
-            if let Some(st) = w.entity(ctx.id()).filter(|s| s.on_ground == 0 && s.vel.y < 0.0) {
-                w.entity_modify(ctx.id()).velocity(Vec3 { y: st.vel.y * 0.6, ..st.vel });
-            }
-        }).every(1))
+        .rule(
+            ai::Rule::sensor("flutter", |ctx| {
+                let w = ctx.world();
+                if let Some(st) = w
+                    .entity(ctx.id())
+                    .filter(|s| s.on_ground == 0 && s.vel.y < 0.0)
+                {
+                    w.entity_modify(ctx.id())
+                        .velocity(Vec3 { y: st.vel.y * 0.6, ..st.vel });
+                }
+            })
+            .every(1),
+        )
         .rule(ai::Rule::sensor("lay_egg", |ctx| {
             let w = ctx.world();
             let id = ctx.id();

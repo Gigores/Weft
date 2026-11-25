@@ -248,7 +248,8 @@ impl T {
         self.until(&format!("reply to {line}"), Duration::from_secs(10), |t| {
             answer = t.c().command_reply(id);
             answer.is_some()
-        }).await?;
+        })
+        .await?;
         Ok(answer.unwrap_or_default())
     }
 
@@ -263,7 +264,10 @@ impl T {
     }
 
     pub async fn game_time(&self) -> Result<u64, String> {
-        self.op("game_time").await?.parse().map_err(|e| format!("game time: {e}"))
+        self.op("game_time")
+            .await?
+            .parse()
+            .map_err(|e| format!("game time: {e}"))
     }
 
     /// The block's name as the server has it (`base:furnace[facing=north,lit=true]`).

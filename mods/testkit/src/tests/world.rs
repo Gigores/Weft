@@ -209,16 +209,27 @@ pub async fn entity_modify(t: T) -> R {
         .op(&format!("spawn base:pig {} {} {}", f[0] + 1, f[1], f[2] - 3))
         .await?;
     for pig in [&hit, &near] {
-        t.check_eq(t.op(&format!("brain_edit {pig} core:wander disable")).await?, "true".to_owned(), "the pig stays in the test formation");
-        t.check_eq(t.op(&format!("brain_edit {pig} core:panic disable")).await?, "true".to_owned(), "the pig only moves from the smash");
+        t.check_eq(
+            t.op(&format!("brain_edit {pig} core:wander disable"))
+                .await?,
+            "true".to_owned(),
+            "the pig stays in the test formation",
+        );
+        t.check_eq(
+            t.op(&format!("brain_edit {pig} core:panic disable"))
+                .await?,
+            "true".to_owned(),
+            "the pig only moves from the smash",
+        );
     }
     t.secs(0.5).await?;
     let before = super::bodies::pos_of(&t, &near).await?[0];
-    let nearby = near.parse::<u64>().map_err(|e| format!("nearby pig: {e}"))?;
+    let nearby = near
+        .parse::<u64>()
+        .map_err(|e| format!("nearby pig: {e}"))?;
     t.op(&format!("hit_falling {hit} 5")).await?;
-    t.until("the pig beside is thrown back", Duration::from_secs(3), |t| {
-        t.c().entity(nearby).is_some_and(|e| e.pos.x - before > 0.8)
-    }).await
+    t.until("the pig beside is thrown back", Duration::from_secs(3), |t| t.c().entity(nearby).is_some_and(|e| e.pos.x - before > 0.8))
+        .await
 }
 
 /// Menus open on a storage a player carries and on far away blocks; a menu for a block without
@@ -494,16 +505,19 @@ pub async fn lod_columns(t: T) -> R {
     t.world(5).await?;
     let dim = Dimension::lookup("testmod:lod_plain").ok_or("missing LOD test dimension")?;
     t.cmd("/dim testmod:lod_plain").await?;
-    t.until("the LOD test dimension", Duration::from_secs(10), |t| t.state().dim == dim).await?;
+    t.until("the LOD test dimension", Duration::from_secs(10), |t| t.state().dim == dim)
+        .await?;
     t.loaded().await?;
     t.op("mode creative").await?;
     t.c().set_flying(true);
     let f = t.feet();
     t.check_eq(t.state().lod_columns, 0, "nothing built, nothing sent");
-    let tower = t.op(&format!("fill {} {} {} {} {} {} base:stone", f[0] + 4, f[1] + 32, f[2] + 4, f[0] + 6, f[1] + 48, f[2] + 6))
+    let tower = t
+        .op(&format!("fill {} {} {} {} {} {} base:stone", f[0] + 4, f[1] + 32, f[2] + 4, f[0] + 6, f[1] + 48, f[2] + 6))
         .await?;
     t.check_eq(tower.trim(), "153", "all tower blocks were placed");
-    t.cmd(&format!("/tp {} {} {}", f[0] + 3000, f[1] + 24, f[2])).await?;
+    t.cmd(&format!("/tp {} {} {}", f[0] + 3000, f[1] + 24, f[2]))
+        .await?;
     t.until("the tower's columns sent", Duration::from_secs(30), |t| t.state().lod_columns >= 9)
         .await?;
     t.check_eq(t.state().lod_columns, 9, "only the tower's columns were sent");

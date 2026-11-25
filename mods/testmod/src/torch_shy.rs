@@ -18,12 +18,17 @@ pub fn register(r: &mut Registry) {
         .texture("base:zombie")
         .model(humanoid(true))
         .attach(&FLEE_PRIORITY)
-        .brain(ai::Brain::new()
-            .aggressive(RANGE)
-            .rule(ai::chase(RANGE, 1.0))
-            .rule(ai::melee())
-            .rule(ai::Rule::action(FLEE, ai::MOVE | ai::USE, flee, ai::navigate)
-                .reads(&FLEE_PRIORITY).every(5)));
+        .brain(
+            ai::Brain::new()
+                .aggressive(RANGE)
+                .rule(ai::chase(RANGE, 1.0))
+                .rule(ai::melee())
+                .rule(
+                    ai::Rule::action(FLEE, ai::MOVE | ai::USE, flee, ai::navigate)
+                        .reads(&FLEE_PRIORITY)
+                        .every(5),
+                ),
+        );
     r.on_event(&ai::HELD_CHANGED, |events| {
         let w = events.world();
         for change in events.iter() {
@@ -39,16 +44,23 @@ fn flee(ctx: &mut ai::Context<'_>) -> Option<ai::Offer> {
     let w = ctx.world();
     let st = w.entity(ctx.id())?;
     let (source, player) = ai::nearest_player(w, &st, RANGE)?;
-    if !w.hands(source).into_iter().any(|stack| !stack.is_empty() && LIGHT.on_item(stack.item)) {
+    if !w
+        .hands(source)
+        .into_iter()
+        .any(|stack| !stack.is_empty() && LIGHT.on_item(stack.item))
+    {
         return None;
     }
     let priority = w.component(ctx.id(), &FLEE_PRIORITY)?;
     let away = ai::flee_from(&st, player.pos, 8.0);
-    let point = ctx.current().filter(|o| o.target() == source && w.navigating(ctx.id()))
+    let point = ctx
+        .current()
+        .filter(|o| o.target() == source && w.navigating(ctx.id()))
         .and_then(|o| {
             let path = o.point() - st.pos;
             let direction = away - st.pos;
             (path.x * direction.x + path.z * direction.z > 0.0).then_some(o.point())
-        }).unwrap_or(away);
+        })
+        .unwrap_or(away);
     Some(ai::Offer::new(source, priority).toward(point, 1.45))
 }

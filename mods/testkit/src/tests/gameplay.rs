@@ -502,12 +502,13 @@ pub async fn model_bones(t: T) -> R {
     t.op("put me 0 testmod:lantern").await?;
     let mut steady = 0.0;
     t.until("the hanging lantern settles", Duration::from_secs(8), |t| {
-        let aligned = at("hook").zip(at("hanging_lamp")).is_some_and(|(hook, lamp)| {
-            hook.y - lamp.y > 0.5 && (hook.x - lamp.x).abs() + (hook.z - lamp.z).abs() < 0.3
-        });
+        let aligned = at("hook")
+            .zip(at("hanging_lamp"))
+            .is_some_and(|(hook, lamp)| hook.y - lamp.y > 0.5 && (hook.x - lamp.x).abs() + (hook.z - lamp.z).abs() < 0.3);
         steady = if aligned { steady + t.state().dt } else { 0.0 };
         steady >= 0.2
-    }).await?;
+    })
+    .await?;
     t.check(at("no_such_bone").is_none(), "no bone of that name");
     let (hook, lamp) = (at("hook").ok_or("the lantern's hook")?, at("hanging_lamp").ok_or("the lantern's lamp")?);
     t.check(hook.y - lamp.y > 0.5, format!("it hangs from the hand: {hook:?} {lamp:?}"));
@@ -1914,9 +1915,11 @@ pub async fn burning(t: T) -> R {
         .await?;
     t.c()
         .teleport([f[0] as f64 + 0.5, f[1] as f64, f[2] as f64 + 0.5]);
-    t.until("back on dry ground", Duration::from_secs(5), |t| t.feet() == f).await?;
+    t.until("back on dry ground", Duration::from_secs(5), |t| t.feet() == f)
+        .await?;
     let out = t.state().health;
-    t.until("fire still deals damage after the lava", Duration::from_secs(4), |t| t.state().health < out).await
+    t.until("fire still deals damage after the lava", Duration::from_secs(4), |t| t.state().health < out)
+        .await
 }
 
 static ON_FIRE: Component<u8> = Component::named("core:burning");
@@ -2183,7 +2186,10 @@ pub async fn replaced_plants_drop(t: T) -> R {
             t.check(!near.contains("core:item"), format!("nothing drops in creative: {near}"));
         } else {
             let d = t.op("inv me").await?;
-            t.check(near.contains("core:item") || d.contains("testmod:glow_flower"), format!("the flower dropped: near '{near}', inventory '{d}'"));
+            t.check(
+                near.contains("core:item") || d.contains("testmod:glow_flower"),
+                format!("the flower dropped: near '{near}', inventory '{d}'"),
+            );
         }
         t.set(flower, "air").await?;
         t.secs(0.5).await?;

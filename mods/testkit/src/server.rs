@@ -466,7 +466,9 @@ const OPS: &[(&str, &str, Run)] = &[
         if trace.as_ref().is_some_and(|t| t.left > 0) {
             Ok("pending".to_owned())
         } else {
-            Ok(trace.take().map_or_else(String::new, |t| t.lines.join("\n")))
+            Ok(trace
+                .take()
+                .map_or_else(String::new, |t| t.lines.join("\n")))
         }
     }),
     ("trace", "<a:pos> <b:pos> <ticks:int>", |w, cmd, _, _| {

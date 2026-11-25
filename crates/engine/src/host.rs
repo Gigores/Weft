@@ -493,7 +493,9 @@ unsafe extern "C" fn entity_hands(w: *mut abi::WorldCtx, id: u64, out: *mut [Ite
     unsafe {
         let entities = &dim(w).entities;
         let c = content();
-        let off = entities.get(id).zip(entities.inventories.get(&id))
+        let off = entities
+            .get(id)
+            .zip(entities.inventories.get(&id))
             .map_or(ItemStack::EMPTY, |(e, inv)| crate::content::in_off_hand(c, e.kind, inv));
         *out = [entities.held(id), off];
     }

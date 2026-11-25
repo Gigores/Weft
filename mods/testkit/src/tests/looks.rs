@@ -537,8 +537,14 @@ pub async fn ctm_any_model(t: T) -> R {
     let base_model = format!("{pack}/base/models/block/grass.json");
     std::fs::create_dir_all(std::path::Path::new(&base_model).parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&base_model, whole(r#""north":{},"south":{},"east":{},"west":{},"up":{},"down":{}"#)).map_err(|e| e.to_string())?;
-    write("textures/block/varied/varied.ctm", "method = vertical\ntiles = testkit:block/colors/red testkit:block/colors/green testkit:block/colors/blue testkit:block/colors/yellow\n")?;
-    write("textures/block/varied_cube/varied_cube.ctm", "method = random\ntiles = testkit:block/varied_cube testkit:block/shapes/thin\nhides_neighbors = false\n")?;
+    write(
+        "textures/block/varied/varied.ctm",
+        "method = vertical\ntiles = testkit:block/colors/red testkit:block/colors/green testkit:block/colors/blue testkit:block/colors/yellow\n",
+    )?;
+    write(
+        "textures/block/varied_cube/varied_cube.ctm",
+        "method = random\ntiles = testkit:block/varied_cube testkit:block/shapes/thin\nhides_neighbors = false\n",
+    )?;
     let face = r##"{"texture":"#unwrap","uv":[0.25,0.25,1.25,1.25]}"##;
     write(
         "models/block/shapes/thin.json",

@@ -1781,11 +1781,15 @@ fn bake_entity(e: &Entry) -> EntityKind {
             .map(|b| (b.model, b.bone))
             .collect(),
         on_tick: e.callback(k::ON_TICK).into_iter().collect(),
-        brain: e.values.iter().filter_map(|v| {
-            let name = v.name.strip_prefix(abi::brain::RULE)?;
-            let settings = e.get(&format!("{}{name}", abi::brain::SETTINGS))?;
-            Some(crate::server::brain::Rule { name: name.to_owned(), call: e.callback(&v.name)?, settings })
-        }).collect(),
+        brain: e
+            .values
+            .iter()
+            .filter_map(|v| {
+                let name = v.name.strip_prefix(abi::brain::RULE)?;
+                let settings = e.get(&format!("{}{name}", abi::brain::SETTINGS))?;
+                Some(crate::server::brain::Rule { name: name.to_owned(), call: e.callback(&v.name)?, settings })
+            })
+            .collect(),
         on_interact: e.callback(k::ON_INTERACT).into_iter().collect(),
         frames: e.callbacks(k::FRAMES),
         components: Vec::new(),

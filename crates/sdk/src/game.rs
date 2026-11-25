@@ -1275,9 +1275,13 @@ impl EntityBuilder<'_> {
             let name = crate::qualify(crate::mod_id(), &rule.name);
             let key = format!("{}{name}", abi::brain::RULE);
             let settings = format!("{}{name}", abi::brain::SETTINGS);
-            self.e.ops.push(crate::Pending::value(&key, "callback", abi::data::bytes_of(&rule.callback)));
+            self.e
+                .ops
+                .push(crate::Pending::value(&key, "callback", abi::data::bytes_of(&rule.callback)));
             self.e.ops.push(crate::Pending::value(
-                &settings, crate::component::schema_of::<abi::BrainSettings>(), abi::data::bytes_of(&rule.settings),
+                &settings,
+                crate::component::schema_of::<abi::BrainSettings>(),
+                abi::data::bytes_of(&rule.settings),
             ));
         }
         if brain.anger {
@@ -1293,9 +1297,13 @@ impl EntityBuilder<'_> {
     pub fn without_brain_rule(mut self, name: &str) -> Self {
         let name = crate::full_name(name);
         let key = format!("{}{name}", abi::brain::RULE);
-        self.e.ops.push(crate::Pending::value(&key, "callback", Vec::new()).as_op(abi::value_op::UNSET, ""));
+        self.e
+            .ops
+            .push(crate::Pending::value(&key, "callback", Vec::new()).as_op(abi::value_op::UNSET, ""));
         let key = format!("{}{name}", abi::brain::SETTINGS);
-        self.e.ops.push(crate::Pending::value(&key, "bytes", Vec::new()).as_op(abi::value_op::UNSET, ""));
+        self.e
+            .ops
+            .push(crate::Pending::value(&key, "bytes", Vec::new()).as_op(abi::value_op::UNSET, ""));
         self
     }
     /// One of these was hurt: `actions::HURT` for this kind, after the damage, with the other
