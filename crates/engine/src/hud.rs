@@ -669,47 +669,54 @@ impl Hud {
                 });
             }
             Part::PlayerList if list_shown || editing => {
-                ui.panel(
-                    "panel",
-                    Style::default()
-                        .pad(5.0)
-                        .gap(2.0)
-                        .align(Align::Stretch)
-                        .w(176.0),
-                    |ui| {
-                        for (i, player) in client
-                            .into_iter()
-                            .flat_map(|cl| &cl.player_list)
-                            .enumerate()
-                        {
-                            if i > 0 {
-                                let mut line = Style::default().h(0.5);
-                                line.fill = Some(0xFFFFFF28);
-                                ui.container(line, |_| {});
-                            }
-                            ui.container(Style::row().gap(4.0).align(Align::Center), |ui| {
-                                ui.add(Kind::Custom { tag: TAG_PLAYER_FACE, data: player.entity }, Style::default().size(8.0, 8.0));
-                                let name = player
-                                    .display
-                                    .as_deref()
-                                    .map_or_else(|| text::plain(&player.name), |s| text::rich(s, lang, None));
-                                ui.container(Style::default().w(0.0).grow(), |ui| {
-                                    let id = ui.text(name, "label");
-                                    if player.operator && player.display.is_none() {
-                                        ui.text_mut(id).unwrap().color = Some(0xFFFF55FF);
-                                    }
-                                });
-                                let ping = player.ping_ms.map_or("—".into(), |ms| format!("{ms} ms"));
-                                let id = ui.text(text::plain(&ping), "dim");
-                                ui.text_mut(id).unwrap().wrap = false;
-                                ui.add(
-                                    Kind::Custom { tag: TAG_PLAYER_SIGNAL, data: player.ping_ms.map_or(u64::MAX, u64::from) },
-                                    Style::default().size(9.0, 8.0),
-                                );
-                            });
+                let width = (ui.size.x - 12.0).clamp(96.0, 176.0);
+                let mut panel = Style::default()
+                    .pad(5.0)
+                    .gap(2.0)
+                    .align(Align::Stretch)
+                    .w(width);
+                panel.fill = Some(0x1B1E26DC);
+                ui.panel("panel", panel, |ui| {
+                    for (i, player) in client
+                        .into_iter()
+                        .flat_map(|cl| &cl.player_list)
+                        .enumerate()
+                    {
+                        if i > 0 {
+                            let mut line = Style::default().h(0.5);
+                            line.fill = Some(0xFFFFFF28);
+                            ui.container(line, |_| {});
                         }
-                    },
-                );
+                        ui.container(Style::row().gap(4.0).align(Align::Center), |ui| {
+                            ui.add(Kind::Custom { tag: TAG_PLAYER_FACE, data: player.entity }, Style::default().size(8.0, 8.0));
+                            let name = player
+                                .display
+                                .as_deref()
+                                .map_or_else(|| text::plain(&player.name), |s| text::rich(s, lang, None));
+                            ui.container(Style::default().w(width - 76.0), |ui| {
+                                let id = ui.text(name, "label");
+                                if player.operator && player.display.is_none() {
+                                    ui.text_mut(id).unwrap().color = Some(0xFFFF55FF);
+                                }
+                            });
+                            ui.spacer();
+                            let ping = player.ping_ms.map_or_else(
+                                || "—".into(),
+                                |ms| {
+                                    if ms > 9999 { "9999+ ms".into() } else { format!("{ms} ms") }
+                                },
+                            );
+                            let id = ui.text(text::plain(&ping), "label");
+                            let t = ui.text_mut(id).unwrap();
+                            t.wrap = false;
+                            t.color = Some(0xD4DBE1FF);
+                            ui.add(
+                                Kind::Custom { tag: TAG_PLAYER_SIGNAL, data: player.ping_ms.map_or(u64::MAX, u64::from) },
+                                Style::default().size(9.0, 8.0),
+                            );
+                        });
+                    }
+                });
             }
             Part::PlayerList => {}
             Part::Chat => {
