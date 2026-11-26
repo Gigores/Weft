@@ -300,7 +300,7 @@ impl Server {
                 let seen = crate::physics::ObservedCells { cells: super::space::CubeCells(&r.space.cubes), dry: &dry };
                 let here = crate::physics::around(c, &seen, pos, dims.height, dims.half_width);
                 let Some(e) = r.entities.get_mut(entity) else { return };
-                let splash = entity::splashes(e.in_liquid, here.in_liquid, -walked.y);
+                let splash = entity::splashes(e.in_liquid, here.in_liquid, -walked.y).then_some(e.pos);
                 let fell = entity::track_fall(&mut e.fall, walked.y, on_ground, here.in_liquid || here.climbing);
                 e.sprinting = sprint;
                 e.flying = flying;

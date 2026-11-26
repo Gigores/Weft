@@ -332,7 +332,7 @@ struct TickHit {
     id: u64,
     /// How far it fell before landing, and whether it fell into a liquid: for `fall_effects`.
     fell: Option<f32>,
-    splash: bool,
+    splash: Option<DVec3>,
     burn: bool,
     /// Hazards it meets (`content::Hazard`), and the block state they are of (0: none).
     met: Vec<(u32, crate::content::Hazard)>,
@@ -1839,7 +1839,7 @@ impl Dim {
 
     /// What everyone near sees of a fall: dust where entity `id` landed from `fell` blocks up
     /// (vanilla's, from a fall that would hurt), and bubbles in the liquid it fell into.
-    pub fn fall_effects(&mut self, space_id: u64, c: &'static Content, id: u64, fell: Option<f32>, splash: bool) {
+    pub fn fall_effects(&mut self, space_id: u64, c: &'static Content, id: u64, fell: Option<f32>, splash: Option<DVec3>) {
         let safe = self.attribute(space_id, c, id, crate::registry::attr::SAFE_FALL, false) as f32;
         let hurts = fell
             .and_then(|f| self.fall_damage(space_id, c, id, f))
@@ -1865,25 +1865,30 @@ impl Dim {
                 ..abi::ParticleBurst::DEFAULT
             });
         }
-        let liquid = splash
-            .then(|| crate::physics::liquid_at(c, self.space(space_id), pos))
-            .flatten()
-            .map(|l| c.liquids[l as usize].first_state);
-        if let Some(kind) = liquid.and_then(|state| {
-            c.components
-                .id(abi::comp::BUBBLE)
-                .and_then(|id| c.components.text(comps::BLOCK, state, id))
-                .and_then(|n| c.game.catalog.find(ek::PARTICLE, n))
-        }) {
-            bursts.push(abi::ParticleBurst {
-                kind,
-                pos: pos.to_array().into(),
-                count: 12,
-                spread: [w * 2.0, 0.2, w * 2.0].into(),
-                speed: 3.0,
-                velocity: [0.0, 3.0, 0.0].into(),
-                ..abi::ParticleBurst::DEFAULT
-            });
+        if let Some(from) = splash
+            && let Some((liquid, surface)) = crate::physics::liquid_surface(c, self.space(space_id), pos.floor().as_ivec3())
+        {
+            let dy = pos.y - from.y;
+            let center = if dy < 0.0 { from.lerp(pos, ((surface - from.y) / dy).clamp(0.0, 1.0)) } else { pos };
+            let state = c.liquids[liquid as usize].first_state;
+            for (particle, y, velocity) in [(abi::comp::SPLASH, surface, 3.0), (abi::comp::BUBBLE, pos.y, 1.2)] {
+                if let Some(kind) = c
+                    .components
+                    .id(particle)
+                    .and_then(|id| c.components.text(comps::BLOCK, state, id))
+                    .and_then(|n| c.game.catalog.find(ek::PARTICLE, n))
+                {
+                    bursts.push(abi::ParticleBurst {
+                        kind,
+                        pos: center.with_y(y).to_array().into(),
+                        count: 12,
+                        spread: [w, 0.0, w].into(),
+                        speed: 3.0,
+                        velocity: [0.0, velocity, 0.0].into(),
+                        ..abi::ParticleBurst::DEFAULT
+                    });
+                }
+            }
         }
         let dim = self.id;
         self.events.extend(
@@ -2897,14 +2902,14 @@ impl Dim {
                     return None;
                 }
                 let k = &c.game.entities[e.kind as usize];
-                let (mut fell, mut splash) = (None, false);
+                let (mut fell, mut splash) = (None, None);
                 let mut crushed = Vec::new();
                 // Players move on their client, bodies moved above, projectiles after; the rest here.
                 if !e.player && !k.is(ef::SOLID) && k.projectile.is_none() {
-                    let (wet, falling) = (e.in_liquid, -e.vel.y * crate::world::TICK);
+                    let (wet, falling, before) = (e.in_liquid, -e.vel.y * crate::world::TICK, e.pos);
                     let s = step(c, e, gravity, &block, bodies);
                     crushed = s.crushed;
-                    (fell, splash) = (s.land, super::entity::splashes(wet, e.in_liquid, falling));
+                    (fell, splash) = (s.land, super::entity::splashes(wet, e.in_liquid, falling).then_some(before));
                 }
                 // The liquids where the entity is now, and whether they burn; what sets it on fire
                 // keeps it burning.
@@ -2969,7 +2974,7 @@ impl Dim {
                         e.gone(abi::removal::EXPIRED);
                     }
                 }
-                (fell.is_some() || splash || burn || !met.is_empty()).then_some(TickHit { id: e.id, fell, splash, burn, met })
+                (fell.is_some() || splash.is_some() || burn || !met.is_empty()).then_some(TickHit { id: e.id, fell, splash, burn, met })
             })
             .collect();
         let cram = crate::config::get(c.game.max_cramming) as u32;
