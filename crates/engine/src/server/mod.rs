@@ -13,15 +13,18 @@ pub mod energy;
 pub mod entity;
 pub(crate) mod extend;
 pub mod forced;
+mod gaze;
 mod guard;
 pub mod holder;
 mod lightning;
 mod liquid;
 mod load;
 pub mod lod_tops;
+mod mob_gizmos;
 pub mod path;
 mod player_file;
 mod projectile;
+mod sense;
 pub mod signal;
 pub mod space;
 mod sync;
@@ -625,10 +628,11 @@ impl Server {
             d.tick_weather(c, t);
         }
         if runs {
+            let tick_rate = self.tick_rate;
             self.dims
                 .par_iter_mut()
                 .flat_map(|d| d.regions.par_iter_mut())
-                .for_each(|r| r.tick(c));
+                .for_each(|r| r.tick(c, tick_rate));
             self.tick_lightning(c);
         }
         lap(2, &self.shared);
@@ -1149,9 +1153,11 @@ impl Server {
                 p.conn.send(ToClient::CloseMenu);
             }
         }
-        let taken = dims[from]
-            .entity_region(p.entity)
-            .and_then(|r| r.entities.take(p.entity));
+        let taken = dims[from].entity_region(p.entity).and_then(|r| {
+            let entity = r.entities.take(p.entity)?;
+            r.clean_observations();
+            Some(entity)
+        });
         let mut frame = None;
         if let Some((mut e, inv, mut comps)) = taken {
             extend::rebase_clock(c, &mut e, &mut comps, dims[to as usize].time as i64 - dims[from].time as i64);
@@ -1419,6 +1425,7 @@ impl Server {
             .skip(1)
             .filter_map(|b| Some((from.entities.take(b)?, from.bodies.remove(&b))))
             .collect();
+        from.clean_observations();
         let delta = pos - e.pos;
         e.pos = pos;
         let by = self.dims[to_dim as usize].time as i64 - self.dims[dim as usize].time as i64;

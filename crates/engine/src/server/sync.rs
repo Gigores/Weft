@@ -41,7 +41,8 @@ impl Server {
                 .map_or((DVec3::ZERO, GameMode::SURVIVAL), |e| (e.pos, e.mode));
             send_entities(c, p, dim, &moved[d], *tick, view.radius, viewer, &open_blocks);
             send_own_state(c, p, dim);
-            let shapes = gizmos_for(p, dim, *tick, viewer.0);
+            let mut shapes = gizmos_for(p, dim, *tick, viewer.0);
+            super::mob_gizmos::collect(c, p, dim, *tick, viewer.0, &mut shapes);
             if !shapes.is_empty() {
                 p.conn.send(ToClient::Gizmos(shapes));
             }

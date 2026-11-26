@@ -1436,6 +1436,7 @@ pub mod comp {
     /// more), `INVENTORY_MENU` (`str`, the menu its inventory key opens). Tags: the ones below,
     /// `NO_FALL_DAMAGE` and `UNPUSHABLE` turning off what every kind does. Any other component goes in its component table.
     pub mod entity {
+        pub const NO_BREATH_BUBBLES: &str = "no_breath_bubbles";
         pub const SIZE: &str = "entity.size";
         pub const EYE: &str = "entity.eye";
         pub const SPEED: &str = "entity.speed";
@@ -2725,6 +2726,28 @@ impl From<BlockPos> for Holder {
 }
 
 /// The movement keys `entity_walk` holds, as a player's are: the same physics and poses answer.
+pub mod navigation {
+    pub const WALK: u32 = 0;
+    pub const SWIM: u32 = 1;
+    pub const BLOCK: u32 = 0;
+    pub const TAG: u32 = 1;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RouteCost {
+    pub selector: u32,
+    pub id: u32,
+    pub multiplier: f32,
+}
+
+#[repr(C)]
+pub struct RouteOptions {
+    pub medium: u32,
+    pub costs: Slice<RouteCost>,
+    pub open_cost: f32,
+}
+
 pub mod walk {
     /// Jumps; swims and flies up.
     pub const JUMP: u32 = 1;
@@ -3133,11 +3156,25 @@ impl Schema for HeldChange {
 }
 
 data! {
+    /// Geometric bounds of a directional brain sensor.
+    pub struct BrainVision {
+        pub range: f64,
+        pub blind_near: f64,
+        pub horizontal: f64,
+        pub vertical: f64,
+        pub yaw_offset: f32,
+        pub pitch_offset: f32,
+    }
+}
+
+data! {
     pub struct BrainSettings {
         pub controls: u32,
         pub interval: u32,
         pub step: u32,
         pub watched: data::Vec<data::String>,
+        pub vision: BrainVision,
+        pub player_notice_range: f64,
     }
 }
 
@@ -3160,6 +3197,15 @@ pub struct BrainActor {
     pub offer: BrainOffer,
     /// Delay until its next evaluation. A zero delay waits for a signal.
     pub next: u32,
+}
+
+/// A living body found by a local entity query.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct Neighbor {
+    pub id: u64,
+    pub pos: Vec3,
+    pub kind: u32,
 }
 
 #[repr(C)]
@@ -3258,6 +3304,35 @@ pub struct RayHit {
     pub point: Vec3,
     pub local: Vec3,
     pub distance: f64,
+}
+
+pub mod gaze {
+    pub const ANY_PART: u32 = u32::MAX;
+    pub const TICKS: u32 = 0;
+    pub const REAL: u32 = 1;
+    pub const ENTER: u32 = 1;
+    pub const LEAVE: u32 = 2;
+    pub const REACHED: u32 = 4;
+    pub const HELD: u32 = 8;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct GazeOptions {
+    pub target: u64,
+    pub range: f64,
+    pub threshold: u64,
+    pub part: u32,
+    pub clock: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct GazeState {
+    pub hit: RayHit,
+    pub ticks: u64,
+    pub milliseconds: u64,
+    pub flags: u32,
 }
 
 /// What the client aims at: `entity` is nonzero for a mob, `state` for a block. Block positions
@@ -4765,6 +4840,21 @@ pub struct Host {
     pub brain_enable: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, rule: Str, enable: u32) -> u32,
     pub brain_install: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, source: u32, rule: Str) -> u32,
     pub brain_status: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, rule: Str, out: *mut BrainOffer) -> u32,
+    pub nearby: unsafe extern "C" fn(
+        world: *mut WorldCtx,
+        pos: *const Vec3,
+        radius: f64,
+        kind: u32,
+        skip: u64,
+        out: *mut Neighbor,
+        cap: usize,
+    ) -> usize,
+    pub sense_block: unsafe extern "C" fn(world: *mut WorldCtx, pos: *const BlockPos) -> u32,
+    pub block_path_clear: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, target: *const Vec3) -> u32,
+    pub hitbox_touches: unsafe extern "C" fn(world: *mut WorldCtx, entity: u64, part: u32, other: u64) -> u32,
+    pub brain_observe:
+        unsafe extern "C" fn(world: *mut WorldCtx, observer: u64, source: u64, component: u32, out: *mut u8, size: usize) -> u32,
+    pub brain_gaze: unsafe extern "C" fn(world: *mut WorldCtx, actor: u64, viewer: u64, options: *const GazeOptions, out: *mut GazeState),
     pub entity_hands: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, out: *mut [ItemStack; 2]),
     /// Entity `id` plays action `to` wherever it would play `from`; `to` empty ends that.
     pub action_override: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, from: Str, to: Str),
@@ -4782,6 +4872,8 @@ pub struct Host {
     pub navigate: unsafe extern "C" fn(world: *mut WorldCtx, id: u64, target: *const Vec3, speed: f32) -> u32,
     /// Whether `id` is still walking somewhere.
     pub navigating: unsafe extern "C" fn(world: *mut WorldCtx, id: u64) -> u32,
+    pub navigate_with:
+        unsafe extern "C" fn(world: *mut WorldCtx, id: u64, target: *const Vec3, speed: f32, opts: *const RouteOptions) -> u32,
     /// A `blocks` component value's list: (state, weight) pairs.
     pub block_list: unsafe extern "C" fn(index: u32) -> Slice<[u32; 2]>,
     /// Places template `name` with its lowest corner at `pos` once turned by `transform`, its slots

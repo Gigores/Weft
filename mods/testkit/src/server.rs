@@ -594,6 +594,27 @@ const OPS: &[(&str, &str, Run)] = &[
         Ok(w.brain_action(id, word(cmd, "rule")?)
             .map_or_else(|| "idle".to_owned(), |action| format!("{} {}", action.target(), action.priority())))
     }),
+    ("route", "<id:int> <to:pos> <medium:word> [cost:float]", |w, cmd, _, _| {
+        let id = int::<u64>(cmd, "id")?;
+        let p = pos(cmd, "to")?;
+        let options = if word(cmd, "medium")? == "swim" {
+            ai::Navigation::swimming()
+        } else {
+            static GRASS: Block = Block::named("base:short_grass");
+            ai::Navigation::walking().block_cost(&GRASS, cmd.float("cost").unwrap_or(1.0) as f32)
+        };
+        let target = [f64::from(p[0]) + 0.5, f64::from(p[1]) + 0.25, f64::from(p[2]) + 0.5];
+        Ok(w.navigate_with(id, target, 1.0, &options).to_string())
+    }),
+    ("sense_probe", "<id:int> <offset:float>", |w, cmd, _, _| {
+        let id = int::<u64>(cmd, "id")?;
+        let source = w.entity(id).ok_or("no sensing entity")?;
+        let offset = cmd.float("offset").ok_or("missing offset")?;
+        let vision = ai::Vision { blind_near: 0.6, ..ai::Vision::new(8.0, 100.0, 70.0) };
+        let visible = vision.sees(w, &source, source.eye().offset(0.0, 0.0, offset));
+        let clears = w.block_path_clear(id, source.pos.offset(0.0, 0.0, offset));
+        Ok(format!("{visible} {clears}"))
+    }),
     ("brain_edit", "<id:int> <rule:word> <edit:word>", |w, cmd, _, _| {
         let id = int::<u64>(cmd, "id")?;
         let rule = word(cmd, "rule")?;
@@ -802,9 +823,12 @@ const OPS: &[(&str, &str, Run)] = &[
             .collect();
         Ok(parts.join(" "))
     }),
-    ("spawn", "<kind:entity> <pos:pos>", |w, cmd, _, _| {
+    ("spawn", "<kind:entity> <pos:pos> [yaw:float]", |w, cmd, _, _| {
         let p = pos(cmd, "pos")?;
-        Ok(w.spawn(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5])
+        let how = cmd
+            .float("yaw")
+            .map_or_else(Spawn::new, |yaw| Spawn::new().yaw(yaw as f32));
+        Ok(w.spawn_with(id(cmd, "kind")?, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5], &how)
             .to_string())
     }),
     // `VALUE` from 1 and the answer to `MAY`.
@@ -1007,6 +1031,12 @@ const OPS: &[(&str, &str, Run)] = &[
         let frame = cmd.int("frame").unwrap_or(0) as u64;
         let space = w.in_space(frame).ok_or("navigation space not loaded")?;
         Ok((space.navigate(id, [p[0] as f64 + 0.5, p[1] as f64, p[2] as f64 + 0.5], 1.0) as u32).to_string())
+    }),
+    ("navigate_exact", "@owner <x:float> <y:float> <z:float> <speed:float>", |w, cmd, _, _| {
+        let id = owner(w, cmd)?;
+        let number = |name| cmd.float(name).ok_or("missing navigation coordinate");
+        let target = [number("x")?, number("y")?, number("z")?];
+        Ok((w.navigate(id, target, number("speed")? as f32) as u32).to_string())
     }),
     ("structure", "<name:word> <r:int>", |w, cmd, _, me| {
         Ok(w.structure_near(word(cmd, "name")?, me, int(cmd, "r")?)

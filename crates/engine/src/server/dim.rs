@@ -173,6 +173,9 @@ pub struct Dim {
     /// The blocks of bodies of this region, by entity.
     pub bodies: FxHashMap<u64, Box<Space>>,
     pub(super) brain_writes: FxHashMap<(u64, u32), Box<[u8]>>,
+    pub(super) observations: super::sense::Observations,
+    pub(super) gaze: super::gaze::Watches,
+    pub(super) senses: super::sense::Environment,
     pub time: u64,
     /// What `/time` moved the time of day by, from `time`.
     pub day_offset: i64,
@@ -535,6 +538,9 @@ impl Dim {
             space: Box::default(),
             bodies: FxHashMap::default(),
             brain_writes: FxHashMap::default(),
+            observations: Default::default(),
+            gaze: Default::default(),
+            senses: Default::default(),
             time: 1000,
             day_offset: 0,
             weather: Default::default(),
@@ -2111,7 +2117,7 @@ impl Dim {
         }
     }
 
-    pub fn tick(&mut self, c: &'static Content) {
+    pub fn tick(&mut self, c: &'static Content, tick_rate: u32) {
         self.time += 1;
         // Whatever changes from here on changes in this tick, before signals have their turn.
         self.space.signals.now = self.time;
@@ -2130,6 +2136,7 @@ impl Dim {
         let landing = self.advance_mounts(c, &children, &order);
         self.advance_grabs(c, &children);
         self.advance_ships(c, &before, &children);
+        self.sample_gaze(c, tick_rate);
         self.tick_entities(c, &before);
         for id in landing {
             self.land_mount(c, id);
@@ -2156,6 +2163,9 @@ impl Dim {
             .collect();
         for r in &gone {
             self.emit_engine(space_id, c, abi::event::ENTITY_REMOVED, r);
+        }
+        if !self.observations.is_empty() && self.entities.list.iter().any(|e| e.removed) {
+            self.clean_observations();
         }
         self.entities.compact();
     }
@@ -2332,15 +2342,19 @@ impl Dim {
     /// Starts or retargets `id`'s walk to `target`. A target close to the current one only
     /// moves it (the path follows at the next look); for a new one the path is looked for in
     /// `navigation`, after the mods' tick, together with every other walk started this tick.
-    pub fn navigate(&mut self, id: u64, target: DVec3, speed: f32) -> bool {
+    pub fn navigate(&mut self, id: u64, target: DVec3, speed: f32, profile: Option<super::path::Profile>) -> bool {
         let Some(e) = self.entities.get_mut(id) else { return false };
         if speed <= 0.0 {
             e.nav = None;
             return false;
         }
+        if !target.is_finite() || !speed.is_finite() {
+            return false;
+        }
         let age = e.age;
-        // On a body, somewhere on that.
-        let frame = e.frame.filter(|f| self.bodies.contains_key(f));
+        // Walkers standing on a body choose a route in its frame.
+        let swim = profile.as_ref().is_some_and(|p| p.swim);
+        let frame = e.frame.filter(|f| !swim && self.bodies.contains_key(f));
         let place = frame
             .and_then(|f| self.entities.get(f))
             .map(Entity::body_place);
@@ -2349,12 +2363,23 @@ impl Dim {
         if let Some(nav) = e
             .nav
             .as_mut()
-            .filter(|n| n.frame == frame && (n.target - target).length_squared() < 1.0)
+            .filter(|n| n.frame == frame && n.profile == profile && (swim || (n.target - target).length_squared() < 1.0))
         {
             (nav.target, nav.speed) = (target, speed);
             return true;
         }
-        e.nav = Some(super::path::Nav { target, speed, path: Vec::new(), next: 1, repath: age, found_for: None, stuck: 0, frame });
+        e.nav = Some(super::path::Nav {
+            target,
+            speed,
+            profile,
+            end: None,
+            path: Vec::new(),
+            next: 1,
+            repath: age,
+            found_for: None,
+            stuck: 0,
+            frame,
+        });
         true
     }
 
@@ -2383,30 +2408,51 @@ impl Dim {
         };
         let list = &mut self.entities.list;
         let due: Vec<usize> = (0..list.len())
-            .filter(|&i| walks(&list[i]) && list[i].nav.as_ref().is_some_and(|n| n.stale(list[i].age)))
+            .filter(|&i| {
+                walks(&list[i])
+                    && list[i]
+                        .nav
+                        .as_ref()
+                        .is_some_and(|n| n.stale(list[i].age, list[i].pos))
+            })
             .take(PATHS_PER_TICK)
             .collect();
-        let found: Vec<Vec<IVec3>> = due
+        let found: Vec<(Option<DVec3>, Vec<IVec3>)> = due
             .par_iter()
             .map(|&i| {
                 let (e, nav) = (&list[i], list[i].nav.as_ref().unwrap());
                 let dims = e.dims(c);
                 // It goes down no further than it falls without harm.
                 let drop = (e.safe_fall.floor() as i32).max(1);
+                if let Some(profile) = nav.profile.as_ref().filter(|p| p.swim) {
+                    return super::path::swim(c, &block, e.pos, nav.target, dims, profile);
+                }
                 match on_body(e) {
                     Some((f, place)) => {
                         let deck = &bodies[&f];
-                        super::path::find(c, deck.as_ref(), place.to_local(e.pos), nav.target, dims, drop)
+                        super::path::walk(c, deck.as_ref(), place.to_local(e.pos), nav.target, dims, drop, nav.profile.as_ref())
                     }
-                    None => super::path::find(c, &block, e.pos, nav.target, dims, drop),
+                    None => super::path::walk(c, &block, e.pos, nav.target, dims, drop, nav.profile.as_ref()),
                 }
             })
             .collect();
-        for (&i, path) in due.iter().zip(found) {
+        for (&i, (end, path)) in due.iter().zip(found) {
             let e = &mut list[i];
             let nav = e.nav.as_mut().unwrap();
             nav.path = path;
-            (nav.next, nav.repath, nav.found_for, nav.stuck) = (1, e.age + 20, Some(nav.target), 0);
+            nav.end = end;
+            let direct = end.is_some() && nav.path.is_empty();
+            let delay = if direct {
+                4
+            } else if nav.swimming() && end.is_none() && nav.path.len() <= 1 {
+                40
+            } else {
+                20
+            };
+            if nav.swimming() {
+                log::trace!(target: "navigation", "{} swim route: direct={direct}, nodes={}", e.id, nav.path.len());
+            }
+            (nav.next, nav.repath, nav.found_for, nav.stuck) = (1, e.age + delay, Some(nav.target), 0);
         }
         let now = self.time;
         for e in list.iter_mut().filter(|e| walks(e)) {
@@ -2426,11 +2472,57 @@ impl Dim {
             let pos = place.map_or(e.pos, |t| t.to_local(e.pos));
             let dims = e.dims(c);
             let nav = e.nav.as_mut().unwrap();
-            nav.stuck = if e.moved < 0.02 { nav.stuck + 1 } else { 0 };
-            let close = (nav.target - pos).with_y(0.0).length() < 1.0 && (nav.target.y - pos.y).abs() < 1.5;
+            let swimming = nav.swimming();
+            let blocked = e.blocked || e.moved < 0.0001;
+            nav.stuck = if blocked { nav.stuck + 1 } else { 0 };
+            if swimming {
+                let mut next = nav.end;
+                while let Some(&cell) = nav.path.get(nav.next) {
+                    let point = super::path::swim_point(cell, dims);
+                    if (point - pos).length_squared() >= 0.01 {
+                        next = Some(point);
+                        break;
+                    }
+                    nav.next += 1;
+                }
+                if nav.swim_arrived(pos) {
+                    e.walk = Some(super::entity::Walk { swim_velocity: Some(DVec3::ZERO), ..Default::default() });
+                    finish(e);
+                } else if let Some(next) = next.filter(|p| (*p - pos).length_squared() >= 0.0016) {
+                    let delta = next - pos;
+                    let top = c.game.entities[e.kind as usize].speed as f64 * nav.speed as f64 * e.moves.swim * crate::world::TICK as f64;
+                    let velocity = delta.clamp_length_max(top.max(0.0));
+                    if !e
+                        .brain
+                        .as_ref()
+                        .is_some_and(|b| b.controls(abi::brain::LOOK))
+                    {
+                        let horizontal = delta.x.hypot(delta.z);
+                        if horizontal > 0.01 {
+                            e.yaw = (-delta.x).atan2(-delta.z) as f32;
+                        }
+                        e.pitch = delta.y.atan2(horizontal) as f32;
+                    }
+                    e.flying = false;
+                    e.walk = Some(super::entity::Walk { swim_velocity: Some(velocity), ..Default::default() });
+                } else {
+                    nav.found_for = None;
+                }
+                continue;
+            }
+            let approximate = nav.end.is_none()
+                && nav.found_for.is_some()
+                && (nav.target - pos).with_y(0.0).length_squared() < 1.0
+                && (nav.target.y - pos.y).abs() < 1.5;
+            let precise = nav.end == Some(nav.target)
+                && (nav.target - pos).with_y(0.0).length_squared() < 0.06_f64.powi(2)
+                && (nav.target.y - pos.y).abs() < 0.15;
             match super::path::steer(nav, pos, dims, e.blocked) {
-                _ if close || nav.stuck > 40 => finish(e),
-                Some((dir, jump)) => {
+                _ if precise || nav.stuck > 40 => finish(e),
+                None if approximate => finish(e),
+                Some((delta, jump, terminal)) if delta.length_squared() > 1e-8 => {
+                    let dir = delta.normalize();
+                    let dir = [dir.x as f32, dir.z as f32];
                     let dir = place.map_or(dir, |t| {
                         let v = t.vector_to_world(DVec3::new(dir[0] as f64, 0.0, dir[1] as f64));
                         [v.x as f32, v.z as f32]
@@ -2443,10 +2535,16 @@ impl Dim {
                     {
                         e.yaw = (-dir[0]).atan2(-dir[1]);
                     }
-                    e.walk = Some(super::entity::Walk { dir, speed: nav.speed, keys: if jump { abi::walk::JUMP } else { 0 } });
+                    let speed = if terminal {
+                        let stride = c.game.entities[e.kind as usize].speed as f64 * crate::world::TICK;
+                        if stride > 0.0 { nav.speed.min((delta.length() / stride) as f32) } else { nav.speed }
+                    } else {
+                        nav.speed
+                    };
+                    e.walk = Some(super::entity::Walk { dir, speed, keys: if jump { abi::walk::JUMP } else { 0 }, swim_velocity: None });
                 }
                 // The end of a path that stopped short: look again.
-                None => nav.found_for = None,
+                _ => nav.found_for = None,
             }
         }
     }
@@ -3101,7 +3199,7 @@ impl Dim {
                         .filter(|old| &***old != value)
                     {
                         old.copy_from_slice(value);
-                        self.brain_component_changed(c, *id, &c.game.components[comp as usize].name);
+                        self.brain_component_changed(c, *id, comp);
                     }
                 }
             }
@@ -4350,6 +4448,9 @@ impl Dim {
             if let Some(st) = self.bodies.remove(&id) {
                 p.bodies.push((id, st));
             }
+        }
+        if !p.entities.is_empty() {
+            self.clean_observations();
         }
         let instances: Vec<_> = p
             .cubes

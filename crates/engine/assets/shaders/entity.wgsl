@@ -38,6 +38,11 @@ fn vs_item(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 
 // `v`: the vertex within the box, 6 per face.
 fn box_vertex(b: Box, v: u32, shadow: bool) -> VOut {
+    if b.ids.y == BOX_MODE_GIZMO_TRIANGLE {
+        let world = b.rows[min(v, 2u)].xyz;
+        return VOut(scene.view_proj * vec4(world, 1.0), vec2(0.0),
+            vec4(b.color.rgb, 1.0), b.ids.z, BOX_MODE_FILLED, 0.0, 0xffffffffu, b.color.rgb);
+    }
     let face = v / 6u;
     let c = TRI[v % 6u];
     var p = CORNERS[face * 4u + c];

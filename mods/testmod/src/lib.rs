@@ -15,11 +15,13 @@
 //! - shows off particles, shaders, text effects and glow masks (`looks`).
 
 mod bodies;
+mod brain_showcase;
 mod camera;
 mod looks;
 mod mace;
 mod riding;
 mod scoped_blaster;
+mod senses;
 mod torch_shy;
 
 use weft_sdk::terrain::*;
@@ -172,6 +174,8 @@ fn init(r: &mut Registry) {
                 .rule(ai::chase(20.0, 1.0)),
         );
     torch_shy::register(r);
+    senses::register(r);
+    brain_showcase::register(r);
     // One block in 2x2x2 cells, its model and boxes spanning them from its own.
     static BIG: Block = Block::named("big");
     r.block(&BIG)

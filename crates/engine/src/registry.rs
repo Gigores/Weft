@@ -1775,7 +1775,8 @@ fn bake_entity(e: &Entry) -> EntityKind {
         height: size.height,
         eye: e.or(k::EYE, size.height * EYE),
         speed: e.or(k::SPEED, 3.0),
-        flags: (ef::FALL_DAMAGE | ef::PUSHABLE | e.flags(crate::tag_bits::entity::TAGS)) & !e.flags(crate::tag_bits::entity::OFF),
+        flags: (ef::FALL_DAMAGE | ef::PUSHABLE | ef::BREATH_BUBBLES | e.flags(crate::tag_bits::entity::TAGS))
+            & !e.flags(crate::tag_bits::entity::OFF),
         category: 0,
         category_name: text(k::CATEGORY),
         texture: e

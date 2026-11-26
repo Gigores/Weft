@@ -513,6 +513,337 @@ pub async fn torch_shy_brain(t: T) -> R {
     Ok(())
 }
 
+pub async fn mob_senses(t: T) -> R {
+    t.flat().await?;
+    let f = t.feet();
+    let at = |offset| add(f, offset);
+    t.fill(at([6, 0, -4]), at([16, 1, 4]), "glass").await?;
+    t.fill(at([7, 0, -3]), at([15, 1, 3]), "water").await?;
+    let [x, y, z] = at([5, 0, 0]);
+    let sentry = t
+        .op(&format!("spawn testmod:touch_sentry {x} {y} {z} 0"))
+        .await?;
+    let sentry = sentry
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| format!("spawn sentry: {sentry}"))?;
+    // Enough bodies outside the sensing area to exercise the shared candidate path.
+    for i in 0..56 {
+        spawn(&t, "base:chicken", at([-10 - i % 8, 0, 7 + i / 8])).await?;
+    }
+    let mut group = Vec::new();
+    for _ in 0..10 {
+        group.push(spawn(&t, "testmod:shoal_fish", at([9, 0, 0])).await?);
+    }
+    let fish = spawn(&t, "testmod:shoal_fish", at([14, 0, 0])).await?;
+    let brain = |id, rule| format!("brain {id} testmod:{rule}");
+    let start = pos_of(&t, &fish.to_string()).await?;
+    t.secs(1.7).await?;
+    let joined = pos_of(&t, &fish.to_string()).await?;
+    t.check(joined[0] < start[0] - 0.6, format!("the outlier swims toward the group: {start:?} -> {joined:?}"));
+    let first = pos_of(&t, &group[0].to_string()).await?;
+    let last = pos_of(&t, &group[9].to_string()).await?;
+    t.check((first[0] - last[0]).hypot(first[2] - last[2]) > 0.2, "fish spawned together spread out");
+    t.check_eq(t.op(&brain(fish, "flee_aggro")).await?, "idle".to_owned(), "calm sentry");
+    t.cmd("/tick freeze").await?;
+    t.op(&format!("brain_edit {fish} testmod:flee_aggro disable"))
+        .await?;
+    t.op(&format!("brain_edit {fish} testmod:flee_aggro enable"))
+        .await?;
+    let advance = |t: T| async move {
+        let tick = t.game_time().await?;
+        t.cmd("/tick step 1").await?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while t.game_time().await? == tick {
+            if std::time::Instant::now() >= deadline {
+                return Err("the frozen world did not step".to_owned());
+            }
+        }
+        Ok(())
+    };
+    advance(t.clone()).await?;
+    t.cmd(&format!("/senseaggro {sentry} 50")).await?;
+    advance(t.clone()).await?;
+    let flight = t.op(&brain(fish, "flee_aggro")).await?;
+    t.check(flight != "idle", format!("the sentry's aggression causes flight through glass: {flight}"));
+    t.check_eq(t.op(&brain(fish, "school")).await?, "idle".to_owned(), "flight overrides the shoal");
+    t.cmd(&format!("/senseaggro {sentry} 40")).await?;
+    advance(t.clone()).await?;
+    t.check(t.op(&brain(fish, "flee_aggro")).await? != "idle", "flight holds between the two thresholds");
+    t.cmd(&format!("/senseaggro {sentry} 30")).await?;
+    advance(t.clone()).await?;
+    t.check_eq(t.op(&brain(fish, "flee_aggro")).await?, "idle".to_owned(), "lower aggression ends flight");
+    t.cmd("/tick unfreeze").await?;
+
+    let probe = |offset| format!("sense_probe {sentry} {offset}");
+    t.check_eq(t.op(&probe(-3.0)).await?, "true true".to_owned(), "clear view and body path ahead");
+    t.check_eq(t.op(&probe(-0.2)).await?, "false true".to_owned(), "near blind spot");
+    t.check_eq(t.op(&probe(2.0)).await?, "false true".to_owned(), "blind behind the observer");
+    t.fill(at([5, 0, -2]), at([5, 1, -2]), "stone").await?;
+    t.check_eq(t.op(&probe(-3.0)).await?, "false false".to_owned(), "stone stops sight and the body");
+    t.fill(at([5, 0, -2]), at([5, 1, -2]), "air").await?;
+
+    let [x, y, z] = pos_of(&t, &sentry.to_string()).await?;
+    t.cmd(&format!("/tp {x} {y} {}", z + 1.0)).await?;
+    t.secs(0.3).await?;
+    t.check_eq(t.c().entity(0).map(|e| e.health), Some(20.0), "nearby behind the sentry is safe");
+    t.check_eq(t.op(&brain(sentry, "probe_contact")).await?, "idle".to_owned(), "no probe overlap behind");
+    t.cmd(&format!("/tp {x} {y} {}", z - 1.0)).await?;
+    t.until("the probe outside the body box detects contact", Duration::from_secs(3), |t| t.c().entity(0).is_some_and(|e| e.health < 20.0))
+        .await?;
+    t.cmd(&format!("/tp {x} {y} {}", z - 5.0)).await?;
+    t.secs(0.2).await?;
+    let aim = |height: f64| {
+        let eye = t.c().entity(0).expect("player in the scene").eye();
+        let delta = Vec3::new(x, y + height, z) - eye;
+        t.c()
+            .set_look((-delta.x).atan2(-delta.z).to_degrees() as f32, delta.y.atan2(delta.x.hypot(delta.z)).to_degrees() as f32);
+    };
+    let head = brain(sentry, "head_gaze");
+    let held = brain(sentry, "held_head_gaze");
+    aim(0.35);
+    t.secs(1.2).await?;
+    t.check_eq(t.op(&head).await?, "idle".to_owned(), "the probe is not its head");
+    aim(1.28);
+    t.secs(0.3).await?;
+    t.check(t.op(&head).await? != "idle", "eyes on the head wake the immediate rule");
+    t.check_eq(t.op(&held).await?, "idle".to_owned(), "a glance does not reach the hold threshold");
+    aim(0.35);
+    t.secs(0.25).await?;
+    t.check_eq(t.op(&head).await?, "idle".to_owned(), "looking off the head ends the gaze");
+    t.cmd("/tick rate 2").await?;
+    aim(1.28);
+    t.secs(0.35).await?;
+    t.check_eq(t.op(&held).await?, "idle".to_owned(), "the second look starts its own duration");
+    let mut reached = false;
+    for _ in 0..10 {
+        t.secs(0.2).await?;
+        if t.op(&held).await? != "idle" {
+            reached = true;
+            break;
+        }
+    }
+    t.check(reached, "a continuous look crosses the real-time threshold even at 2 TPS");
+    t.cmd("/tick rate 20").await?;
+    t.fill(at([5, 0, -3]), at([5, 1, -3]), "stone").await?;
+    t.secs(0.25).await?;
+    t.check_eq(t.op(&held).await?, "idle".to_owned(), "an occluder interrupts an already held gaze");
+    t.fill(at([5, 0, -3]), at([5, 1, -3]), "air").await?;
+    t.op("mode spectator").await?;
+    t.cmd(&format!("/tp {} {} {}", x - 2.7, y + 3.2, z - 3.0))
+        .await?;
+    t.secs(0.45).await?;
+    t.look_at(at([8, 0, 0]));
+    t.secs(0.2).await?;
+    t.shot("senses").await?;
+    Ok(())
+}
+
+pub async fn brain_showcase(t: T) -> R {
+    t.flat().await?;
+    let center = t.c().entity(0).expect("player in the scene").pos;
+    t.cmd("/brainshowcase hunt").await?;
+    let near = t.op("near ~ ~ ~ 12").await?;
+    let find = |near: &str, kind: &str| {
+        near.split_whitespace()
+            .find_map(|s| {
+                let (id, name) = s.split_once(':')?;
+                (name == kind).then(|| id.parse::<u64>().ok()).flatten()
+            })
+            .ok_or_else(|| format!("{kind} missing from the hunt: {near}"))
+    };
+    let amber = find(&near, "testmod:amber_hunter")?;
+    let cyan = find(&near, "testmod:cyan_hunter")?;
+    let initial = pos_of(&t, &amber.to_string()).await?;
+    let mut last = initial;
+    for _ in 0..8 {
+        t.secs(0.3).await?;
+        let next = pos_of(&t, &amber.to_string()).await?;
+        t.check((next[0] - last[0]).hypot(next[2] - last[2]) > 0.12, "the hunter keeps moving between waypoints");
+        last = next;
+    }
+    let [ax, _, az] = pos_of(&t, &amber.to_string()).await?;
+    let [bx, _, bz] = pos_of(&t, &cyan.to_string()).await?;
+    let (a, b) = ((ax - center.x, az - center.z), (bx - center.x, bz - center.z));
+    let (ra, rb) = (a.0.hypot(a.1), b.0.hypot(b.1));
+    t.check((ax - initial[0]).hypot(az - initial[2]) > 1.8, "hunters move around the player");
+    t.check((4.5..7.5).contains(&ra) && (4.5..7.5).contains(&rb), format!("both keep their distance: {ra}, {rb}"));
+    t.check((a.0 * b.0 + a.1 * b.1) / (ra * rb) < -0.75, "hunters stay on opposite sides");
+    for id in [amber, cyan] {
+        t.op(&format!("remove {id}")).await?;
+    }
+
+    t.cmd("/brainshowcase shoal").await?;
+    let f = t.feet();
+    let near = t.op("near ~ ~ ~ 17").await?;
+    let fish: Vec<u64> = near
+        .split_whitespace()
+        .filter_map(|line| line.strip_suffix(":testmod:shoal_fish")?.parse().ok())
+        .collect();
+    t.check_eq(fish.len(), 6, "the demo creates a group on both sides of the wall");
+    let far = *fish.last().ok_or("no fish in the demonstration")?;
+    t.until("the isolated fish swims up and over the wall toward the shoal", Duration::from_secs(8), |t| {
+        t.c()
+            .entity(far)
+            .is_some_and(|e| e.pos.x < f64::from(f[0]) + 8.0)
+    })
+    .await?;
+    let mut alarmed = false;
+    for _ in 0..15 {
+        t.secs(0.35).await?;
+        if t.op(&format!("brain {far} testmod:flee_aggro")).await? != "idle" {
+            alarmed = true;
+            break;
+        }
+    }
+    t.check(alarmed, "the alarm changes nearby fish behavior through glass");
+    t.op("mode spectator").await?;
+    t.cmd(&format!("/tp {} {} {}", f[0], f[1] + 3, f[2] - 4))
+        .await?;
+    t.secs(0.35).await?;
+    t.look_at(add(f, [7, 2, 0]));
+    t.secs(0.2).await?;
+    t.shot("shoal").await?;
+
+    t.cmd(&format!("/tp {} {} {}", f[0], f[1], f[2] - 14))
+        .await?;
+    t.op("mode survival").await?;
+    t.secs(0.35).await?;
+    let f = t.feet();
+    t.cmd("/brainshowcase routes").await?;
+    let near = t.op("near ~ ~ ~ 12").await?;
+    let amber = find(&near, "testmod:amber_hunter")?;
+    let cyan = find(&near, "testmod:cyan_hunter")?;
+    let (mut avoided, mut entered) = (false, false);
+    t.until("the route showcase visibly separates avoidance and attraction", Duration::from_secs(8), |t| {
+        let in_strip_x = |x: f64| (f64::from(f[0] + 6)..f64::from(f[0] + 10)).contains(&x);
+        avoided |= t
+            .c()
+            .entity(amber)
+            .is_some_and(|e| in_strip_x(e.pos.x) && !(f64::from(f[2] - 4)..f64::from(f[2] - 1)).contains(&e.pos.z));
+        entered |= t
+            .c()
+            .entity(cyan)
+            .is_some_and(|e| in_strip_x(e.pos.x) && (f64::from(f[2] + 2)..f64::from(f[2] + 5)).contains(&e.pos.z));
+        avoided && entered
+    })
+    .await?;
+
+    t.cmd(&format!("/tp {} {} {}", f[0], f[1], f[2] + 28))
+        .await?;
+    t.secs(0.35).await?;
+    let f = t.feet();
+    t.cmd("/brainshowcase gap").await?;
+    let near = t.op("near ~ ~ ~ 14").await?;
+    let small = find(&near, "testmod:shoal_fish")?;
+    let wide = find(&near, "testmod:wide_shoal_fish")?;
+    t.until("the small demo fish clears the gap", Duration::from_secs(8), |t| {
+        t.c()
+            .entity(small)
+            .is_some_and(|e| e.pos.x < f64::from(f[0] + 7))
+    })
+    .await?;
+    let [x, _, _] = pos_of(&t, &wide.to_string()).await?;
+    t.check(x >= f64::from(f[0] + 9), "the large demo fish cannot fit");
+    t.op("mode spectator").await?;
+    t.cmd(&format!("/tp {} {} {}", f[0] + 8, f[1] + 1, f[2] - 8))
+        .await?;
+    t.secs(0.25).await?;
+    t.look_at(add(f, [8, 1, 0]));
+    t.secs(0.2).await?;
+    t.shot("gap").await?;
+    Ok(())
+}
+
+pub async fn fish_navigation(t: T) -> R {
+    t.flat().await?;
+    let f = t.feet();
+    let at = |offset| add(f, offset);
+    t.fill(at([3, 0, -3]), at([14, 4, 3]), "glass").await?;
+    t.fill(at([4, 0, -2]), at([13, 4, 2]), "water").await?;
+    t.fill(at([8, 0, -2]), at([8, 1, 2]), "stone").await?;
+    let fish = spawn(&t, "testmod:shoal_fish", at([5, 0, 0])).await?;
+    let goal = |pos: [i32; 3]| format!("route {fish} {} {} {} swim", pos[0], pos[1], pos[2]);
+    t.op(&goal(at([5, 3, 0]))).await?;
+    t.until("a straight swim changes depth", Duration::from_secs(5), |t| {
+        t.c()
+            .entity(fish)
+            .is_some_and(|e| e.pos.y > f64::from(f[1]) + 3.0)
+    })
+    .await?;
+    t.op(&goal(at([5, 0, 0]))).await?;
+    t.until("the fish swims back down", Duration::from_secs(5), |t| {
+        t.c()
+            .entity(fish)
+            .is_some_and(|e| e.pos.y < f64::from(f[1]) + 0.5)
+    })
+    .await?;
+    t.op(&goal(at([11, 0, 0]))).await?;
+    t.until("the fish goes over the submerged wall", Duration::from_secs(8), |t| {
+        t.c()
+            .entity(fish)
+            .is_some_and(|e| e.pos.x > f64::from(f[0]) + 9.3)
+    })
+    .await?;
+    t.until("the fish arrives on the far side at the original depth", Duration::from_secs(6), |t| {
+        t.c()
+            .entity(fish)
+            .is_some_and(|e| e.pos.x > f64::from(f[0]) + 10.9 && e.pos.y < f64::from(f[1]) + 0.65)
+    })
+    .await?;
+
+    t.op(&format!("brain_edit {fish} testmod:school disable"))
+        .await?;
+    t.fill(at([8, 0, -2]), at([8, 4, 2]), "stone").await?;
+    t.fill(at([8, 0, 0]), at([8, 4, 0]), "water").await?;
+    let wide = spawn(&t, "testmod:shoal_fish", at([11, 0, 0])).await?;
+    t.op(&format!("brain_edit {wide} testmod:school disable"))
+        .await?;
+    t.op(&format!("size {wide} 1.4 0.3")).await?;
+    let [x, y, z] = at([5, 0, 0]);
+    t.op(&format!("route {wide} {x} {y} {z} swim")).await?;
+    t.op(&goal(at([5, 0, 0]))).await?;
+    t.until("a small fish fits through a single-block opening", Duration::from_secs(8), |t| {
+        t.c()
+            .entity(fish)
+            .is_some_and(|e| e.pos.x < f64::from(f[0]) + 6.9)
+    })
+    .await?;
+    let [x, _, _] = pos_of(&t, &wide.to_string()).await?;
+    t.check(x >= f64::from(f[0]) + 9.0, "a wide fish stays outside the undersized opening");
+
+    t.fill(at([-8, 0, -1]), at([-5, 0, 1]), "short_grass")
+        .await?;
+    let cautious = spawn(&t, "testmod:touch_sentry", at([-10, 0, 0])).await?;
+    let attracted = spawn(&t, "testmod:touch_sentry", at([-10, 0, 0])).await?;
+    let [x, y, z] = at([-2, 0, 0]);
+    t.op(&format!("route {cautious} {x} {y} {z} walk 10"))
+        .await?;
+    t.op(&format!("route {attracted} {x} {y} {z} walk 0.25"))
+        .await?;
+    let in_strip_x = |x: f64| (f64::from(f[0] - 8)..f64::from(f[0] - 4)).contains(&x);
+    let entered = std::cell::Cell::new(false);
+    let avoided = std::cell::Cell::new(false);
+    t.until("low cost crosses the strip and high cost goes around it", Duration::from_secs(5), |t| {
+        let lateral = |e: EntityState| (e.pos.z - f64::from(f[2]) - 0.5).abs();
+        entered.set(
+            entered.get()
+                || t.c()
+                    .entity(attracted)
+                    .is_some_and(|e| in_strip_x(e.pos.x) && lateral(e) < 0.8),
+        );
+        avoided.set(
+            avoided.get()
+                || t.c()
+                    .entity(cautious)
+                    .is_some_and(|e| in_strip_x(e.pos.x) && lateral(e) > 1.6),
+        );
+        entered.get() && avoided.get()
+    })
+    .await?;
+    Ok(())
+}
+
 /// A zombie finds its way around a wall to the player and hits it.
 pub async fn zombie_chases(t: T) -> R {
     t.flat().await?;

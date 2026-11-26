@@ -29,8 +29,13 @@ tag_bits! {
         /// What every kind does unless a tag in `OFF` takes it away.
         pub const FALL_DAMAGE: u32 = 1 << 20;
         pub const PUSHABLE: u32 = 1 << 21;
+        pub const BREATH_BUBBLES: u32 = 1 << 22;
         pub const BLOCKED: u32 = weft_abi::entity_state::BLOCKED;
-        pub const OFF: &[(&str, u32)] = &[(weft_abi::comp::entity::NO_FALL_DAMAGE, FALL_DAMAGE), (weft_abi::comp::entity::UNPUSHABLE, PUSHABLE)];
+        pub const OFF: &[(&str, u32)] = &[
+            (weft_abi::comp::entity::NO_FALL_DAMAGE, FALL_DAMAGE),
+            (weft_abi::comp::entity::UNPUSHABLE, PUSHABLE),
+            (weft_abi::comp::entity::NO_BREATH_BUBBLES, BREATH_BUBBLES),
+        ];
     ]
 }
 

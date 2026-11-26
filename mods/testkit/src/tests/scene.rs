@@ -317,6 +317,17 @@ async fn pathfinding(t: T, o: [i32; 3]) -> R {
         t.check(d < 1.5, format!("{width} x {height} body walked through a fitting gap ({:.1} {:.1}, {d:.1} from target)", p[0], p[2]));
         t.op(&format!("remove {id}")).await?;
     }
+    let from = add(o, [11, 0, 9]);
+    let id = spawn(&t, "testmod:idol", from).await?;
+    let [x, y, z] = pos_of(&t, id).await?;
+    let (to_x, to_z) = (x + 0.42, z - 0.33);
+    t.op(&format!("navigate_exact {id} {to_x} {y} {to_z} 0.15"))
+        .await?;
+    t.secs(2.5).await?;
+    let [x, _, z] = pos_of(&t, id).await?;
+    let distance = (x - to_x).hypot(z - to_z);
+    t.check(distance < 0.11, format!("the slow diagonal reaches a fractional target ({distance:.3} blocks away)"));
+    t.op(&format!("remove {id}")).await?;
     Ok(())
 }
 

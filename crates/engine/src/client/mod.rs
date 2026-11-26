@@ -811,6 +811,7 @@ pub struct Client {
     /// This frame's gizmo shapes, from `collect_gizmos`.
     pub gizmo_lines: Vec<gizmo::Line>,
     pub gizmo_fills: Vec<gizmo::Fill>,
+    pub gizmo_tint: Option<u32>,
     pub gizmo_labels: Vec<gizmo::Label>,
     /// The block being broken (frame, block as in `Hit`) and how far.
     pub breaking: Option<(u64, IVec3, f32)>,
@@ -879,7 +880,7 @@ impl Client {
     /// Builds the gizmo lines and labels for this frame; labels behind opaque blocks are left out.
     pub fn collect_gizmos(&mut self) {
         let mut g = std::mem::take(&mut self.gizmos);
-        let (lines, fills, mut labels) = g.collect(self);
+        let (lines, fills, mut labels, tint) = g.collect(self);
         self.gizmos = g;
         let c = content();
         let eye = self.render_camera().pos;
@@ -894,6 +895,7 @@ impl Client {
             len < 24.0 && (len < 0.2 || physics::raycast(c, &opaque, eye, d / len, len - 0.1, weft_abi::ray::BLOCKS).is_none())
         });
         (self.gizmo_lines, self.gizmo_fills, self.gizmo_labels) = (lines, fills, labels);
+        self.gizmo_tint = tint;
     }
 
     /// Shows a line in the chat as if the server had sent it.
@@ -1144,6 +1146,7 @@ impl Client {
             gizmos: Default::default(),
             gizmo_lines: Vec::new(),
             gizmo_fills: Vec::new(),
+            gizmo_tint: None,
             gizmo_labels: Vec::new(),
             breaking: None,
             breaking_part: Default::default(),
@@ -2695,13 +2698,17 @@ impl Client {
         self.effect_swirls(a.entity, pos, dims, a.dt);
         // Bubbles from the eyes under a liquid that has them.
         let eye = pos + DVec3::Y * dims.eye;
-        let bubble = self.visible_liquid(eye).and_then(|l| {
-            let state = c.liquids[l as usize].first_state;
-            let id = c.components.id(weft_abi::comp::BUBBLE)?;
-            c.game
-                .catalog
-                .find(ek::PARTICLE, c.components.text(crate::components::BLOCK, state, id)?)
-        });
+        let bubble = k
+            .is(crate::tag_bits::entity::BREATH_BUBBLES)
+            .then(|| self.visible_liquid(eye))
+            .flatten()
+            .and_then(|l| {
+                let state = c.liquids[l as usize].first_state;
+                let id = c.components.id(weft_abi::comp::BUBBLE)?;
+                c.game
+                    .catalog
+                    .find(ek::PARTICLE, c.components.text(crate::components::BLOCK, state, id)?)
+            });
         if let Some(kind) = bubble.filter(|_| self.chance() < a.dt * 1.5) {
             self.particles.spawn(
                 &weft_abi::ParticleBurst {
@@ -3824,6 +3831,7 @@ fn step_player(p: &mut LocalPlayer, input: &Input, block: &impl physics::Cells, 
         careful: sneak,
         sprint: swimming,
         swim_look: swimming.then(|| (p.pitch as f64).sin()),
+        swim_velocity: None,
     };
     let frame = physics::Frame { half_width: hw, height, gravity: g, moves: p.moves };
     let w = physics::walk(c, block, bodies, 0, &mut p.pos, &mut p.vel, p.on_ground, &ctl, &frame);

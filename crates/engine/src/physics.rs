@@ -1640,6 +1640,7 @@ pub struct Control {
     pub sprint: bool,
     /// Swimming: goes where it looks, this being the look's up component.
     pub swim_look: Option<f64>,
+    pub swim_velocity: Option<DVec3>,
     /// Never steps off an edge, and holds on to a ladder (sneaking).
     pub careful: bool,
 }
@@ -1737,7 +1738,10 @@ pub fn walk(
         }
     };
     let mut jumped = false;
-    if liquid {
+    let directed_swim = ctl.swim_velocity.filter(|_| liquid);
+    if let Some(swim) = directed_swim {
+        *vel = swim;
+    } else if liquid {
         accelerate(vel, ctl.liquid * drag);
         if ctl.swim {
             vel.y += 0.04;
@@ -1790,7 +1794,7 @@ pub fn walk(
     // static grip on a gentle slope while leaving nearly all of the slope force on ice.
     let grip = 2.5 * (1.0 - slip).powi(2);
     let move_by = |delta, step| move_box_excluding(c, block, bodies, [skip, 0], before, f.half_width, f.height, delta, step, grip);
-    let step = if on_ground { f.moves.step } else { 0.0 };
+    let step = if on_ground && directed_swim.is_none() { f.moves.step } else { 0.0 };
     let travel = *vel;
     let mut r = move_by(travel, step);
     if ctl.auto_jump > 0.0 && on_ground && !jumped && !liquid && !climbing && !ctl.careful && (r.hit[0] || r.hit[2]) {
@@ -1815,11 +1819,11 @@ pub fn walk(
         vel.x *= keep;
         vel.z *= keep;
         vel.y *= 0.8;
-        if !ctl.sprint {
+        if directed_swim.is_none() && !ctl.sprint {
             vel.y -= f.gravity / 16.0;
         }
         // Up a ledge out of the water, vanilla's little boost at a wall with room above it.
-        if r.hit[0] || r.hit[2] {
+        if directed_swim.is_none() && (r.hit[0] || r.hit[2]) {
             let at = DVec3::new(before.x + travel.x, pos.y + vel.y + 0.6, before.z + travel.z);
             let above = Aabb::around(at, f.half_width, f.height);
             if !occupied(c, block, bodies, skip, above) {

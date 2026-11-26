@@ -13,6 +13,7 @@
 - `r.bone_model(..)`, `.wearable_model(..)` on an item: a model on a bone. `r.bone_motion`, `c.bone_turn`, `c.bone_position`: bones moving by themselves or by code (`docs/models.md`)
 - `light(..)`, `light_rgb(..)` and `light_at(x, y, z)` for where on it the light comes from (a lantern on its head). One mob's own light changes with `.attach(&LIGHT)` then `w.set_component(mob, &LIGHT, [r, g, b])`; effects give light too (`r.entity_effect(&E).light(..)`), and `shown_slots(&[0])` makes a kind's slots seen by everyone, glowing if what's there glows (a pedestal holding a torch)
 - `sound("hurt")`, `sound("death")`, `sound("ambient")`: files from `sounds/entity/<name>/`
+- `.tag("no_breath_bubbles")` disables the ambient breathing particles under liquids
 - `animations(..)`
 
 ## Callbacks
@@ -54,10 +55,79 @@ the action. The action callback receives `Start`, `Update`, `Stop`, and optional
 Use `ai::share` in a group alert to write a fact to nearby members selected by your
 predicate. Rules watching that fact then decide how each member responds.
 
+`ai::Nearby::new(origin, radius)` finds living bodies. Use `.kind(&SPECIES)`,
+`.excluding(ctx.id())`, and `visit`, `nearest`, `list` or `count`. Local queries
+in one brain pass can share candidates while still testing the exact requested
+origin and radius. Filter by tag with `TAG.on_entity(entry.kind)` in a visitor.
+Use `w.sensed_block` or `w.nearest_block` for nearby terrain, `w.looked_at`
+for a direction, and `w.block_path_clear` for a straight sweep of the current
+body box against blocks.
+
+`ai::Vision` controls range, angles, near blind distance and block occlusion.
+Use several profiles with different yaw or pitch offsets for separate fields of
+view. `ai::Scent` scores the strength of a local source after distance falloff.
+`ai::Touch` checks bodies in range against the collision box or a named hitbox
+part in its current pose. Use any of these in your own sensor or action offer.
+
+Read a source entity's component with `ctx.observe(source, &COMPONENT)` while
+sampling or offering. A change through SDK or system writes, or the source
+leaving the region, wakes the rule. Each sample refreshes the subscriptions. Use periodic
+sampling where a source can enter or leave a sensor's range by moving.
+
 Use `.without_brain_rule("core:chase")` to edit the kind. Use
 `w.enable_brain_rule(id, name, enabled)` and `w.install_brain_rule(id, &SOURCE, name)` to
 edit the rules of a single entity. Instance edits are saved by name. Inspect a running rule
 with `w.brain_action(id, name)` or log transitions with `--log brain=debug`.
+
+Game masters can use `/gizmo mob_brain` to see active rules and their keep
+priorities above nearby mobs, and `/gizmo mob_path` to see remaining route
+segments and target markers. Use `ai::Rule::vision_sensor(name, profile, sample)`
+to pass an `ai::Vision` profile to a sensor callback and expose its geometric
+limits to `/gizmo mob_vision`. The orange boundary marks the near blind zone.
+The outline shows the profile before per-target obstruction checks.
+The same group also shows the nominal player detection distance as a sphere.
+The built-in sight and watch-player rules expose their range. Custom rules can
+declare theirs with `.player_notice_range(range)`. From inside a volume, the
+overlay tints the view at 20% opacity.
+
+### Watching someone's gaze
+
+Call `ctx.watch_gaze(viewer, ai::Gaze::at(ctx.id(), range).part("head").for_ticks(20))`
+from a sensor or offer. The rule wakes on entry, exit and threshold crossing.
+`hit()` returns the current hit, `held()` says whether it has reached the
+threshold, and `entered()`, `left()` and `reached_threshold()` are consumed
+on read. Transitions can coalesce. A threshold crossing expires when that
+focus ends. Leaving off the part filter keeps the same target in focus even if
+the viewer moves between its parts. Use a named eye hitbox for a tighter check.
+
+Use `for_real_time(Duration::from_secs(1))` for monotonic server time. A gap
+over 250 ms or two configured tick periods, whichever is longer, resets
+real-time watches. Simulation-time watches count sampled server ticks. The server shares a single block-occluded entity ray per
+watched viewer each tick. Use a local entity query on an interval to pick new
+viewers and refresh a rule's watches by reading them when it runs.
+
+## Navigation
+
+Pass `ai::Navigation::walking()` or `ai::Navigation::swimming()` to
+`w.navigate_with(id, target, speed, &profile)`. A swimmer uses the liquids
+declared in `SWIMS_IN`. It changes depth freely, checks the whole body against
+solids and liquid surfaces, and follows a clear straight leg before trying a
+cell search. Long straight routes are checked in successive legs.
+On the ground, clear supported routes and final approaches can use fractional
+coordinates. The cell search still handles terrain detours, steps and drops.
+
+The profile can price a block or tag with `block_cost` or `tag_cost`. A cost
+of one gives ordinary distance, a larger weight makes travel more expensive,
+and a smaller positive weight favors that material. The last matching rule
+takes effect. `open_cost` prices cells without a wall beside the body. The
+fast straight probe can bypass the search when the segment costs the minimum
+allowed by its profile. A profile that prefers a wall can still search across
+open water.
+
+Create options from the mob's current components or senses each time the
+behavior changes its route. A different profile replaces the existing route.
+If the creature must visit a material even when it takes a longer route,
+select that material as a waypoint in the behavior.
 
 ## Hands
 

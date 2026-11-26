@@ -218,6 +218,12 @@ pub static HOST: Host = Host {
     brain_enable,
     brain_install,
     brain_status,
+    nearby,
+    sense_block,
+    block_path_clear,
+    hitbox_touches,
+    brain_observe,
+    brain_gaze,
     entity_hands,
     action_override,
     play_sound,
@@ -225,6 +231,7 @@ pub static HOST: Host = Host {
     biome_at,
     navigate,
     navigating,
+    navigate_with,
     block_list,
     place,
     unplace,
@@ -386,6 +393,16 @@ unsafe extern "C" fn structure_near(
 }
 
 unsafe extern "C" fn navigate(w: *mut abi::WorldCtx, id: u64, target: *const abi::Vec3, speed: f32) -> u32 {
+    unsafe { navigate_with(w, id, target, speed, std::ptr::null()) }
+}
+
+unsafe extern "C" fn navigate_with(
+    w: *mut abi::WorldCtx,
+    id: u64,
+    target: *const abi::Vec3,
+    speed: f32,
+    opts: *const abi::RouteOptions,
+) -> u32 {
     unsafe {
         let c = content();
         let d = dim(w);
@@ -397,7 +414,21 @@ unsafe extern "C" fn navigate(w: *mut abi::WorldCtx, id: u64, target: *const abi
         if let Some(e) = d.entities.get_mut(id) {
             e.jump_mul = jump_mul;
         }
-        d.navigate(id, target, speed * mul) as u32
+        let profile = opts.as_ref().and_then(|opts| {
+            let e = d.entities.get(id)?;
+            let liquids = if opts.medium == abi::navigation::SWIM {
+                let inv = d
+                    .entities
+                    .inventories
+                    .get(&id)
+                    .map_or(&[][..], Vec::as_slice);
+                crate::content::swims_in(c, e.kind, crate::content::equipped(c, e.kind, inv))
+            } else {
+                Vec::new()
+            };
+            Some(crate::server::path::Profile::new(opts, liquids))
+        });
+        d.navigate(id, target, speed * mul, profile) as u32
     }
 }
 
@@ -576,6 +607,104 @@ unsafe fn dim<'a>(w: *mut abi::WorldCtx) -> &'a mut Dim {
 
 unsafe fn space_id(w: *mut abi::WorldCtx) -> u64 {
     unsafe { (*w).frame }
+}
+
+unsafe extern "C" fn nearby(
+    w: *mut abi::WorldCtx,
+    pos: *const abi::Vec3,
+    radius: f64,
+    kind: u32,
+    skip: u64,
+    out: *mut abi::Neighbor,
+    cap: usize,
+) -> usize {
+    unsafe { dim(w).nearby(space_id(w), crate::world::dvec(*pos), radius, kind, skip, std::slice::from_raw_parts_mut(out, cap)) }
+}
+
+unsafe extern "C" fn sense_block(w: *mut abi::WorldCtx, pos: *const abi::BlockPos) -> u32 {
+    unsafe { dim(w).sense_block(space_id(w), ip(pos)).unwrap_or(u32::MAX) }
+}
+
+unsafe extern "C" fn block_path_clear(w: *mut abi::WorldCtx, id: u64, target: *const abi::Vec3) -> u32 {
+    use crate::physics::{self, Aabb, Solid, Transform};
+    let (d, frame, c, target) = unsafe { (dim(w), space_id(w), content(), crate::world::dvec(*target)) };
+    let Some(entity) = d.entities.get(id) else { return 0 };
+    let pose = d.space_pose(frame);
+    let start = pose.to_local(entity.pos);
+    let extent = (target - start).abs().max_element();
+    if !target.is_finite() || extent > 1024.0 {
+        return 0;
+    }
+    let dims = entity.dims(c);
+    // Keep each swept bounds local even on long diagonals.
+    let segments = (extent / 4.0).ceil().max(1.0) as u32;
+    let delta = (target - start) / f64::from(segments);
+    let world_delta = pose.to_world(target) - entity.pos;
+    let world_delta = world_delta / f64::from(segments);
+    let to_space = Transform::default().relative_to(pose);
+    for segment in 0..segments {
+        let bounds = Solid::Box(Aabb::around(entity.pos + world_delta * f64::from(segment), dims.half_width, dims.height));
+        let mut clear = true;
+        physics::rotated_contacts(c, d.space(frame), bounds, to_space, delta, |hit| {
+            if hit.depth > 1e-6 || hit.fraction < 1.0 && hit.normal.dot(delta) < -1e-7 {
+                clear = false;
+            }
+        });
+        if !clear {
+            return 0;
+        }
+    }
+    1
+}
+
+unsafe extern "C" fn hitbox_touches(w: *mut abi::WorldCtx, entity: u64, part: u32, other: u64) -> u32 {
+    let (d, c) = (unsafe { dim(w) }, content());
+    if entity == other {
+        return 0;
+    }
+    let (Some(e), Some(other)) = (d.entities.get(entity), d.entities.get(other)) else { return 0 };
+    if !e.is_body() || !other.is_body() || !e.alive() || !other.alive() {
+        return 0;
+    }
+    let bounds = other.aabb(c);
+    if part == 0 {
+        return e.aabb(c).intersects(&bounds) as u32;
+    }
+    let Some(rig) = &c.game.entities[e.kind as usize].hitboxes else { return 0 };
+    let mut scratch = crate::hitbox::Scratch::default();
+    crate::hitbox::place(rig, &e.hit_body(c, e.pos), &mut scratch);
+    scratch
+        .parts
+        .iter()
+        .any(|placed| placed.id == part && placed.intersects(&bounds)) as u32
+}
+
+unsafe extern "C" fn brain_observe(w: *mut abi::WorldCtx, observer: u64, source: u64, component: u32, out: *mut u8, size: usize) -> u32 {
+    let d = unsafe { dim(w) };
+    if d.entities.get(source).is_none() {
+        return 0;
+    }
+    let Some(value) = d
+        .entities
+        .comps
+        .get(&(source, component))
+        .filter(|value| value.len() == size)
+    else {
+        return 0;
+    };
+    unsafe { std::ptr::copy_nonoverlapping(value.as_ptr(), out, size) };
+    d.observe_brain(observer, source, component);
+    1
+}
+
+unsafe extern "C" fn brain_gaze(
+    w: *mut abi::WorldCtx,
+    actor: u64,
+    viewer: u64,
+    options: *const abi::GazeOptions,
+    out: *mut abi::GazeState,
+) {
+    unsafe { *out = dim(w).watch_gaze(actor, viewer, *options) };
 }
 
 fn ip(p: *const abi::BlockPos) -> IVec3 {
@@ -1006,7 +1135,7 @@ unsafe extern "C" fn entity_walk(w: *mut abi::WorldCtx, id: u64, dir: *const [f3
         if let Some(e) = d.entities.get_mut(id).filter(|e| !e.player) {
             // What it may not do, its keys don't do: as a hungry player's sprint key.
             let keys = if can_sprint < 1.0 { keys & !abi::walk::SPRINT } else { keys };
-            e.walk = Some(crate::server::entity::Walk { dir: *dir, speed: speed * mul, keys });
+            e.walk = Some(crate::server::entity::Walk { dir: *dir, speed: speed * mul, keys, swim_velocity: None });
             e.jump_mul = jump_mul;
             // It takes off with the key, and comes down when it may fly no more or lands.
             if keys & abi::walk::FLY != 0 || can_fly < 1.0 {
@@ -2288,7 +2417,16 @@ unsafe extern "C" fn set_entity_size(w: *mut abi::WorldCtx, id: u64, size: abi::
         let d = dim(w);
         if let Some(e) = d.entities.get_mut(id) {
             let height = size.height.max(0.0);
-            e.size = (size.width > 0.0).then_some(abi::EntitySize { width: size.width, height, eye: size.eye.clamp(0.0, height) });
+            let size = (size.width > 0.0).then_some(abi::EntitySize { width: size.width, height, eye: size.eye.clamp(0.0, height) });
+            if e.size != size
+                && let Some(nav) = &mut e.nav
+            {
+                nav.path.clear();
+                nav.end = None;
+                nav.found_for = None;
+                nav.repath = e.age;
+            }
+            e.size = size;
         }
     }
 }

@@ -147,6 +147,7 @@ shared! {
         TEXEL = 4,
         FILLED = 5,
         QUAD = 6,
+        GIZMO_TRIANGLE = 7,
     }
     /// `Quad::layer` of a texture animated as a strip: the frame, the next and how many there are.
     ui_strip {

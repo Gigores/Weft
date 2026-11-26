@@ -2406,7 +2406,22 @@ fn gizmo_line_boxes(out: &mut Vec<GpuBox>, lines: &[super::gizmo::Line], cam: DV
 /// Filled gizmo boxes: see-through by their own alpha (mode 5), slightly grown so they do not
 /// fight with the faces of the blocks they cover.
 fn gizmo_fill_boxes(out: &mut Vec<GpuBox>, fills: &[super::gizmo::Fill], cam: DVec3) {
-    for &(a, b, color) in fills {
+    for fill in fills {
+        use super::gizmo::Fill;
+        let ch = |color: u32, s: u32| ((color >> s) & 255) as f32 / 255.0;
+        let (a, b, color) = match *fill {
+            Fill::Box(a, b, color) => (a, b, color),
+            Fill::Triangle(points, color) => {
+                let rows = points.map(|p| (p - cam).as_vec3().extend(1.0).to_array());
+                out.push(GpuBox {
+                    rows,
+                    color: [ch(color, 24), ch(color, 16), ch(color, 8), 0.0],
+                    ids: [0, box_mode::GIZMO_TRIANGLE, ch(color, 0).to_bits(), 0],
+                    ..Default::default()
+                });
+                continue;
+            }
+        };
         let (a, b) = ((a - cam).as_vec3() - Vec3::splat(0.002), (b - cam).as_vec3() + Vec3::splat(0.002));
         if a.length_squared().min(b.length_squared()) > 160.0 * 160.0 {
             continue;

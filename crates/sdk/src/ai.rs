@@ -3,6 +3,14 @@
 use crate::{Component, EntityState, Event, ItemStack, Vec3, World, abi};
 use abi::brain as b;
 
+mod gaze;
+mod navigation;
+pub use gaze::{Gaze, GazeState};
+mod sense;
+pub use abi::Neighbor;
+pub use navigation::Navigation;
+pub use sense::{Nearby, Scent, Touch, Vision};
+
 pub const MOVE: u32 = b::MOVE;
 pub const LOOK: u32 = b::LOOK;
 pub const USE: u32 = b::USE;
@@ -69,6 +77,24 @@ impl Context<'_> {
     pub fn current(&self) -> Option<Offer> {
         (self.actor.current.valid != 0).then_some(Offer(self.actor.current))
     }
+    /// Read another entity's component and wake this rule on SDK or system writes that change it,
+    /// or when its owner leaves the region.
+    /// Call while sensing or making an offer. Each sample replaces the previous subscriptions.
+    pub fn observe<T: crate::Value>(&self, source: u64, component: &Component<T>) -> Option<T> {
+        let mut value = std::mem::MaybeUninit::<T>::uninit();
+        let found = unsafe {
+            (crate::host().brain_observe)(
+                self.world.raw(),
+                self.id(),
+                source,
+                component.id(),
+                value.as_mut_ptr().cast(),
+                std::mem::size_of::<T>(),
+            )
+        };
+        (found != 0).then(|| unsafe { value.assume_init() })
+    }
+
     /// Ask for another check or step. Zero waits for a signal.
     pub fn next_in(&mut self, ticks: u32) {
         self.actor.next = ticks;
@@ -91,6 +117,20 @@ impl Rule {
             }),
             settings: abi::BrainSettings::default(),
         }
+    }
+
+    /// A directional sensor whose profile is also shown by `/gizmo mob_vision`.
+    pub fn vision_sensor(name: &str, vision: Vision, sample: impl Fn(&mut Context<'_>, Vision) + Send + Sync + 'static) -> Self {
+        let mut rule = Self::sensor(name, move |ctx| sample(ctx, vision));
+        rule.settings.vision = abi::BrainVision {
+            range: vision.range,
+            blind_near: vision.blind_near,
+            horizontal: vision.horizontal,
+            vertical: vision.vertical,
+            yaw_offset: vision.yaw_offset,
+            pitch_offset: vision.pitch_offset,
+        };
+        rule
     }
 
     /// Evaluates a candidate from the current facts. Make changes from the action callback.
@@ -127,6 +167,12 @@ impl Rule {
     /// Periodic sampling for facts that have no direct change event.
     pub fn every(mut self, ticks: u32) -> Self {
         self.settings.interval = ticks;
+        self
+    }
+
+    /// Exposes the nominal player detection distance to the mob vision gizmo.
+    pub fn player_notice_range(mut self, range: f64) -> Self {
+        self.settings.player_notice_range = range;
         self
     }
 
@@ -180,6 +226,7 @@ impl Brain {
                     remember(w, ctx.id(), &ANGER, source, w.game_time().saturating_add(40));
                 }
             })
+            .player_notice_range(range)
             .every(5),
         )
     }
@@ -421,6 +468,7 @@ pub fn watch_player(range: f64) -> Rule {
             }
         },
     )
+    .player_notice_range(range)
     .every(6)
     .step_every(6)
 }

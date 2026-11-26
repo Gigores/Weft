@@ -327,6 +327,19 @@ wire_struct! {
 }
 
 wire_struct! {
+    /// Bounds of a debug volume, in radians and blocks.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct GizmoVolume {
+        pub yaw: f32,
+        pub pitch: f32,
+        pub horizontal: f64,
+        pub vertical: f64,
+        pub near: f64,
+        pub far: f64,
+    }
+}
+
+wire_struct! {
     /// A debug shape for a gizmo group (`client::gizmo`): `kind` a `gizmo_kind` from `a` to `b`, or
     /// `GizmoShape::TEXT`, `text` at `a` `size` times as big as menu text. Shown for `ticks`
     /// server ticks.
@@ -340,6 +353,7 @@ wire_struct! {
         pub ticks: u32,
         pub size: f32,
         pub text: crate::ui::text::Msg,
+        pub volume: Option<GizmoVolume>,
     }
 }
 
@@ -347,13 +361,14 @@ impl GizmoShape {
     pub const ASSEMBLY: &'static str = "core:assembly_preview";
     /// Not a `gizmo_kind`: a label.
     pub const TEXT: u8 = u8::MAX;
+    pub const VOLUME: u8 = u8::MAX - 1;
 
     pub fn shape(group: &str, kind: u8, a: DVec3, b: DVec3, color: u32, ticks: u32) -> GizmoShape {
-        GizmoShape { group: group.into(), kind, a, b, color, ticks, size: 0.0, text: crate::ui::text::Msg::default() }
+        GizmoShape { group: group.into(), kind, a, b, color, ticks, size: 0.0, text: crate::ui::text::Msg::default(), volume: None }
     }
 
     pub fn text(group: &str, at: DVec3, size: f32, color: u32, ticks: u32, text: crate::ui::text::Msg) -> GizmoShape {
-        GizmoShape { group: group.into(), kind: GizmoShape::TEXT, a: at, b: at, color, ticks, size, text }
+        GizmoShape { group: group.into(), kind: GizmoShape::TEXT, a: at, b: at, color, ticks, size, text, volume: None }
     }
 }
 

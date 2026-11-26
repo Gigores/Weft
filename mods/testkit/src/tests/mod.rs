@@ -172,6 +172,9 @@ pub fn all() -> Vec<TestDef> {
         bodies::zombie_chases,
         bodies::neutral_mobs,
         bodies::torch_shy_brain,
+        bodies::mob_senses,
+        bodies::fish_navigation,
+        bodies::brain_showcase,
     ]
 }
 

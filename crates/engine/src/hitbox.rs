@@ -160,6 +160,29 @@ pub struct Placed {
     pub to_world: DAffine3,
 }
 
+impl Placed {
+    pub fn intersects(&self, bounds: &Aabb) -> bool {
+        let half = (self.max - self.min) * 0.5;
+        let matrix = self.to_world.matrix3;
+        let edges = [matrix.x_axis * half.x, matrix.y_axis * half.y, matrix.z_axis * half.z];
+        let center = self.to_world.transform_point3(self.min + half);
+        let other_half = (bounds.max - bounds.min) * 0.5;
+        let delta = bounds.min + other_half - center;
+        let axes = [DVec3::X, DVec3::Y, DVec3::Z];
+        // Separating axes for an affine box and a world-aligned box.
+        axes.into_iter()
+            .chain((0..3).map(|i| edges[(i + 1) % 3].cross(edges[(i + 2) % 3])))
+            .chain(
+                axes.into_iter()
+                    .flat_map(|axis| edges.map(|edge| axis.cross(edge))),
+            )
+            .all(|axis| {
+                axis.length_squared() <= 1e-24
+                    || delta.dot(axis).abs() < other_half.dot(axis.abs()) + edges.iter().map(|edge| edge.dot(axis).abs()).sum::<f64>()
+            })
+    }
+}
+
 #[derive(Default)]
 pub struct Scratch {
     pub parts: Vec<Placed>,

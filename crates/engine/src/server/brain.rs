@@ -96,11 +96,41 @@ impl State {
         self.controls & mask != 0
     }
 
+    pub(super) fn actions<'a>(&'a self, c: &'a Content) -> impl Iterator<Item = (&'a str, BrainOffer)> + 'a {
+        self.slots
+            .iter()
+            .filter(|s| valid(s.current))
+            .map(|s| (s.definition(c).name.as_str(), s.current))
+    }
+
+    pub(super) fn vision<'a>(&'a self, c: &'a Content) -> impl Iterator<Item = &'a abi::BrainVision> + 'a {
+        self.slots
+            .iter()
+            .filter(|s| s.enabled)
+            .map(|s| &s.definition(c).settings.vision)
+            .filter(|v| v.range != 0.0)
+    }
+
+    pub(super) fn notice_range(&self, c: &Content) -> f64 {
+        self.slots
+            .iter()
+            .filter(|s| s.enabled)
+            .map(|s| s.definition(c).settings.player_notice_range)
+            .filter(|r| r.is_finite())
+            .fold(0.0, f64::max)
+    }
+
     pub fn wake_controls(&mut self, c: &Content, controls: u32, now: u64) {
         for i in 0..self.slots.len() {
             if self.slots[i].definition(c).settings.controls & controls != 0 && valid(self.slots[i].current) {
                 self.wake(i, now);
             }
+        }
+    }
+
+    pub(super) fn wake_after_move(&mut self) {
+        for i in 0..self.slots.len() {
+            self.wake(i, 0);
         }
     }
 
@@ -192,6 +222,10 @@ impl Dim {
                 found = true;
                 if slot.enabled != enabled {
                     slot.enabled = enabled;
+                    if !enabled {
+                        self.observations.clear((id, slot.rule));
+                        self.gaze.clear((id, slot.rule));
+                    }
                     slot.due = slot.due.min(self.time);
                 }
             }
@@ -242,7 +276,39 @@ impl Dim {
         Some(slot.current).filter(|offer| valid(*offer))
     }
 
-    pub(super) fn brain_component_changed(&mut self, c: &Content, id: u64, name: &str) {
+    pub(crate) fn observe_brain(&mut self, observer: u64, source: u64, component: u32) {
+        if let Some(rule) = self.observations.rule {
+            self.observations
+                .watch((observer, rule), (source, component), self.time);
+        }
+    }
+
+    pub(super) fn wake_observer(entities: &mut super::entity::Entities, id: u64, rule: (u32, usize), now: u64) {
+        let Some(brain) = entities.get_mut(id).and_then(|e| e.brain.as_mut()) else { return };
+        if let Some(index) = brain
+            .slots
+            .iter()
+            .position(|slot| slot.enabled && slot.rule == rule)
+        {
+            brain.wake(index, now);
+        }
+    }
+
+    pub(super) fn clean_observations(&mut self) {
+        self.gaze.forget_missing(&self.entities);
+        for (id, rule) in self
+            .observations
+            .remove_entities(|id| self.entities.get(id).is_none())
+        {
+            Self::wake_observer(&mut self.entities, id, rule, self.time);
+        }
+    }
+
+    pub(super) fn brain_component_changed(&mut self, c: &Content, id: u64, component: u32) {
+        for (observer, rule) in self.observations.watchers((id, component)) {
+            Self::wake_observer(&mut self.entities, observer, rule, self.time);
+        }
+        let name = &c.game.components[component as usize].name;
         let Some(e) = self.entities.get_mut(id) else { return };
         let Some(brain) = &mut e.brain else { return };
         for i in 0..brain.slots.len() {
@@ -259,14 +325,19 @@ impl Dim {
     }
 
     pub(crate) fn track_brain_write(&mut self, c: &Content, id: u64, component: u32) {
-        let Some(brain) = self.entities.get(id).and_then(|e| e.brain.as_ref()) else { return };
         let Some(def) = c.game.components.get(component as usize) else { return };
-        if brain
-            .slots
-            .iter()
-            .any(|slot| slot.definition(c).settings.watched.contains(&def.name))
-            && let Some(value) = self.entities.comps.get(&(id, component))
-        {
+        let watched = self.observations.observing((id, component))
+            || self
+                .entities
+                .get(id)
+                .and_then(|e| e.brain.as_ref())
+                .is_some_and(|brain| {
+                    brain
+                        .slots
+                        .iter()
+                        .any(|slot| slot.definition(c).settings.watched.contains(&def.name))
+                });
+        if watched && let Some(value) = self.entities.comps.get(&(id, component)) {
             self.brain_writes
                 .entry((id, component))
                 .or_insert_with(|| value.clone());
@@ -276,7 +347,7 @@ impl Dim {
     pub(super) fn flush_brain_writes(&mut self, c: &Content) {
         for ((id, comp), before) in std::mem::take(&mut self.brain_writes) {
             if self.entities.comps.get(&(id, comp)) != Some(&before) {
-                self.brain_component_changed(c, id, &c.game.components[comp as usize].name);
+                self.brain_component_changed(c, id, comp);
             }
         }
     }
@@ -286,7 +357,16 @@ impl Dim {
         batch.sort_unstable_by_key(|&(key, _)| key);
         for ((kind, i, phase), mut actors) in batch {
             let (owner, callback) = c.game.entities[kind as usize].brain[i].call;
+            let sampling = matches!(phase, b::SENSE | b::OFFER);
+            self.observations.rule = sampling.then_some((kind, i));
             self.call(0, owner, callback, |world| abi::BrainArgs { world, actors: actors.as_mut_ptr(), count: actors.len(), phase });
+            self.observations.rule = None;
+            if sampling {
+                for entry in &actors {
+                    self.observations.finish((entry.id, (kind, i)), now);
+                    self.gaze.finish((entry.id, (kind, i)), now);
+                }
+            }
             if !matches!(phase, b::OFFER | b::SENSE | b::START | b::STEP) {
                 continue;
             }
@@ -334,6 +414,7 @@ impl Dim {
         let now = self.time;
         let mut decisions = FxHashSet::default();
         for phase in [b::SENSE, b::OFFER] {
+            self.senses.begin();
             let mut batch = Batch::default();
             for &(_, id) in ready {
                 let Some(brain) = self.entities.get_mut(id).and_then(|e| e.brain.as_mut()) else { continue };
@@ -359,6 +440,7 @@ impl Dim {
                 }
             }
             self.brain_callbacks(c, batch, now, &mut decisions);
+            self.senses.end();
             self.flush_brain_writes(c);
         }
         let mut stop = Batch::default();

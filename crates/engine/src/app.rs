@@ -2778,6 +2778,10 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
         for s in &r.mod_gizmos {
             crate::client::gizmo::shape(s, &mut cl.gizmo_lines, &mut cl.gizmo_fills, &mut cl.gizmo_labels);
         }
+        if let Some(color) = cl.gizmo_tint {
+            r.ui.rect(crate::ui::Rect { x: 0.0, y: 0.0, w: info.width as f32, h: info.height as f32 }, color);
+            r.ui.quads.rotate_right(1);
+        }
     }
     // Gizmo labels and mods' screen text: text nodes placed at points (GUI pixels), the same
     // text as anywhere else.

@@ -478,9 +478,13 @@ mod tests {
             ticks: 21,
             size: 1.5,
             text: Msg::new("gizmo.value", vec![Arg::Text("r0".into())]),
+            volume: None,
         };
-        let Some(ToClient::Gizmos(back)) = decode_client(&encode_client(&ToClient::Gizmos(vec![g.clone()]))) else { panic!("not decoded") };
-        assert_eq!(back, vec![g]);
+        let mut volume = crate::net::GizmoShape::shape("mob_vision", crate::net::GizmoShape::VOLUME, g.a, g.a, g.color, g.ticks);
+        volume.volume = Some(crate::net::GizmoVolume { yaw: 0.5, pitch: -0.25, horizontal: 0.75, vertical: 0.6, near: 1.15, far: 8.0 });
+        let shapes = vec![g, volume];
+        let Some(ToClient::Gizmos(back)) = decode_client(&encode_client(&ToClient::Gizmos(shapes.clone()))) else { panic!("not decoded") };
+        assert_eq!(back, shapes);
     }
 }
 

@@ -110,3 +110,19 @@ item.testmod.hammer = Hammer
 command.testmod.display_calls = {0}: {1}
 
 command.testmod.eclipse = Environment source updated
+
+entity.testmod.shoal_fish = Shoal Fish
+entity.testmod.touch_sentry = Touch Sentry
+command.testmod.senseaggro = Aggression {0}
+
+entity.testmod.wide_shoal_fish = Wide Shoal Fish
+entity.testmod.amber_hunter = Amber Hunter
+entity.testmod.cyan_hunter = Cyan Hunter
+command.testmod.brainshowcase.gaze = Sentry #{0}. Green means it saw you. Look at its head for amber and hold for red. Touch its front plate to test contact.
+command.testmod.brainshowcase.shoal = Aquarium to the east. Watch the fish regroup over the wall. The sentry turns hostile after eight seconds and the fish scatter.
+command.testmod.brainshowcase.gap = Another aquarium to the east. The small fish goes through the one-block gap. The large one stops at the wall.
+command.testmod.brainshowcase.routes = Two routes to the east. Amber avoids the grass and cyan prefers it.
+command.testmod.brainshowcase.hunt = Stand still on open ground and turn around. The amber and cyan hunters circle you on opposite sides.
+command.testmod.brainshowcase.torch = On open ground in survival, hold a torch to make the approaching zombie retreat. Put it away to resume the chase.
+command.testmod.brainshowcase.space = The space east of you needs to be empty and loaded. Try this on flat ground.
+command.testmod.brainshowcase.unknown = Unknown scene

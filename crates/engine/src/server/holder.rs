@@ -371,7 +371,7 @@ pub fn set_component(d: &mut Dim, c: &Content, at: At, comp: u32, v: Option<&[u8
                 (Some(old), Some(v)) if size == 0 || v.len() == size => {
                     if &**old != v {
                         *old = v.into();
-                        d.brain_component_changed(c, id, &c.game.components[comp as usize].name);
+                        d.brain_component_changed(c, id, comp);
                     }
                     true
                 }

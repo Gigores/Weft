@@ -99,3 +99,19 @@ item.testmod.hammer = Молот
 command.testmod.display_calls = {0}: {1}
 
 command.testmod.eclipse = Источник окружения обновлён
+
+entity.testmod.shoal_fish = Стайная рыбка
+entity.testmod.touch_sentry = Часовой со щупом
+command.testmod.senseaggro = Агрессия {0}
+
+entity.testmod.wide_shoal_fish = Широкая стайная рыбка
+entity.testmod.amber_hunter = Янтарный охотник
+entity.testmod.cyan_hunter = Бирюзовый охотник
+command.testmod.brainshowcase.gaze = Часовой №{0}. Зелёные искры означают, что он заметил тебя. Посмотри на голову для жёлтой вспышки и удержи взгляд для красной. Коснись передней пластины, чтобы проверить контакт.
+command.testmod.brainshowcase.shoal = Аквариум на востоке. Рыбы собираются в косяк через стенку. Через восемь секунд часовой разозлится и рыбки разбегутся.
+command.testmod.brainshowcase.gap = Аквариум на востоке. Маленькая рыбка проплывёт через щель в один блок, крупная остановится у стенки.
+command.testmod.brainshowcase.routes = Два маршрута на востоке. Янтарный обходит траву, бирюзовый предпочитает идти по ней.
+command.testmod.brainshowcase.hunt = Стой на месте на открытом участке и оборачивайся. Янтарный и бирюзовый охотники кружат вокруг тебя с противоположных сторон.
+command.testmod.brainshowcase.torch = На открытом месте в выживании возьми факел в руку, чтобы зомби отступил. Убери факел, чтобы он снова погнался.
+command.testmod.brainshowcase.space = На востоке от тебя нужна свободная загруженная площадка. Попробуй на ровном месте.
+command.testmod.brainshowcase.unknown = Неизвестная сцена

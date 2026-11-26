@@ -8,14 +8,19 @@ use glam::{DVec3, IVec3};
 
 use super::Client;
 use crate::content::content;
-use crate::net::GizmoShape;
+use crate::net::{GizmoShape, GizmoVolume};
 
-pub const BUILTIN: &[&str] = &["cubes", "hitboxes", "collision", "light", "regions", "visibility"];
+pub const MOB_BRAIN: &str = "mob_brain";
+pub const MOB_PATH: &str = "mob_path";
+pub const MOB_VISION: &str = "mob_vision";
+pub const BUILTIN: &[&str] = &["cubes", "hitboxes", "collision", "light", "regions", "visibility", MOB_BRAIN, MOB_PATH, MOB_VISION];
 
 /// A line between two points, in the color `0xRRGGBBAA`.
 pub type Line = (DVec3, DVec3, u32);
-/// A filled box between two corners; its alpha makes it see-through.
-pub type Fill = (DVec3, DVec3, u32);
+pub enum Fill {
+    Box(DVec3, DVec3, u32),
+    Triangle([DVec3; 3], u32),
+}
 /// Where, what, its color and its size (1: menu text).
 pub type Label = (DVec3, crate::ui::text::Msg, u32, f32);
 
@@ -61,17 +66,30 @@ impl Gizmos {
     }
 
     /// Lines, filled boxes and labels to draw this frame.
-    pub fn collect(&mut self, client: &Client) -> (Vec<Line>, Vec<Fill>, Vec<Label>) {
+    pub fn collect(&mut self, client: &Client) -> (Vec<Line>, Vec<Fill>, Vec<Label>, Option<u32>) {
         let mut lines = Vec::new();
         let mut fills = Vec::new();
         let mut labels = Vec::new();
         let now = Instant::now();
         self.shapes.retain(|s| s.1 > now);
+        let camera = self.on(MOB_VISION).then(|| client.render_camera().pos);
+        let mut tint = [0u32; 3];
+        let mut inside = 0;
         for (s, _) in &self.shapes {
-            shape(s, &mut lines, &mut fills, &mut labels);
+            if let Some((eye, v)) = camera.zip(s.volume) {
+                if draw_volume(s.a, v, s.color, eye, &mut lines, &mut fills) {
+                    for (ch, shift) in tint.iter_mut().zip([24, 16, 8]) {
+                        *ch += (s.color >> shift) & 255;
+                    }
+                    inside += 1;
+                }
+            } else {
+                shape(s, &mut lines, &mut fills, &mut labels);
+            }
         }
+        let tint = (inside > 0).then(|| ((tint[0] / inside) << 24) | ((tint[1] / inside) << 16) | ((tint[2] / inside) << 8) | 51);
         if self.enabled.is_empty() {
-            return (lines, fills, labels);
+            return (lines, fills, labels, tint);
         }
         let c = content();
         let me = client.player.pos;
@@ -190,7 +208,7 @@ impl Gizmos {
                 }
             }
         }
-        (lines, fills, labels)
+        (lines, fills, labels, tint)
     }
 }
 
@@ -199,9 +217,82 @@ pub fn shape(s: &GizmoShape, lines: &mut Vec<Line>, fills: &mut Vec<Fill>, label
     match s.kind as u32 {
         weft_abi::gizmo_kind::LINE => lines.push((s.a, s.b, s.color)),
         weft_abi::gizmo_kind::BOX => cuboid(lines, s.a.min(s.b), s.a.max(s.b), s.color),
-        weft_abi::gizmo_kind::FILL => fills.push((s.a.min(s.b), s.a.max(s.b), s.color)),
-        _ => labels.push((s.a, s.text.clone(), s.color, if s.size > 0.0 { s.size } else { 1.0 })),
+        weft_abi::gizmo_kind::FILL => fills.push(Fill::Box(s.a.min(s.b), s.a.max(s.b), s.color)),
+        _ if s.kind == GizmoShape::TEXT => labels.push((s.a, s.text.clone(), s.color, if s.size > 0.0 { s.size } else { 1.0 })),
+        _ => {}
     }
+}
+
+fn draw_volume(origin: DVec3, v: GizmoVolume, color: u32, eye: DVec3, lines: &mut Vec<Line>, fills: &mut Vec<Fill>) -> bool {
+    use crate::physics::look_dir;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let forward = look_dir(v.yaw, v.pitch);
+    let side = look_dir(v.yaw + std::f32::consts::FRAC_PI_2, 0.0);
+    let up = look_dir(v.yaw, v.pitch + std::f32::consts::FRAC_PI_2);
+    let delta = eye - origin;
+    let distance = delta.length();
+    let sphere = v.horizontal == PI && v.vertical == FRAC_PI_2 && v.near == 0.0;
+    let (a, b) = (delta.dot(forward), delta.dot(side));
+    let inside = distance >= v.near
+        && distance <= v.far
+        && (sphere || (b.atan2(a).abs() <= v.horizontal && delta.dot(up).atan2(a.hypot(b)).abs() <= v.vertical));
+    let direction = |a: f64, b: f64| (forward * a.cos() + side * a.sin()) * b.cos() + up * b.sin();
+    let point = |(a, b), radius| origin + direction(a, b) * radius;
+    let mut surface = |[a, b, c, d]: [DVec3; 4], rgb: u32| {
+        if !inside {
+            let alpha = (rgb & !255u32) | 51;
+            fills.push(Fill::Triangle([a, b, c], alpha));
+            fills.push(Fill::Triangle([a, c, d], alpha));
+        }
+    };
+    let (h, pitch) = (v.horizontal, v.vertical);
+    if !inside {
+        let (cols, rows) = if sphere { (24, 12) } else { (8, 6) };
+        for i in 0..cols {
+            for j in 0..rows {
+                let az = |i| -h + (2.0 * h / f64::from(cols)) * f64::from(i);
+                let el = |j| -pitch + (2.0 * pitch / f64::from(rows)) * f64::from(j);
+                let corners = [(az(i), el(j)), (az(i + 1), el(j)), (az(i + 1), el(j + 1)), (az(i), el(j + 1))];
+                surface(corners.map(|p| point(p, v.far)), color);
+                if v.near > 0.0 {
+                    let [a, b, c, d] = corners.map(|p| point(p, v.near));
+                    surface([d, c, b, a], 0xFFBD54FF);
+                }
+            }
+        }
+    }
+    if sphere {
+        for (u, w) in [(DVec3::X, DVec3::Z), (DVec3::X, DVec3::Y), (DVec3::Y, DVec3::Z)] {
+            let ring = |i| {
+                let (s, c) = (TAU * f64::from(i) / 48.0).sin_cos();
+                origin + (u * c + w * s) * v.far
+            };
+            for i in 0..48 {
+                lines.push((ring(i), ring(i + 1), color));
+            }
+        }
+    } else {
+        let edges = [(-h, -pitch), (h, -pitch), (h, pitch), (-h, pitch)];
+        for (i, &(a, b)) in edges.iter().enumerate() {
+            let (next_a, next_b) = edges[(i + 1) % edges.len()];
+            let mut last = (a, b);
+            lines.push((point(last, v.near), point(last, v.far), color));
+            let steps = if i % 2 == 0 { 8 } else { 6 };
+            for step in 1..=steps {
+                let t = f64::from(step) / f64::from(steps);
+                let next = (a + (next_a - a) * t, b + (next_b - b) * t);
+                let (a, b) = (point(last, v.far), point(next, v.far));
+                let (c, d) = (point(next, v.near), point(last, v.near));
+                lines.push((a, b, color));
+                if v.near > 0.0 {
+                    lines.push((c, d, 0xFFBD54FF));
+                }
+                surface([d, c, b, a], color);
+                last = next;
+            }
+        }
+    }
+    inside
 }
 
 /// The twelve edges of an axis-aligned box.

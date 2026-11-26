@@ -147,6 +147,7 @@ pub struct Mining {
 pub struct Walk {
     /// Horizontal, length up to 1.
     pub dir: [f32; 2],
+    pub swim_velocity: Option<DVec3>,
     /// Times its kind's speed.
     pub speed: f32,
     /// `abi::walk`: the keys a player would hold.
@@ -937,7 +938,10 @@ impl Entities {
 
     pub fn take(&mut self, id: u64) -> Option<(Entity, Option<Vec<ItemStack>>, Vec<(u32, Box<[u8]>)>)> {
         let i = *self.index.get(&id)?;
-        let e = self.list.remove(i);
+        let mut e = self.list.remove(i);
+        if let Some(brain) = &mut e.brain {
+            brain.wake_after_move();
+        }
         self.index = self
             .list
             .iter()
@@ -1192,6 +1196,7 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
         };
         let target = k.speed as f64 * w.speed as f64 * DT * e.pose.def().speed as f64 * slow;
         ctl.wish = dir;
+        ctl.swim_velocity = w.swim_velocity;
         // Vanilla's ground friction keeps 0.546 of the speed a tick; this much a tick holds it.
         ctl.ground = target * (1.0 - 0.6 * 0.91);
         ctl.air = if e.sprinting { 0.026 } else { 0.02 };
@@ -1215,13 +1220,14 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
     let r = physics::walk(c, block, bodies, e.id, &mut e.pos, &mut v, e.on_ground, &ctl, &frame);
     e.vel = v / DT;
     e.jumped = r.jumped;
-    e.blocked = r.hit[0] || r.hit[2];
+    e.blocked = r.hit[0] || r.hit[2] || (ctl.swim_velocity.is_some() && r.hit[1]);
     e.on_ground = r.on_ground;
     if r.on_ground {
         e.frame = physics::standing_on(c, e.pos, hw, bodies, e.id);
     }
     let dy = e.pos.y - start.y;
-    e.moved = ((e.pos.x - start.x).powi(2) + (e.pos.z - start.z).powi(2)).sqrt() as f32;
+    let displacement = e.pos - start;
+    e.moved = if ctl.swim_velocity.is_some() { displacement.length() } else { displacement.with_y(0.0).length() } as f32;
     let here = if !block.masks_liquid() && start == e.pos { r.started_in } else { physics::around(c, block, e.pos, h, hw) };
     e.in_liquid = here.in_liquid;
     if let Some(land) = track_fall(&mut e.fall, dy, e.on_ground, here.in_liquid || here.climbing) {
