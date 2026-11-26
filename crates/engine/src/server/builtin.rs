@@ -62,7 +62,7 @@ pub const COMMANDS: &[(&str, &str, Handler, u32)] = &[
     ("give", "<who:targets> <item:item> [count:int] | <item:item> [count:int]", give, p::GAME_MASTER),
     ("time", "set <time:time> | add <ticks:int> | query", time, p::GAME_MASTER),
     ("summon", "<entity:entity> [pos:pos] [count:int]", summon, p::GAME_MASTER),
-    ("clear", " | item <who:targets> [filter:item] | item [filter:item] | entity <who:targets>", clear, p::GAME_MASTER),
+    ("clear", "item [filter:item] | item <who:targets> [filter:item] | entity [who:targets]", clear, p::GAME_MASTER),
     ("setblock", "<pos:pos> <block:block>", set_block, p::GAME_MASTER),
     ("insert", "<pos:pos> <item:item> [count:int]", insert, p::GAME_MASTER),
     ("block", "<pos:pos>", block, p::GAME_MASTER),
@@ -371,9 +371,6 @@ fn summon(s: &mut Server, x: &Ctx) -> Vec<Msg> {
 }
 
 fn clear(s: &mut Server, x: &Ctx) -> Vec<Msg> {
-    if x.a.get("item").is_none() && x.a.get("entity").is_none() {
-        return weather(s, x);
-    }
     let c = x.c;
     let who = x.targets(s, "who");
     if x.a.get("entity").is_some() {
