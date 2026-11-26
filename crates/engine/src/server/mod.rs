@@ -1589,11 +1589,8 @@ fn serialize_indexed<'a>(c: &Content, d: &'a Dim, ids: &[u64], mut components: i
 }
 
 /// Said to a player arriving in the engine's void.
-/// "X was slain by Zombie": `killer` is the kind of whatever did it, if something did.
-fn death_message(c: &Content, cause: u32, killer: Option<u32>, name: String) -> Msg {
-    let by = killer
-        .and_then(|k| c.game.entities.get(k as usize))
-        .map(|k| Arg::Key(format!("entity.{}", k.name.replace(':', "."))));
+/// "X was slain by Zombie": the killer may be a literal nickname or a localized name.
+fn death_message(c: &Content, cause: u32, by: Option<Arg>, name: String) -> Msg {
     let def = c.game.damage_causes.get(cause as usize);
     let key = match (def, &by) {
         (Some(d), Some(_)) if !d.death_message_by.is_empty() => d.death_message_by.clone(),

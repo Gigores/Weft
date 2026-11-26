@@ -64,8 +64,8 @@ pub enum DimEvent {
     Died {
         entity: u64,
         cause: u32,
-        /// The kind of what did it.
-        killer: Option<u32>,
+        /// A player's nickname or the localized name of a mob.
+        killer: Option<crate::ui::text::Arg>,
         /// Its own name; a player's comes from its session.
         name: Option<String>,
     },
@@ -2050,7 +2050,6 @@ impl Dim {
                 abi::action::DIE,
                 &abi::Death { entity: id, source: source, kind, cause, pos: pos.to_array().into() },
             );
-            let killer = self.entities.get(source).map(|s| s.kind);
             let name = self
                 .entities
                 .comps
@@ -2058,6 +2057,17 @@ impl Dim {
                 .map(|b| String::from_utf8_lossy(b).into_owned())
                 .filter(|n| !n.is_empty());
             if player || name.is_some() {
+                use crate::ui::text::{Arg, Name};
+                let killer = self
+                    .player_identities
+                    .read()
+                    .get(&source)
+                    .map(|p| Arg::Text(p.name.clone()))
+                    .or_else(|| {
+                        let source = self.entities.get(source)?;
+                        let kind = c.game.entities.get(source.kind as usize)?;
+                        Some(Arg::Name(Name::Entity(kind.name.clone())))
+                    });
                 self.events
                     .push(DimEvent::Died { entity: id, cause, killer, name });
             }
