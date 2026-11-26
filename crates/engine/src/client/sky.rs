@@ -380,6 +380,7 @@ pub struct Overlay {
     pub lower: bool,
     /// Which frame of an animated picture.
     pub frame: u32,
+    pub show_without_hud: bool,
 }
 
 /// The average color of a liquid's first frame, its tint in.

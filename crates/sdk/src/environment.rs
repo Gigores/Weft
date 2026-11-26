@@ -124,7 +124,15 @@ impl Environment {
             frame: 0,
             block_face: -1,
             lit: false,
+            show_without_hud: false,
         });
+        self
+    }
+    /// Keep the last screen overlay visible when the HUD is hidden.
+    pub fn show_overlay_without_hud(mut self) -> Self {
+        if let Some(overlay) = self.overlays.last_mut() {
+            overlay.show_without_hud = true;
+        }
         self
     }
     /// Adds a named post shader at this strength.

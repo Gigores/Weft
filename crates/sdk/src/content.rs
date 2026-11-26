@@ -3899,7 +3899,14 @@ impl LiquidBuilder<'_> {
     /// of it shows. By default its own texture at 0.1; for an inside that looks unlike the surface, set
     /// this and `fog` apart from its texture.
     pub fn overlay(self, texture: &str, opacity: f32) -> Self {
-        let texture = crate::asset("block", texture);
+        self.overlay_layer(texture, opacity, false)
+    }
+    /// An inside-liquid overlay that remains visible with the HUD hidden.
+    pub fn persistent_overlay(self, texture: &str, opacity: f32) -> Self {
+        self.overlay_layer(texture, opacity, true)
+    }
+    fn overlay_layer(self, texture: &str, opacity: f32, show_without_hud: bool) -> Self {
+        let texture = if texture.is_empty() { String::new() } else { crate::asset("block", texture) };
         let mut layer = crate::Environment::new("core:liquid_overlay")
             .priority(-698)
             .replace_overlays();
@@ -3910,6 +3917,7 @@ impl LiquidBuilder<'_> {
             tiles: 1.0,
             block_face,
             lit: true,
+            show_without_hud,
             ..Default::default()
         });
         self.environment(layer)

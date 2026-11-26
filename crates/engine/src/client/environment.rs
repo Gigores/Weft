@@ -288,6 +288,7 @@ impl Client {
                 frame: textures.strip_frame(c.fire_texture, ticks),
                 block_face: -1,
                 lit: false,
+                show_without_hud: true,
             });
             env.contribute("burning".into(), fire, 1.0);
         }
@@ -399,7 +400,14 @@ impl Client {
                 }
                 let picture = overlay.texture.clone();
                 if !picture.is_empty() {
-                    overlays.push(sky::Overlay { picture, color, tiles: overlay.tiles, lower: overlay.lower, frame: overlay.frame });
+                    overlays.push(sky::Overlay {
+                        picture,
+                        color,
+                        tiles: overlay.tiles,
+                        lower: overlay.lower,
+                        frame: overlay.frame,
+                        show_without_hud: overlay.show_without_hud,
+                    });
                 }
             }
         }

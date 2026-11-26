@@ -409,6 +409,7 @@ pub fn register(r: &mut Registry) {
         })
         .renewable(2)
         .fog(0x050533, -8.0, 96.0)
+        .persistent_overlay("", 0.1)
         .environment(
             Environment::new("water_acoustics")
                 .priority(-700)
@@ -427,7 +428,7 @@ pub fn register(r: &mut Registry) {
         .slope_find(2)
         .heat(1300)
         .fog(0x991A00, 0.25, 1.0)
-        .no_overlay()
+        .persistent_overlay("", 0.1)
         .bucket(Item::generated("lava_bucket".into()), &crate::items::BUCKET, &crate::tabs::TOOLS);
     r.liquid_reaction("#cools_into_stone", "#water")
         .source_turns_into("obsidian")

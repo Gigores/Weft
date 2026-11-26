@@ -136,6 +136,7 @@ crate::data! {
         /// -1 uses texture; 0..5 uses the sampled block's face and its resource-pack texture.
         pub block_face: i32,
         pub lit: bool,
+        pub show_without_hud: bool,
     }
 }
 

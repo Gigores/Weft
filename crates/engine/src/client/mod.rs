@@ -2544,7 +2544,15 @@ impl Client {
     }
 
     fn overlays(&self, _textures: &GameTextures) -> Vec<sky::Overlay> {
-        if !self.camera_has(crate::tag_bits::camera::EFFECTS) || self.hide_gui { Vec::new() } else { self.environment.overlays.clone() }
+        if !self.camera_has(crate::tag_bits::camera::EFFECTS) {
+            return Vec::new();
+        }
+        self.environment
+            .overlays
+            .iter()
+            .filter(|o| !self.hide_gui || o.show_without_hud)
+            .cloned()
+            .collect()
     }
 
     /// Like vanilla's block display ticks: random blocks around the player that name a particle
