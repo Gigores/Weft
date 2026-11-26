@@ -566,6 +566,10 @@ impl MusicBuilder<'_> {
     pub fn biome(self, biome: &crate::Biome) -> Self {
         self.push(&crate::comps::music::BIOME, biome.name().to_string())
     }
+    /// The sound category whose volume slider a bed follows (music unless set). Only for beds.
+    pub fn category(self, category: &crate::SoundCategory) -> Self {
+        self.set(&crate::comps::music::CATEGORY, category.name().to_string().into())
+    }
     /// Blocks outside its biomes over which a bed fades out (and in, coming back); the default
     /// is 32. 0 cuts it at the border.
     pub fn biome_fade(self, blocks: f32) -> Self {

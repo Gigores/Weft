@@ -730,6 +730,7 @@ pub mod comp {
     /// unless set), `WHEN` (`[str]`, conditions that all have to hold).
     pub mod music {
         pub const AMBIENT: &str = "music.ambient";
+        pub const CATEGORY: &str = "music.category";
         pub const BIOME: &str = "music.biome";
         pub const BIOME_FADE: &str = "music.biome_fade";
         pub const RAIN: &str = "music.rain";

@@ -1,16 +1,20 @@
 //! Sound events: block groups (`block.<group>.break|place|step|hit`) blocks pick with
 //! `.sound_group(group)`, and the background music; mobs' voices come with them (`mobs.rs`). Files are in `assets/sounds/`.
 
-use crate::worldgen::statics::*;
+use crate::worldgen::statics::{
+    BEACH, BIRCH_FOREST, CLOVER_MEADOW, FOREST, LAVENDER_FIELDS, PLAINS, TALLGRASS_MEADOW,
+};
 use weft_sdk::*;
+
+static SHEEP: Music = Music::named("sheep");
+
 static CRICKETS: Music = Music::named("crickets");
 static DAY_FOREST: Music = Music::named("day_forest");
-static SHEEP: Music = Music::named("sheep");
 static LIGHT_RAIN: Music = Music::named("light_rain");
 static FOREST_RAIN: Music = Music::named("forest_rain");
 static BEACH_WAVES: Music = Music::named("beach_waves");
 static CAVE_DRONE: Sound = Sound::named("cave_drone");
-static CAVE_DRONES: Music = Music::named("cave_drones");
+static CAVE_AMBIENCE: Music = Music::named("cave_ambience");
 
 pub fn register(r: &mut Registry) {
     for g in ["stone", "wood", "gravel", "grass", "sand", "glass", "cloth"] {
@@ -45,6 +49,8 @@ pub fn register(r: &mut Registry) {
     r.music(&CRICKETS)
         .tracks(&["ambient/crickets"])
         .ambient(0.1)
+        .category(&sound_categories::AMBIENT)
+        .when(&conditions::SURFACE)
         .when(&conditions::NIGHT)
         .biome(&PLAINS)
         .biome(&LAVENDER_FIELDS)
@@ -57,6 +63,8 @@ pub fn register(r: &mut Registry) {
     r.music(&LIGHT_RAIN)
         .tracks(&["ambient/light_rain"])
         .ambient(0.1)
+        .category(&sound_categories::AMBIENT)
+        .when(&conditions::SURFACE)
         .biome(&PLAINS)
         .biome(&LAVENDER_FIELDS)
         .biome(&TALLGRASS_MEADOW)
@@ -66,6 +74,8 @@ pub fn register(r: &mut Registry) {
     r.music(&DAY_FOREST)
         .tracks(&["ambient/day_forest"])
         .ambient(0.1)
+        .category(&sound_categories::AMBIENT)
+        .when(&conditions::SURFACE)
         .when(&conditions::DAY)
         .biome(&FOREST)
         .biome(&BIRCH_FOREST)
@@ -74,6 +84,8 @@ pub fn register(r: &mut Registry) {
     r.music(&FOREST_RAIN)
         .tracks(&["ambient/forest_rain"])
         .ambient(0.1)
+        .category(&sound_categories::AMBIENT)
+        .when(&conditions::SURFACE)
         .biome(&FOREST)
         .biome(&BIRCH_FOREST)
         .rain(0.05, 1.0);
@@ -81,6 +93,7 @@ pub fn register(r: &mut Registry) {
     r.music(&BEACH_WAVES)
         .tracks(&["ambient/beach_waves"])
         .ambient(0.1)
+        .category(&sound_categories::AMBIENT)
         .when(&conditions::SURFACE)
         .biome(&BEACH);
 
@@ -89,8 +102,8 @@ pub fn register(r: &mut Registry) {
         .category(&sound_categories::AMBIENT)
         .range(40.0);
 
-    r.music(&CAVE_DRONES)
-        .ambient(5.0)
+    r.music(&CAVE_AMBIENCE)
+        .ambient(1.0)
         .when(&conditions::UNDERGROUND)
         .spot(&CAVE_DRONE)
         .spot_every(10.0, 10.0)

@@ -86,13 +86,41 @@ impl Default for Acoustics {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct AudioParams {
-    pub biome: Option<u16>,
-    pub weather: u16,
-    pub rain: f32,
-    pub enclosed: bool,
-    pub daylight: f32,
+const RAIN_EDGE: f32 = 0.04;
+const BED_LINGER: Duration = Duration::from_secs(8);
+const GAIN_STEP: f32 = 0.005;
+const SILENT: f32 = 0.001;
+
+struct Bed {
+    handle: StreamingSoundHandle<kira::sound::FromFileError>,
+    gain: f32,
+    silent_since: Option<Instant>,
+}
+
+fn rain_weight(rain: f32, [lo, hi]: [f32; 2]) -> f32 {
+    let rise = if lo <= 0.0 { 1.0 } else { ((rain - lo) / RAIN_EDGE + 0.5).clamp(0.0, 1.0) };
+    let fall = if hi >= 1.0 { 1.0 } else { ((hi - rain) / RAIN_EDGE + 0.5).clamp(0.0, 1.0) };
+    rise.min(fall)
+}
+
+fn bed_weight(m: &crate::registry::MusicDef, l: &Listener) -> f32 {
+    if !(m.dimension.is_none_or(|d| d == l.dim) && m.when.iter().all(|w| l.holds.contains(w))) {
+        return 0.0;
+    }
+    let rain = rain_weight(l.rain, m.rain);
+    if rain <= 0.0 || m.biomes.is_empty() {
+        return rain;
+    }
+    let near = |d: f32| match d {
+        d if d <= 0.0 => 1.0,
+        d if m.biome_fade > 0.0 => (1.0 - d / m.biome_fade).max(0.0),
+        _ => 0.0,
+    };
+    let biome = (l.biome_dist.iter())
+        .filter(|(id, _)| m.biomes.contains(id))
+        .map(|&(_, d)| near(d))
+        .fold(0.0, f32::max);
+    rain * biome
 }
 
 /// Where the listener is, for positions and the environment.
@@ -104,8 +132,8 @@ pub struct Listener {
     pub dim: u32,
     /// The conditions music asks for that hold now, by id.
     pub holds: Vec<u32>,
-    pub params: AudioParams,
-    pub biome_dist: Vec<(u16, f32)>,
+    pub rain: f32,
+    pub biome_dist: Vec<(u32, f32)>,
 }
 
 pub struct Audio {
@@ -126,7 +154,7 @@ pub struct Audio {
     globs: FxHashMap<String, Vec<String>>,
     music: Option<StreamingSoundHandle<kira::sound::FromFileError>>,
     next_music: Instant,
-    beds: FxHashMap<usize, (StaticSoundHandle, f32)>,
+    beds: FxHashMap<usize, Bed>,
     spots: FxHashMap<usize, Instant>,
     state: Acoustics,
     /// Per category, then the master volume.
@@ -533,12 +561,14 @@ impl Audio {
         if self.active && !local_playing {
             self.music(assets, l);
         }
-        self.beds(assets, Some(l));
+        // Beds follow `active` like music: when it's off they fade out.
+        self.beds(assets, Some(l).filter(|_| self.active));
     }
 
     fn beds(&mut self, assets: &Assets, l: Option<&Listener>) {
         let fade = Tween { duration: Duration::from_secs(3), ..Default::default() };
         let follow = Tween { duration: Duration::from_secs(1), ..Default::default() };
+        let now = Instant::now();
         for (i, m) in content()
             .game
             .music
@@ -546,63 +576,53 @@ impl Audio {
             .enumerate()
             .filter(|(_, m)| m.ambient > 0.0)
         {
-            let weight = l.map_or(0.0, |l| {
-                let holds = m.dimension.is_none_or(|d| d == l.dim)
-                    && m.when.iter().all(|w| l.holds.contains(w))
-                    && (m.rain[0]..=m.rain[1]).contains(&l.params.rain);
-                if !holds {
-                    return 0.0;
+            let weight = l.map_or(0.0, |l| bed_weight(m, l));
+            match l.filter(|_| weight > 0.0) {
+                Some(l) => self.spot(assets, i, m, l, weight),
+                None => {
+                    self.spots.remove(&i);
                 }
-                if m.biomes.is_empty() {
-                    return 1.0;
-                }
-                let near = |&(_, d): &(u16, f32)| match d {
-                    d if d <= 0.0 => 1.0,
-                    d if m.biome_fade > 0.0 => (1.0 - d / m.biome_fade).max(0.0),
-                    _ => 0.0,
-                };
-                (m.biomes.iter())
-                    .filter_map(|&b| l.biome_dist.iter().find(|&&(id, _)| u32::from(id) == b))
-                    .map(near)
-                    .fold(0.0, f32::max)
-            });
-            if let Some(l) = l.filter(|_| weight > 0.0) {
-                self.spot(assets, i, m, l, weight);
-            } else {
-                self.spots.remove(&i);
             }
             let gain = m.ambient * weight;
-            let playing = self
-                .beds
-                .get(&i)
-                .is_some_and(|(h, _)| h.state() == PlaybackState::Playing);
-            if weight <= 0.0 {
-                if let Some((h, _)) = self.beds.get_mut(&i).filter(|_| playing) {
-                    h.stop(fade);
+            if self.beds.get(&i).is_some_and(|b| {
+                matches!(b.handle.state(), PlaybackState::Stopped | PlaybackState::Stopping)
+            }) {
+                self.beds.remove(&i);
+            }
+            if let Some(bed) = self.beds.get_mut(&i) {
+                if (gain - bed.gain).abs() > GAIN_STEP || (gain == 0.0 && bed.gain != 0.0) {
+                    bed.handle.set_volume(db(f64::from(gain.max(SILENT))), follow);
+                    bed.gain = gain;
+                }
+                let stop = if gain > 0.0 {
+                    bed.silent_since = None;
+                    false
+                } else {
+                    now.duration_since(*bed.silent_since.get_or_insert(now)) >= BED_LINGER
+                };
+                if stop {
+                    bed.handle.stop(fade);
+                    self.beds.remove(&i);
                 }
                 continue;
             }
-            if playing {
-                if let Some((h, last)) = self.beds.get_mut(&i)
-                    && (gain - *last).abs() > 0.005
-                {
-                    h.set_volume(db(f64::from(gain)), follow);
-                    *last = gain;
-                }
-                continue;
-            }
-            if m.tracks.is_empty() {
+            if gain <= 0.0 || m.tracks.is_empty() {
                 continue;
             }
             let track = &m.tracks[(self.random() * m.tracks.len() as f32) as usize % m.tracks.len()];
-            let Some(data) = self.file(assets, track) else { continue };
+            let Some(data) = sound_path(assets, track).and_then(|p| {
+                StreamingSoundData::from_file(p).inspect_err(|e| log::warn!("ambient {track}: {e}")).ok()
+            }) else {
+                continue;
+            };
             let data = data
                 .loop_region(..)
                 .volume(db(f64::from(gain)))
                 .fade_in_tween(fade);
-            match self.groups[crate::registry::MUSIC_CATEGORY as usize].play(data) {
-                Ok(h) => {
-                    self.beds.insert(i, (h, gain));
+            let category = m.category.unwrap_or(crate::registry::MUSIC_CATEGORY);
+            match self.groups[category as usize].play(data) {
+                Ok(handle) => {
+                    self.beds.insert(i, Bed { handle, gain, silent_since: None });
                 }
                 Err(e) => log::warn!("ambient {track}: {e}"),
             }
@@ -634,7 +654,7 @@ impl Audio {
             let (angle, away) = (self.random() * std::f32::consts::TAU, near + (far - near) * self.random());
             l.pos + DVec3::new(f64::from(angle.cos() * away), 0.0, f64::from(angle.sin() * away))
         });
-        self.play(assets, Play { sound, pos, volume: m.ambient.max(0.01) * weight, pitch: 0.0 });
+        self.play(assets, Play { sound, pos, volume: m.ambient * weight, pitch: 0.0 });
     }
 
     pub(crate) fn start_local(

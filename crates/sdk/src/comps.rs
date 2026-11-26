@@ -146,6 +146,7 @@ pub mod music {
     pub static DIMENSION: Component<Text, Music> = Component::named(m::DIMENSION);
     pub static WHEN: Component<Vec<String>, Music> = Component::named(m::WHEN);
     pub static AMBIENT: Component<f32, Music> = Component::named(m::AMBIENT);
+    pub static CATEGORY: Component<Text, Music> = Component::named(m::CATEGORY);
     pub static BIOME: Component<Vec<String>, Music> = Component::named(m::BIOME);
     pub static BIOME_FADE: Component<f32, Music> = Component::named(m::BIOME_FADE);
     pub static RAIN: Component<[f32; 2], Music> = Component::named(m::RAIN);
