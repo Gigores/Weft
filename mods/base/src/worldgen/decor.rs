@@ -158,8 +158,12 @@ pub fn place_boulder(s: &mut Plan, rng: &mut Rng, ox: i32, oy: i32, oz: i32, cel
     }
 }
 pub fn place_bush(s: &mut Plan, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
-    let BlockPos { x, y, z } = s.pos();
-    let mut rng = Rng(s.random());
+    bush(&mut super::TreePlaceData::new(s), leaf, stem);
+}
+
+pub(super) fn bush(d: &mut super::TreePlaceData, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
+    let (x, y, z) = d.pos;
+    let rng = &mut d.rng;
     let bush_size = {
         let mut result = rng.float() + 0.7;
         if result < 1.0 {
@@ -167,17 +171,17 @@ pub fn place_bush(s: &mut Plan, leaf: impl Fn(&mut Rng) -> u32, stem: u32) {
         }
         result
     };
-    s.put([x, y, z], stem);
+    (d.place)(x, y, z, stem, false);
     let mut place_ball = |mut rng: &mut Rng, ox, oy, oz, size| {
         for (dx, dy, dz) in sphere(size) {
-            s.put([ox + dx, oy + dy, oz + dz], leaf(&mut rng));
+            (d.place)(ox + dx, oy + dy, oz + dz, leaf(&mut rng), false);
         }
     };
-    place_ball(&mut rng, x, y, z, bush_size);
+    place_ball(rng, x, y, z, bush_size);
     if bush_size < 1.5 {
         return;
     }
     let dx = x + (rng.float() * 2.0) as i32;
     let dz = z + (rng.float() * 2.0) as i32;
-    place_ball(&mut rng, dx, y, dz, bush_size - 0.5);
+    place_ball(rng, dx, y, dz, bush_size - 0.5);
 }

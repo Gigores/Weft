@@ -46,7 +46,7 @@ const COLORS: &[(&str, u32, u32, [u8; 3], [u8; 3])] = &[
     ("blue", 0x375BFF, 0x3C44AA, [12, 12, 0], [3, 6, 15]),
 ];
 
-fn leaves(r: &mut Registry, handle: &'static Block, tex: &str, tint: bool) {
+fn leaves(r: &mut Registry, handle: &'static Block, tex: &str, tint: bool, sapling: &Block) {
     let mut b = r
         .block(handle)
         .sound_group("grass")
@@ -73,7 +73,7 @@ fn leaves(r: &mut Registry, handle: &'static Block, tex: &str, tint: bool) {
         Pool::new()
             .when(no_shears.clone())
             .when(Cond::chance(0.05))
-            .item("sapling"),
+            .item(sapling.name()),
     );
     if std::ptr::eq(handle, &OAK_LEAVES) {
         table.pool(
@@ -84,7 +84,14 @@ fn leaves(r: &mut Registry, handle: &'static Block, tex: &str, tint: bool) {
         );
     }
 }
-fn berry_leaves(r: &mut Registry, handle: &'static Block, texture: &'static str, texture_berried: &'static str, item: &'static Item) {
+fn berry_leaves(
+    r: &mut Registry,
+    handle: &'static Block,
+    texture: &'static str,
+    texture_berried: &'static str,
+    item: &'static Item,
+    sapling: &Block,
+) {
     r.block(handle)
         .sound_group("grass")
         .prop("berried", ["false", "true"])
@@ -108,6 +115,12 @@ fn berry_leaves(r: &mut Registry, handle: &'static Block, texture: &'static str,
             Pool::new()
                 .when(Cond::state("berried=true"))
                 .items(item.name(), 1, 1),
+        )
+        .pool(
+            Pool::new()
+                .when(!Cond::tool("#tools/shears"))
+                .when(Cond::chance(0.05))
+                .item(sapling.name()),
         );
 }
 
@@ -389,12 +402,12 @@ pub fn register(r: &mut Registry) {
     for tag in ["#materials/wood", "#planks", "#wood", "#logs"] {
         r.set(tag, &SOUND_ABSORPTION, 0.90);
     }
-    leaves(r, &OAK_LEAVES, "leaves_oak", true);
-    leaves(r, &BIRCH_LEAVES, "leaves_birch", true);
-    leaves(r, &SPRUCE_LEAVES, "leaves_spruce", true);
-    leaves(r, &BUSH_LEAVES, "raspberry_leaves", false);
-    berry_leaves(r, &RASPBERRY_LEAVES, "raspberry_leaves", "raspberry_leaves_berried", &crate::items::RASPBERRY);
-    berry_leaves(r, &SNOWBERRY_LEAVES, "raspberry_leaves", "snowberry_leaves_berried", &crate::items::SNOWBERRY);
+    leaves(r, &OAK_LEAVES, "leaves_oak", true, &SAPLING);
+    leaves(r, &BIRCH_LEAVES, "leaves_birch", true, &BIRCH_SAPLING);
+    leaves(r, &SPRUCE_LEAVES, "leaves_spruce", true, &SPRUCE_SAPLING);
+    leaves(r, &BUSH_LEAVES, "raspberry_leaves", false, &BUSH_SAPLING);
+    berry_leaves(r, &RASPBERRY_LEAVES, "raspberry_leaves", "raspberry_leaves_berried", &crate::items::RASPBERRY, &RASPBERRY_SAPLING);
+    berry_leaves(r, &SNOWBERRY_LEAVES, "raspberry_leaves", "snowberry_leaves_berried", &crate::items::SNOWBERRY, &SNOWBERRY_SAPLING);
     // Vanilla numbers: water steps every 5 ticks and reaches 7 blocks, lava every 30 and 3.
     // Players swim in water; what they wear may add more (`SWIMS_IN` on an item).
     r.edit(&PLAYER).set_text(&SWIMS_IN, "#water");
@@ -551,14 +564,23 @@ pub fn register(r: &mut Registry) {
         .tint_kind(&tints::GRASS)
         .not_solid()
         .tab(&crate::tabs::NATURAL);
-    r.block(&SAPLING)
-        .sound_group("grass")
-        .texture("sapling_oak")
-        .plant()
-        .needs_below("#plant_soil")
-        .grows(470.0, 9)
-        .on_grow(|e| worldgen::grow_tree(e.world(), e.pos().to_array()))
-        .tab(&crate::tabs::NATURAL);
+    for (sapling, texture) in [
+        (&SAPLING, "sapling_oak"),
+        (&BIRCH_SAPLING, "sapling_birch"),
+        (&SPRUCE_SAPLING, "sapling_spruce"),
+        (&BUSH_SAPLING, "sapling_bush"),
+        (&RASPBERRY_SAPLING, "sapling_raspberry"),
+        (&SNOWBERRY_SAPLING, "sapling_snowberry"),
+    ] {
+        r.block(sapling)
+            .sound_group("grass")
+            .texture(texture)
+            .plant()
+            .needs_below("#plant_soil")
+            .grows(470.0, 9)
+            .on_grow(move |e| worldgen::grow_tree(e.world(), e.pos().to_array(), sapling))
+            .tab(&crate::tabs::NATURAL);
+    }
     r.block(&SUGAR_CANE)
         .sound_group("grass")
         .texture("reeds")

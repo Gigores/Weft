@@ -344,12 +344,15 @@ fn place_oak(data: &mut TreePlaceData) {
     place_oak_impl(data, true)
 }
 fn place_birch(data: &mut TreePlaceData) {
+    place_birch_impl(data, true);
+}
+fn place_birch_impl(data: &mut TreePlaceData, allow_stump: bool) {
     static LOG: &Block = &BIRCH_LOG;
     static HOLLOW_LOG: Block = Block::named("birch_log_hollow");
     static WOOD: &Block = &BIRCH_WOOD;
     static ALLOW_ROOTS: bool = false;
     let height = 6u16 + (data.rng.next() as u16) % 4u16;
-    if check_stump(data, height) {
+    if allow_stump && check_stump(data, height) {
         place_stump(data, LOG, &HOLLOW_LOG, WOOD, height, ALLOW_ROOTS);
         return;
     }
@@ -368,8 +371,20 @@ pub fn register() {
     register_tree("base:spruce", place_spruce);
 }
 /// Places a tree into a live world (saplings). Checks for room first.
-pub fn grow_tree(w: World, p: [i32; 3]) {
-    grow_plant(w, p, &SAPLING, |data| place_oak_impl(data, false));
+pub fn grow_tree(w: World, p: [i32; 3], sapling: &Block) {
+    grow_plant(w, p, sapling, |data| match sapling.name() {
+        "base:sapling" => place_oak_impl(data, false),
+        "base:birch_sapling" => place_birch_impl(data, false),
+        "base:spruce_sapling" => place_spruce(data),
+        _ => {
+            let leaves = match sapling.name() {
+                "base:raspberry_sapling" => &RASPBERRY_LEAVES,
+                "base:snowberry_sapling" => &SNOWBERRY_LEAVES,
+                _ => &BUSH_LEAVES,
+            };
+            super::decor::bush(data, |_| leaves.id(), BUSH_STEM.id());
+        }
+    });
 }
 
 pub(super) fn grow_plant(w: World, p: [i32; 3], sapling: &Block, plan: impl FnOnce(&mut TreePlaceData)) {
