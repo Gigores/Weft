@@ -377,12 +377,14 @@ pub fn grow_tree(w: World, p: [i32; 3], sapling: &Block) {
         "base:birch_sapling" => place_birch_impl(data, false),
         "base:spruce_sapling" => place_spruce(data),
         _ => {
-            let leaves = match sapling.name() {
-                "base:raspberry_sapling" => &RASPBERRY_LEAVES,
-                "base:snowberry_sapling" => &SNOWBERRY_LEAVES,
-                _ => &BUSH_LEAVES,
+            let (leaves, berries) = match sapling.name() {
+                "base:raspberry_sapling" => (&RASPBERRY_LEAVES, true),
+                "base:snowberry_sapling" => (&SNOWBERRY_LEAVES, true),
+                _ => (&BUSH_LEAVES, false),
             };
-            super::decor::bush(data, |_| leaves.id(), BUSH_STEM.id());
+            let plain = leaves.id();
+            let berried = if berries { leaves.with(&[("berried", "true")]) } else { plain };
+            super::decor::bush(data, |rng| if berries && rng.float() >= 0.5 { berried } else { plain }, BUSH_STEM.id());
         }
     });
 }
