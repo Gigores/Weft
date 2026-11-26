@@ -144,6 +144,7 @@ world.game_mode = Режим игры: {0}
 world.cheats = Читы: {0}
 world.rules = Правила мира
 config.core.mob_spawning = Появление мобов
+config.core.mob_spawn_limit = Лимит мобов в мире (0 = без лимита)
 config.core.simulation_distance = Дальность симуляции
 config.core.ship_thrust = Тяга кораблей
 config.core.ship_thrust.tooltip = Ускорение вперёд и назад при полной тяге, в блоках в секунду за секунду.

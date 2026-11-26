@@ -27,6 +27,7 @@ mod projectile;
 mod sense;
 pub mod signal;
 pub mod space;
+mod spawn;
 mod sync;
 pub use builtin::COMMANDS as BUILTIN_COMMANDS;
 pub use extend::explanation;
@@ -629,10 +630,38 @@ impl Server {
         }
         if runs {
             let tick_rate = self.tick_rate;
+            let spawning = !c.game.spawns.is_empty() && crate::config::get(c.game.mob_spawning) != 0.0;
+            let cap = crate::config::get(c.game.mob_spawn_limit) as u64;
+            let budget = (spawning && cap != 0 && self.dims.iter().any(|d| d.time.is_multiple_of(40))).then(|| {
+                let count = self
+                    .dims
+                    .iter()
+                    .flat_map(|d| &d.regions)
+                    .flat_map(|r| &r.entities.list)
+                    .filter(|e| !e.player && e.is_body() && e.alive() && !c.game.entities[e.kind as usize].category_name.is_empty())
+                    .count() as u64;
+                AtomicU64::new(cap.saturating_sub(count))
+            });
+            let players: Vec<_> = self
+                .dims
+                .iter()
+                .map(|d| {
+                    (spawning && d.time.is_multiple_of(40) && c.dims[d.id as usize].editable).then(|| {
+                        spawn::Players::new(
+                            d.regions
+                                .iter()
+                                .flat_map(|r| &r.entities.list)
+                                .filter(|e| e.player && !e.removed && e.alive())
+                                .map(|e| e.pos),
+                        )
+                    })
+                })
+                .collect();
             self.dims
                 .par_iter_mut()
-                .flat_map(|d| d.regions.par_iter_mut())
-                .for_each(|r| r.tick(c, tick_rate));
+                .zip(players.par_iter())
+                .flat_map(|(d, players)| d.regions.par_iter_mut().map(move |r| (r, players.as_ref())))
+                .for_each(|(r, players)| r.tick(c, tick_rate, players, budget.as_ref()));
             self.tick_lightning(c);
         }
         lap(2, &self.shared);

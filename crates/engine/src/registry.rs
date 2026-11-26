@@ -508,6 +508,7 @@ pub struct Game {
     pub synced_comps: Vec<bool>,
     /// Config id of `core:mob_spawning`.
     pub mob_spawning: u32,
+    pub mob_spawn_limit: u32,
     /// Per attribute, the world rule players' base of it is (`comp::attribute::RULE`).
     pub attr_rules: Vec<Option<u32>>,
     /// Per damage cause, the world rule that turns it off (`core:damage.<cause>`); none for what
@@ -2373,6 +2374,7 @@ pub fn freeze(
     g.lives = tables.1.ids(ek::CONFIG)["core:lives"];
     g.rules_locked = tables.1.ids(ek::CONFIG)["core:rules_locked"];
     g.mob_spawning = tables.1.ids(ek::CONFIG)["core:mob_spawning"];
+    g.mob_spawn_limit = tables.1.ids(ek::CONFIG)["core:mob_spawn_limit"];
     g.keep_inventory = tables.1.ids(ek::CONFIG)["core:keep_inventory"];
     g.max_cramming = tables.1.ids(ek::CONFIG)["core:max_entity_cramming"];
     g.simulation_distance = tables.1.ids(ek::CONFIG)["core:simulation_distance"];

@@ -459,6 +459,7 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
         string("core:resource_packs", ""),
         string("core:shader_pack", ""),
         number("core:mob_spawning", ck::BOOL, 1.0, 0.0, 1.0, 0.0).set(c::SCOPE, scope::WORLD),
+        rule("core:mob_spawn_limit", ck::INT, 0.0, 0.0, 1_000_000.0),
         number("core:simulation_distance", ck::INT, 8.0, 2.0, 64.0, 1.0).set(c::SCOPE, scope::WORLD),
         // Most cubes mods' tickets keep loaded with no player near (`Host::force_load`).
         number("core:max_forced_cubes", ck::INT, 4096.0, 0.0, 1048576.0, 1.0).set(c::SCOPE, scope::WORLD),

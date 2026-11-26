@@ -185,6 +185,7 @@ world.game_mode = Game mode: {0}
 world.cheats = Allow cheats: {0}
 world.rules = World Rules
 config.core.mob_spawning = Mobs spawn
+config.core.mob_spawn_limit = World mob limit (0 = unlimited)
 config.core.simulation_distance = Simulation distance
 config.core.ship_thrust = Ship thrust
 config.core.ship_thrust.tooltip = Forward and reverse acceleration at full throttle, in blocks per second squared.

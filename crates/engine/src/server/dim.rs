@@ -2122,7 +2122,13 @@ impl Dim {
         }
     }
 
-    pub fn tick(&mut self, c: &'static Content, tick_rate: u32) {
+    pub(super) fn tick(
+        &mut self,
+        c: &'static Content,
+        tick_rate: u32,
+        players: Option<&super::spawn::Players>,
+        budget: Option<&std::sync::atomic::AtomicU64>,
+    ) {
         self.time += 1;
         // Whatever changes from here on changes in this tick, before signals have their turn.
         self.space.signals.now = self.time;
@@ -2130,7 +2136,9 @@ impl Dim {
         self.tick_blocks_first(0, c);
         self.tick_effects(0, c);
         self.source_modifiers(c);
-        self.natural_spawns(c);
+        if let Some(players) = players {
+            self.natural_spawns(c, players, budget);
+        }
         let children = self.mount_children();
         let order = self.mount_order(&children);
         let before = self
@@ -2555,15 +2563,8 @@ impl Dim {
     }
 
     /// Natural spawning (`abi::comp::spawn`) around this region's players every two seconds.
-    fn natural_spawns(&mut self, c: &'static Content) {
-        // Nothing spawns where nothing may change (the debug blocks, the void).
-        if self.time % 40 != 0 || c.game.spawns.is_empty() || !c.dims[self.id as usize].editable {
-            return;
-        }
-        let on = crate::config::get(c.game.mob_spawning) != 0.0;
-        if !on {
-            return;
-        }
+    fn natural_spawns(&mut self, c: &'static Content, nearby: &super::spawn::Players, budget: Option<&std::sync::atomic::AtomicU64>) {
+        use std::sync::atomic::Ordering::Relaxed;
         let cats = &c.game.categories;
         let players: Vec<DVec3> = self
             .entities
@@ -2587,7 +2588,7 @@ impl Dim {
             }
             for _ in 0..4 {
                 let a = self.rng.float() as f64 * std::f64::consts::TAU;
-                let r = 20.0 + self.rng.float() as f64 * 25.0;
+                let r = super::spawn::MIN_DISTANCE + self.rng.float() as f64 * 21.0;
                 let (x, z) = ((p.x + a.cos() * r).floor() as i32, (p.z + a.sin() * r).floor() as i32);
                 // Per rule, the first spot of its kind with room for its mob, scanning down from
                 // above the player. Unloaded counts as solid; liquids are not solid.
@@ -2688,10 +2689,23 @@ impl Dim {
                     continue;
                 }
                 let n = rule.group[0] + (self.rng.next() % (rule.group[1] - rule.group[0] + 1) as u64) as u32;
+                let at = DVec3::new(x as f64 + 0.5, y as f64, z as f64 + 0.5);
+                if !nearby.allows(at) {
+                    continue;
+                }
                 for _ in 0..n {
-                    let at = DVec3::new(x as f64 + 0.5, y as f64, z as f64 + 0.5);
+                    if count[rule.category as usize] >= cats[rule.category as usize].cap
+                        || budget.is_some_and(|b| {
+                            b.fetch_update(Relaxed, Relaxed, |n| n.checked_sub(1))
+                                .is_err()
+                        })
+                    {
+                        break;
+                    }
                     if self.spawn_by(0, c, rule.entity, at, abi::spawn_cause::NATURAL, |_| {}) != 0 {
                         count[rule.category as usize] += 1;
+                    } else if let Some(budget) = budget {
+                        budget.fetch_add(1, Relaxed);
                     }
                 }
             }
