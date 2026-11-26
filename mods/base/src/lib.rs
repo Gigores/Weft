@@ -11,6 +11,7 @@ mod commands;
 mod doors;
 mod effects;
 mod items;
+mod leaf_decay;
 mod mobs;
 mod music_player;
 mod player;

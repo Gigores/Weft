@@ -17,8 +17,7 @@ static GRASS_COVER: Condition = Condition::named("grass_cover");
 fn log(r: &mut Registry, handle: &'static Block, wood: &str, wood_block: bool) {
     let side = format!("log_{wood}");
     let top = format!("log_{wood}_top");
-    let b = r
-        .block(handle)
+    let b = crate::leaf_decay::support(r.block(handle))
         .sound_group("wood")
         .hardness(2.0)
         .mined_by("axe", tool_tier::HAND)
@@ -47,8 +46,7 @@ const COLORS: &[(&str, u32, u32, [u8; 3], [u8; 3])] = &[
 ];
 
 fn leaves(r: &mut Registry, handle: &'static Block, tex: &str, tint: bool, sapling: &Block) {
-    let mut b = r
-        .block(handle)
+    let mut b = crate::leaf_decay::leaves(r.block(handle))
         .sound_group("grass")
         .texture(tex)
         .hardness(0.2)
@@ -92,7 +90,7 @@ fn berry_leaves(
     item: &'static Item,
     sapling: &Block,
 ) {
-    r.block(handle)
+    crate::leaf_decay::leaves(r.block(handle))
         .sound_group("grass")
         .prop("berried", ["false", "true"])
         .hardness(0.2)
@@ -378,7 +376,7 @@ pub fn register(r: &mut Registry) {
         .outline([2.0, 0.0, 2.0], [14.0, 16.0, 14.0])
         .tag("hollow_log")
         .tab(&crate::tabs::NATURAL);
-    r.block(&BUSH_STEM)
+    crate::leaf_decay::support(r.block(&BUSH_STEM))
         .sound_group("grass")
         .hardness(0.2)
         .cutout()
