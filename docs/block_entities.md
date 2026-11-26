@@ -347,6 +347,10 @@ w.set_component(id, &ENERGY, e);
 
 An item whose stacks carry `energy` is a battery: `.set(&ENERGY, Energy { .. })` on the item gives each stack a charge of its own. A machine that charges the tool in its slot does `w.energy_move(Holder::held(id, slot), amount, false)`.
 
+Use `resource::register(r, &NETWORK, &CABLE, &PORT, "mymod.unit.heat")` for another resource. `NETWORK` is a `Record`, `CABLE` a `Tag`, and `PORT` a `Component<resource::Storage>`. Tag the conductors and attach `PORT` to each producer or consumer with its capacity and per-tick rates. Machines read and change the stored quantity through `World::component` and `World::set_component`. Use `resource::unit_key(&NETWORK)` to display the unit in a menu.
+
+The base water and lava networks use `base_api::resources::WATER_TANK` and `LAVA_TANK`. A pipe tagged `resource::LIQUID_CONDUIT.name()` carries both on independent channels. One stored unit corresponds to one litre, with the label supplied by the `unit.litre` translation.
+
 Networks are rebuilt when a conductor, or a block next to one, is placed or broken (and when its cube loads or unloads), not every tick.
 
 There are no units, conversion or losses. Testmod uses 40 per tick and capacities in the tens of thousands, so if your mod should play along with others, stay in that range.

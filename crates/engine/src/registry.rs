@@ -468,6 +468,8 @@ pub struct Game {
     pub platform_kind: u32,
     pub ship_kind: u32,
     pub energy: u32,
+    pub resource_networks: Vec<crate::server::energy::Channel>,
+    pub resource_conduits: FxHashMap<u32, Vec<usize>>,
     /// `Host::reg_client_frame`, in mod order.
     pub client_frames: Vec<(ModId, Callback)>,
     /// Camera modifiers after the active mode, in mod order.

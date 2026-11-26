@@ -6,6 +6,7 @@ pub mod ai;
 pub mod camera;
 pub mod client;
 mod component;
+pub mod resource;
 pub mod riding;
 pub mod shape;
 pub mod shapes;

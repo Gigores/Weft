@@ -2167,6 +2167,7 @@ pub fn freeze(
         let mut matcher = |text: &str, c: &Components| matchers.add(text, &block_names, &block_defs, c);
         components.add_table(*kind as usize, entries, &mut matcher, &mut errors);
     }
+    crate::server::energy::freeze(&mut game, &components, states.len(), &mut errors);
     resolve_hazards(&mut states, raw_hazards, &mut game, &mut dim_defs, &components, &mut conds, &mut errors);
     let source_mods = resolve_source_mods(&game, &components, item_defs.len(), &mut conds, &mut errors);
     let conds = crate::conditions::compile_all(

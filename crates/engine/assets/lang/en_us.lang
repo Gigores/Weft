@@ -236,6 +236,7 @@ multiplayer.connecting = Connecting...
 multiplayer.disconnected = Disconnected: {0}
 multiplayer.version_mismatch = Incompatible game versions: server {0} (protocol {2}), client {1} (protocol {3}).
 multiplayer.protocol_mismatch = Incompatible game versions: server protocol {0}, client protocol {1}.
+unit.litre = L
 world.open_failed = Could not open the world: {0}
 world.compiling = Compiling shaders
 world.compiling.once = Only on the first start: from then on worlds open at once.

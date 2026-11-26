@@ -47,6 +47,12 @@ fn init(r: &mut Registry) {
         r.creative_tab(tab, icon);
     }
     blocks::register(r);
+    {
+        use base_api::resources::*;
+        use weft_sdk::resource::{LIQUID_CONDUIT, LITRE, register};
+        register(r, &WATER, &LIQUID_CONDUIT, &WATER_TANK, LITRE);
+        register(r, &LAVA, &LIQUID_CONDUIT, &LAVA_TANK, LITRE);
+    }
     commands::register(r);
     items::register(r);
     player::register(r);

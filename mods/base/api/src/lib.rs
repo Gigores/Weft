@@ -46,6 +46,7 @@ pub mod slots;
 
 /// Vanilla's recipe types.
 pub mod recipes;
+pub mod resources;
 
 /// Vanilla's creative tabs.
 pub mod tabs;

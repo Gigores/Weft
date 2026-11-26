@@ -125,6 +125,7 @@ fn init(r: &mut Registry) {
     // Joins whatever pipe is next to it, any mod's, by the shared tag.
     r.block(&PIPE)
         .tag("pipes")
+        .tag(weft_sdk::resource::LIQUID_CONDUIT.name())
         .joins(Facings::ALL, "#pipes")
         .states(|p, s| {
             let mut s = s
