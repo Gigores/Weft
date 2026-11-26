@@ -844,6 +844,7 @@ impl Running {
             log::error!("world '{}' was saved in format {}, this build reads {}", meta.name, meta.format, saves::SAVE_FORMAT);
             self.entering = None;
             self.screens.clear();
+            self.open(screens::engine("core:title"));
             self.open(Box::new(screens::Message { title: "world.open_failed".into(), args: vec![Arg::Key("world.old_format".into())] }));
             return;
         }
@@ -925,6 +926,7 @@ impl Running {
         log::error!("{reason}");
         self.entering = None;
         self.screens.clear();
+        self.open(screens::engine("core:title"));
         self.open(Box::new(screens::Message { title: "world.open_failed".into(), args: vec![Arg::Text(reason)] }));
     }
 

@@ -345,8 +345,7 @@ async fn accept(incoming: iroh::endpoint::Incoming, connect: crossbeam_channel::
     let mut hello = codec::R(&hello);
     let (proto, hash) = <(u32, u64) as codec::Wire>::get(&mut hello).ok_or("bad hello")?;
     let version = <String as codec::Wire>::get(&mut hello);
-    let same_content = hash == content_hash();
-    let reply = if proto != PROTOCOL || !same_content {
+    let reply = if proto != PROTOCOL || hash != content_hash() {
         if let Some(client) = version.filter(|s| {
             !s.is_empty()
                 && s.len() <= 32
