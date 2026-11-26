@@ -106,6 +106,6 @@ pub fn register(r: &mut Registry) {
         .ambient(1.0)
         .when(&conditions::UNDERGROUND)
         .spot(&CAVE_DRONE)
-        .spot_every(10.0, 10.0)
-        .spot_distance(8.0, 24.0);
+        .spot_every(60.0, 120.0)
+        .spot_distance(0.0, 0.0);
 }
