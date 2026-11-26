@@ -312,7 +312,9 @@ impl Client {
             ToClient::CommandReply { id, lines } => {
                 self.command_replies.insert(id, lines);
             }
-            ToClient::Disconnect(reason) => self.disconnected = Some(reason),
+            ToClient::Disconnect(reason) => {
+                self.disconnected.get_or_insert(reason);
+            }
             ToClient::Gizmos(shapes) => self.gizmos.receive(shapes),
             ToClient::Packet { channel, data } => self.packets.push((channel, data)),
             ToClient::SharedComponents(list) => {

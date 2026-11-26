@@ -1142,7 +1142,7 @@ impl Running {
                             Err(e) => log::error!("{e}"),
                         }
                     }
-                    Err(e) => self.open(Box::new(screens::Message { title: "multiplayer.disconnected".into(), args: vec![Arg::Text(e)] })),
+                    Err(e) => self.open(Box::new(screens::Message::join_error(e))),
                 },
             }
         }

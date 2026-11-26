@@ -18,6 +18,7 @@ use crate::settings::Settings;
 const ALPN: &[u8] = b"weft/1";
 // Peers must agree on deterministic terrain and weather as well as the wire format.
 const PROTOCOL: u32 = 29;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -341,9 +342,19 @@ async fn accept(incoming: iroh::endpoint::Incoming, connect: crossbeam_channel::
     let peer = conn.remote_id();
     let (mut send, mut recv) = conn.accept_bi().await.map_err(|e| e.to_string())?;
     let hello = read_frame(&mut recv).await?;
-    let (proto, hash) = <(u32, u64) as codec::Wire>::get(&mut codec::R(&hello)).ok_or("bad hello")?;
+    let mut hello = codec::R(&hello);
+    let (proto, hash) = <(u32, u64) as codec::Wire>::get(&mut hello).ok_or("bad hello")?;
+    let version = <String as codec::Wire>::get(&mut hello);
     let reply = if proto != PROTOCOL {
-        format!("protocol mismatch: server {PROTOCOL}, client {proto}")
+        if let Some(client) = version.filter(|s| {
+            s.len() <= 32
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
+        }) {
+            format!("version mismatch: {VERSION}|{client}|{PROTOCOL}|{proto}")
+        } else {
+            format!("protocol mismatch: server {PROTOCOL}, client {proto}")
+        }
     } else if hash != content_hash() {
         format!("different mods; server runs: {}", mod_list())
     } else {
@@ -351,6 +362,9 @@ async fn accept(incoming: iroh::endpoint::Incoming, connect: crossbeam_channel::
     };
     write_frame(&mut send, reply.as_bytes()).await?;
     if !reply.is_empty() {
+        send.finish().map_err(|e| e.to_string())?;
+        // Keep the connection alive until the peer has received the rejection.
+        let _ = tokio::time::timeout(Duration::from_secs(3), send.stopped()).await;
         return Err(reply);
     }
     log::info!("player {peer} connected");
@@ -450,6 +464,7 @@ pub fn join(ticket: &str, settings: &Settings) -> Result<ClientConn, String> {
             let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
             let mut hello = codec::W::default();
             codec::Wire::put(&(PROTOCOL, content_hash()), &mut hello);
+            codec::Wire::put(&VERSION.to_string(), &mut hello);
             write_frame(&mut send, &hello.0).await?;
             let reply = read_frame(&mut recv).await?;
             if !reply.is_empty() {
@@ -464,13 +479,14 @@ pub fn join(ticket: &str, settings: &Settings) -> Result<ClientConn, String> {
                 let (to_client_tx, to_client_rx) = unbounded::<ToClient>();
                 let _ = ready_tx.send(Ok(Conn::new(to_server_tx, to_client_rx)));
                 let reader = tokio::spawn(async move {
-                    while let Ok(frame) = read_frame(&mut recv).await {
-                        let Some(msg) = codec::decode_client(&frame) else { break };
+                    let reason = loop {
+                        let Ok(frame) = read_frame(&mut recv).await else { break "connection closed" };
+                        let Some(msg) = codec::decode_client(&frame) else { break "unrecognized server message (check the game versions)" };
                         if to_client_tx.send(msg).is_err() {
-                            break;
+                            return;
                         }
-                    }
-                    let _ = to_client_tx.send(ToClient::Disconnect("connection closed".into()));
+                    };
+                    let _ = to_client_tx.send(ToClient::Disconnect(reason.into()));
                 });
                 pump_out(to_server_rx, send, codec::encode_server).await;
                 reader.abort();

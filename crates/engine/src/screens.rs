@@ -1153,6 +1153,27 @@ pub struct Message {
     pub args: Vec<Arg>,
 }
 
+impl Message {
+    pub fn join_error(reason: String) -> Self {
+        if let Some(versions) = reason.strip_prefix("version mismatch: ")
+            && let [server, client, server_protocol, client_protocol] = versions.split('|').collect::<Vec<_>>().as_slice()
+        {
+            return Self {
+                title: "multiplayer.version_mismatch".into(),
+                args: [server, client, server_protocol, client_protocol]
+                    .map(|s| Arg::Text((*s).into()))
+                    .into(),
+            };
+        }
+        if let Some(protocols) = reason.strip_prefix("protocol mismatch: server ")
+            && let Some((server, client)) = protocols.split_once(", client ")
+        {
+            return Self { title: "multiplayer.protocol_mismatch".into(), args: vec![Arg::Text(server.into()), Arg::Text(client.into())] };
+        }
+        Self { title: "multiplayer.disconnected".into(), args: vec![Arg::Text(reason)] }
+    }
+}
+
 /// Loading without a saved preview, including a cold shader compilation.
 pub enum LoadingWorld {
     Compiling,
