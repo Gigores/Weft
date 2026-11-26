@@ -369,35 +369,39 @@ pub fn register() {
 }
 /// Places a tree into a live world (saplings). Checks for room first.
 pub fn grow_tree(w: World, p: [i32; 3]) {
-    // A tree needs a clear trunk column before we start replacing the sapling.
-    for y in p[1] + 1..p[1] + 12 {
-        match w.block_loaded([p[0], y, p[2]]) {
-            Some(s) if s == 0 || TALL_GRASS.is(s) || TALL_TALL_GRASS.is(s) => {}
-            _ => return,
-        }
-    }
+    grow_plant(w, p, &SAPLING, |data| place_oak_impl(data, false));
+}
 
-    let mut data = TreePlaceData {
+pub(super) fn grow_plant(w: World, p: [i32; 3], sapling: &Block, plan: impl FnOnce(&mut TreePlaceData)) {
+    let open = |at| {
+        w.block_loaded(at).is_some()
+            && w.parts(at)
+                .into_iter()
+                .all(|state| AIR_LIKE.on_block(state) || (at == p && sapling.is(state)))
+    };
+    if !sapling.is(w.block(p)) || !open(p) {
+        return;
+    }
+    let mut placements = Vec::new();
+    plan(&mut TreePlaceData {
         pos: (p[0], p[1], p[2]),
         rng: Rng(w.random()),
-        place: Box::new(move |x, y, z, state, force| {
-            let Some(cur) = w.block_loaded([x, y, z]) else { return };
-            if force || cur == 0 || TALL_GRASS.is(cur) || TALL_TALL_GRASS.is(cur) {
-                w.set_block([x, y, z], state);
+        place: Box::new(|x, y, z, state, required| {
+            if y >= p[1] {
+                placements.push(([x, y, z], state, required));
             }
         }),
-        ground: Box::new(move |x, z| {
-            // The live world has no column-height query, so find the top solid block near the
-            // sapling. Stop at the loaded edge rather than pretending air is ground.
-            for y in (p[1].saturating_sub(64)..=p[1] + 32).rev() {
-                let Some(state) = w.block_loaded([x, y, z]) else { continue };
-                if block_info(state).is_some_and(|i| i.solid()) {
-                    return y;
-                }
-            }
-            p[1] - 1
-        }),
-    };
-
-    place_oak_impl(&mut data, false)
+        ground: Box::new(|_, _| p[1] - 1),
+    });
+    if placements
+        .iter()
+        .any(|&(at, _, required)| required && !open(at))
+    {
+        return;
+    }
+    for (at, state, _) in placements {
+        if open(at) {
+            w.set_block(at, state);
+        }
+    }
 }

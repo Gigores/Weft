@@ -9,7 +9,7 @@ pub use base_api::blocks::*;
 pub static PRICKED: DamageCause = DamageCause::named("cactus");
 
 static TILLABLE: Tag = Tag::named("tillable");
-static AIR_LIKE: Tag = Tag::named("air_like");
+pub(crate) static AIR_LIKE: Tag = Tag::named("air_like");
 static NON_FULL_BLOCK: Tag = Tag::named("non_full_block");
 static GRASS_COVER: Condition = Condition::named("grass_cover");
 
