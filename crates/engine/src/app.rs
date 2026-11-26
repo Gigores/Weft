@@ -220,6 +220,7 @@ pub struct Stats {
 pub struct Game {
     pub client: Client,
     pub server: Option<ServerHandle>,
+    join_address: Option<String>,
 }
 
 /// Commands the engine runs on the client that types them: name, usage, handler. One table for
@@ -906,7 +907,7 @@ impl Running {
             Ok(mut client) => {
                 client.sent = chat_history;
                 self.world_dir = Some(dir);
-                self.game = Some(Game { client, server: Some(server) });
+                self.game = Some(Game { client, server: Some(server), join_address: None });
                 self.hud.invalidate();
                 self.quads_dirty = true;
                 if self.entering.is_none() {
@@ -1130,7 +1131,7 @@ impl Running {
                         match Client::new(&mut *self.gpu, &self.assets, &self.textures, &self.cache_dir, conn, view, skin) {
                             Ok(mut client) => {
                                 client.sent = load_chat_history(&self.settings.run_dir);
-                                self.game = Some(Game { client, server: None });
+                                self.game = Some(Game { client, server: None, join_address: Some(ticket.trim().to_owned()) });
                                 self.screens.clear();
                                 self.hud.invalidate();
                                 self.open(Box::new(screens::LoadingWorld::Streaming));
@@ -3112,6 +3113,9 @@ fn enter_world(r: &mut Running) {
     };
     let now = Instant::now();
     if g.client.joined {
+        if let Some(address) = g.join_address.take() {
+            net::screens::remember_server(&r.settings, address);
+        }
         r.hud_since.get_or_insert(now);
         if g.client.preparing_since.take().is_some() {
             r.entering = None;
