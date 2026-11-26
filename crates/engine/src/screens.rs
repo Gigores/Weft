@@ -1174,6 +1174,16 @@ impl Message {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn disconnect_distinguishes_incompatible_versions() {
+    let msg = Message::join_error("version mismatch: 26.11.8|26.11.7|29|28".into());
+    assert_eq!(msg.title, "multiplayer.version_mismatch");
+    assert_eq!(msg.args, ["26.11.8", "26.11.7", "29", "28"].map(|s| Arg::Text(s.into())));
+    assert_eq!(Message::join_error("protocol mismatch: server 29, client 28".into()).title, "multiplayer.protocol_mismatch");
+    assert_eq!(Message::join_error("connection lost".into()).title, "multiplayer.disconnected");
+}
+
 /// Loading without a saved preview, including a cold shader compilation.
 pub enum LoadingWorld {
     Compiling,

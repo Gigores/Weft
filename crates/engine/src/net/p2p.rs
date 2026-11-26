@@ -345,18 +345,21 @@ async fn accept(incoming: iroh::endpoint::Incoming, connect: crossbeam_channel::
     let mut hello = codec::R(&hello);
     let (proto, hash) = <(u32, u64) as codec::Wire>::get(&mut hello).ok_or("bad hello")?;
     let version = <String as codec::Wire>::get(&mut hello);
-    let reply = if proto != PROTOCOL {
+    let same_content = hash == content_hash();
+    let reply = if proto != PROTOCOL || !same_content {
         if let Some(client) = version.filter(|s| {
-            s.len() <= 32
+            !s.is_empty()
+                && s.len() <= 32
+                && (proto != PROTOCOL || s != VERSION)
                 && s.bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
         }) {
             format!("version mismatch: {VERSION}|{client}|{PROTOCOL}|{proto}")
-        } else {
+        } else if proto != PROTOCOL {
             format!("protocol mismatch: server {PROTOCOL}, client {proto}")
+        } else {
+            format!("different mods; server runs: {}", mod_list())
         }
-    } else if hash != content_hash() {
-        format!("different mods; server runs: {}", mod_list())
     } else {
         String::new()
     };
