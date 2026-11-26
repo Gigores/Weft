@@ -358,12 +358,16 @@ pub fn back_button(ui: &mut Ui, cx: &BuildCx, key: &str, args: &[Arg], width: f3
 
 /// The X that closes a screen as Escape does, its picture `side` GUI pixels.
 pub fn close_button(ui: &mut Ui, side: f32) {
+    close_button_with(ui, side, |c| c.requests.push(Request::Close));
+}
+
+pub(crate) fn close_button_with(ui: &mut Ui, side: f32, action: impl Fn(&mut Ctx) + 'static) {
     ui.has_close = true;
     let style = Style::default()
         .size(side + 2.0, side + 2.0)
         .pad(1.0)
         .center();
-    let b = ui.button("button", style, Rc::new(|c: &mut Ctx| c.requests.push(Request::Close)), |ui| {
+    let b = ui.button("button", style, Rc::new(action), |ui| {
         ui.add(Kind::Image { texture: "core:gui/close".into(), color: 0xFFFFFFFF }, Style::default().size(side, side));
     });
     ui.set_id(b, "screen_close");

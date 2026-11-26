@@ -422,12 +422,10 @@ fn choices(c: &Content, kind: What, list: List, things: &[Thing], cx: &BuildCx) 
                 .filter(|t| t.kind == What::Item)
                 .map(|t| plain(&t.name, t.picture().map_or(Icon::None, |p| picture(c, &p)), code::quote(&t.name)))
                 .collect();
-            let mut names: Vec<(&String, &u32)> = c.game.catalog.ids(ek::ITEM).iter().collect();
-            names.sort();
             v.extend(
-                names
+                registered_items(c)
                     .into_iter()
-                    .map(|(n, &i)| plain(n, Icon::Item(i), code::quote(n))),
+                    .map(|(n, i)| plain(n, Icon::Item(i), code::quote(n))),
             );
             v
         }
@@ -458,7 +456,7 @@ fn icon(ui: &mut Ui, icon: &Icon, side: f32) {
             ui.add(Kind::Container { class: None }, Style::default().size(side, side));
         }
         Icon::Item(i) => {
-            ui.add(Kind::Custom { tag: crate::client::modui::TAG_ICON, data: *i as u64 }, Style::default().size(side, side));
+            item_icon(ui, *i, side);
         }
         Icon::Picture(p) => {
             ui.add(Kind::Custom { tag: TAG_PICTURE, data: *p as u64 }, Style::default().size(side, side));
@@ -467,6 +465,22 @@ fn icon(ui: &mut Ui, icon: &Icon, side: f32) {
             ui.add(Kind::Image { texture: texture.clone(), color: 0xFFFFFFFF }, Style::default().size(side, side));
         }
     }
+}
+
+pub(crate) fn registered_items(c: &Content) -> Vec<(&str, u32)> {
+    let mut items: Vec<_> = c
+        .game
+        .catalog
+        .ids(ek::ITEM)
+        .iter()
+        .map(|(name, &id)| (name.as_str(), id))
+        .collect();
+    items.sort_unstable_by_key(|&(name, _)| name);
+    items
+}
+
+pub(crate) fn item_icon(ui: &mut Ui, id: u32, side: f32) {
+    ui.add(Kind::Custom { tag: crate::client::modui::TAG_ICON, data: u64::from(id) }, Style::default().size(side, side));
 }
 
 fn no_wrap(ui: &mut Ui, n: crate::ui::NodeId) {

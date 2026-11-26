@@ -13,6 +13,7 @@ use crate::assets::Assets;
 
 pub const FALLBACK: &str = "en_us";
 
+#[derive(Clone)]
 pub struct Lang {
     pub code: String,
     entries: FxHashMap<String, String>,

@@ -15,6 +15,7 @@ use crate::ui::{Kind, Style, Ui};
 
 pub struct MenuScreen {
     pub kind: u32,
+    sign: Rc<RefCell<crate::sign_text::Draft>>,
     /// The status effects (effect, level) its list was built with.
     effects: Vec<(u32, u32)>,
     /// Creative inventory filter and open tab.
@@ -24,7 +25,7 @@ pub struct MenuScreen {
 
 impl MenuScreen {
     pub fn new(kind: u32) -> MenuScreen {
-        MenuScreen { kind, effects: Vec::new(), search: Default::default(), tab: Default::default() }
+        MenuScreen { kind, sign: Default::default(), effects: Vec::new(), search: Default::default(), tab: Default::default() }
     }
 }
 
@@ -234,7 +235,7 @@ impl Screen for MenuScreen {
                 .and_then(|state| c.game.block_data.get(&state.block))
                 .is_some_and(|def| def.watched.contains(&comp))
         {
-            crate::sign_text::editor(ui, cx, menu);
+            crate::sign_text::editor(ui, cx, menu, &self.sign);
             return;
         }
         let creative = cx

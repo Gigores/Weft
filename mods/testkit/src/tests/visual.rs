@@ -318,9 +318,28 @@ pub async fn sign_text(t: T) -> R {
         .await?;
     t.click_ui("id:sign_text", 0);
     t.frames(2).await?;
-    t.c().input_type("{#4455FF}Weft{/} {item:base:diamond}");
+    t.c().input_type("Weft ");
     t.frames(2).await?;
-    t.check(t.click_ui("text:Done", 0), "save the sign");
+    t.check(t.click_ui("id:sign_color", 0), "open the color picker");
+    t.until("color picker", Duration::from_secs(5), |t| t.c().ui_rect("id:sign_hex").is_some())
+        .await?;
+    t.shot("sign_colors").await?;
+    t.click_ui("id:sign_apply_color", 0);
+    t.until("text editor", Duration::from_secs(5), |t| t.c().ui_rect("id:sign_text").is_some())
+        .await?;
+    t.c().input_type("rocks ");
+    t.frames(2).await?;
+    t.check(t.click_ui("id:sign_icons", 0), "open the item picker");
+    t.until("item search", Duration::from_secs(5), |t| t.c().ui_rect("id:sign_item_search").is_some())
+        .await?;
+    t.c().input_type("diamond");
+    t.frames(3).await?;
+    t.shot("sign_items").await?;
+    t.check(t.click_ui("id:sign_item:base:diamond", 0), "insert the searched item");
+    t.until("text editor", Duration::from_secs(5), |t| t.c().ui_rect("id:sign_text").is_some())
+        .await?;
+    t.shot("sign_editor").await?;
+    t.check(t.click_ui("id:screen_close", 0), "close the sign");
     t.until("sign editor closed", Duration::from_secs(5), |t| t.c().ui_rect("id:sign_text").is_none())
         .await?;
     t.secs(0.5).await?;

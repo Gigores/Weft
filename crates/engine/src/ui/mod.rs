@@ -267,6 +267,10 @@ pub enum Kind {
         texture: String,
         color: u32,
     },
+    ImageRegion {
+        texture: String,
+        uv: [f32; 4],
+    },
     Item {
         bind: ItemBind,
         last: (u32, u32),

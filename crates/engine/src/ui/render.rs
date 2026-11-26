@@ -1204,6 +1204,11 @@ impl UiRenderer {
                     self.image(r, idx, [0.0, 0.0, 1.0, 1.0], *color);
                 }
             }
+            Kind::ImageRegion { texture, uv } => {
+                if let Some((idx, _, _)) = self.texture(gpu, assets, texture) {
+                    self.image(r, idx, *uv, 0xFFFFFFFF);
+                }
+            }
             Kind::Item { last, .. } => {
                 if last.0 != 0 {
                     let clip = n
