@@ -557,6 +557,43 @@ impl MusicBuilder<'_> {
     pub fn when(self, c: impl Into<crate::Cond>) -> Self {
         self.push(&crate::comps::music::WHEN, c.into().0)
     }
+    /// Makes this a looping bed at `volume` (0..1) rather than a track: it fades in while its
+    /// conditions hold and out when they stop. Its `tracks` are the files it picks from.
+    pub fn ambient(self, volume: f32) -> Self {
+        self.set(&crate::comps::music::AMBIENT, volume)
+    }
+    /// Plays only in this biome; call again for more, any of which may match.
+    pub fn biome(self, biome: &crate::Biome) -> Self {
+        self.push(&crate::comps::music::BIOME, biome.name().to_string())
+    }
+    /// The sound category whose volume slider a bed follows (music unless set). Only for beds.
+    pub fn category(self, category: &crate::SoundCategory) -> Self {
+        self.set(&crate::comps::music::CATEGORY, category.name().to_string().into())
+    }
+    /// Blocks outside its biomes over which a bed fades out (and in, coming back); the default
+    /// is 32. 0 cuts it at the border.
+    pub fn biome_fade(self, blocks: f32) -> Self {
+        self.set(&crate::comps::music::BIOME_FADE, blocks)
+    }
+    /// Plays only while it rains between `min` and `max` (0..1): `rain(0.3, 1.0)` is "raining",
+    /// `rain(0.0, 0.05)` is "dry".
+    pub fn rain(self, min: f32, max: f32) -> Self {
+        self.set(&crate::comps::music::RAIN, [min, max])
+    }
+    /// A sound event played now and then at a random place around the listener while this holds
+    /// (it needs `ambient` for its volume, and needs no tracks). Call again for more to pick from.
+    pub fn spot(self, sound: &crate::Sound) -> Self {
+        self.push(&crate::comps::music::SPOT, sound.name().to_string())
+    }
+    /// Seconds between spots, picked at random in `min..max`.
+    pub fn spot_every(self, min: f32, max: f32) -> Self {
+        self.set(&crate::comps::music::SPOT_EVERY, [min, max])
+    }
+    /// Blocks away from the listener a spot is placed, picked at random in `min..max`. `0, 0`
+    /// places it nowhere: it is heard in plain stereo, with no direction or distance.
+    pub fn spot_distance(self, min: f32, max: f32) -> Self {
+        self.set(&crate::comps::music::SPOT_DISTANCE, [min, max])
+    }
 }
 
 /// A sound category being registered (`Registry::sound_category`).

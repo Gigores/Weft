@@ -729,6 +729,14 @@ pub mod comp {
     /// `TRACKS` (`[str]`, sound files streamed), `DIMENSION` (`str`, the one it plays in, any
     /// unless set), `WHEN` (`[str]`, conditions that all have to hold).
     pub mod music {
+        pub const AMBIENT: &str = "music.ambient";
+        pub const CATEGORY: &str = "music.category";
+        pub const BIOME: &str = "music.biome";
+        pub const BIOME_FADE: &str = "music.biome_fade";
+        pub const RAIN: &str = "music.rain";
+        pub const SPOT: &str = "music.spot";
+        pub const SPOT_EVERY: &str = "music.spot_every";
+        pub const SPOT_DISTANCE: &str = "music.spot_distance";
         pub const TRACKS: &str = "music.tracks";
         pub const DIMENSION: &str = "music.dimension";
         pub const WHEN: &str = "music.when";

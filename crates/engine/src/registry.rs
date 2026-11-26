@@ -578,6 +578,14 @@ pub struct MusicDef {
     pub dimension: Option<u32>,
     /// A condition (`Content::conds`) that holds while it may play.
     pub when: Option<u32>,
+    pub ambient: f32,
+    pub category: Option<u32>,
+    pub biomes: Vec<u32>,
+    pub biome_fade: f32,
+    pub rain: [f32; 2],
+    pub spots: Vec<u32>,
+    pub spot_every: [f32; 2],
+    pub spot_distance: [f32; 2],
 }
 
 /// A condition and who answers it.
@@ -2498,7 +2506,74 @@ pub fn freeze(
                 id
             });
         let when = conds.all(&e.or::<Vec<String>>(m::WHEN, Vec::new()));
-        MusicDef { name: e.name.clone(), tracks: e.or(m::TRACKS, Vec::new()), dimension, when }
+        let biomes: Vec<u32> = e
+            .or::<Vec<String>>(m::BIOME, Vec::new())
+            .iter()
+            .filter_map(|b| {
+                let id = biome_names.get(b).copied();
+                if id.is_none() {
+                    errors.push(format!("music {} plays in unknown biome {b}", e.name));
+                }
+                id
+            })
+            .collect();
+        let spots: Vec<u32> = e
+            .or::<Vec<String>>(m::SPOT, Vec::new())
+            .iter()
+            .filter_map(|s| {
+                let id = sound_names.get(s).copied();
+                if id.is_none() {
+                    errors.push(format!("music {} spots unknown sound {s}", e.name));
+                }
+                id
+            })
+            .collect();
+        let category = e.text(m::CATEGORY).and_then(|c| {
+            let id = g
+                .sound_categories
+                .iter()
+                .position(|k| k.name == c)
+                .map(|i| i as u32);
+            if id.is_none() {
+                errors.push(format!("music {} follows unknown sound category {c}", e.name));
+            }
+            id
+        });
+        let range = |key, default: [f32; 2]| {
+            let [a, b] = e.or(key, default);
+            [a.min(b).max(0.0), a.max(b).max(0.0)]
+        };
+        let tracks: Vec<String> = e.or(m::TRACKS, Vec::new());
+        let ambient = e.or(m::AMBIENT, 0.0f32);
+        if !(0.0..=1.0).contains(&ambient) {
+            errors.push(format!("music {}: ambient volume {ambient} is outside 0..1", e.name));
+        }
+        let ambient = ambient.clamp(0.0, 1.0);
+        let rain = range(m::RAIN, [0.0, 1.0]).map(|r| r.min(1.0));
+        if ambient == 0.0 {
+            if !spots.is_empty() {
+                errors.push(format!("music {} has spots but no ambient volume, so they never play", e.name));
+            }
+            if !biomes.is_empty() || rain != [0.0, 1.0] || category.is_some() {
+                errors.push(format!("music {}: biome, rain and category only apply to ambient beds; set ambient or drop them", e.name));
+            }
+        } else if tracks.is_empty() && spots.is_empty() {
+            errors.push(format!("music {} is ambient but has no tracks or spots", e.name));
+        }
+        MusicDef {
+            name: e.name.clone(),
+            tracks,
+            dimension,
+            when,
+            ambient,
+            category,
+            biomes,
+            biome_fade: e.or(m::BIOME_FADE, 32.0f32).max(0.0),
+            rain,
+            spots,
+            spot_every: range(m::SPOT_EVERY, [20.0, 60.0]),
+            spot_distance: range(m::SPOT_DISTANCE, [4.0, 16.0]),
+        }
     });
     (g.weathers, _) = tables.bake(kind(ek::WEATHER), ek::WEATHER, mod_name, errors, |e, errors| {
         let mut d = bake_weather(e);

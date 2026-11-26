@@ -2746,7 +2746,54 @@ impl Client {
                     crate::conditions::on_client(Some(self), id, &crate::conditions::Ask { pos: self.player.pos, ..Default::default() })
                 })
                 .collect(),
+            rain: self.look.falls,
+            biome_dist: self.biome_distances(cam.pos),
         }
+    }
+
+    fn biome_distances(&self, pos: DVec3) -> Vec<(u32, f32)> {
+        type Cache = Option<(IVec3, std::time::Instant, Vec<(u32, f32)>)>;
+        thread_local!(static CACHE: std::cell::RefCell<Cache> = const { std::cell::RefCell::new(None) });
+        let at = pos.floor().as_ivec3();
+        CACHE.with_borrow_mut(|cache| {
+            if let Some((block, when, found)) = cache
+                && *block == at
+                && when.elapsed() < std::time::Duration::from_secs(2)
+            {
+                return found.clone();
+            }
+            let found = self.sample_biomes(at);
+            *cache = Some((at, std::time::Instant::now(), found.clone()));
+            found
+        })
+    }
+
+    fn sample_biomes(&self, at: IVec3) -> Vec<(u32, f32)> {
+        const BIOME_SAMPLE_GAP: f32 = 4.0;
+        let reach = (content().game.music.iter())
+            .filter(|m| m.ambient > 0.0 && !m.biomes.is_empty())
+            .map(|m| m.biome_fade)
+            .fold(0.0, f32::max);
+        let mut found: Vec<(u32, f32)> = Vec::new();
+        let mut note = |biome: Option<u16>, distance: f32| {
+            let Some(biome) = biome.map(u32::from) else { return };
+            match found.iter_mut().find(|f| f.0 == biome) {
+                Some(f) => f.1 = f.1.min(distance),
+                None => found.push((biome, distance)),
+            }
+        };
+        note(self.world.biome_at(at), 0.0);
+        let mut ring = BIOME_SAMPLE_GAP;
+        while ring <= reach {
+            let n = ((std::f32::consts::TAU * ring / BIOME_SAMPLE_GAP).ceil() as usize).max(8);
+            for k in 0..n {
+                let angle = k as f32 / n as f32 * std::f32::consts::TAU;
+                let offset = IVec3::new((angle.cos() * ring).round() as i32, 0, (angle.sin() * ring).round() as i32);
+                note(self.world.biome_at(at + offset), ring);
+            }
+            ring += BIOME_SAMPLE_GAP;
+        }
+        found
     }
 
     pub(crate) fn play_audio(
