@@ -584,14 +584,17 @@ impl Audio {
                 }
             }
             let gain = m.ambient * weight;
-            if self.beds.get(&i).is_some_and(|b| {
-                matches!(b.handle.state(), PlaybackState::Stopped | PlaybackState::Stopping)
-            }) {
+            if self
+                .beds
+                .get(&i)
+                .is_some_and(|b| matches!(b.handle.state(), PlaybackState::Stopped | PlaybackState::Stopping))
+            {
                 self.beds.remove(&i);
             }
             if let Some(bed) = self.beds.get_mut(&i) {
                 if (gain - bed.gain).abs() > GAIN_STEP || (gain == 0.0 && bed.gain != 0.0) {
-                    bed.handle.set_volume(db(f64::from(gain.max(SILENT))), follow);
+                    bed.handle
+                        .set_volume(db(f64::from(gain.max(SILENT))), follow);
                     bed.gain = gain;
                 }
                 let stop = if gain > 0.0 {
@@ -611,7 +614,9 @@ impl Audio {
             }
             let track = &m.tracks[(self.random() * m.tracks.len() as f32) as usize % m.tracks.len()];
             let Some(data) = sound_path(assets, track).and_then(|p| {
-                StreamingSoundData::from_file(p).inspect_err(|e| log::warn!("ambient {track}: {e}")).ok()
+                StreamingSoundData::from_file(p)
+                    .inspect_err(|e| log::warn!("ambient {track}: {e}"))
+                    .ok()
             }) else {
                 continue;
             };
@@ -622,7 +627,8 @@ impl Audio {
             let category = m.category.unwrap_or(crate::registry::MUSIC_CATEGORY);
             match self.groups[category as usize].play(data) {
                 Ok(handle) => {
-                    self.beds.insert(i, Bed { handle, gain, silent_since: None });
+                    self.beds
+                        .insert(i, Bed { handle, gain, silent_since: None });
                 }
                 Err(e) => log::warn!("ambient {track}: {e}"),
             }

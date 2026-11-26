@@ -1,9 +1,7 @@
 //! Sound events: block groups (`block.<group>.break|place|step|hit`) blocks pick with
 //! `.sound_group(group)`, and the background music; mobs' voices come with them (`mobs.rs`). Files are in `assets/sounds/`.
 
-use crate::worldgen::statics::{
-    BEACH, BIRCH_FOREST, CLOVER_MEADOW, FOREST, LAVENDER_FIELDS, PLAINS, TALLGRASS_MEADOW,
-};
+use crate::worldgen::statics::{BEACH, BIRCH_FOREST, CLOVER_MEADOW, FOREST, LAVENDER_FIELDS, PLAINS, TALLGRASS_MEADOW};
 use weft_sdk::*;
 
 static SHEEP: Music = Music::named("sheep");

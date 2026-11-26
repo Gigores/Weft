@@ -2529,7 +2529,11 @@ pub fn freeze(
             })
             .collect();
         let category = e.text(m::CATEGORY).and_then(|c| {
-            let id = g.sound_categories.iter().position(|k| k.name == c).map(|i| i as u32);
+            let id = g
+                .sound_categories
+                .iter()
+                .position(|k| k.name == c)
+                .map(|i| i as u32);
             if id.is_none() {
                 errors.push(format!("music {} follows unknown sound category {c}", e.name));
             }
@@ -2551,10 +2555,7 @@ pub fn freeze(
                 errors.push(format!("music {} has spots but no ambient volume, so they never play", e.name));
             }
             if !biomes.is_empty() || rain != [0.0, 1.0] || category.is_some() {
-                errors.push(format!(
-                    "music {}: biome, rain and category only apply to ambient beds; set ambient or drop them",
-                    e.name
-                ));
+                errors.push(format!("music {}: biome, rain and category only apply to ambient beds; set ambient or drop them", e.name));
             }
         } else if tracks.is_empty() && spots.is_empty() {
             errors.push(format!("music {} is ambient but has no tracks or spots", e.name));
