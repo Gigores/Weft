@@ -9,6 +9,9 @@ pub use base_api::blocks::*;
 pub static PRICKED: DamageCause = DamageCause::named("cactus");
 
 static TILLABLE: Tag = Tag::named("tillable");
+static AIR_LIKE: Tag = Tag::named("air_like");
+static NON_FULL_BLOCK: Tag = Tag::named("non_full_block");
+static GRASS_COVER: Condition = Condition::named("grass_cover");
 
 /// A log that grows into a tree of `leaves` (a cone, like a spruce, when `cone`).
 fn log(r: &mut Registry, handle: &'static Block, wood: &str, wood_block: bool) {
@@ -157,11 +160,36 @@ pub fn register(r: &mut Registry) {
             "base:spruce_planks",
         ],
     );
-    r.stairs("#has_shapes").tab(&crate::tabs::BUILDING);
-    r.slabs("#has_shapes").tab(&crate::tabs::BUILDING);
-    r.vertical_slabs("#has_shapes").tab(&crate::tabs::BUILDING);
-    r.beams("#has_shapes").tab(&crate::tabs::BUILDING);
-    r.eighths("#has_shapes").tab(&crate::tabs::BUILDING);
+    r.stairs("#has_shapes")
+        .tag(NON_FULL_BLOCK.name())
+        .tab(&crate::tabs::BUILDING);
+    r.slabs("#has_shapes")
+        .tag(NON_FULL_BLOCK.name())
+        .tab(&crate::tabs::BUILDING);
+    r.vertical_slabs("#has_shapes")
+        .tag(NON_FULL_BLOCK.name())
+        .tab(&crate::tabs::BUILDING);
+    r.beams("#has_shapes")
+        .tag(NON_FULL_BLOCK.name())
+        .tab(&crate::tabs::BUILDING);
+    r.eighths("#has_shapes")
+        .tag(NON_FULL_BLOCK.name())
+        .tab(&crate::tabs::BUILDING);
+    r.condition(&GRASS_COVER, |ctx| {
+        let Some(w) = ctx.world() else { return false };
+        let frame = w.frame().unwrap_or(0);
+        let Some(local) = w
+            .in_space(0)
+            .and_then(|root| root.point_in(frame, ctx.pos()))
+        else {
+            return false;
+        };
+        let above = block_pos_of(local).offset(0, 1, 0);
+        w.block_loaded(above).is_some()
+            && w.parts(above)
+                .into_iter()
+                .all(|block| liquid_of(block).is_none() && (NON_FULL_BLOCK.on_block(block) || AIR_LIKE.on_block(block)))
+    });
     r.block(&STONE)
         .sound_group("stone")
         .hardness(1.5)
@@ -213,6 +241,7 @@ pub fn register(r: &mut Registry) {
         .tag("tillable")
         // Vanilla's pace: a minute or so under a block, many minutes to cover bare dirt.
         .spreads("#grass_spreads_to", 765.0, 9)
+        .spread_when(Cond::new("light(9.., up)") & Cond::from(&GRASS_COVER))
         .smothered_into("dirt", 68.0)
         .tab(&crate::tabs::NATURAL);
     r.block(&SNOWY_GRASS)
