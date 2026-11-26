@@ -24,7 +24,7 @@ fn server_key(address: &str) -> String {
 }
 
 fn saved_path(settings: &Settings) -> std::path::PathBuf {
-    settings.run_dir.join("config").join("recent_servers.json")
+    crate::paths::config(&settings.run_dir).join("recent_servers.json")
 }
 
 fn read_servers(settings: &Settings) -> Vec<SavedServer> {
