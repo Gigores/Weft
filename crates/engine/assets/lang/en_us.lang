@@ -175,6 +175,7 @@ key.core.hotbar8 = Hotbar slot 8
 key.core.hotbar9 = Hotbar slot 9
 hud.hint.inventory = Press {key:core:inventory} to open your inventory
 world.select = Select World
+world.edit = Edit World
 world.create = Create New World
 world.play = Play Selected World
 world.delete = Delete

@@ -164,6 +164,7 @@ key.core.hotbar8 = Case 8 de la barre d'action
 key.core.hotbar9 = Case 9 de la barre d'action
 hud.hint.inventory = Appuyer sur {key:core:inventory} pour ouvrir votre inventaire
 world.select = Sélectionner un monde
+world.edit = Modifier le monde
 world.create = Créer un nouveau monde
 world.play = Jouer dans ce monde
 world.delete = Supprimer

@@ -134,6 +134,7 @@ key.core.hotbar8 = Слот 8
 key.core.hotbar9 = Слот 9
 hud.hint.inventory = Нажмите {key:core:inventory}, чтобы открыть инвентарь
 world.select = Выбор мира
+world.edit = Настройки мира
 world.create = Создать новый мир
 world.play = Играть в выбранном мире
 world.folder = Папка

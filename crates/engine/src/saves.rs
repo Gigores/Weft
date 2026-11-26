@@ -663,11 +663,84 @@ impl Screen for ConfirmDelete {
                         // The screen promised it can be got back, so failing means keeping it.
                         if let Err(e) = std::fs::rename(&dir, &target) {
                             log::error!("could not move {} to the trash, it stays where it is: {e}", dir.display());
+                        } else {
+                            c.requests.push(Request::Close);
                         }
                     }
                     c.requests.push(Request::Close);
                 });
                 back_button(ui, cx, "menu.cancel", &[], 145.0, |c| c.requests.push(Request::Close));
+            });
+        });
+    }
+}
+
+struct WorldEdit {
+    world: WorldMeta,
+    cheats: Rc<std::cell::Cell<bool>>,
+}
+
+impl WorldEdit {
+    fn new(world: WorldMeta) -> Self {
+        crate::config::load_world(&world.configs);
+        Self { cheats: Rc::new(std::cell::Cell::new(world.cheats)), world }
+    }
+}
+
+impl Screen for WorldEdit {
+    fn name(&self) -> &str {
+        "core:world_edit"
+    }
+
+    fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
+        frame(ui, cx, "world.edit", |ui| {
+            label(ui, cx, "world.name", &[], "default");
+            let name = ui.add(Kind::input(&self.world.name, 32), Style::default().h(18.0).w(240.0));
+            ui.set_id(name, "name");
+            let hardcore = is_hardcore(&self.world);
+            let (cheats, shown) = (self.cheats.clone(), self.cheats.clone());
+            let toggle = bound_button(
+                ui,
+                240.0,
+                move || ("world.cheats".into(), vec![on_off(shown.get() && !hardcore)]),
+                move |_| {
+                    if !hardcore {
+                        cheats.set(!cheats.get());
+                    }
+                },
+            );
+            if let Kind::Button { enabled, .. } = &mut ui.nodes[toggle].kind {
+                *enabled = !hardcore;
+            }
+            let rules = button(ui, cx, "world.rules", &[], 240.0, |c| c.requests.push(Request::Screen("core:world_rules".into())));
+            if let Kind::Button { enabled, .. } = &mut ui.nodes[rules].kind {
+                *enabled = !hardcore;
+            }
+            let world = self.world.clone();
+            button(ui, cx, "world.delete", &[], 240.0, move |c| {
+                c.requests
+                    .push(Request::Open(Box::new(ConfirmDelete { world: world.clone() })));
+            });
+            ui.container(Style::row().gap(6.0), |ui| {
+                let (world, cheats) = (self.world.clone(), self.cheats.clone());
+                button(ui, cx, "menu.done", &[], 117.0, move |c| {
+                    if let Some(mut latest) = WorldMeta::load(&world.dir) {
+                        if let Some(name) = c.input_text("name").filter(|s| !s.trim().is_empty()) {
+                            latest.name = name.trim().replace(['\r', '\n'], " ");
+                        }
+                        if !hardcore {
+                            latest.cheats = cheats.get();
+                            let edited = crate::config::world_values();
+                            latest
+                                .configs
+                                .retain(|(name, _)| crate::config::by_name(name).is_none());
+                            latest.configs.extend(edited);
+                        }
+                        latest.save();
+                    }
+                    c.requests.push(Request::Close);
+                });
+                back_button(ui, cx, "menu.cancel", &[], 117.0, |c| c.requests.push(Request::Close));
             });
         });
     }
@@ -734,43 +807,29 @@ impl Screen for WorldSelect {
                 }
                 ui.spacer();
                 let sel = selected.and_then(|i| worlds.get(i)).cloned();
-                let play = button(ui, cx, "world.play", &[], 156.0, move |c| {
-                    if let Some(w) = &sel {
-                        enter(c, w);
+                ui.container(Style::row().gap(4.0), |ui| {
+                    let world = sel.clone();
+                    let play = button(ui, cx, "world.play", &[], 131.0, move |c| {
+                        if let Some(w) = &world {
+                            enter(c, w);
+                        }
+                    });
+                    let edit = crate::mods_screen::icon_button(ui, cx, "button", "menu_editor", "world.edit", &[], move |c| {
+                        if let Some(w) = &sel {
+                            c.requests
+                                .push(Request::Open(Box::new(WorldEdit::new(w.clone()))));
+                        }
+                    });
+                    ui.set_id(play, "play");
+                    ui.set_id(edit, "edit");
+                    ui.nodes[edit].style = Style::default().size(21.0, 20.0).center();
+                    for id in [play, edit] {
+                        if let Kind::Button { enabled, .. } = &mut ui.nodes[id].kind {
+                            *enabled = selected.is_some();
+                        }
                     }
                 });
-                if let Kind::Button { enabled, .. } = &mut ui.nodes[play].kind {
-                    *enabled = selected.is_some();
-                }
-                ui.set_id(play, "play");
                 button(ui, cx, "world.create", &[], 156.0, |c| c.requests.push(Request::Screen("core:create_world".into())));
-                let sel = selected.and_then(|i| worlds.get(i)).cloned();
-                let del = button(ui, cx, "world.delete", &[], 156.0, move |c| {
-                    if let Some(w) = &sel {
-                        c.requests
-                            .push(Request::Open(Box::new(ConfirmDelete { world: w.clone() })));
-                    }
-                });
-                if let Kind::Button { enabled, .. } = &mut ui.nodes[del].kind {
-                    *enabled = selected.is_some();
-                }
-                // The selected world's cheats, changed where it is chosen.
-                let sel = selected.and_then(|i| worlds.get(i)).cloned();
-                let on = sel.as_ref().is_some_and(|w| w.cheats);
-                let cheats = button(ui, cx, "world.cheats", &[on_off(on)], 156.0, move |c| {
-                    if let Some(mut w) = sel.clone() {
-                        w.cheats = !w.cheats;
-                        w.save();
-                        c.requests.push(Request::Rebuild);
-                    }
-                });
-                // Hardcore stays without.
-                let hardcore = selected
-                    .and_then(|i| worlds.get(i))
-                    .is_some_and(is_hardcore);
-                if let Kind::Button { enabled, .. } = &mut ui.nodes[cheats].kind {
-                    *enabled = selected.is_some() && !hardcore;
-                }
                 let dir = cx.settings.run_dir.join("saves");
                 let open = button(ui, cx, "world.folder", &[], 156.0, move |_| crate::packs::open_folder(&dir));
                 ui.set_id(open, "saves_folder");
