@@ -610,13 +610,13 @@ fn settings_links(cx: &BuildCx) -> Vec<(&'static str, &'static str)> {
         ("settings.video", "core:video"),
         ("settings.controls", "core:controls"),
         ("settings.sound", "core:sound"),
-        ("settings.chat", "core:chat_settings"),
+        ("settings.hud", "core:hud_editor"),
         ("settings.accessibility", "core:accessibility"),
         ("settings.language", "core:language"),
         ("settings.resource_packs", "core:resource_packs"),
         ("settings.shader_packs", "core:shader_packs"),
         ("settings.mods", "core:mod_settings"),
-        ("settings.hud", "core:hud_editor"),
+        ("settings.chat", "core:chat_settings"),
     ];
     if cx
         .client

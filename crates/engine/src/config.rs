@@ -487,11 +487,10 @@ pub fn engine_configs(keys: &[(String, String)]) -> Vec<RawEntry> {
     // The settings pages, in the order they show.
     let pages: [(&str, &[&str]); 6] = [
         // What anyone changes now and then; the rest is a page away.
-        ("core:settings", &["fov", "view_distance"]),
+        ("core:settings", &["fov", "view_distance", "gui_scale"]),
         (
             "core:video",
             &[
-                "gui_scale",
                 "render_scale",
                 "brightness",
                 "lod_distance",
