@@ -1217,6 +1217,9 @@ pub fn step(c: &Content, e: &mut Entity, gravity: f64, block: &impl physics::Cel
         moves: physics::Moves { step: if e.item.is_empty() { e.moves.step } else { 0.0 }, ..e.moves },
     };
     let mut v = e.vel * DT;
+    if e.kind == c.game.item_kind {
+        v += physics::liquid_current(c, block, e.pos) * 0.0225;
+    }
     let r = physics::walk(c, block, bodies, e.id, &mut e.pos, &mut v, e.on_ground, &ctl, &frame);
     e.vel = v / DT;
     e.jumped = r.jumped;

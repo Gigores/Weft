@@ -210,6 +210,22 @@ async fn water_flow(t: T, s: [i32; 3]) -> R {
     ] {
         t.check_eq(t.block(add(s, d)).await?, want.into(), &format!("water at {d:?}"));
     }
+    let carrier_at = add(s, [-12, 0, 0]);
+    let carrier = t
+        .op(&format!("spawn testmod:display_carrier {}", at(carrier_at)))
+        .await?;
+    t.op(&format!("put {carrier} 0 stick 1")).await?;
+    let item: u64 = t
+        .op(&format!("drop_stack {carrier} 0 {}", at(add(s, [1, 0, 0]))))
+        .await?
+        .parse()
+        .map_err(|e| format!("dropped item: {e}"))?;
+    t.until("water carries a dropped item downstream", Duration::from_secs(8), |t| {
+        t.c()
+            .entity(item)
+            .is_some_and(|e| e.pos.x > f64::from(s[0]) + 4.0)
+    })
+    .await?;
     Ok(())
 }
 

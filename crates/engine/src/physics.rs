@@ -1606,6 +1606,53 @@ pub fn liquid_surface(c: &Content, block: &impl Cells, at: IVec3) -> Option<(u16
     surface_of(c, block, at, block.liquid(c, at)?)
 }
 
+pub(crate) fn liquid_walls(c: &Content, cells: &impl Cells, at: IVec3) -> Option<u8> {
+    let (main, layout) = cells.cell(at)?;
+    Some(if layout.offsets.is_empty() && layout.covers.is_empty() && layout.extras.len() <= 1 {
+        std::iter::once(main)
+            .chain(layout.extras.iter().copied())
+            .fold(0, |walls, s| walls | c.liquid_walls[s as usize])
+    } else {
+        layout.covered_faces(c, main, true)
+    })
+}
+
+/// Horizontal flow follows the liquid's level gradient, including across a drop.
+pub(crate) fn liquid_current(c: &Content, cells: &impl Cells, pos: DVec3) -> DVec3 {
+    let Some(state) = cells.liquid_block_at(c, pos) else { return DVec3::ZERO };
+    let at = pos.floor().as_ivec3();
+    let Some((liquid, height)) = surface_of(c, cells, at, state) else { return DVec3::ZERO };
+    if pos.y > height {
+        return DVec3::ZERO;
+    }
+    let walls = liquid_walls(c, cells, at).unwrap_or(63);
+    let level = f64::from(c.states[state as usize].level);
+    let mut flow = DVec3::ZERO;
+    let same_liquid = |p| {
+        cells
+            .liquid(c, p)
+            .filter(|&s| c.states[s as usize].liquid == Some(liquid))
+    };
+    for (face, &dir) in crate::world::DIRS.iter().enumerate() {
+        if dir.y != 0 || walls & (1 << face) != 0 {
+            continue;
+        }
+        let next = at + dir;
+        let next_walls = liquid_walls(c, cells, next).unwrap_or(63);
+        if next_walls & (1 << (face ^ 1)) != 0 {
+            continue;
+        }
+        if let Some(other) = same_liquid(next) {
+            flow += dir.as_dvec3() * (f64::from(c.states[other as usize].level) - level);
+        } else if next_walls & (1 << 2) == 0
+            && let Some(other) = same_liquid(next - IVec3::Y)
+        {
+            flow += dir.as_dvec3() * (8.0 + f64::from(c.states[other as usize].level) - level);
+        }
+    }
+    flow.normalize_or_zero()
+}
+
 fn surface_of(c: &Content, block: &impl Cells, at: IVec3, state: u32) -> Option<(u16, f64)> {
     let st = &c.states[state as usize];
     let liquid = st.liquid?;

@@ -50,16 +50,8 @@ impl Dim {
     /// Whether what shares the cell at `p` with a liquid closes its side towards `d`: what its
     /// shape covers whole there (a stair's back), or what its block says (`liquid_walls`).
     fn sealed(&self, space_id: u64, c: &Content, p: IVec3, d: IVec3) -> bool {
-        let space = self.space(space_id);
-        let Some(main) = space.get(p) else { return false };
-        let layout = space.layout(p);
         let Some(dir) = crate::world::DIRS.iter().position(|&v| v == d) else { return false };
-        if layout.offsets.is_empty() && layout.covers.is_empty() && layout.extras.len() <= 1 {
-            return std::iter::once(main)
-                .chain(layout.extras.iter().copied())
-                .any(|s| c.liquid_walls[s as usize] & (1 << dir) != 0);
-        }
-        layout.covered_faces(c, main, true) & (1 << dir) != 0
+        crate::physics::liquid_walls(c, self.space(space_id), p).is_some_and(|walls| walls & (1 << dir) != 0)
     }
 
     /// Room for liquid: neither solid nor a ladder (unloaded counts as solid).
