@@ -578,6 +578,13 @@ pub struct MusicDef {
     pub dimension: Option<u32>,
     /// A condition (`Content::conds`) that holds while it may play.
     pub when: Option<u32>,
+    pub ambient: f32,
+    pub biomes: Vec<u32>,
+    pub biome_fade: f32,
+    pub rain: [f32; 2],
+    pub spots: Vec<u32>,
+    pub spot_every: [f32; 2],
+    pub spot_distance: [f32; 2],
 }
 
 /// A condition and who answers it.
@@ -2498,7 +2505,45 @@ pub fn freeze(
                 id
             });
         let when = conds.all(&e.or::<Vec<String>>(m::WHEN, Vec::new()));
-        MusicDef { name: e.name.clone(), tracks: e.or(m::TRACKS, Vec::new()), dimension, when }
+        let biomes = e
+            .or::<Vec<String>>(m::BIOME, Vec::new())
+            .iter()
+            .filter_map(|b| {
+                let id = biome_names.get(b).copied();
+                if id.is_none() {
+                    errors.push(format!("music {} plays in unknown biome {b}", e.name));
+                }
+                id
+            })
+            .collect();
+        let spots = e
+            .or::<Vec<String>>(m::SPOT, Vec::new())
+            .iter()
+            .filter_map(|s| {
+                let id = sound_names.get(s).copied();
+                if id.is_none() {
+                    errors.push(format!("music {} spots unknown sound {s}", e.name));
+                }
+                id
+            })
+            .collect();
+        let range = |key, default: [f32; 2]| {
+            let [a, b] = e.or(key, default);
+            [a.min(b).max(0.0), a.max(b).max(0.0)]
+        };
+        MusicDef {
+            name: e.name.clone(),
+            tracks: e.or(m::TRACKS, Vec::new()),
+            dimension,
+            when,
+            ambient: e.or(m::AMBIENT, 0.0f32).max(0.0),
+            biomes,
+            biome_fade: e.or(m::BIOME_FADE, 32.0f32).max(0.0),
+            rain: range(m::RAIN, [0.0, 1.0]),
+            spots,
+            spot_every: range(m::SPOT_EVERY, [20.0, 60.0]),
+            spot_distance: range(m::SPOT_DISTANCE, [4.0, 16.0]),
+        }
     });
     (g.weathers, _) = tables.bake(kind(ek::WEATHER), ek::WEATHER, mod_name, errors, |e, errors| {
         let mut d = bake_weather(e);

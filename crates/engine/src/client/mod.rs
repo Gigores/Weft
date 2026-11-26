@@ -2746,7 +2746,42 @@ impl Client {
                     crate::conditions::on_client(Some(self), id, &crate::conditions::Ask { pos: self.player.pos, ..Default::default() })
                 })
                 .collect(),
+            params: crate::audio::AudioParams {
+                biome: self.world.biome_at(cam.pos.floor().as_ivec3()),
+                weather: self.weather_id,
+                rain: self.look.falls,
+                enclosed: self.enclosed(),
+                daylight: self.daylight(),
+            },
+            biome_dist: self.biome_distances(cam.pos),
         }
+    }
+
+    fn biome_distances(&self, pos: DVec3) -> Vec<(u16, f32)> {
+        let reach = (content().game.music.iter())
+            .filter(|m| m.ambient > 0.0 && !m.biomes.is_empty())
+            .map(|m| m.biome_fade)
+            .fold(0.0, f32::max);
+        let at = pos.floor().as_ivec3();
+        let mut found: Vec<(u16, f32)> = Vec::new();
+        let mut note = |biome: Option<u16>, distance: f32| {
+            let Some(biome) = biome else { return };
+            match found.iter_mut().find(|f| f.0 == biome) {
+                Some(f) => f.1 = f.1.min(distance),
+                None => found.push((biome, distance)),
+            }
+        };
+        note(self.world.biome_at(at), 0.0);
+        let mut ring = 4.0f32;
+        while ring <= reach {
+            for k in 0..16 {
+                let angle = k as f32 / 16.0 * std::f32::consts::TAU;
+                let p = at + IVec3::new((angle.cos() * ring) as i32, 0, (angle.sin() * ring) as i32);
+                note(self.world.biome_at(p), ring);
+            }
+            ring += 4.0;
+        }
+        found
     }
 
     pub(crate) fn play_audio(

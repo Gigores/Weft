@@ -145,6 +145,13 @@ pub mod music {
     pub static TRACKS: Component<Vec<String>, Music> = Component::named(m::TRACKS);
     pub static DIMENSION: Component<Text, Music> = Component::named(m::DIMENSION);
     pub static WHEN: Component<Vec<String>, Music> = Component::named(m::WHEN);
+    pub static AMBIENT: Component<f32, Music> = Component::named(m::AMBIENT);
+    pub static BIOME: Component<Vec<String>, Music> = Component::named(m::BIOME);
+    pub static BIOME_FADE: Component<f32, Music> = Component::named(m::BIOME_FADE);
+    pub static RAIN: Component<[f32; 2], Music> = Component::named(m::RAIN);
+    pub static SPOT: Component<Vec<String>, Music> = Component::named(m::SPOT);
+    pub static SPOT_EVERY: Component<[f32; 2], Music> = Component::named(m::SPOT_EVERY);
+    pub static SPOT_DISTANCE: Component<[f32; 2], Music> = Component::named(m::SPOT_DISTANCE);
 }
 
 /// What a camera mode is made of: a tag per flag (`abi::comp::camera::FLAGS`) and these.

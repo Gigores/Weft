@@ -86,6 +86,15 @@ impl Default for Acoustics {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AudioParams {
+    pub biome: Option<u16>,
+    pub weather: u16,
+    pub rain: f32,
+    pub enclosed: bool,
+    pub daylight: f32,
+}
+
 /// Where the listener is, for positions and the environment.
 pub struct Listener {
     pub pos: DVec3,
@@ -95,6 +104,8 @@ pub struct Listener {
     pub dim: u32,
     /// The conditions music asks for that hold now, by id.
     pub holds: Vec<u32>,
+    pub params: AudioParams,
+    pub biome_dist: Vec<(u16, f32)>,
 }
 
 pub struct Audio {
@@ -115,6 +126,8 @@ pub struct Audio {
     globs: FxHashMap<String, Vec<String>>,
     music: Option<StreamingSoundHandle<kira::sound::FromFileError>>,
     next_music: Instant,
+    beds: FxHashMap<usize, (StaticSoundHandle, f32)>,
+    spots: FxHashMap<usize, Instant>,
     state: Acoustics,
     /// Per category, then the master volume.
     volumes: Vec<f64>,
@@ -370,6 +383,8 @@ impl Audio {
                 globs: FxHashMap::default(),
                 music: None,
                 next_music: Instant::now() + Duration::from_secs(20),
+                beds: FxHashMap::default(),
+                spots: FxHashMap::default(),
                 state: acoustics,
                 volumes: Vec::new(),
                 rng: weft_noise::Rng(0x2545_F491_4F6C_DD1D),
@@ -509,6 +524,7 @@ impl Audio {
                 m.stop(Tween { duration: Duration::from_secs(2), ..Default::default() });
                 self.music = None;
             }
+            self.beds(assets, None);
             return;
         };
         let orientation = Quat::from_rotation_y(l.yaw) * Quat::from_rotation_x(l.pitch);
@@ -517,6 +533,108 @@ impl Audio {
         if self.active && !local_playing {
             self.music(assets, l);
         }
+        self.beds(assets, Some(l));
+    }
+
+    fn beds(&mut self, assets: &Assets, l: Option<&Listener>) {
+        let fade = Tween { duration: Duration::from_secs(3), ..Default::default() };
+        let follow = Tween { duration: Duration::from_secs(1), ..Default::default() };
+        for (i, m) in content()
+            .game
+            .music
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.ambient > 0.0)
+        {
+            let weight = l.map_or(0.0, |l| {
+                let holds = m.dimension.is_none_or(|d| d == l.dim)
+                    && m.when.iter().all(|w| l.holds.contains(w))
+                    && (m.rain[0]..=m.rain[1]).contains(&l.params.rain);
+                if !holds {
+                    return 0.0;
+                }
+                if m.biomes.is_empty() {
+                    return 1.0;
+                }
+                let near = |&(_, d): &(u16, f32)| match d {
+                    d if d <= 0.0 => 1.0,
+                    d if m.biome_fade > 0.0 => (1.0 - d / m.biome_fade).max(0.0),
+                    _ => 0.0,
+                };
+                (m.biomes.iter())
+                    .filter_map(|&b| l.biome_dist.iter().find(|&&(id, _)| u32::from(id) == b))
+                    .map(near)
+                    .fold(0.0, f32::max)
+            });
+            if let Some(l) = l.filter(|_| weight > 0.0) {
+                self.spot(assets, i, m, l, weight);
+            } else {
+                self.spots.remove(&i);
+            }
+            let gain = m.ambient * weight;
+            let playing = self
+                .beds
+                .get(&i)
+                .is_some_and(|(h, _)| h.state() == PlaybackState::Playing);
+            if weight <= 0.0 {
+                if let Some((h, _)) = self.beds.get_mut(&i).filter(|_| playing) {
+                    h.stop(fade);
+                }
+                continue;
+            }
+            if playing {
+                if let Some((h, last)) = self.beds.get_mut(&i)
+                    && (gain - *last).abs() > 0.005
+                {
+                    h.set_volume(db(f64::from(gain)), follow);
+                    *last = gain;
+                }
+                continue;
+            }
+            if m.tracks.is_empty() {
+                continue;
+            }
+            let track = &m.tracks[(self.random() * m.tracks.len() as f32) as usize % m.tracks.len()];
+            let Some(data) = self.file(assets, track) else { continue };
+            let data = data
+                .loop_region(..)
+                .volume(db(f64::from(gain)))
+                .fade_in_tween(fade);
+            match self.groups[crate::registry::MUSIC_CATEGORY as usize].play(data) {
+                Ok(h) => {
+                    self.beds.insert(i, (h, gain));
+                }
+                Err(e) => log::warn!("ambient {track}: {e}"),
+            }
+        }
+    }
+
+    fn spot(&mut self, assets: &Assets, i: usize, m: &crate::registry::MusicDef, l: &Listener, weight: f32) {
+        if m.spots.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let gap = |audio: &mut Self| {
+            let [min, max] = m.spot_every;
+            now + Duration::from_secs_f32(min + (max - min) * audio.random())
+        };
+        let Some(&due) = self.spots.get(&i) else {
+            let first = gap(self);
+            self.spots.insert(i, first);
+            return;
+        };
+        if now < due {
+            return;
+        }
+        let next = gap(self);
+        self.spots.insert(i, next);
+        let sound = m.spots[(self.random() * m.spots.len() as f32) as usize % m.spots.len()];
+        let [near, far] = m.spot_distance;
+        let pos = (far > 0.0).then(|| {
+            let (angle, away) = (self.random() * std::f32::consts::TAU, near + (far - near) * self.random());
+            l.pos + DVec3::new(f64::from(angle.cos() * away), 0.0, f64::from(angle.sin() * away))
+        });
+        self.play(assets, Play { sound, pos, volume: m.ambient.max(0.01) * weight, pitch: 0.0 });
     }
 
     pub(crate) fn start_local(
@@ -592,7 +710,7 @@ impl Audio {
             .game
             .music
             .iter()
-            .find(|m| fits(m) && !m.tracks.is_empty())
+            .find(|m| m.ambient == 0.0 && fits(m) && !m.tracks.is_empty())
         else {
             return;
         };
