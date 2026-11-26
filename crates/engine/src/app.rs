@@ -2577,7 +2577,7 @@ fn handle_disconnect(r: &mut Running) {
         r.leave_world_silent();
         r.screens.clear();
         r.open(screens::engine("core:title"));
-        r.open(Box::new(screens::Message { title: "multiplayer.disconnected".into(), args: vec![Arg::Text(reason)] }));
+        r.open(Box::new(screens::Message::join_error(reason)));
     }
 }
 
@@ -2651,6 +2651,7 @@ fn layout_uis(r: &mut Running, scale: f32) -> f32 {
     // A phone's keyboard covers the bottom of the window: screens are laid out above it, so the
     // chat line stays in sight while it is typed in. The HUD keeps the whole window.
     let screen_size = Vec2::new(gui_size.x, visible_height(r).map_or(gui_size.y, |h| (h / scale).min(gui_size.y)));
+    let update_hud = r.hud.ui.dirty || r.hud.ui.size != gui_size || r.hud.ui.text_unit != text_unit;
     {
         let mut uis: Vec<(&mut Ui, Vec2)> = Vec::new();
         if r.game.is_some() || r.hud.editing() {
@@ -2665,6 +2666,9 @@ fn layout_uis(r: &mut Running, scale: f32) -> f32 {
                 r.quads_dirty = true;
             }
         }
+    }
+    if update_hud {
+        r.hud.hide_covered_elements();
     }
     text_unit
 }

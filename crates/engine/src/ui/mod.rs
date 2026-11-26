@@ -323,6 +323,7 @@ pub struct Node {
     pub scrollbar: Option<Scrollbar>,
     /// Opens the recipes of the open menu when clicked (`ui.recipe_arrow`).
     pub recipes: bool,
+    pub hidden: bool,
 }
 
 /// A recipe arrow's size in GUI pixels, wherever one is drawn.
@@ -552,6 +553,7 @@ impl Ui {
             clip: None,
             scrollbar: None,
             recipes: false,
+            hidden: false,
         };
         Ui {
             nodes: vec![root],
@@ -673,6 +675,7 @@ impl Ui {
             clip: None,
             scrollbar: None,
             recipes: false,
+            hidden: false,
         });
         let parent = *self.stack.last().unwrap();
         self.nodes[parent].children.push(id);
@@ -1067,7 +1070,7 @@ impl Ui {
     pub fn hit(&self, p: Vec2) -> Option<NodeId> {
         fn walk(ui: &Ui, id: NodeId, p: Vec2, in_button: bool, best: &mut Option<NodeId>) {
             let n = &ui.nodes[id];
-            if (!n.rect.contains(p) || n.clip.is_some_and(|c| !c.contains(p))) && id != 0 {
+            if n.hidden || (!n.rect.contains(p) || n.clip.is_some_and(|c| !c.contains(p))) && id != 0 {
                 return;
             }
             let button = matches!(n.kind, Kind::Button { .. });

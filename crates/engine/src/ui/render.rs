@@ -1135,6 +1135,9 @@ impl UiRenderer {
         surface: Option<&str>,
     ) {
         let n = &ui.nodes[id];
+        if n.hidden {
+            return;
+        }
         let r = Rect { x: n.rect.x * scale, y: n.rect.y * scale, w: n.rect.w * scale, h: n.rect.h * scale };
         let (quad_start, icon_start) = (self.quads.len(), icons.len());
         let stack_start = self.stacks.len();

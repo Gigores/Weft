@@ -323,6 +323,26 @@ impl Hud {
         self.ui.find(&format!("hud:{name}"))
     }
 
+    /// Apply the player list's occlusion after layout so custom HUD positions are honored.
+    pub fn hide_covered_elements(&mut self) {
+        if self.editing() {
+            return;
+        }
+        let list = self.element_node("core:player_list");
+        let cover = list
+            .and_then(|id| self.ui.nodes[id].children.first())
+            .map(|&id| self.ui.nodes[id].rect);
+        for name in &self.names {
+            if let Some(id) = self.element_node(name) {
+                self.ui.nodes[id].hidden = Some(id) != list
+                    && cover.is_some_and(|cover| {
+                        let overlap = self.ui.nodes[id].rect.intersect(cover);
+                        overlap.w > 0.0 && overlap.h > 0.0
+                    });
+            }
+        }
+    }
+
     pub fn element_rect(&self, name: &str) -> Option<Rect> {
         self.element_node(name).map(|n| self.ui.nodes[n].rect)
     }
@@ -543,6 +563,7 @@ impl Hud {
                 let p = self.layout.get(&name).cloned().unwrap_or_default();
                 let at = match part {
                     Part::Place(i) if p.flow.is_none() => p.at.or(places()[i].at),
+                    Part::PlayerList if p.flow.is_none() => p.at.or(Some([0.5, 0.0, 0.0, 12.0])),
                     _ => p.at,
                 };
                 let (anchor, order) = p.flow.unwrap_or((anchor, order));
@@ -641,9 +662,7 @@ impl Hud {
                 });
             }
             Part::PlayerList if list_shown || editing => {
-                let mut style = Style::default().pad(4.0).gap(1.0);
-                style.at = Some([0.0, 12.0 - ui.size.y / 2.0, 0.5, 0.0]);
-                ui.panel("panel", style, |ui| {
+                ui.panel("panel", Style::default().pad(4.0).gap(1.0), |ui| {
                     for name in client.into_iter().flat_map(|cl| &cl.players) {
                         ui.text(text::rich(&text::escape(name), lang, None), "label");
                     }
