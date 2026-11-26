@@ -501,10 +501,6 @@ impl App {
 
         let mut roots: Vec<(String, PathBuf)> = vec![("core".into(), core_assets)];
         roots.extend(mods.iter().map(|m| (m.id.clone(), m.assets.clone())));
-        // Not in automated runs: their pictures are compared against fixed expectations.
-        if !self.opts.automated {
-            crate::minecraft::ensure_pack(&self.opts.run_dir, &roots);
-        }
         let packs_now = (crate::settings::resource_packs(), crate::settings::shader_pack());
         let packs = crate::packs::enabled(&self.opts.run_dir, &crate::settings::resource_packs());
         crate::packs::set_shader_pack(

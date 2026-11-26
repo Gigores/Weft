@@ -30,7 +30,6 @@ pub mod hud_editor;
 pub mod input;
 pub mod log;
 pub mod loot;
-pub mod minecraft;
 pub mod mod_index;
 pub mod model;
 pub mod modloader;
