@@ -17,7 +17,7 @@ use crate::settings::Settings;
 
 const ALPN: &[u8] = b"weft/1";
 // Peers must agree on deterministic terrain and weather as well as the wire format.
-const PROTOCOL: u32 = 29;
+const PROTOCOL: u32 = 30;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn runtime() -> &'static tokio::runtime::Runtime {
@@ -374,7 +374,7 @@ async fn accept(incoming: iroh::endpoint::Incoming, connect: crossbeam_channel::
     let (to_server_tx, to_server_rx) = unbounded::<ToServer>();
     let (to_client_tx, to_client_rx) = unbounded::<ToClient>();
     connect
-        .send(Conn::new(to_client_tx, to_server_rx))
+        .send(Conn::new(to_client_tx, to_server_rx).with_transport(conn.clone()))
         .map_err(|_| "server stopped")?;
     let peer_key = peer.to_string();
     // Incoming: the authenticated key replaces whatever key the client claims.

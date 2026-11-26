@@ -546,6 +546,20 @@ impl EntityRenderer {
         }
     }
 
+    pub fn player_skin(&self, entity: u64) -> Option<(u32, [u32; 2])> {
+        self.player_skins
+            .get(&entity)
+            .map(|s| (s.index, s.size))
+            .or_else(|| {
+                let c = content();
+                let (_, index, size) = self
+                    .skins
+                    .get(&c.game.entities[c.game.player_kind as usize].texture)?
+                    .as_ref()?;
+                Some((*index, *size))
+            })
+    }
+
     /// Uploads the player's skin with the model chosen in their profile.
     pub fn set_skin(&mut self, gpu: &mut dyn Backend, entity: u64, skin: &crate::net::Skin) {
         let Some(img) = crate::assets::decode_png(&skin.png) else { return };

@@ -104,6 +104,7 @@ pub struct ServerConfig {
     pub dedicated: bool,
     /// Who may join: keys, one a line. No file, anyone.
     pub whitelist: Option<std::path::PathBuf>,
+    pub player_list: std::path::PathBuf,
 }
 
 /// Which opening of a world this is (`World::session`): one more for each server started.
@@ -251,7 +252,8 @@ pub struct Server {
     shared: Arc<Shared>,
     next_id: Arc<AtomicU64>,
     /// Names last sent to clients as the online list.
-    online: Vec<String>,
+    online: Vec<crate::net::PlayerListEntry>,
+    player_list_text: std::collections::HashMap<String, String>,
     /// Generated and inserted totals at the last `load` report.
     load_seen: (u64, u64),
     /// World rule values by rule id.
@@ -472,7 +474,6 @@ impl Server {
             .as_ref()
             .map_or(Vec::new(), |s| s.meta.forced.clone());
         let mut server = Server {
-            cfg,
             dims,
             players: Vec::new(),
             identities,
@@ -486,6 +487,17 @@ impl Server {
             shared,
             next_id,
             online: Vec::new(),
+            player_list_text: std::fs::read(&cfg.player_list)
+                .ok()
+                .and_then(|bytes| match serde_json::from_slice(&bytes) {
+                    Ok(text) => Some(text),
+                    Err(e) => {
+                        log::warn!("{}: {e}", cfg.player_list.display());
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+            cfg,
             tick_rate: TPS,
             frozen: false,
             steps: 0,
@@ -708,17 +720,34 @@ impl Server {
                 true
             }
         });
-        let online: Vec<String> = self
-            .players
-            .iter()
-            .filter(|p| p.joined)
-            .map(|p| p.identity.name.clone())
-            .collect();
-        if online != self.online {
-            for p in self.players.iter_mut().filter(|p| p.joined) {
-                p.conn.send(ToClient::Players(online.clone()));
+        if self.tick % 20 == 0 || self.online.len() != self.players.iter().filter(|p| p.joined).count() {
+            let online: Vec<_> = self
+                .players
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.joined)
+                .map(|(i, p)| {
+                    let display = self
+                        .player_list_text
+                        .get(&p.identity.key)
+                        .or_else(|| self.player_list_text.get(&p.identity.name))
+                        .or_else(|| self.player_list_text.get("*"))
+                        .map(|s| s.replace("{name}", &crate::ui::text::escape(&p.identity.name)));
+                    crate::net::PlayerListEntry {
+                        entity: p.entity,
+                        name: p.identity.name.clone(),
+                        operator: self.permission_of(i) > abi::permission::EVERYONE,
+                        ping_ms: p.conn.ping_ms(),
+                        display,
+                    }
+                })
+                .collect();
+            if online != self.online {
+                for p in self.players.iter_mut().filter(|p| p.joined) {
+                    p.conn.send(ToClient::Players(online.clone()));
+                }
+                self.online = online;
             }
-            self.online = online;
         }
         if self.tick % 10 == 0 {
             for d in &mut self.dims {

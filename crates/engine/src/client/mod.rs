@@ -741,6 +741,8 @@ pub struct Client {
     pub held_name: (ItemStack, Instant),
     /// Names of the players online, for completion.
     pub players: Vec<String>,
+    pub player_list: Vec<crate::net::PlayerListEntry>,
+    pub player_list_revision: u64,
     /// Lines this player sent, oldest first (chat history).
     pub sent: Vec<String>,
     /// Mouse button and slots of a drag in progress in a menu.
@@ -1093,6 +1095,8 @@ impl Client {
             picking: Vec::new(),
             last_click: None,
             players: Vec::new(),
+            player_list: Vec::new(),
+            player_list_revision: 0,
             sent: Vec::new(),
             held_name: (ItemStack::EMPTY, Instant::now()),
             mode: GameMode::SURVIVAL,
@@ -3095,6 +3099,10 @@ impl Client {
 
     /// The block looked at: the world's or a structure's, whichever the ray enters first.
     fn raycast(&self, eye: DVec3, look: DVec3, reach: f64) -> Option<Hit> {
+        self.raycast_blocks(eye, look, reach, weft_abi::ray::BLOCKS)
+    }
+
+    fn raycast_blocks(&self, eye: DVec3, look: DVec3, reach: f64, flags: u32) -> Option<Hit> {
         let world = &self.world;
         let now = self.body_tick(self.body_clock - STEP + self.accum);
         let structures: Vec<(u64, physics::Transform, &dyn physics::Blocks)> = self
@@ -3106,7 +3114,34 @@ impl Client {
                     .map(|s| (id, e.place_at(now), s as &dyn physics::Blocks))
             })
             .collect();
-        physics::pick(content(), &world::SeenCells { world, air_if_missing: false }, &structures, eye, look, reach, weft_abi::ray::BLOCKS)
+        physics::pick(content(), &world::SeenCells { world, air_if_missing: false }, &structures, eye, look, reach, flags)
+    }
+
+    pub fn player_tag_anchor(&self, id: u64) -> Option<DVec3> {
+        let e = self.entities.get(&id)?;
+        let c = content();
+        if e.hidden_mode
+            || e.dying.is_some()
+            || e.effects.iter().any(|f| {
+                f.until > self.ticks()
+                    && c.game
+                        .entity_effects
+                        .get(f.id as usize)
+                        .is_some_and(|d| d.hides)
+            })
+        {
+            return None;
+        }
+        Some(e.pos + DVec3::Y * (e.dims().height + 0.06))
+    }
+
+    pub fn player_tag_visible(&self, eye: DVec3, pos: DVec3) -> bool {
+        let delta = pos - eye;
+        let distance = delta.length();
+        distance > 0.1
+            && self
+                .raycast_blocks(eye, delta / distance, distance, weft_abi::ray::BLOCKS | weft_abi::ray::SOLID)
+                .is_none()
     }
 
     /// Server tick (fractional) bodies are shown at when the client clock reads `clock`.

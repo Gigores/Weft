@@ -206,7 +206,11 @@ impl Client {
                     }
                 }
             }
-            ToClient::Players(names) => self.players = names,
+            ToClient::Players(entries) => {
+                self.players = entries.iter().map(|p| p.name.clone()).collect();
+                self.player_list = entries;
+                self.player_list_revision = self.player_list_revision.wrapping_add(1);
+            }
             ToClient::Inventory(slots) => {
                 for (i, s) in slots {
                     if let Some(dst) = self.inventory.get_mut(i as usize) {
@@ -329,7 +333,10 @@ impl Client {
                     crate::config::put_from_server(id, v);
                 }
             }
-            ToClient::Skin { entity, skin } => self.entity_render.skin_pending.push((entity, skin)),
+            ToClient::Skin { entity, skin } => {
+                self.entity_render.skin_pending.push((entity, skin));
+                self.player_list_revision = self.player_list_revision.wrapping_add(1);
+            }
             ToClient::Avatar { entity, avatar } => self
                 .entity_render
                 .avatar_pending

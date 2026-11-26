@@ -876,7 +876,9 @@ impl Running {
         let dir = storage.meta.dir.clone();
         let view = crate::settings::view_distance();
         let preload_view = if self.entering.is_some() || self.gpu.compiling() { view.min(NEAR + 2) } else { view };
-        let server = server::spawn(ServerConfig { seed, view_radius: preload_view, dedicated: false, whitelist: None }, Some(storage));
+        let player_list = crate::paths::config(&self.settings.run_dir).join("player_list.json");
+        let server =
+            server::spawn(ServerConfig { seed, view_radius: preload_view, dedicated: false, whitelist: None, player_list }, Some(storage));
         let (mut conn, server_conn) = net::local_pair();
         let _ = server.connect.send(server_conn);
         let key = net::p2p::player_key(&self.settings.run_dir);
@@ -2786,7 +2788,7 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
     }
     // Gizmo labels and mods' screen text: text nodes placed at points (GUI pixels), the same
     // text as anywhere else.
-    let mut labels: Vec<(f32, f32, &crate::ui::text::Msg, u32, f32)> = Vec::new();
+    let mut labels = Vec::new();
     if let Some(g) = &r.game {
         let cam = g.client.render_camera();
         let view_proj = cam.proj(info.width as f32 / info.height.max(1) as f32) * cam.view();
@@ -2796,23 +2798,37 @@ fn draw_overlays(r: &mut Running, info: &weft_render::FrameInfo, scale: f32, tex
                 continue;
             }
             let (x, y) = ((clip.x / clip.w * 0.5 + 0.5) * info.width as f32, (0.5 - clip.y / clip.w * 0.5) * info.height as f32);
-            labels.push((x / scale, y / scale - 4.0, text, *color, *size));
+            labels.push((x / scale, y / scale - 4.0, text.spans(&r.lang, Some(&r.input)), *color, *size, 0.0));
+        }
+        if r.screens.is_empty() && !r.hud_off && !hud_hidden() && g.client.camera_has(crate::tag_bits::camera::HUD) {
+            for p in &g.client.player_list {
+                let Some(pos) = g.client.player_tag_anchor(p.entity) else { continue };
+                let offset = pos - cam.pos;
+                if offset.length_squared() > 32.0 * 32.0 {
+                    continue;
+                }
+                let clip = view_proj * offset.as_vec3().extend(1.0);
+                if clip.w <= 0.1 || clip.x.abs() > clip.w || clip.y.abs() > clip.w || !g.client.player_tag_visible(cam.pos, pos) {
+                    continue;
+                }
+                let x = (clip.x / clip.w * 0.5 + 0.5) * info.width as f32;
+                let y = (0.5 - clip.y / clip.w * 0.5) * info.height as f32;
+                labels.push((x / scale, y / scale, crate::ui::text::plain(&p.name), 0xFFFFFFFF, 0.85, 1.0));
+            }
         }
     }
     let (sw, sh) = r.gpu.surface_size();
     if !hud_hidden() && !(r.hud_off && r.screens.is_empty()) {
-        labels.extend(
-            r.mod_screen_text
-                .iter()
-                .map(|(x, y, text, color, size)| (x * sw as f32 / scale, y * sh as f32 / scale, text, *color, *size)),
-        );
+        labels.extend(r.mod_screen_text.iter().map(|(x, y, text, color, size)| {
+            (x * sw as f32 / scale, y * sh as f32 / scale, text.spans(&r.lang, Some(&r.input)), *color, *size, 0.0)
+        }));
     }
     if !labels.is_empty() {
         let mut o = crate::ui::Ui::new();
         o.text_unit = text_unit;
-        for (x, y, text, color, size) in labels {
-            let id = o.text(text.spans(&r.lang, Some(&r.input)), "label");
-            o.nodes[id].style = crate::ui::Style::default().at(x, y, [0.5, 0.0]);
+        for (x, y, text, color, size, anchor_y) in labels {
+            let id = o.text(text, "label");
+            o.nodes[id].style = crate::ui::Style::default().at(x, y, [0.5, anchor_y]);
             if let crate::ui::Kind::Text(t) = &mut o.nodes[id].kind {
                 t.wrap = false;
                 t.color = Some(color);

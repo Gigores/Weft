@@ -84,6 +84,17 @@ wire_struct! {
 }
 
 wire_struct! {
+    #[derive(Clone, PartialEq, Eq)]
+    pub struct PlayerListEntry {
+        pub entity: u64,
+        pub name: String,
+        pub operator: bool,
+        pub ping_ms: Option<u32>,
+        pub display: Option<String>,
+    }
+}
+
+wire_struct! {
     schema;
     #[derive(Default)]
     pub struct HealthField { pub current: f32, pub maximum: f32 }
@@ -465,7 +476,7 @@ messages! {
         /// A use (right click) did something: the arm swings, and dips if the held item was used.
         Swing { used_item: bool, off_hand: bool },
         /// Everyone online, sent when someone joins or leaves.
-        Players(Vec<String>),
+        Players(Vec<PlayerListEntry>),
         /// Own inventory: (slot, stack) for changed slots.
         Inventory(Vec<(u32, ItemStack)>),
         /// Own synced components: (component id, bytes).
@@ -617,11 +628,24 @@ pub struct Conn<S, R> {
     tx: Sender<S>,
     rx: Receiver<R>,
     closed: bool,
+    transport: Option<iroh::endpoint::Connection>,
 }
 
 impl<S: Message, R> Conn<S, R> {
     pub fn new(tx: Sender<S>, rx: Receiver<R>) -> Self {
-        Conn { tx, rx, closed: false }
+        Conn { tx, rx, closed: false, transport: None }
+    }
+
+    fn with_transport(mut self, transport: iroh::endpoint::Connection) -> Self {
+        self.transport = Some(transport);
+        self
+    }
+
+    pub(crate) fn ping_ms(&self) -> Option<u32> {
+        let Some(conn) = &self.transport else { return Some(0) };
+        let paths = conn.paths();
+        let path = paths.iter().find(|p| p.is_selected())?;
+        Some(path.rtt().as_millis().min(u32::MAX as u128) as u32)
     }
 
     pub fn send(&mut self, m: S) {

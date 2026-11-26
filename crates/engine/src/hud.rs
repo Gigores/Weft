@@ -47,6 +47,8 @@ pub const TAG_CROSSHAIR: u32 = 2;
 pub const TAG_EFFECT: u32 = 3;
 const TAG_EDIT_GRID: u32 = 4;
 const TAG_OFFHAND: u32 = 5;
+const TAG_PLAYER_FACE: u32 = 6;
+const TAG_PLAYER_SIGNAL: u32 = 7;
 
 /// The status effects the local player has now, beneficial ones first: effect, level, ticks left
 /// (`u64::MAX` for good).
@@ -261,7 +263,7 @@ struct Placed {
 pub struct Hud {
     pub ui: Ui,
     revisions: Vec<u64>,
-    key: Option<(bool, usize, [u32; 3], bool, bool, u32, u8, (i32, i32), (u32, u32, u8, bool), u64, (bool, [i32; 2], u64))>,
+    key: Option<(bool, usize, [u32; 3], (bool, u64), bool, u32, u8, (i32, i32), (u32, u32, u8, bool), u64, (bool, [i32; 2], u64))>,
     helm_held: u64,
     by_face_placement: bool,
     /// Player overrides from `config/hud.txt` by element name.
@@ -467,7 +469,12 @@ impl Hud {
             debug,
             chat_visible,
             [chat.width as u32, chat.closed_height as u32, chat.dim as u32],
-            list_shown,
+            (
+                list_shown,
+                client
+                    .filter(|_| list_shown || self.editing())
+                    .map_or(0, |cl| cl.player_list_revision),
+            ),
             client.is_some_and(|cl| cl.dead),
             groups,
             client.map_or(0, |cl| cl.mode.0 as u8),
@@ -662,11 +669,47 @@ impl Hud {
                 });
             }
             Part::PlayerList if list_shown || editing => {
-                ui.panel("panel", Style::default().pad(4.0).gap(1.0), |ui| {
-                    for name in client.into_iter().flat_map(|cl| &cl.players) {
-                        ui.text(text::rich(&text::escape(name), lang, None), "label");
-                    }
-                });
+                ui.panel(
+                    "panel",
+                    Style::default()
+                        .pad(5.0)
+                        .gap(2.0)
+                        .align(Align::Stretch)
+                        .w(176.0),
+                    |ui| {
+                        for (i, player) in client
+                            .into_iter()
+                            .flat_map(|cl| &cl.player_list)
+                            .enumerate()
+                        {
+                            if i > 0 {
+                                let mut line = Style::default().h(0.5);
+                                line.fill = Some(0xFFFFFF28);
+                                ui.container(line, |_| {});
+                            }
+                            ui.container(Style::row().gap(4.0).align(Align::Center), |ui| {
+                                ui.add(Kind::Custom { tag: TAG_PLAYER_FACE, data: player.entity }, Style::default().size(8.0, 8.0));
+                                let name = player
+                                    .display
+                                    .as_deref()
+                                    .map_or_else(|| text::plain(&player.name), |s| text::rich(s, lang, None));
+                                ui.container(Style::default().w(0.0).grow(), |ui| {
+                                    let id = ui.text(name, "label");
+                                    if player.operator && player.display.is_none() {
+                                        ui.text_mut(id).unwrap().color = Some(0xFFFF55FF);
+                                    }
+                                });
+                                let ping = player.ping_ms.map_or("—".into(), |ms| format!("{ms} ms"));
+                                let id = ui.text(text::plain(&ping), "dim");
+                                ui.text_mut(id).unwrap().wrap = false;
+                                ui.add(
+                                    Kind::Custom { tag: TAG_PLAYER_SIGNAL, data: player.ping_ms.map_or(u64::MAX, u64::from) },
+                                    Style::default().size(9.0, 8.0),
+                                );
+                            });
+                        }
+                    },
+                );
             }
             Part::PlayerList => {}
             Part::Chat => {
@@ -1181,6 +1224,30 @@ pub fn draw_custom(
     drag: Option<&DragPreview>,
 ) {
     match tag {
+        TAG_PLAYER_FACE => {
+            if let Some((tex, [w, h])) = client.and_then(|cl| cl.entity_render.player_skin(data)) {
+                for x in [8, 40] {
+                    let (w, h) = (w as f32, h as f32);
+                    ren.image(r, tex, [x as f32 / w, 8.0 / h, (x + 8) as f32 / w, 16.0 / h], 0xFFFFFFFF);
+                }
+            }
+        }
+        TAG_PLAYER_SIGNAL => {
+            let bars = match data {
+                0..=50 => 4,
+                51..=120 => 3,
+                121..=220 => 2,
+                221..=500 => 1,
+                _ => 0,
+            };
+            for i in 0..4 {
+                let h = (i + 1) as f32 * 2.0 * scale;
+                ren.rect(
+                    Rect { x: r.x + i as f32 * 2.0 * scale, y: r.y + r.h - h, w: scale, h },
+                    if i < bars { 0x9CC663FF } else { 0xFFFFFF35 },
+                );
+            }
+        }
         TAG_CROSSHAIR => loaded(ren, look, "crosshair", r, scale),
         TAG_EDIT_GRID => {
             let step = crate::hud_editor::GRID * scale;
