@@ -1474,6 +1474,7 @@ impl EntityRenderer {
         breaking: &[Crack],
         gizmo_lines: &[super::gizmo::Line],
         gizmo_fills: &[super::gizmo::Fill],
+        signs: &[GpuBox],
         late: &mut CommandList,
         mut sun: Option<(super::sun_shadow::SunView, BufferId, &mut CommandList)>,
         only_shadow_view: bool,
@@ -1795,6 +1796,7 @@ impl EntityRenderer {
             outline_boxes(&mut boxes, std::iter::once(selection).chain(preview), root);
         }
         gizmo_line_boxes(&mut boxes, gizmo_lines, cam.pos);
+        boxes.extend_from_slice(signs);
         let overlay_start = boxes.len();
         gizmo_fill_boxes(&mut boxes, gizmo_fills, cam.pos);
         crack_boxes(&mut boxes, breaking, textures, cam.pos, light);

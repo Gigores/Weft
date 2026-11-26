@@ -9,3 +9,4 @@ pub static INVENTORY: Menu = Menu::named("base:inventory");
 pub static MUSIC_PLAYER: Menu = Menu::named("base:music_player");
 pub static SLEEPING: Menu = Menu::named("base:sleeping");
 pub static WOODCUTTER: Menu = Menu::named("base:woodcutter");
+pub static SIGN: weft_sdk::Menu = weft_sdk::Menu::named("base:sign");

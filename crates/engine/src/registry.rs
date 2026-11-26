@@ -784,6 +784,7 @@ fn engine_components() -> Vec<RawEntry> {
         (TIMERS, "bytes", cf::SAVE, Vec::new()),
         (crate::server::assembly::BOUNDS, "bytes", cf::SAVE, Vec::new()),
         (abi::comp::NAME, "bytes", cf::SAVE | cf::CARRIED, Vec::new()),
+        (abi::comp::SIGN_TEXT, "bytes", cf::SAVE | cf::SYNC_MENU | cf::SYNC_WATCHERS, Vec::new()),
         (abi::comp::PERSISTENT, "bytes", cf::SAVE, Vec::new()),
         (HEALTH, health_schema.as_str(), own, crate::net::HealthField::default().to_bytes()),
         (abi::brain::HURT, <abi::BrainMemory as abi::Schema>::SCHEMA, 0, vec![0; size_of::<abi::BrainMemory>()]),

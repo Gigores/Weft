@@ -447,6 +447,7 @@ fn send_block_views(
 ) {
     let mut changed = Vec::new();
     let mut shared = Vec::new();
+    let sign_text = c.components.id(weft_abi::comp::SIGN_TEXT);
     for reg in &dim.regions {
         let data = &reg.entities;
         for &id in &data.public_blocks {
@@ -467,11 +468,14 @@ fn send_block_views(
             {
                 continue;
             }
+            let sign = sign_text.is_some_and(|id| def.watched.contains(&id));
             let view = crate::net::BlockView {
                 id,
                 frame: block.frame,
                 local,
-                animation_state: animation.and_then(|_| reg.block_part(id, c).map(|(_, part)| part.state)),
+                animation_state: (animation.is_some() || sign)
+                    .then(|| reg.block_part(id, c).map(|(_, part)| part.state))
+                    .flatten(),
                 menu_open: animation.is_some_and(|a| a.menu) && open_blocks.contains(&id),
             };
             let old = p

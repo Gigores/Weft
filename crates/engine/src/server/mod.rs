@@ -1000,12 +1000,15 @@ impl Server {
             Some(holder::At::Stack { entity, slot }) => {
                 crate::stack::name(&holder::get(r, c, holder::Inv::own(holder::At::Entity(entity)), slot)).unwrap_or_default()
             }
-            _ => r
-                .entities
-                .comps
-                .get(&(owner, c.game.name_comp))
-                .map(|b| String::from_utf8_lossy(b).into_owned())
-                .unwrap_or_default(),
+            _ => {
+                let sign = c
+                    .components
+                    .id(abi::comp::SIGN_TEXT)
+                    .and_then(|comp| r.entities.comps.get(&(owner, comp)));
+                sign.or_else(|| r.entities.comps.get(&(owner, c.game.name_comp)))
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_default()
+            }
         };
         let block = if block != 0 { block } else { r.block_part(owner, c).map_or(0, |(_, part)| part.state) };
         p.conn

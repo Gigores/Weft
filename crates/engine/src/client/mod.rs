@@ -3432,6 +3432,7 @@ impl Client {
         early: &mut CommandList,
         frame: &FrameInfo,
         textures: &GameTextures,
+        signs: &[crate::gpu_layout::GpuBox],
         animate_lod: bool,
     ) -> bool {
         self.entity_render.local = self.player_id;
@@ -3699,6 +3700,7 @@ impl Client {
             &cracks,
             &self.gizmo_lines,
             &self.gizmo_fills,
+            signs,
             &mut hand_late,
             sun.zip(depth)
                 .map(|(view, depth)| (view, depth, &mut self.sun_draws)),

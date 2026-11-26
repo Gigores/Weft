@@ -227,6 +227,16 @@ impl Screen for MenuScreen {
     fn build(&mut self, ui: &mut Ui, cx: &BuildCx) {
         let c = content();
         ui.root_style(Style::default().stretch());
+        if let Some(menu) = cx.client.and_then(|cl| cl.menu.as_ref())
+            && let Some(comp) = c.components.id(weft_abi::comp::SIGN_TEXT)
+            && c.states
+                .get(menu.block as usize)
+                .and_then(|state| c.game.block_data.get(&state.block))
+                .is_some_and(|def| def.watched.contains(&comp))
+        {
+            crate::sign_text::editor(ui, cx, menu);
+            return;
+        }
         let creative = cx
             .client
             .is_some_and(|cl| cl.mode.has(crate::tag_bits::game_mode::CREATIVE_INVENTORY))

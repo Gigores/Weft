@@ -621,6 +621,7 @@ messages! {
         GrabBody,
         ReleaseBody,
         TurnGrab([f32; 2]),
+        WriteSign { window: u32, lines: Vec<String> },
     }
 }
 

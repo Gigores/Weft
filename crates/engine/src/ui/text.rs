@@ -590,7 +590,8 @@ fn format_depth(template: &str, args: &[Arg], cx: &Ctx, out: &mut Vec<Span>, st:
             let size = parts
                 .next()
                 .and_then(|s| s.split_once('x'))
-                .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)));
+                .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
+                .filter(|&(w, h)| w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0);
             if let Some((w, h)) = size.or_else(|| crate::assets::texture_size(name).map(|(w, h)| (w as f32, h as f32))) {
                 out.push(st.span(Piece::Image(image_id(name), w * FONT_PER_GUI, h * FONT_PER_GUI, [0.0, 0.0, 1.0, 1.0]), None));
             }

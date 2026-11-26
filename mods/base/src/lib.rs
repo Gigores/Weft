@@ -17,6 +17,7 @@ mod music_player;
 mod player;
 mod recipes;
 mod redstone;
+mod signs;
 mod sounds;
 mod storage;
 mod target_info;
@@ -72,6 +73,7 @@ fn init(r: &mut Registry) {
     music_player::register(r);
     woodcutter::register(r);
     storage::register(r);
+    signs::register(r);
     target_info::register(r);
     // Its terrain is described in `worldgen`.
     r.dimension(&OVERWORLD)

@@ -2986,8 +2986,9 @@ fn record_passes(r: &mut Running, info: &weft_render::FrameInfo, scale: f32) {
     world_list.clear();
     after.clear();
     let atmosphere = if let Some(g) = &mut r.game {
+        let signs = crate::sign_text::boxes(&g.client, &mut r.ui, &mut *r.gpu, &r.assets, &r.lang, &r.textures);
         g.client
-            .render(&mut *r.gpu, &mut world_list, &mut after, &mut r.list, &world, &r.textures, r.entering.is_none())
+            .render(&mut *r.gpu, &mut world_list, &mut after, &mut r.list, &world, &r.textures, &signs, r.entering.is_none())
     } else {
         false
     };

@@ -302,6 +302,32 @@ pub async fn break_overlay(t: T) -> R {
     Ok(())
 }
 
+pub async fn sign_text(t: T) -> R {
+    t.flat().await?;
+    let p = super::add(t.feet(), [0, 0, -2]);
+    t.set(p, "base:oak_sign[facing=south,mount=floor]").await?;
+    t.look_at(p);
+    t.until("sign is targeted", Duration::from_secs(5), |t| {
+        t.c()
+            .target()
+            .is_some_and(|target| target.pos.to_array() == p)
+    })
+    .await?;
+    t.c().input_click(1, 0.0);
+    t.until("sign editor", Duration::from_secs(5), |t| t.c().ui_rect("id:sign_text").is_some())
+        .await?;
+    t.click_ui("id:sign_text", 0);
+    t.frames(2).await?;
+    t.c().input_type("{#4455FF}Weft{/} {item:base:diamond}");
+    t.frames(2).await?;
+    t.check(t.click_ui("text:Done", 0), "save the sign");
+    t.until("sign editor closed", Duration::from_secs(5), |t| t.c().ui_rect("id:sign_text").is_none())
+        .await?;
+    t.secs(0.5).await?;
+    t.shot("sign_text").await?;
+    Ok(())
+}
+
 /// Hosts the test world and lets a second game process join it over the network transport.
 pub async fn multiplayer(t: T) -> R {
     t.world(13).await?;

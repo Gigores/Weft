@@ -142,7 +142,7 @@ impl Server {
             }
             M::ControllerSave { .. } | M::HelmHeld { .. } => e.alive() && !e.mode.has(crate::tag_bits::game_mode::NO_INTERACT),
             M::GrabBody | M::TurnGrab(_) => e.alive() && !e.mode.has(crate::tag_bits::game_mode::NO_INTERACT),
-            M::MenuMove { .. } => e.alive() && !e.mode.has(crate::tag_bits::game_mode::NO_INTERACT),
+            M::MenuMove { .. } | M::WriteSign { .. } => e.alive() && !e.mode.has(crate::tag_bits::game_mode::NO_INTERACT),
             M::Move { .. } | M::OpenInventory | M::Click { .. } | M::Drag { .. } | M::CreativeTake { .. } | M::Pick { .. } => e.alive(),
             _ => true,
         }
@@ -583,6 +583,20 @@ impl Server {
                     && !menu::out_of_reach(m, r, p.entity)
                 {
                     menu::drag(m, r, c, p.entity, &slots, button);
+                }
+            }
+            ToServer::WriteSign { window, lines } => {
+                let p = &mut self.players[pi];
+                let Some(m) = p.menu.as_ref().filter(|m| m.on_block && window == p.window) else { return };
+                let Some(r) = self.dims[p.dim as usize].entity_region(p.entity) else { return };
+                if menu::out_of_reach(m, r, p.entity) || lines.len() > 4 {
+                    return;
+                }
+                let Some(comp) = c.components.id(abi::comp::SIGN_TEXT) else { return };
+                let owner = m.owner();
+                let text = crate::sign_text::sanitize(lines);
+                if holder::set_component(r, c, holder::At::Block(owner), comp, Some(text.as_bytes())) {
+                    r.entities.dirty_comp.insert((owner, comp));
                 }
             }
             ToServer::CloseMenu => {

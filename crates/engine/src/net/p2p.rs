@@ -17,7 +17,7 @@ use crate::settings::Settings;
 
 const ALPN: &[u8] = b"weft/1";
 // Peers must agree on deterministic terrain and weather as well as the wire format.
-const PROTOCOL: u32 = 30;
+const PROTOCOL: u32 = 31;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn runtime() -> &'static tokio::runtime::Runtime {

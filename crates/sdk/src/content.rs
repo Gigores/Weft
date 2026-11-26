@@ -1871,6 +1871,12 @@ macro_rules! state_setters {
         pub fn liquid_walls(self, sides: &[crate::Dir]) -> Self {
             self.set(&bc::LIQUID_WALLS, sides.iter().fold(0u8, |m, d| m | 1 << d.face()))
         }
+
+        /// A writable block's text area, in model pixels and before its orientation is applied.
+        pub fn sign_surface(self, center: [f32; 3], size: [f32; 2], front: crate::Dir) -> Self {
+            const SIGN_SURFACE: Component<[f32; 6]> = Component::named(abi::comp::SIGN_SURFACE);
+            self.set(&SIGN_SURFACE, [center[0], center[1], center[2], size[0], size[1], front.face() as f32])
+        }
         /// Air-like: invisible, no collision, not targetable.
         pub fn air(self) -> Self {
             self.not_solid()
@@ -2346,6 +2352,11 @@ impl<'a> BlockBuilder<'a> {
 
     pub fn attach_storage(self, storage: &crate::Storage) -> Self {
         self.attach_value(storage.name(), Vec::new())
+    }
+
+    /// Persistent rich text edited in a menu opened on this block and drawn in its `sign_surface`.
+    pub fn writable_sign(self) -> Self {
+        self.attach_value(abi::comp::SIGN_TEXT, Vec::new())
     }
 
     fn attach_value(self, name: &str, start: Vec<u8>) -> Self {

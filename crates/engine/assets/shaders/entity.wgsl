@@ -46,8 +46,9 @@ fn box_vertex(b: Box, v: u32, shadow: bool) -> VOut {
     let face = v / 6u;
     let c = TRI[v % 6u];
     var p = CORNERS[face * 4u + c];
+    let sign_text = b.ids.y == BOX_MODE_SIGN_GLYPH || b.ids.y == BOX_MODE_SIGN_IMAGE;
     // One face of a block's box, as the world mesher makes it: the rows place a unit square.
-    if b.ids.y == BOX_MODE_QUAD {
+    if b.ids.y == BOX_MODE_QUAD || sign_text {
         p = vec3(UVS[c].x, 1.0 - UVS[c].y, 0.0);
     }
     let local = vec4(p, 1.0);
@@ -84,15 +85,17 @@ fn box_vertex(b: Box, v: u32, shadow: bool) -> VOut {
             out.glow = glow_map[out.layer];
         }
         out.uv = uv;
-    } else if b.ids.y == BOX_MODE_QUAD {
+    } else if b.ids.y == BOX_MODE_QUAD || sign_text {
         // A box is 6 faces to draw; this is one.
         if face != 0u {
             out.clip = vec4(0.0, 0.0, 0.0, 1.0);
         }
-        out.mode = BOX_MODE_FACES;
         out.layer = b.ids.z;
-        if out.layer < arrayLength(&glow_map) {
-            out.glow = glow_map[out.layer];
+        if !sign_text {
+            out.mode = BOX_MODE_FACES;
+            if out.layer < arrayLength(&glow_map) {
+                out.glow = glow_map[out.layer];
+            }
         }
         out.uv = mix(b.uvo.xy, b.uvo.zw, UVS[c]);
     }
@@ -109,7 +112,7 @@ fn box_vertex(b: Box, v: u32, shadow: bool) -> VOut {
         lit = min(vec3(1.0), lit + lightning_ground(scene, world, light.x));
     }
     // Gamma-space shading applied in linear space, as in the world shader.
-    let shade = select(SHADE[face], b.dims.x, b.ids.y == BOX_MODE_QUAD);
+    let shade = select(SHADE[face], b.dims.x, b.ids.y == BOX_MODE_QUAD || sign_text);
     out.color = vec4(pow(tint * lit * shade * mix(vec3(1.0), vec3(1.0, 0.4, 0.4), hurt), vec3(2.2)), 1.0);
     return out;
 }
@@ -157,6 +160,11 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         albedo = textureSample(textures[in.layer], nearest_mipped, in.uv);
     } else if in.mode == BOX_MODE_TEXEL {
         albedo = textureSampleLevel(textures[in.layer], nearest_mipped, in.uv, 0.0);
+    } else if in.mode == BOX_MODE_SIGN_GLYPH {
+        let ink = textureSampleLevel(textures[in.layer], nearest_clamp, in.uv, 0.0).r;
+        albedo = vec4(1.0, 1.0, 1.0, ink);
+    } else if in.mode == BOX_MODE_SIGN_IMAGE {
+        albedo = textureSampleLevel(textures[in.layer], nearest_clamp, in.uv, 0.0);
     }
     if in.mode == BOX_MODE_FLAMES {
         // Flames give their own light.

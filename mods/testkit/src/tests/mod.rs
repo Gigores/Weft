@@ -117,6 +117,7 @@ pub fn all() -> Vec<TestDef> {
         visual::night_light,
         visual::moving_light,
         visual::multiplayer,
+        visual::sign_text,
         visual::client_hooks,
         audit::saved_entities_stay_gone,
         audit::death_is_a_state,

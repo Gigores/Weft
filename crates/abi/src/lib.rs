@@ -1617,6 +1617,8 @@ pub mod comp {
     pub const PERSISTENT: &str = "persistent";
     /// Blocks connecting energy networks.
     pub const CONDUCTOR: &str = "conductor";
+    pub const SIGN_TEXT: &str = "core:sign_text";
+    pub const SIGN_SURFACE: &str = "core:sign_surface";
     /// Entity or stack component, layout `Energy`.
     pub const ENERGY: &str = "energy";
     /// Item: it is a liquid (`str`, the liquid's block name) by the millibucket, what liquid

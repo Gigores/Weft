@@ -1113,7 +1113,7 @@ impl UiRenderer {
     }
 
     /// An icon placed by rich text: an item, or a block state (`{block:..}`).
-    fn text_icon(&mut self, c: &Content, t: &GameTextures, x: f32, y: f32, s: f32, icon: u32) {
+    pub(crate) fn text_icon(&mut self, c: &Content, t: &GameTextures, x: f32, y: f32, s: f32, icon: u32) {
         if icon & super::text::STATE_ICON != 0 {
             self.state_icon(c, t, x, y, s, icon & !super::text::STATE_ICON);
         } else {
