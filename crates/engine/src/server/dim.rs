@@ -2696,7 +2696,7 @@ impl Dim {
                 for _ in 0..n {
                     if count[rule.category as usize] >= cats[rule.category as usize].cap
                         || budget.is_some_and(|b| {
-                            b.fetch_update(Relaxed, Relaxed, |n| n.checked_sub(1))
+                            b.try_update(Relaxed, Relaxed, |n| n.checked_sub(1))
                                 .is_err()
                         })
                     {
