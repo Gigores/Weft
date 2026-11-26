@@ -827,11 +827,13 @@ pub fn register(r: &mut Registry) {
 fn till_soil(u: &mut ItemUse) -> bool {
     let w = u.world();
     let Some((pos, _)) = u.target_block() else { return false };
-    if TILLABLE.on_block(w.block(pos)) {
-        w.set_block(pos, FARMLAND.id());
-        return true;
+    if !TILLABLE.on_block(w.block(pos)) || !w.set_block(pos, FARMLAND.id()) {
+        return false;
     }
-    false
+    if !w.creative(u.entity()) {
+        u.set_stack(u.stack().add_wear(1));
+    }
+    true
 }
 
 pub use weft_sdk::shapes::{TORCH_FACINGS, stick_faces, torch_state};
