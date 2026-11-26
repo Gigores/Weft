@@ -570,6 +570,17 @@ pub trait Cells {
     fn masks_liquid(&self) -> bool {
         false
     }
+
+    fn masks_liquid_at(&self, _point: DVec3) -> bool {
+        false
+    }
+
+    fn visit_spaces(&self, _area: Aabb, mut visit: impl FnMut(&dyn Cells, Transform) -> bool) -> bool
+    where
+        Self: Sized,
+    {
+        visit(self, Transform::default())
+    }
 }
 
 pub type DryVolume<'a> = (Transform, &'a [(IVec3, IVec3)]);
@@ -584,6 +595,7 @@ pub fn inside_dry_volume((place, boxes): DryVolume<'_>, point: DVec3) -> bool {
 pub struct ObservedCells<'a, C> {
     pub cells: C,
     pub dry: &'a [DryVolume<'a>],
+    pub bodies: &'a [Body<'a>],
 }
 
 impl<C: Cells> Cells for ObservedCells<'_, C> {
@@ -601,14 +613,27 @@ impl<C: Cells> Cells for ObservedCells<'_, C> {
     }
     fn liquid_block_at(&self, c: &Content, point: DVec3) -> Option<u32> {
         let state = self.cells.liquid_block_at(c, point)?;
-        let dry = self
-            .dry
-            .iter()
-            .any(|&volume| inside_dry_volume(volume, point));
-        (!dry).then_some(state)
+        (!self.masks_liquid_at(point)).then_some(state)
     }
     fn masks_liquid(&self) -> bool {
-        !self.dry.is_empty()
+        !self.dry.is_empty() || !self.bodies.is_empty()
+    }
+    fn masks_liquid_at(&self, point: DVec3) -> bool {
+        self.dry
+            .iter()
+            .any(|&volume| inside_dry_volume(volume, point))
+    }
+    fn visit_spaces(&self, area: Aabb, mut visit: impl FnMut(&dyn Cells, Transform) -> bool) -> bool {
+        if visit(self, Transform::default()) {
+            return true;
+        }
+        self.bodies
+            .iter()
+            .filter(|b| b.aabb.min.cmple(area.max).all() && b.aabb.max.cmpge(area.min).all())
+            .any(|b| {
+                b.blocks
+                    .is_some_and(|(blocks, place)| visit(&BodyCells(blocks), place))
+            })
     }
 }
 
@@ -1554,7 +1579,7 @@ fn ray_box(o: DVec3, d: DVec3, b: &[f32; 6], max: f64) -> Option<(f64, u8)> {
 /// Whether liquid fills the block `level` above the feet at `pos` (0 the feet, the eye height for
 /// eyes): the one question of "in water", asked at the height the caller means.
 pub fn in_liquid(c: &Content, block: &impl Cells, pos: DVec3, level: f64) -> bool {
-    block.liquid_block_at(c, pos + DVec3::Y * level).is_some()
+    liquid_state_at(c, block, pos + DVec3::Y * level).is_some()
 }
 
 /// What the cells a box of that height stands in do to it, by all that is in them: the one answer
@@ -1574,9 +1599,15 @@ pub fn body_level(height: f64) -> f64 {
 
 pub fn around(c: &Content, block: &impl Cells, pos: DVec3, height: f64, half_width: f64) -> Around {
     let area = Aabb::around(pos, half_width + 1e-4, height);
-    let lo = area.min.floor().as_ivec3();
-    let hi = area.max.floor().as_ivec3();
-    let climbing = (lo.y..=hi.y).any(|y| {
+    let climbing = block.visit_spaces(area, |cells, place| climbs(c, cells, place, area));
+    Around { in_liquid: in_liquid(c, block, pos, 0.0) || in_liquid(c, block, pos, body_level(height)), climbing }
+}
+
+fn climbs(c: &Content, block: &dyn Cells, place: Transform, area: Aabb) -> bool {
+    let local = place.box_to_local(area);
+    let lo = local.min.floor().as_ivec3();
+    let hi = local.max.floor().as_ivec3();
+    (lo.y..=hi.y).any(|y| {
         (lo.z..=hi.z).any(|z| {
             (lo.x..=hi.x).any(|x| {
                 let cell = IVec3::new(x, y, z);
@@ -1585,28 +1616,59 @@ pub fn around(c: &Content, block: &impl Cells, pos: DVec3, height: f64, half_wid
                         c.states[part.state as usize].flags & bf::CLIMBABLE != 0
                             && part
                                 .bounds(c)
-                                .any(|b| area.intersects(&Aabb { min: cell.as_dvec3() + b.min, max: cell.as_dvec3() + b.max }))
+                                .any(|b| contact_box(area, b.shifted(cell.as_dvec3()), place))
                     })
                 })
             })
         })
-    });
-    Around { in_liquid: in_liquid(c, block, pos, 0.0) || in_liquid(c, block, pos, body_level(height)), climbing }
+    })
+}
+
+pub(crate) fn contact_box(area: Aabb, local: Aabb, place: Transform) -> bool {
+    area.intersects(&place.box_to_world(local))
+        && (place.rotation() == DQuat::IDENTITY || convex_contact(Solid::Box(local), place, Solid::Box(area), DVec3::ZERO).is_some())
 }
 
 /// Which liquid a point is under, its surface considered: water in a block only fills it up to
 /// its level, unless more of the same is on top.
 pub fn liquid_at(c: &Content, block: &impl Cells, p: DVec3) -> Option<u16> {
-    let at = p.floor().as_ivec3();
-    let (liquid, surface) = surface_of(c, block, at, block.liquid_block_at(c, p)?)?;
-    (p.y <= surface).then_some(liquid)
+    find_liquid(block, p, |cells, point| local_liquid(c, cells, point)).and_then(|state| c.states[state as usize].liquid)
+}
+
+pub(crate) fn body_liquid_at(c: &Content, blocks: &dyn Blocks, place: Transform, point: DVec3) -> Option<u16> {
+    let (lo, hi) = blocks.bounds()?;
+    let local = place.to_local(point);
+    let cell = local.floor().as_ivec3();
+    if !cell.cmpge(lo).all() || !cell.cmple(hi).all() {
+        return None;
+    }
+    liquid_at(c, &BodyCells(blocks), local)
+}
+
+pub(crate) fn liquid_state_at(c: &Content, block: &impl Cells, p: DVec3) -> Option<u32> {
+    find_liquid(block, p, |cells, point| cells.liquid_block_at(c, point))
+}
+
+fn find_liquid(block: &impl Cells, p: DVec3, mut sample: impl FnMut(&dyn Cells, DVec3) -> Option<u32>) -> Option<u32> {
+    let mut found = None;
+    block.visit_spaces(Aabb { min: p, max: p }, |cells, place| {
+        found = sample(cells, place.to_local(p));
+        found.is_some()
+    });
+    found
+}
+
+fn local_liquid(c: &Content, cells: &dyn Cells, p: DVec3) -> Option<u32> {
+    let state = cells.liquid_block_at(c, p)?;
+    let (_, surface) = surface_of(c, cells, p.floor().as_ivec3(), state)?;
+    (p.y <= surface).then_some(state)
 }
 
 pub fn liquid_surface(c: &Content, block: &impl Cells, at: IVec3) -> Option<(u16, f64)> {
     surface_of(c, block, at, block.liquid(c, at)?)
 }
 
-pub(crate) fn liquid_walls(c: &Content, cells: &impl Cells, at: IVec3) -> Option<u8> {
+pub(crate) fn liquid_walls(c: &Content, cells: &(impl Cells + ?Sized), at: IVec3) -> Option<u8> {
     let (main, layout) = cells.cell(at)?;
     Some(if layout.offsets.is_empty() && layout.covers.is_empty() && layout.extras.len() <= 1 {
         std::iter::once(main)
@@ -1619,19 +1681,25 @@ pub(crate) fn liquid_walls(c: &Content, cells: &impl Cells, at: IVec3) -> Option
 
 /// Horizontal flow follows the liquid's level gradient, including across a drop.
 pub(crate) fn liquid_current(c: &Content, cells: &impl Cells, pos: DVec3) -> DVec3 {
-    let Some(state) = cells.liquid_block_at(c, pos) else { return DVec3::ZERO };
-    let at = pos.floor().as_ivec3();
-    let Some((liquid, height)) = surface_of(c, cells, at, state) else { return DVec3::ZERO };
-    if pos.y > height {
-        return DVec3::ZERO;
-    }
+    let mut flow = DVec3::ZERO;
+    cells.visit_spaces(Aabb { min: pos, max: pos }, |cells, place| {
+        let local = place.to_local(pos);
+        let Some(state) = local_liquid(c, cells, local) else { return false };
+        flow = place.vector_to_world(current_in_space(c, cells, local.floor().as_ivec3(), state));
+        true
+    });
+    flow
+}
+
+fn current_in_space(c: &Content, cells: &dyn Cells, at: IVec3, state: u32) -> DVec3 {
+    let liquid = c.states[state as usize].liquid;
     let walls = liquid_walls(c, cells, at).unwrap_or(63);
     let level = f64::from(c.states[state as usize].level);
     let mut flow = DVec3::ZERO;
     let same_liquid = |p| {
         cells
             .liquid(c, p)
-            .filter(|&s| c.states[s as usize].liquid == Some(liquid))
+            .filter(|&s| c.states[s as usize].liquid == liquid)
     };
     for (face, &dir) in crate::world::DIRS.iter().enumerate() {
         if dir.y != 0 || walls & (1 << face) != 0 {
@@ -1653,7 +1721,7 @@ pub(crate) fn liquid_current(c: &Content, cells: &impl Cells, pos: DVec3) -> DVe
     flow.normalize_or_zero()
 }
 
-fn surface_of(c: &Content, block: &impl Cells, at: IVec3, state: u32) -> Option<(u16, f64)> {
+fn surface_of(c: &Content, block: &(impl Cells + ?Sized), at: IVec3, state: u32) -> Option<(u16, f64)> {
     let st = &c.states[state as usize];
     let liquid = st.liquid?;
     let covered = block
@@ -1768,8 +1836,7 @@ pub fn walk(
     let feet = pos.floor().as_ivec3();
     let started_in = around(c, block, *pos, f.height, f.half_width);
     let Around { in_liquid: liquid, climbing } = started_in;
-    let drag = block
-        .liquid_block_at(c, *pos)
+    let drag = liquid_state_at(c, block, *pos)
         .or_else(|| {
             block
                 .main(feet)

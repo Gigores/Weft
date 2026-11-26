@@ -1683,10 +1683,10 @@ impl Client {
                     self.player.vel += push;
                 }
                 if flying {
-                    let seen = physics::ObservedCells { cells: air_if_missing, dry: &dry };
+                    let seen = physics::ObservedCells { cells: air_if_missing, dry: &dry, bodies: &bodies };
                     step_player(&mut self.player, input, &seen, gravity, &bodies);
                 } else {
-                    let seen = physics::ObservedCells { cells: block, dry: &dry };
+                    let seen = physics::ObservedCells { cells: block, dry: &dry, bodies: &bodies };
                     step_player(&mut self.player, input, &seen, gravity, &bodies);
                 }
                 let entities = &self.entities;

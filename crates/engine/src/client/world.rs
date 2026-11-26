@@ -185,13 +185,22 @@ pub(super) struct LiquidSampler<'a> {
 impl LiquidSampler<'_> {
     pub fn observation(&self, point: DVec3) -> Option<(u16, bool)> {
         let cells = SeenCells { world: self.world, air_if_missing: false };
-        let liquid = crate::physics::liquid_at(content(), &cells, point)?;
-        let dry = self
-            .entities
+        let c = content();
+        let outside = crate::physics::liquid_at(c, &cells, point).map(|liquid| {
+            let dry = self
+                .entities
+                .values()
+                .any(|e| !e.dry_boxes.is_empty() && crate::physics::inside_dry_volume((e.place_at(self.tick), &e.dry_boxes), point));
+            (liquid, dry)
+        });
+        if outside.is_some_and(|(_, dry)| !dry) {
+            return outside;
+        }
+        self.entities
             .values()
-            .filter(|e| !e.dry_boxes.is_empty())
-            .any(|e| crate::physics::inside_dry_volume((e.place_at(self.tick), &e.dry_boxes), point));
-        Some((liquid, dry))
+            .find_map(|e| crate::physics::body_liquid_at(c, e.structure.as_deref()?, e.place_at(self.tick), point))
+            .map(|liquid| (liquid, false))
+            .or(outside)
     }
 
     pub fn at(&self, point: DVec3) -> Option<u16> {

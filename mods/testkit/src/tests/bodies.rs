@@ -276,6 +276,62 @@ pub async fn body_place(t: T) -> R {
     Ok(())
 }
 
+/// A player's movement and hazards use the blocks of an assembled structure.
+pub async fn assembly_contact(t: T) -> R {
+    t.flat().await?;
+    let origin = add(t.feet(), [0, 6, -6]);
+    let [x, y, z] = origin;
+    t.fill(add(origin, [0, 0, -1]), add(origin, [0, 2, -1]), "base:cobblestone")
+        .await?;
+    t.fill(origin, add(origin, [0, 2, 0]), "base:ladder[north=true]")
+        .await?;
+    t.set(add(origin, [0, -1, 0]), "base:cobblestone").await?;
+    let id = t.op(&format!("lift {x} {y} {z} 3")).await?;
+    let id: u64 = id
+        .trim()
+        .parse()
+        .map_err(|_| format!("assembly id: {id}"))?;
+    let ladder = t.op(&format!("sblock {id} 0 1 0")).await?;
+    t.check(ladder.contains("ladder") && ladder.contains("north=true"), format!("ladder carried by the assembly: {ladder}"));
+
+    t.op("mode survival").await?;
+    t.cmd(&format!("/tp {} {y} {}", f64::from(x) + 0.5, f64::from(z) + 0.31))
+        .await?;
+    t.c().set_look(0.0, 0.0);
+    t.secs(0.3).await?;
+    let from = t.state().pos.y;
+    t.hold("core:forward", 0.85);
+    t.secs(0.9).await?;
+    let climbed = t.state().pos.y - from;
+    t.check(climbed > 1.5, format!("walking against the assembly ladder climbs it ({climbed:.2} blocks)"));
+
+    t.op(&format!("sblock {id} 2 -1 0 base:cobblestone"))
+        .await?;
+    t.op(&format!("sblock {id} 2 0 0 base:water")).await?;
+    t.op(&format!("sblock {id} 2 1 0 base:water")).await?;
+    t.cmd(&format!("/tp {} {y} {}", f64::from(x) + 2.5, f64::from(z) + 0.5))
+        .await?;
+    t.c().set_look(0.0, 0.0);
+    t.secs(0.3).await?;
+    t.hold("core:jump", 0.35);
+    t.secs(0.3).await?;
+    t.check(t.state().pos.y > f64::from(y) + 0.5, "jump swims up through assembly water");
+
+    t.op(&format!("sblock {id} -2 -1 0 base:cobblestone"))
+        .await?;
+    t.op(&format!("sblock {id} -2 0 0 base:lava")).await?;
+    t.cmd(&format!("/tp {} {y} {}", f64::from(x) - 1.5, f64::from(z) + 0.5))
+        .await?;
+    for _ in 0..15 {
+        t.secs(0.1).await?;
+        if t.op("health").await? != "20" {
+            return Ok(());
+        }
+    }
+    t.check(false, "assembly lava damages the player");
+    Ok(())
+}
+
 /// Standing on a lift carries the player up and back down with it, without fall damage.
 pub async fn lift(t: T) -> R {
     t.flat().await?;

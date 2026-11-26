@@ -161,6 +161,7 @@ pub fn all() -> Vec<TestDef> {
         looks::rich_text,
         looks::models,
         bodies::lift,
+        bodies::assembly_contact,
         bodies::ride_frames,
         bodies::skiff_smooth,
         gameplay::respawn,

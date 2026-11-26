@@ -297,7 +297,8 @@ impl Server {
                 e.pose = pose;
                 let dims = e.dims(c);
                 let dry = r.dry_volumes();
-                let seen = crate::physics::ObservedCells { cells: super::space::CubeCells(&r.space.cubes), dry: &dry };
+                let bodies = r.contact_bodies(c);
+                let seen = crate::physics::ObservedCells { cells: super::space::CubeCells(&r.space.cubes), dry: &dry, bodies: &bodies };
                 let here = crate::physics::around(c, &seen, pos, dims.height, dims.half_width);
                 let Some(e) = r.entities.get_mut(entity) else { return };
                 let splash = entity::splashes(e.in_liquid, here.in_liquid, -walked.y).then_some(e.pos);

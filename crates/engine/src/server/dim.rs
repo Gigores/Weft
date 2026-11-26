@@ -341,10 +341,29 @@ struct TickHit {
 /// The hazards entity `e` meets, by state and which of its: those in the cells its box is in or
 /// a sixteenth from, at its eyes, under its feet. What isn't a body meets only those it is in.
 fn hazards_met(c: &Content, block: &impl crate::physics::Cells, e: &super::entity::Entity) -> Vec<(u32, crate::content::Hazard)> {
+    let b = e.aabb(c);
+    let reach = crate::physics::Aabb { min: b.min - 1.0 / 16.0, max: b.max + 1.0 / 16.0 };
+    let mut met = Vec::new();
+    block.visit_spaces(reach, |cells, place| {
+        hazards_in_space(c, cells, e, place, b, &mut met);
+        false
+    });
+    met.into_iter()
+        .map(|(s, i)| (s, c.states[s as usize].hazards[i]))
+        .collect()
+}
+
+fn hazards_in_space(
+    c: &Content,
+    block: &dyn crate::physics::Cells,
+    e: &super::entity::Entity,
+    place: crate::physics::Transform,
+    b: crate::physics::Aabb,
+    out: &mut Vec<(u32, usize)>,
+) {
     use abi::hazard_at as at;
     const GROW: f64 = 1.0 / 16.0;
-    let (b, body) = (e.aabb(c), e.is_body());
-    let mut out = Vec::new();
+    let body = e.is_body();
     let look = |p: IVec3, out: &mut Vec<(u32, usize)>, f: &dyn Fn(&crate::content::Hazard, Part) -> bool| {
         let Some((main, extras)) = block.cell(p) else { return };
         for part in extras.parts(main) {
@@ -357,15 +376,26 @@ fn hazards_met(c: &Content, block: &impl crate::physics::Cells, e: &super::entit
         }
     };
     let overlaps = |part: Part, p: IVec3, grow: f64| {
-        part.bounds(c)
-            .any(|a| (a.max + p.as_dvec3() + grow).cmpgt(b.min).all() && (a.min + p.as_dvec3() - grow).cmplt(b.max).all())
+        part.bounds(c).any(|a| {
+            let local = crate::physics::Aabb { min: a.min + p.as_dvec3() - grow, max: a.max + p.as_dvec3() + grow };
+            if !crate::physics::contact_box(b, local, place) {
+                return false;
+            }
+            if c.states[part.state as usize].liquid.is_none() {
+                return true;
+            }
+            let world = place.box_to_world(local);
+            let contact = (world.min.max(b.min) + world.max.min(b.max)) * 0.5;
+            !block.masks_liquid_at(place.to_local(contact))
+        })
     };
-    let (lo, hi) = ((b.min - GROW).floor().as_ivec3(), (b.max + GROW).floor().as_ivec3());
+    let local = place.box_to_local(crate::physics::Aabb { min: b.min - GROW, max: b.max + GROW });
+    let (lo, hi) = (local.min.floor().as_ivec3(), local.max.floor().as_ivec3());
     for y in lo.y..=hi.y {
         for z in lo.z..=hi.z {
             for x in lo.x..=hi.x {
                 let p = IVec3::new(x, y, z);
-                look(p, &mut out, &|h, s| match h.at {
+                look(p, out, &|h, s| match h.at {
                     at::INSIDE => overlaps(s, p, 0.0),
                     at::TOUCH => body && overlaps(s, p, GROW),
                     _ => false,
@@ -374,18 +404,15 @@ fn hazards_met(c: &Content, block: &impl crate::physics::Cells, e: &super::entit
         }
     }
     if body {
-        let eye = e.pos + DVec3::Y * e.eye(c);
+        let eye = place.to_local(e.pos + DVec3::Y * e.eye(c));
         let liquid = block.liquid_block_at(c, eye);
-        look(eye.floor().as_ivec3(), &mut out, &|h, s| {
+        look(eye.floor().as_ivec3(), out, &|h, s| {
             h.at == at::HEAD && (c.states[s.state as usize].liquid.is_none() || liquid == Some(s.state))
         });
         if e.on_ground {
-            look((e.pos - DVec3::Y * 0.05).floor().as_ivec3(), &mut out, &|h, _| h.at == at::ON);
+            look(place.to_local(e.pos - DVec3::Y * 0.05).floor().as_ivec3(), out, &|h, _| h.at == at::ON);
         }
     }
-    out.into_iter()
-        .map(|(s, i)| (s, c.states[s as usize].hazards[i]))
-        .collect()
 }
 
 impl Dim {
@@ -659,13 +686,33 @@ impl Dim {
         self.dry_volume_iter().collect()
     }
 
+    pub(super) fn contact_bodies<'a>(&'a self, c: &'a Content) -> Vec<crate::physics::Body<'a>> {
+        self.bodies
+            .iter()
+            .filter_map(|(id, built)| {
+                let entity = self.entities.get(*id)?;
+                physics_body(c, entity, Some(built), entity.body_place())
+            })
+            .collect()
+    }
+
     pub(crate) fn observed_liquid_at(&self, space_id: u64, c: &Content, pos: DVec3) -> Option<u16> {
-        let liquid = crate::physics::liquid_at(c, self.space(space_id), pos)?;
-        let dry = space_id == 0
-            && self
-                .dry_volume_iter()
-                .any(|volume| crate::physics::inside_dry_volume(volume, pos));
-        (!dry).then_some(liquid)
+        let outside = crate::physics::liquid_at(c, self.space(space_id), pos);
+        if space_id != 0 {
+            return outside;
+        }
+        outside
+            .filter(|_| {
+                !self
+                    .dry_volume_iter()
+                    .any(|v| crate::physics::inside_dry_volume(v, pos))
+            })
+            .or_else(|| {
+                self.bodies.iter().find_map(|(id, built)| {
+                    let entity = self.entities.get(*id)?;
+                    crate::physics::body_liquid_at(c, &**built, entity.body_place(), pos)
+                })
+            })
     }
 
     pub fn has(&self, pos: IVec3) -> bool {
@@ -2894,7 +2941,7 @@ impl Dim {
                 (!boxes.is_empty()).then_some((b.blocks?.1, boxes.as_slice()))
             })
             .collect();
-        let block = crate::physics::ObservedCells { cells: block, dry: &dry };
+        let block = crate::physics::ObservedCells { cells: block, dry: &dry, bodies };
         // Physics only reads blocks and bodies and writes its own entity, so entities move in
         // parallel; damage is applied afterwards in list order to stay deterministic.
         let inventories = &self.entities.inventories;
@@ -2940,7 +2987,7 @@ impl Dim {
                 let wet = [e.pos, e.pos + DVec3::Y * crate::physics::body_level(e.height(c))]
                     .iter()
                     .any(|p| {
-                        crate::physics::Cells::liquid_block_at(&block, c, *p)
+                        crate::physics::liquid_state_at(c, &block, *p)
                             .and_then(|s| c.states[s as usize].liquid)
                             .is_some_and(|l| !c.liquids[l as usize].burns())
                     });
