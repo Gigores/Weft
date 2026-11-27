@@ -88,7 +88,7 @@ Per-state components (`comps::block`):
 | `PIECES` | `[Piece]` | none: a hit breaks all of it | `.piece` |
 | `RULES` | `[BlockRule]` | none | what happens to it by itself: `.rule`, and `.grows`, `.smothered_into`, `.needs_below`, `.needs`, `.needs_near`, `.falling` |
 
-Tags per state (`abi::comp::block`): `NOT_SOLID`, `REPLACEABLE`, `CLIMBABLE`, `NOT_TARGETABLE`, `CULL_SAME`, `IMMOVABLE`, `SIGNAL_BLOCKER`, `STICKY`, `NOT_STOOD_ON`. Presets set them (`.not_solid()`, `.replaceable()`...), `.tag(..)` sets any.
+Tags per state (`abi::comp::block`): `NOT_SOLID`, `REPLACEABLE`, `CLIMBABLE`, `NOT_TARGETABLE`, `CULL_SAME`, `IMMOVABLE`, `SIGNAL_BLOCKER`, `NOT_STOOD_ON`. Presets set them (`.not_solid()`, `.replaceable()`...), `.tag(..)` sets any. Adhesion rules are stored in the `ADHESION` component.
 
 ```rust
 static LAMP: Block = Block::named("base:redstone_lamp");

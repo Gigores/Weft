@@ -37,6 +37,8 @@ pub(crate) struct Blocks {
     pub rules: Vec<(usize, Vec<abi::BlockRule>)>,
     /// Each state's hazards, still text.
     pub hazards: Vec<(usize, Vec<abi::Hazard>)>,
+    /// States with explicit attachment rules, including an empty list to disable attachment.
+    pub adhesion: Vec<(u32, Vec<abi::Adhesion>)>,
 }
 
 /// Every mod's block entries in load order, frozen. Templates copy their item in `items` for each
@@ -108,6 +110,7 @@ pub(crate) fn freeze(
         shares: Vec::new(),
         rules: Vec::new(),
         hazards: Vec::new(),
+        adhesion: Vec::new(),
         shapes,
         retextures: Vec::new(),
         patterns: Vec::new(),
@@ -165,6 +168,9 @@ pub(crate) fn freeze(
             let hazards = s.or::<Vec<abi::Hazard>>(b::HAZARDS, Vec::new());
             if !hazards.is_empty() {
                 out.hazards.push((out.states.len(), hazards));
+            }
+            if let Some(adhesion) = s.get(b::ADHESION) {
+                out.adhesion.push((out.states.len() as u32, adhesion));
             }
             if !head.is_empty() {
                 heads.push((out.states.len(), head));

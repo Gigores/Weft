@@ -1317,7 +1317,7 @@ pub mod comp {
         pub const CULL_SAME: &str = "block.cull_same";
         pub const IMMOVABLE: &str = "block.immovable";
         pub const SIGNAL_BLOCKER: &str = "block.signal_blocker";
-        pub const STICKY: &str = "block.sticky";
+        pub const ADHESION: &str = "block.adhesion";
         pub const NOT_STOOD_ON: &str = "block.not_stood_on";
         pub const PIECES: &str = "block.pieces";
         pub const RULES: &str = "block.rules";
@@ -1727,8 +1727,6 @@ pub mod block_flags {
     pub const IMMOVABLE: u32 = 256;
     /// Doesn't carry redstone power, the way glass doesn't. Wire can still lie on it.
     pub const SIGNAL_BLOCKER: u32 = 512;
-    /// A piston moving it takes what touches it along, like slime.
-    pub const STICKY: u32 = 1024;
     /// On a moving body it shoves, but can't be stood on and be taken along by: a piston's head
     /// sliding out from under whoever stands on the piston.
     pub const NOT_STOOD_ON: u32 = 2048;
@@ -2280,6 +2278,11 @@ crate::data! {
 crate::data! {
     /// A texture renamed, full names (`comp::block::RETEXTURE`).
     pub struct Retexture { pub from: alloc::string::String, pub to: alloc::string::String }
+}
+
+crate::data! {
+    /// What a block can carry at its faces (`comp::block::ADHESION`), in model orientation.
+    pub struct Adhesion { pub faces: u8, pub targets: alloc::string::String }
 }
 
 #[repr(C)]

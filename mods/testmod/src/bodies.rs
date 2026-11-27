@@ -8,10 +8,16 @@ use weft_sdk::*;
 static LIFT: EntityKind = EntityKind::named("lift");
 static SKIFF: EntityKind = EntityKind::named("skiff");
 static CRATE: EntityKind = EntityKind::named("crate");
+static FACE_GLUE: Block = Block::named("face_glue");
 static LIFT_DECK: Template = Template::named("lift_deck");
 static SKIFF_DECK: Template = Template::named("skiff_deck");
 
 pub fn register(r: &mut Registry) {
+    r.block(&FACE_GLUE)
+        .texture("base:slime_block")
+        .no_item()
+        .facing(Facings::HORIZONTAL, Toward::Away)
+        .states(|_, s| s.adhesion(&[(Facings::only(&[Dir::North, Dir::Up]), "base:stone")]));
     // What the moving structures are built of, checked when the game loads.
     r.template(&LIFT_DECK)
         .fill("base:oak_planks", [0, 0, 0], [1, 0, 1]);

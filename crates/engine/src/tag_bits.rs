@@ -56,7 +56,6 @@ pub mod block {
         (b::CULL_SAME, f::CULL_SAME),
         (b::IMMOVABLE, f::IMMOVABLE),
         (b::SIGNAL_BLOCKER, f::SIGNAL_BLOCKER),
-        (b::STICKY, f::STICKY),
         (b::NOT_STOOD_ON, f::NOT_STOOD_ON),
     ];
 }

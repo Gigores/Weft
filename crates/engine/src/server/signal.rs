@@ -25,7 +25,7 @@ use super::structure::{Carried, Lifted, Liveness};
 use crate::content::{AIR, Content, Signal};
 use crate::physics::Aabb;
 use crate::wire::{self, Link, Site};
-use crate::world::placement::Part;
+use crate::world::placement::{Part, adhesion_contacts};
 
 type Placed = (IVec3, Part);
 use crate::world::{Cube, DIRS, cube_of, local_index};
@@ -1966,6 +1966,7 @@ impl Dim {
         contacts: Option<Vec<Placed>>,
     ) -> Option<(Vec<Placed>, Vec<Placed>)> {
         let space = self.space(space_id);
+        let get = |at| Some((space.get(at)?, space.layout(at)));
         let mut moved = Vec::new();
         let mut broken = Vec::new();
         let pulling = contacts.is_some();
@@ -2031,32 +2032,13 @@ impl Dim {
             moved.push((p, part));
             for patch in part.bounds(c) {
                 collect(p, patch.swept(step.as_dvec3()), false, &mut todo)?;
-                if info.flags & bf::STICKY != 0 {
-                    for dir in 0..6 {
-                        let axis = dir / 2;
-                        let plane = if dir % 2 == 0 { patch.min[axis] } else { patch.max[axis] };
-                        crate::world::placement::face_contacts(
-                            c,
-                            p,
-                            patch,
-                            dir,
-                            plane,
-                            &|at| Some((space.get(at)?, space.layout(at))),
-                            |at, other, _| {
-                                let other = other.owner(at);
-                                if other.0 != base.cell
-                                    && c.solid(other.1.state)
-                                    && self.movable(c, other.1.state)
-                                    && !todo.contains(&other)
-                                    && !moved.contains(&other)
-                                {
-                                    todo.push(other);
-                                }
-                                false
-                            },
-                        );
+            }
+            if let Some(rules) = c.adhesion.get(&part.state) {
+                adhesion_contacts(c, p, part, rules, false, &get, |at, other| {
+                    if at != base.cell && self.movable(c, other.state) && !todo.contains(&(at, other)) && !moved.contains(&(at, other)) {
+                        todo.push((at, other));
                     }
-                }
+                });
             }
         }
         Some((moved, broken))

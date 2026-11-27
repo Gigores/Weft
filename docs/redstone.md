@@ -47,7 +47,7 @@ Solid blocks carry power by default, lamps and other blocks that only take power
 | `comparator` | Back against the sides; the other mode subtracts (click to change). Reads how full a container behind it is |
 | `redstone_lamp` | Lit with any power around it. Carries power like any solid block |
 | `piston`, `sticky_piston` | Pushes up to 12 blocks, powered from any side but its front. Breaks what isn't solid, stops at `.immovable()` blocks. The blocks move as a body, so whoever stands on them rides along smoothly |
-| `slime_block` | What a piston moves takes what touches it along, for flying machines. `.sticky()` on any block does the same |
+| `slime_block` | Carries movable solid blocks touching any face when a piston or assembly takes it along. |
 | `floater` | Moves in the direction of its front arrow. Power from any other side moves it and the connected blocks at its front by half a block per second per power level. Attached parts come along and drop if they hit a solid block. Sneak and right-click with an empty hand to switch between Disassemble and Hold. Hold keeps a floater's platform assembled after it stops. |
 | `thruster` | Pushes an assembled body in the direction of its arrow. The force scales with input power. A thruster offset from the center of mass also turns the body. |
 | `rotor` | Turns the assembly on its front relative to the surface it is mounted on. Its facing sets the axis and direction. A stronger signal turns it faster. Sneak and right-click with an empty hand to change its stop mode. The amber face marks Disassemble, which finishes the quarter turn or returns to the last clear quarter turn before placing the blocks on its parent's grid. Cycle power to restart after a blocked disassembly. The cyan pause mark indicates Hold. The rotor keeps its current angle and resumes when it has power and the path is clear. |
@@ -62,7 +62,7 @@ Solid blocks carry power by default, lamps and other blocks that only take power
 
 Right-click a Controller, floater, rotor or assembler to preview its connected blocks. Right-click it again to confirm. A Controller launches the contraption immediately. A floater, rotor or assembler saves the selection and uses it when powered.
 
-The selection starts at the Controller or the block immediately in front of another assembly device. It follows movable solid blocks that share a face and takes supported parts within the selected bounds. A floater also carries itself. If the build touches a dock, set two opposite corners by right-clicking them with an Assembly Wand, then preview and confirm on the controller. The limit is 4,096 carried cells and parts.
+The selection starts at the Controller, the floater, or the block immediately in front of a fixed mount. It follows face connections between movable solids and takes supported parts within the selected bounds. A floater's front is its only adhesive face by default. If the build touches a dock, set two opposite corners by right-clicking them with an Assembly Wand, then preview and confirm on the controller. The limit is 4,096 carried cells and parts.
 
 After choosing two corners with the wand, right-click into the air to assemble the previewed volume as a standalone contraption that stays in place. Sneak while right-clicking into the air to assemble it as a free body affected by gravity and buoyancy. Both modes can include separated groups of blocks inside the box.
 
@@ -151,6 +151,12 @@ The rest of the set, each with the properties it needs added for you:
 - `w.body_from_blocks(center, &cells)` takes blocks into a scripted body with its chests, parts and circuits. Move it with `w.entity_modify(id).velocity(..)` or `w.body_move_to(id, pos, ticks)`. `w.body_dynamics(id)` enables gravity, buoyancy and rigid-body contacts. `w.body_force(id, at, force)` applies a force for one physics step at a point in the body's local coordinates. Use `w.in_space(id)` to read or edit its blocks.
 - `w.body_to_blocks(id)` docks a body at grid coordinates. `w.body_fall(id)` puts its blocks down when it reaches support. `w.push_blocks(pos, dir)` moves blocks one cell by piston rules, including sticky neighbors.
 - `.signal_observer()` and `.signal_piston(head, sticky)`, `.signal_piston_head()`: after `.facing(..)`.
+
+### Adhesion
+
+Use `.adhesion(&[(faces, matcher)])` on a block or state to select the sides that carry neighbors when it moves. The faces turn with the state. Matchers accept block names, properties, tags and exclusions. For example, an upward face can carry planks with `.adhesion(&[(Facings::only(&[Dir::Up]), "#planks")])`.
+
+Rules apply in the direction of traversal, from the block being carried to its neighbor. A match on either of several rules for the same face is enough. An empty list disables its outgoing attachments. `.sticky()` carries movable solids on every face. A connected assembly follows aligned grid neighbors of ordinary blocks and uses the configured face rules for adhesive blocks. Pistons follow adhesive contacts at the blocks' actual surfaces.
 
 **A model on any face:** those blocks have `attach` and `front` properties. Write the model once for a floor with the front to the north, and the block turns it onto its face, pictures included:
 

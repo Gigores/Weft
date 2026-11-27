@@ -9,7 +9,7 @@ use crate::content::{AIR, Content};
 use crate::net::codec::Wire;
 use crate::physics::Transform;
 use crate::world::DIRS;
-use crate::world::placement::Part;
+use crate::world::placement::{EMPTY_LAYOUT, Part, adhesion_contacts};
 
 pub const BOUNDS: &str = "core:assembly_bounds";
 
@@ -66,18 +66,14 @@ impl Controller {
         Some(Self { block, face: signal.front, helm: signal.flags as u32 & abi::signal_flags::HELM != 0, floater, slide })
     }
 
-    fn grip(self) -> IVec3 {
-        if self.helm {
+    pub fn center(self) -> IVec3 {
+        if self.helm || self.floater {
             self.block
         } else if let Some(slide) = self.slide {
             self.block + DIRS[self.face as usize] * slide.length as i32 + DIRS[slide.side as usize]
         } else {
             self.block + DIRS[self.face as usize]
         }
-    }
-
-    pub fn center(self) -> IVec3 {
-        if self.floater { self.block } else { self.grip() }
     }
 }
 
@@ -139,20 +135,21 @@ impl Dim {
         controller: Option<Controller>,
         bounds: Option<Bounds>,
     ) -> Result<Vec<IVec3>, u32> {
-        let grip = controller.map(Controller::grip);
-        let allowed = |at| controller.is_none_or(|ctrl| ctrl.helm || at != ctrl.block) && bounds.is_none_or(|b| b.contains(at));
+        let space = self.space(space_id);
+        let grip = controller.map(Controller::center);
+        let allowed = |at| {
+            if let Some(ctrl) = controller.filter(|ctrl| at == ctrl.block && !ctrl.helm) {
+                return ctrl.floater;
+            }
+            bounds.is_none_or(|b| b.contains(at))
+        };
+        let get = |at| if allowed(at) { Some((space.get(at)?, space.layout(at))) } else { Some((AIR, &EMPTY_LAYOUT)) };
         let connected = controller.is_some();
         let mut seen = FxHashSet::default();
         let mut pending = Vec::new();
         let mut cells = Vec::new();
-        if let Some(ctrl) = controller {
-            pending.push(ctrl.grip());
-            if ctrl.floater {
-                if self.space(space_id).signals.reserved(ctrl.block) {
-                    return Err(result::UNAVAILABLE);
-                }
-                cells.push(ctrl.block);
-            }
+        if let Some(grip) = grip {
+            pending.push(grip);
         } else if let Some(b) = bounds {
             let size = b.hi.as_i64vec3() - b.lo.as_i64vec3() + glam::I64Vec3::ONE;
             if size.max_element() > BODY_LIMIT as i64 || size.x * size.y * size.z > BODY_LIMIT as i64 * 16 {
@@ -168,12 +165,13 @@ impl Dim {
             if !allowed(at) || !seen.insert(at) {
                 continue;
             }
-            let state = self.get(space_id, at).ok_or(result::UNAVAILABLE)?;
+            let state = space.get(at).ok_or(result::UNAVAILABLE)?;
             let info = &c.states[state as usize];
             if controller.is_some_and(|ctrl| ctrl.slide.is_some() && super::structure::is_guide_rail(c, state)) {
                 continue;
             }
-            for cover in &self.space(space_id).layout(at).covers {
+            let layout = space.layout(at);
+            for cover in &layout.covers {
                 let root = cover.owner(at).0;
                 if !allowed(root) {
                     return Err(result::UNAVAILABLE);
@@ -183,7 +181,7 @@ impl Dim {
             if state == AIR || info.liquid.is_some() {
                 continue;
             }
-            if self.space(space_id).signals.reserved(at) {
+            if space.signals.reserved(at) {
                 return Err(result::UNAVAILABLE);
             }
             if connected && Some(at) != grip && !info.solid() {
@@ -197,24 +195,32 @@ impl Dim {
                 continue;
             }
             cells.push(at);
-            let layout = self.space(space_id).layout(at);
-            for offset in layout
-                .residents(state)
-                .flat_map(|part| part.footprint(c).into_owned())
-            {
-                let extra = at + offset;
-                if !allowed(extra) || self.space(space_id).signals.reserved(extra) || self.get(space_id, extra).is_none() {
-                    return Err(result::UNAVAILABLE);
+            let mut adjacent = false;
+            for part in layout.residents(state) {
+                let rules = c.adhesion.get(&part.state);
+                let grid = connected && rules.is_none();
+                adjacent |= grid;
+                for &offset in part.footprint(c).iter() {
+                    let extra = at + offset;
+                    if !allowed(extra) || space.signals.reserved(extra) || space.get(extra).is_none() {
+                        return Err(result::UNAVAILABLE);
+                    }
+                    pending.push(extra);
+                    if grid {
+                        pending.extend(DIRS.map(|d| extra + d));
+                    }
                 }
-                pending.push(extra);
-                if connected {
-                    pending.extend(DIRS.map(|d| extra + d));
+                if connected
+                    && let Some(rules) = rules
+                    && !adhesion_contacts(c, at, part, rules, true, &get, |at, _| pending.push(at))
+                {
+                    return Err(result::UNAVAILABLE);
                 }
             }
             if cells.len() > BODY_LIMIT {
                 return Err(result::TOO_LARGE);
             }
-            if connected {
+            if adjacent {
                 pending.extend(DIRS.map(|d| at + d));
             }
         }

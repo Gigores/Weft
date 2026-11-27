@@ -1836,9 +1836,21 @@ macro_rules! state_setters {
         pub fn immovable(self) -> Self {
             self.tag(abi::comp::block::IMMOVABLE)
         }
-        /// A piston moving it takes what touches it along, like slime.
+        /// Carries all movable solid blocks touching any face, like slime.
         pub fn sticky(self) -> Self {
-            self.tag(abi::comp::block::STICKY)
+            self.adhesion(&[(crate::Facings::ALL, "!core:air")])
+        }
+        /// Sets which sides carry touching blocks and which blocks they can carry. Faces are in
+        /// model orientation. Each matcher accepts block names, states, tags and exclusions.
+        /// Any matching rule is enough. An empty list disables all adhesion.
+        pub fn adhesion(self, rules: &[(crate::Facings, &str)]) -> Self {
+            self.set(
+                &bc::ADHESION,
+                rules
+                    .iter()
+                    .map(|(faces, targets)| abi::Adhesion { faces: faces.0, targets: crate::qualify_matcher(crate::mod_id(), targets) })
+                    .collect(),
+            )
         }
         /// Its shape, in 1/16 units like the model's (a slab: `[0.0; 3]` to `[16.0, 8.0, 16.0]`), one
         /// box a call: what stops a walker, what the crosshair outlines and cracks. On a block that
@@ -2513,7 +2525,7 @@ impl<'a> BlockBuilder<'a> {
     }
     /// Goes along its `facing` (after `facing`), any of the six ways. With power from any other
     /// side it carries itself and the structure connected to its front, half a block a second
-    /// per level of power. Circuits on it go on.
+    /// per level of power. Use `.adhesion(..)` to configure which blocks it carries. Circuits on it go on.
     /// On stopping, the default `mode` of `disassemble` lands the platform on whole blocks.
     /// `hold` keeps it assembled.
     /// `power`: 0 idle, 1 going, 2 stuck. `breaks`: it breaks what is in its way instead.
@@ -2649,6 +2661,12 @@ impl BlockBuilder<'_> {
         // A part per combination of its own properties' values, from `.states(..)` and its signal.
         let looks = self.looks.take();
         let (signal, turns) = (self.signal, self.turns);
+        let floater_default = signal.is_some_and(|b| b.kind == abi::signal_kind::FLOATER)
+            && !self
+                .e
+                .ops
+                .iter()
+                .any(|op| op.name == abi::comp::block::ADHESION);
         let generates_states = looks.is_some() || signal.is_some() || turns.is_some();
         let block_faces = if generates_states || !self.keyed.is_empty() { self.faces_now() } else { Default::default() };
         if generates_states {
@@ -2665,7 +2683,7 @@ impl BlockBuilder<'_> {
                     s = f(&p, s);
                 }
                 if let Some(b) = &signal {
-                    b.apply(&p, s);
+                    b.apply(&p, s, floater_default);
                 }
                 if !ops.is_empty() {
                     self.e.parts.push((p.key(), ops));
@@ -3451,7 +3469,7 @@ struct SignalBuild {
 }
 
 impl SignalBuild {
-    fn apply<'s>(&self, p: &Props, mut s: State<'s>) -> State<'s> {
+    fn apply<'s>(&self, p: &Props, mut s: State<'s>, floater_default: bool) -> State<'s> {
         use abi::signal_kind as k;
         let dir = |name: &str| crate::Dir::from_name(p.get(name));
         // Faces as the model is written: what `facing` and `attach` name, turned back.
@@ -3491,6 +3509,14 @@ impl SignalBuild {
             k::PISTON | k::FLOATER | k::BODY_MOUNT | k::PISTON_HEAD => {
                 let f = turn.own(facing.unwrap_or(crate::Dir::Up)).face();
                 sig.front = f;
+                if floater_default
+                    && !s
+                        .pending()
+                        .iter()
+                        .any(|op| op.name == abi::comp::block::ADHESION)
+                {
+                    s = s.adhesion(&[(crate::Facings(1 << f), "!core:air")]);
+                }
                 sig.inputs = if self.kind == k::PISTON_HEAD || sig.flags & abi::signal_flags::HELM != 0 { 0 } else { 0x3F & !(1 << f) };
                 if sig.flags & abi::signal_flags::HELM != 0 {
                     (sig.gives, sig.strong) = (0x3F, 0x3F);

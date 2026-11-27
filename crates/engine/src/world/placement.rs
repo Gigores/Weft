@@ -150,6 +150,66 @@ pub fn face_contacts<'a>(
     (!unknown).then_some(false)
 }
 
+/// Visits the solid parts that this part can carry. False if a sticky face reaches unloaded cells.
+/// Grid connections also join aligned neighbors with recessed models.
+pub fn adhesion_contacts<'a>(
+    c: &Content,
+    origin: IVec3,
+    part: Part,
+    rules: &[crate::content::Adhesion],
+    grid: bool,
+    get: &impl Fn(IVec3) -> Option<(u32, &'a CellLayout)>,
+    mut visit: impl FnMut(IVec3, Part),
+) -> bool {
+    let faces = rules.iter().fold(0, |mask, rule| mask | rule.faces);
+    if faces == 0 {
+        return true;
+    }
+    let accepts = |face, other: Part| {
+        c.solid(other.state)
+            && rules
+                .iter()
+                .any(|r| r.faces & (1u8 << face) != 0 && c.matchers.has(r.targets, other.state))
+    };
+    let mut loaded = true;
+    if grid && part.offset == IVec3::ZERO {
+        for offset in std::iter::once(IVec3::ZERO).chain(part.footprint(c).iter().copied()) {
+            for (face, dir) in crate::world::DIRS
+                .into_iter()
+                .enumerate()
+                .filter(|(f, _)| faces & (1 << f) != 0)
+            {
+                let at = origin + offset + dir;
+                let Some((state, layout)) = get(at) else {
+                    loaded = false;
+                    continue;
+                };
+                for other in layout.parts(state) {
+                    let (at, other) = other.owner(at);
+                    if (at, other) != (origin, part) && other.offset == IVec3::ZERO && accepts(face, other) {
+                        visit(at, other);
+                    }
+                }
+            }
+        }
+    }
+    for patch in part.bounds(c) {
+        for face in (0..6).filter(|&f| faces & (1 << f) != 0) {
+            let axis = face / 2;
+            let plane = if face % 2 == 0 { patch.min[axis] } else { patch.max[axis] };
+            loaded &= face_contacts(c, origin, patch, face, plane, get, |at, other, _| {
+                let (at, other) = other.owner(at);
+                if (at, other) != (origin, part) && accepts(face, other) {
+                    visit(at, other);
+                }
+                false
+            })
+            .is_some();
+        }
+    }
+    loaded
+}
+
 pub fn supported<'a>(
     c: &Content,
     cell: IVec3,

@@ -1063,6 +1063,29 @@ pub async fn redstone_floater(t: T) -> R {
     t.set(at(1, 0), "air").await?;
     t.secs(0.8).await?;
     t.check(t.block(at(0, 0)).await?.contains("air"), "and goes when that has gone");
+
+    // Both movers follow the turned face and its target matcher. Adhesion is directional.
+    for (z, mover) in [(0, "piston"), (-5, "floater")] {
+        let at = |x, dy, dz| add(f, [x, y + 6 + dy, z + dz]);
+        let glue = "testmod:face_glue[facing=south]";
+        t.set(at(0, 0, 0), &format!("base:{mover}[facing=east]"))
+            .await?;
+        t.set(at(1, 0, 0), glue).await?;
+        t.set(at(1, 0, 1), "base:stone").await?;
+        t.set(at(1, 1, 0), "base:gold_block").await?;
+        t.set(at(1, 0, -1), "base:slime_block").await?;
+        settle(&t).await?;
+        t.set(at(-1, 0, 0), "base:redstone_block").await?;
+        t.until(&format!("the adhesive block docks after {mover} movement"), Duration::from_secs(4), |t| {
+            t.c()
+                .block(at(2, 0, 0))
+                .is_some_and(|s| block_name(s) == glue)
+        })
+        .await?;
+        for (pos, expected) in [(at(2, 0, 1), "base:stone"), (at(1, 1, 0), "base:gold_block"), (at(1, 0, -1), "base:slime_block")] {
+            t.check_eq(t.block(pos).await?, expected.to_owned(), &format!("{mover} at {pos:?}"));
+        }
+    }
     Ok(())
 }
 

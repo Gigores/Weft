@@ -242,6 +242,12 @@ pub struct Hazard {
     pub level: u32,
 }
 
+/// A block's attachment rule with the state's turn and target matcher resolved.
+pub struct Adhesion {
+    pub faces: u8,
+    pub targets: u32,
+}
+
 /// A block rule (`abi::BlockRule`) resolved: its condition is in `Content::conds`.
 #[derive(Clone, Copy, Debug)]
 pub struct Rule {
@@ -1071,6 +1077,8 @@ pub struct Content {
     pub shapes: FxHashMap<String, (String, String)>,
     /// What may be in a cell with this block though their shapes overlap (a matcher), by block.
     pub shares_cell: FxHashMap<u32, u32>,
+    /// Explicit attachment rules by state. An empty set opts out of assembly connections.
+    pub adhesion: FxHashMap<u32, Box<[Adhesion]>>,
     /// Every block matcher the content names (`refs`).
     pub matchers: crate::refs::Matchers,
     /// Attribute modifiers that come with items, kinds and poses.
@@ -2086,6 +2094,7 @@ pub fn freeze(
         instance_data,
         rules: raw_rules,
         hazards: raw_hazards,
+        adhesion: raw_adhesion,
         ..
     } = block_tables;
     let ItemTables { mut item_defs, item_names, .. } = item_tables;
@@ -2118,6 +2127,21 @@ pub fn freeze(
         biome_names: &biome_names,
         components: &components,
     };
+    let adhesion = raw_adhesion
+        .into_iter()
+        .map(|(state, rules)| {
+            let info = &states[state as usize];
+            let block = &block_defs[info.block as usize].name;
+            let rules = rules
+                .into_iter()
+                .filter_map(|rule| {
+                    let targets = look.matcher(&mut matchers, &rule.targets, &format!("{block} adhesion"), &mut errors)?;
+                    Some(Adhesion { faces: info.turn.faces(rule.faces), targets })
+                })
+                .collect();
+            (state, rules)
+        })
+        .collect();
     let (templates, template_names) = freeze_templates(&mut games, &mods, look, &mut tables, &mod_name, &mut errors);
     let (palettes, palette_names) = freeze_palettes(&mut games, look, &mut tables, &mod_name, &mut errors);
     let made = Made { templates: &templates, template_names: &template_names, palette_names: &palette_names };
@@ -2309,6 +2333,7 @@ pub fn freeze(
         ids,
         shapes: shapes.into_iter().map(|(n, s, k)| (n, (s, k))).collect(),
         shares_cell,
+        adhesion,
         matchers,
         conds,
         cond_cache: Default::default(),
