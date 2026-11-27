@@ -1,7 +1,7 @@
 //! Sound events: block groups (`block.<group>.break|place|step|hit`) blocks pick with
 //! `.sound_group(group)`, and the background music; mobs' voices come with them (`mobs.rs`). Files are in `assets/sounds/`.
 
-use crate::worldgen::statics::{BEACH, BIRCH_FOREST, CLOVER_MEADOW, FOREST, LAVENDER_FIELDS, PLAINS, TALLGRASS_MEADOW};
+use crate::worldgen::statics::*;
 use weft_sdk::*;
 
 static SHEEP: Music = Music::named("sheep");
@@ -13,6 +13,7 @@ static FOREST_RAIN: Music = Music::named("forest_rain");
 static BEACH_WAVES: Music = Music::named("beach_waves");
 static CAVE_DRONE: Sound = Sound::named("cave_drone");
 static CAVE_AMBIENCE: Music = Music::named("cave_ambience");
+static MOUNTAIN_WIND: Music = Music::named("mountain_wind");
 
 pub fn register(r: &mut Registry) {
     for g in ["stone", "wood", "gravel", "grass", "sand", "glass", "cloth"] {
@@ -56,6 +57,8 @@ pub fn register(r: &mut Registry) {
         .biome(&CLOVER_MEADOW)
         .biome(&FOREST)
         .biome(&BIRCH_FOREST)
+        .biome(&TAIGA)
+        .biome(&HILLS)
         .rain(0.0, 0.05);
 
     r.music(&LIGHT_RAIN)
@@ -69,6 +72,15 @@ pub fn register(r: &mut Registry) {
         .biome(&CLOVER_MEADOW)
         .rain(0.05, 1.0);
 
+    r.music(&MOUNTAIN_WIND)
+        .tracks(&["ambient/mountain_wind"])
+        .ambient(0.1)
+        .category(&sound_categories::AMBIENT)
+        .when(&conditions::SURFACE)
+        .biome(&MOUNTAINS)
+        .biome(&SNOWY_PEAKS)
+        .rain(0.0, 0.05);
+
     r.music(&DAY_FOREST)
         .tracks(&["ambient/day_forest"])
         .ambient(0.1)
@@ -77,6 +89,8 @@ pub fn register(r: &mut Registry) {
         .when(&conditions::DAY)
         .biome(&FOREST)
         .biome(&BIRCH_FOREST)
+        .biome(&TAIGA)
+        .biome(&HILLS)
         .rain(0.0, 0.05);
 
     r.music(&FOREST_RAIN)
@@ -86,6 +100,8 @@ pub fn register(r: &mut Registry) {
         .when(&conditions::SURFACE)
         .biome(&FOREST)
         .biome(&BIRCH_FOREST)
+        .biome(&TAIGA)
+        .biome(&HILLS)
         .rain(0.05, 1.0);
 
     r.music(&BEACH_WAVES)
@@ -103,6 +119,7 @@ pub fn register(r: &mut Registry) {
     r.music(&CAVE_AMBIENCE)
         .ambient(1.0)
         .when(&conditions::UNDERGROUND)
+        .biome(&DEEP_CAVES)
         .spot(&CAVE_DRONE)
         .spot_every(60.0, 120.0)
         .spot_distance(0.0, 0.0);
