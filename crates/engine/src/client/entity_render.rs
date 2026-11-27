@@ -2063,7 +2063,7 @@ impl EntityRenderer {
                 let how = if super::endless_use(e.use_ticks) {
                     Play { drive: Drive::Clock, clock: p, mirror: off, ..progress }
                 } else {
-                    Play { progress: p, mirror: off, ..progress }
+                    Play { progress: use_clip_progress(p, e.use_ticks), mirror: off, ..progress }
                 };
                 m.play(&mut clips, m.action_seen(item, swapped(item, "use"), in_view), &how);
             }
@@ -2339,6 +2339,28 @@ impl EntityRenderer {
             }
         }
         out
+    }
+}
+
+fn use_clip_progress(progress: f32, use_ticks: f32) -> f32 {
+    const FULL_USE_TICKS: f32 = 32.0;
+    let kept = (use_ticks / FULL_USE_TICKS).min(1.0);
+    // Keep the normal pace at both ends and jump over the missing time halfway through.
+    let skipped = if progress < 0.5 { 0.0 } else { 1.0 - kept };
+    progress * kept + skipped
+}
+
+#[test]
+fn short_uses_keep_the_first_and_last_ticks_at_normal_speed() {
+    for ticks in [2, 6, 16, 32] {
+        let half = ticks / 2;
+        let played: Vec<_> = (0..ticks)
+            .map(|t| use_clip_progress(t as f32 / ticks as f32, ticks as f32) * 32.0)
+            .collect();
+        let expected = (0..half).chain(32 - half..32).map(|t| t as f32);
+        for (frame, expected) in played.into_iter().zip(expected) {
+            assert!((frame - expected).abs() < 1e-5, "{ticks} ticks: {frame} != {expected}");
+        }
     }
 }
 

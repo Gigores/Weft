@@ -2588,13 +2588,13 @@ impl Client {
             let state = self.world.block(p);
             let Some((own, drip)) = kinds.get(state as usize) else { continue };
             for &kind in own {
-                // Vanilla's: over a torch, and out from the wall where it leans.
+                // A wall torch's tip is still on the support side of its cell.
                 let wall = c
                     .held_by(state)
                     .map(|f| f as usize)
                     .filter(|f| f / 2 != 1)
                     .map(|f| crate::world::DIRS[f].as_dvec3());
-                let pos = (p.as_dvec3() + wall.map_or(DVec3::new(0.5, 0.7, 0.5), |d| DVec3::new(0.5, 0.92, 0.5) - d * 0.27)).to_array();
+                let pos = (p.as_dvec3() + wall.map_or(DVec3::new(0.5, 0.7, 0.5), |d| DVec3::new(0.5, 0.92, 0.5) + d * 0.27)).to_array();
                 bursts.push(weft_abi::ParticleBurst {
                     kind,
                     pos: pos.into(),
