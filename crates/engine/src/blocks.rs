@@ -69,7 +69,7 @@ pub(crate) fn freeze(
     let mut blocks = f.entries;
     let own: Vec<usize> = blocks.iter().map(|e| e.parts.len()).collect();
     by_name(&mut blocks, &named, &mut named_hits, errors);
-    let (made, shapes) = expand_templates(&mut blocks, &own, items, errors);
+    let (made, shapes) = expand_templates(&mut blocks, &own, &tagged, items, errors);
     let first_made = blocks.len();
     blocks.extend(made);
     for (e, why) in std::mem::take(&mut f.missing) {
@@ -133,17 +133,7 @@ pub(crate) fn freeze(
         let mut tagged_here = vec![false; tagged.len()];
         for picked in &picks {
             let mut s = Values::of(&e.parts, picked, &e.name, errors);
-            for (p, hit) in tagged.iter().zip(tagged_here.iter_mut()) {
-                if s.0
-                    .iter()
-                    .any(|x| x.schema.is_empty() && matches(&p.name[1..], &x.name))
-                {
-                    *hit = true;
-                    for op in p.ops.iter().filter(|op| !block_only(&op.value.name)) {
-                        s.apply(op, &e.name, errors);
-                    }
-                }
-            }
+            s.apply_tagged(&tagged, &e.name, errors, |i| tagged_here[i] = true);
             if s.or(abi::comp::HARDNESS, 1.0f32) < 0.0 && !liquids.contains(&e.name) {
                 s.0.push(Cow::Owned(RawValue::tag(abi::comp::UNBREAKABLE)));
             }
@@ -492,6 +482,21 @@ impl<'a> Values<'a> {
                     .collect();
                 entries::apply(&mut one, op, what, errors);
                 self.0.extend(one.into_iter().map(Cow::Owned));
+            }
+        }
+    }
+
+    fn apply_tagged(&mut self, tagged: &'a [RawEntry], what: &str, errors: &mut Vec<String>, mut hit: impl FnMut(usize)) {
+        for (i, p) in tagged.iter().enumerate() {
+            if self
+                .0
+                .iter()
+                .any(|v| v.schema.is_empty() && matches(&p.name[1..], &v.name))
+            {
+                hit(i);
+                for op in p.ops.iter().filter(|op| !block_only(&op.value.name)) {
+                    self.apply(op, what, errors);
+                }
             }
         }
     }
@@ -1023,6 +1028,7 @@ fn carries_over(v: &RawValue) -> bool {
 fn expand_templates(
     blocks: &mut Vec<Entry>,
     own: &[usize],
+    tagged: &[RawEntry],
     items: &mut Folded,
     errors: &mut Vec<String>,
 ) -> (Vec<Entry>, Vec<(String, String, String)>) {
@@ -1033,24 +1039,22 @@ fn expand_templates(
         return (Vec::new(), Vec::new());
     }
     templates.sort_by(|&a, &b| blocks[a].name.cmp(&blocks[b].name));
-    // The first state of each block a template may take, by its own registration, and its tags
-    // with what edits by name gave it.
-    let firsts: Vec<Option<(Values, Vec<&str>)>> = blocks
+    // Geometry comes from the source registration. Material values include edits to the source.
+    let firsts: Vec<Option<(Values, Values)>> = blocks
         .iter()
         .zip(own)
         .map(|(e, &own)| {
             if e.has(b::SHAPES_OF) {
                 return None;
             }
-            let tags = first_state(e, &e.parts)
-                .0
-                .into_iter()
-                .filter_map(|v| match v {
-                    Cow::Borrowed(v) if v.schema.is_empty() => Some(v.name.as_str()),
-                    _ => None,
-                })
-                .collect();
-            Some((first_state(e, &e.parts[..own]), tags))
+            let original = first_state(e, &e.parts[..own]);
+            if model_of(original.or(b::MODEL, BlockModel::Cube as u32)) != BlockModel::Cube {
+                return None;
+            }
+            let mut edited = first_state(e, &e.parts);
+            // The final bake reports edit errors on the source itself.
+            edited.apply_tagged(tagged, &e.name, &mut Vec::new(), |_| {});
+            Some((original, edited))
         })
         .collect();
     let mut made: Vec<Entry> = Vec::new();
@@ -1084,9 +1088,12 @@ fn expand_templates(
                 .iter()
                 .enumerate()
                 .filter_map(|(i, source)| {
-                    let (_, tags) = firsts[i].as_ref()?;
+                    let (_, edited) = firsts[i].as_ref()?;
                     let fits = match &term {
-                        crate::refs::Ref::Tags(pattern) => tags.iter().any(|t| matches(pattern, t)),
+                        crate::refs::Ref::Tags(pattern) => edited
+                            .0
+                            .iter()
+                            .any(|v| v.schema.is_empty() && matches(pattern, &v.name)),
                         crate::refs::Ref::Name(n, props) => props.is_empty() && source.name == *n,
                     };
                     fits.then_some(i as u32)
@@ -1098,8 +1105,8 @@ fn expand_templates(
             Vec::new()
         });
         for (s, source) in blocks.iter().enumerate() {
-            let Some((first, _)) = &firsts[s] else { continue };
-            if !crate::refs::has(&taken, s as u32) || model_of(first.or(b::MODEL, BlockModel::Cube as u32)) != BlockModel::Cube {
+            let Some((first, edited)) = &firsts[s] else { continue };
+            if !crate::refs::has(&taken, s as u32) {
                 continue;
             }
             let name = format!("{}{}", source.name, of.suffix);
@@ -1123,7 +1130,7 @@ fn expand_templates(
                 .iter()
                 .enumerate()
                 .map(|(i, own)| {
-                    let v = shaped(own.clone(), first, &textures, &format!("{short}/{id}"));
+                    let v = shaped(own.clone(), first, edited, &textures, &format!("{short}/{id}"));
                     (full_key(&props, i as u32), v.into_iter().map(of_source).map(set_op).collect())
                 })
                 .collect();
@@ -1216,7 +1223,7 @@ fn of_source(v: RawValue, source: &str, textures: &[String; 6]) -> RawValue {
 /// A template's state `own` made of `source`'s first state: its textures and light filter; for a
 /// cube its look and flags too, for another shape a translucent source's layer; its values (but
 /// how it grows) unless the template sets them; and the tag `tag` naming the source.
-fn shaped(own: Vec<RawValue>, source: &Values, textures: &[String; 6], tag: &str) -> Vec<RawValue> {
+fn shaped(own: Vec<RawValue>, source: &Values, material: &Values, textures: &[String; 6], tag: &str) -> Vec<RawValue> {
     let set = |own: &mut Vec<RawValue>, name: &str, v: Option<&RawValue>| {
         own.retain(|x| x.name != name);
         own.extend(v.cloned());
@@ -1239,7 +1246,7 @@ fn shaped(own: Vec<RawValue>, source: &Values, textures: &[String; 6], tag: &str
             set(&mut own, b::CULL_SAME, source.value(b::CULL_SAME));
         }
     }
-    let carried: Vec<RawValue> = source
+    let carried: Vec<RawValue> = material
         .0
         .iter()
         .filter(|v| carries_over(v) && !own.iter().any(|o| o.name == v.name))
@@ -1281,5 +1288,41 @@ mod tests {
         // No such texture: the next one.
         assert_eq!(list[0].texture, "m:block/log_top");
         assert_eq!(name.text.as_deref(), Some("m:log"));
+    }
+
+    #[test]
+    fn shape_material_follows_source_edits_and_allows_overrides() {
+        let block = |name| RawEntry::engine(abi::entry_kind::BLOCK, name);
+        let edit = |name| RawEntry { mode: abi::entry_mode::EDIT, ..block(name) };
+        let shape = |name: &'static str, suffix: &str| {
+            block(name).set(b::SHAPES_OF, abi::ShapesOf { sources: "#shape_source".into(), suffix: suffix.into() })
+        };
+        let mut errors = Vec::new();
+        let mod_name = |_: ModId| "m".into();
+        let mut items = entries::fold("item", Vec::new(), &mod_name, &mut errors);
+        let blocks = freeze(
+            vec![
+                block("m:wood").tag("wood").set(b::DENSITY, 1.0f32),
+                edit("m:wood[]").set(abi::comp::HARDNESS, 3.0f32),
+                edit("#wood").tag("shape_source").set(b::DENSITY, 0.55f32),
+                shape("m:first", "_first"),
+                shape("m:second", "_second").set(b::DENSITY, 0.7f32),
+                edit("#first/*").set(abi::comp::HARDNESS, 2.0f32),
+            ],
+            &mut items,
+            &[],
+            &[],
+            &|_| None,
+            &mut |_| 0,
+            &mod_name,
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        for (name, density, hardness) in [("m:wood", 0.55f32, 3.0f32), ("m:wood_first", 0.55, 2.0), ("m:wood_second", 0.7, 3.0)] {
+            let (_, states) = &blocks.block_values[blocks.block_names[name] as usize];
+            let values = Values(states[0].iter().map(Cow::Borrowed).collect());
+            assert_eq!(values.get(b::DENSITY), Some(density), "{name}");
+            assert_eq!(values.get(abi::comp::HARDNESS), Some(hardness), "{name}");
+        }
     }
 }

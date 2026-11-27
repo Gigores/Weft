@@ -477,7 +477,7 @@ To make some of the shapes yourself, use `r.stairs("#my_tag")`, `r.slabs(..)`, `
 
 ### Your own shape
 
-`r.shapes_of(name, sources, suffix)` makes one new block for every full cube that `sources` matches. Each new block is called `<source><suffix>`. It inherits everything (texture, sounds, etc.) from the source, so you only specify what's different:
+`r.shapes_of(name, sources, suffix)` makes one new block for every full cube that `sources` matches. Each new block is called `<source><suffix>`. It inherits textures and material values such as hardness, sounds and density. Material values include edits to the source by name or tag. Set a value on the shape template to override the source:
 
 ```rust
 r.shapes_of("wall", "#my_tag", "_wall")
