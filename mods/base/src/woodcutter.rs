@@ -31,15 +31,15 @@ pub fn register(r: &mut Registry) {
                 );
             }
             m.model_box_faces(
-                [0.0; 3],
+                [0.0, 12.0, 0.0],
                 [32.0, 16.0, 16.0],
                 [
-                    ("woodcutter", [0.0, 4.0, 4.0, 8.0]),
-                    ("woodcutter", [12.0, 4.0, 16.0, 8.0]),
-                    ("woodcutter", UV_NO_FACE),
+                    ("woodcutter", [0.0, 4.0, 4.0, 5.0]),
+                    ("woodcutter", [12.0, 4.0, 16.0, 5.0]),
                     ("woodcutter", [4.0, 4.0, 12.0, 8.0]),
-                    ("woodcutter", [4.0, 0.0, 12.0, 4.0]),
-                    ("woodcutter", [4.0, 8.0, 12.0, 12.0]),
+                    ("woodcutter", [4.0, 4.0, 12.0, 8.0]),
+                    ("woodcutter", [4.0, 0.0, 12.0, 1.0]),
+                    ("woodcutter", [4.0, 8.0, 12.0, 9.0]),
                 ],
             )
             .model_box_faces(
