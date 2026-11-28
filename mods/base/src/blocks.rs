@@ -717,12 +717,12 @@ pub fn register(r: &mut Registry) {
         .tab(&crate::tabs::BUILDING);
     r.block(&STONE_BRICKS)
         .sound_group("stone")
-        .west("stonebrick_side_1")
-        .east("stonebrick_side_4")
-        .bottom("stonebrick_bottom")
-        .top("stonebrick_top")
-        .north("stonebrick_side_3")
-        .south("stonebrick_side_2")
+        // .west("stonebrick_side_1")
+        // .east("stonebrick_side_4")
+        // .bottom("stonebrick_bottom")
+        // .top("stonebrick_top")
+        // .north("stonebrick_side_3")
+        // .south("stonebrick_side_2")
         .hardness(1.5)
         .mined_by("pickaxe", 0)
         .tab(&crate::tabs::BUILDING);
